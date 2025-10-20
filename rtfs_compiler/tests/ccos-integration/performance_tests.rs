@@ -5,7 +5,7 @@
 
 use rtfs_compiler::ccos::{
     capabilities::registry::CapabilityRegistry,
-    capability_marketplace::{CapabilityMarketplace, types::CapabilityManifest},
+    capability_marketplace::{types::CapabilityManifest, CapabilityMarketplace},
     checkpoint_archive::CheckpointArchive,
     synthesis::{
         capability_synthesizer::CapabilitySynthesizer,
@@ -13,7 +13,7 @@ use rtfs_compiler::ccos::{
         graphql_importer::GraphQLImporter,
         http_wrapper::HTTPWrapper,
         mcp_registry_client::McpRegistryClient,
-    missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig},
+        missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig},
         openapi_importer::OpenAPIImporter,
         registration_flow::RegistrationFlow,
         validation_harness::ValidationHarness,
@@ -53,12 +53,11 @@ async fn test_concurrent_resolution_performance() {
     for i in 0..num_concurrent {
         let resolver_clone = resolver.clone();
         let handle = tokio::spawn(async move {
-            resolver_clone
-                .handle_missing_capability(
-                    format!("test.capability.{}", i),
-                    vec![Value::String(format!("arg{}", i))],
-                    std::collections::HashMap::new(),
-                )
+            resolver_clone.handle_missing_capability(
+                format!("test.capability.{}", i),
+                vec![Value::String(format!("arg{}", i))],
+                std::collections::HashMap::new(),
+            )
         });
         handles.push(handle);
     }
@@ -73,7 +72,10 @@ async fn test_concurrent_resolution_performance() {
     .await;
 
     let elapsed = start_time.elapsed();
-    assert!(result.is_ok(), "All concurrent operations should complete within timeout");
+    assert!(
+        result.is_ok(),
+        "All concurrent operations should complete within timeout"
+    );
 
     assert!(
         elapsed < Duration::from_secs(30),
@@ -170,9 +172,13 @@ async fn test_openapi_importer_performance() {
     let mut all_capabilities = vec![];
     for _ in 0..num_specs {
         let spec = importer.load_spec("mock").await.expect("load mock spec");
-        let operations = importer.extract_operations(&spec).expect("extract operations");
+        let operations = importer
+            .extract_operations(&spec)
+            .expect("extract operations");
         for operation in operations {
-            let cap = importer.operation_to_capability(&operation, "example").expect("operation to capability");
+            let cap = importer
+                .operation_to_capability(&operation, "example")
+                .expect("operation to capability");
             all_capabilities.push(cap);
         }
     }
@@ -197,10 +203,17 @@ async fn test_graphql_importer_performance() {
     let start_time = Instant::now();
     let mut capabilities = vec![];
     for _ in 0..num_schemas {
-        let schema = importer.introspect_schema().await.expect("introspect schema");
-        let ops = importer.extract_operations(&schema).expect("extract operations");
+        let schema = importer
+            .introspect_schema()
+            .await
+            .expect("introspect schema");
+        let ops = importer
+            .extract_operations(&schema)
+            .expect("extract operations");
         for op in ops {
-            let cap = importer.operation_to_capability(&op, "example").expect("operation to capability");
+            let cap = importer
+                .operation_to_capability(&op, "example")
+                .expect("operation to capability");
             capabilities.push(cap);
         }
     }
@@ -234,13 +247,17 @@ async fn test_capability_synthesizer_performance() {
             description: Some("Performance test synth".to_string()),
             context: None,
         };
-        let result = synthesizer.synthesize_capability(&request).await.expect("synthesize mock");
+        let result = synthesizer
+            .synthesize_capability(&request)
+            .await
+            .expect("synthesize mock");
         let quality_score = synthesizer.calculate_quality_score(&request, &result);
         synthesis_results.push((result.capability, quality_score));
     }
 
     let elapsed = start_time.elapsed();
-    let avg_quality: f64 = synthesis_results.iter().map(|(_, s)| *s).sum::<f64>() / synthesis_results.len() as f64;
+    let avg_quality: f64 =
+        synthesis_results.iter().map(|(_, s)| *s).sum::<f64>() / synthesis_results.len() as f64;
     println!(
         "✅ Capability synthesizer performance: {} capabilities, avg quality {:.2} in {:?}",
         num_capabilities, avg_quality, elapsed
@@ -269,7 +286,11 @@ async fn test_web_search_discovery_performance() {
     let start_time = Instant::now();
 
     // Run searches sequentially (mock discovery is inexpensive in tests)
-    let mut all_results: Vec<rtfs_compiler::runtime::error::RuntimeResult<Vec<rtfs_compiler::ccos::synthesis::web_search_discovery::WebSearchResult>>> = Vec::new();
+    let mut all_results: Vec<
+        rtfs_compiler::runtime::error::RuntimeResult<
+            Vec<rtfs_compiler::ccos::synthesis::web_search_discovery::WebSearchResult>,
+        >,
+    > = Vec::new();
     for query in &search_queries {
         let res = discovery.search_for_api_specs(query).await;
         all_results.push(res);
@@ -333,7 +354,9 @@ async fn test_registration_flow_performance() {
     for i in 0..num_capabilities {
         let id = format!("test.capability.{}", i);
         let code = format!("(defn test{} [x] x)", i);
-        let res = registration_flow.register_capability(create_test_capability(&id), Some(code.as_str())).await;
+        let res = registration_flow
+            .register_capability(create_test_capability(&id), Some(code.as_str()))
+            .await;
         registration_results.push(res);
     }
 
@@ -356,7 +379,12 @@ async fn test_continuous_resolution_loop_performance() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = Arc::new(CapabilityMarketplace::new(registry));
     let checkpoint_archive = Arc::new(CheckpointArchive::new());
-    let resolver_cfg = ResolverConfig { max_attempts: 3, auto_resolve: true, verbose_logging: false, ..ResolverConfig::default() };
+    let resolver_cfg = ResolverConfig {
+        max_attempts: 3,
+        auto_resolve: true,
+        verbose_logging: false,
+        ..ResolverConfig::default()
+    };
     let resolver = Arc::new(MissingCapabilityResolver::new(
         marketplace.clone(),
         checkpoint_archive,
@@ -376,8 +404,14 @@ async fn test_continuous_resolution_loop_performance() {
 
     // Test continuous resolution loop performance
     let registration_flow = Arc::new(RegistrationFlow::new(marketplace.clone()));
-    let loop_cfg = rtfs_compiler::ccos::synthesis::continuous_resolution::ResolutionConfig::default();
-    let loop_controller = ContinuousResolutionLoop::new(resolver.clone(), registration_flow, marketplace.clone(), loop_cfg);
+    let loop_cfg =
+        rtfs_compiler::ccos::synthesis::continuous_resolution::ResolutionConfig::default();
+    let loop_controller = ContinuousResolutionLoop::new(
+        resolver.clone(),
+        registration_flow,
+        marketplace.clone(),
+        loop_cfg,
+    );
     let start_time = Instant::now();
 
     // Run the loop multiple times
@@ -389,7 +423,10 @@ async fn test_continuous_resolution_loop_performance() {
     let elapsed = start_time.elapsed();
 
     // Get final statistics
-    let stats = loop_controller.get_resolution_stats().await.expect("get stats");
+    let stats = loop_controller
+        .get_resolution_stats()
+        .await
+        .expect("get stats");
 
     println!(
         "✅ Continuous resolution loop performance: {} iterations in {:?}",
@@ -423,22 +460,27 @@ async fn test_memory_usage_under_load() {
     let start_time = Instant::now();
 
     for i in 0..num_capabilities {
-        let _ = resolver
-            .handle_missing_capability(
-                format!("test.capability.{}", i),
-                vec![
-                    Value::String(format!("arg{}", i)),
-                    Value::Float(i as f64),
-                    Value::Map(std::collections::HashMap::from([
-                        (rtfs_compiler::ast::MapKey::String("key1".to_string()), Value::String(format!("value1_{}", i))),
-                        (rtfs_compiler::ast::MapKey::String("key2".to_string()), Value::String(format!("value2_{}", i))),
-                    ])),
-                ],
-                std::collections::HashMap::from([
-                    ("context1".to_string(), format!("value1_{}", i)),
-                    ("context2".to_string(), format!("value2_{}", i)),
-                ]),
-            );
+        let _ = resolver.handle_missing_capability(
+            format!("test.capability.{}", i),
+            vec![
+                Value::String(format!("arg{}", i)),
+                Value::Float(i as f64),
+                Value::Map(std::collections::HashMap::from([
+                    (
+                        rtfs_compiler::ast::MapKey::String("key1".to_string()),
+                        Value::String(format!("value1_{}", i)),
+                    ),
+                    (
+                        rtfs_compiler::ast::MapKey::String("key2".to_string()),
+                        Value::String(format!("value2_{}", i)),
+                    ),
+                ])),
+            ],
+            std::collections::HashMap::from([
+                ("context1".to_string(), format!("value1_{}", i)),
+                ("context2".to_string(), format!("value2_{}", i)),
+            ]),
+        );
     }
 
     let elapsed = start_time.elapsed();

@@ -4,34 +4,41 @@
 //! components that handle capability discovery and generation.
 
 use rtfs_compiler::ast::{
-    Expression,
-    Keyword,
-    Literal,
-    MapKey,
-    MapTypeEntry,
-    PrimitiveType,
-    Symbol,
-    TypeExpr,
+    Expression, Keyword, Literal, MapKey, MapTypeEntry, PrimitiveType, Symbol, TypeExpr,
 };
 use rtfs_compiler::ccos::synthesis::auth_injector::{AuthConfig, AuthInjector, AuthType};
-use rtfs_compiler::ccos::synthesis::capability_synthesizer::{CapabilitySynthesizer, SynthesisRequest};
-use rtfs_compiler::ccos::synthesis::continuous_resolution::{ContinuousResolutionLoop, ResolutionConfig, ResolutionPriority};
+use rtfs_compiler::ccos::synthesis::capability_synthesizer::{
+    CapabilitySynthesizer, SynthesisRequest,
+};
+use rtfs_compiler::ccos::synthesis::continuous_resolution::{
+    ContinuousResolutionLoop, ResolutionConfig, ResolutionPriority,
+};
 use rtfs_compiler::ccos::synthesis::feature_flags::MissingCapabilityConfig;
-use rtfs_compiler::ccos::synthesis::governance_policies::{EnterpriseSecurityPolicy, GovernancePolicy, MaxParameterCountPolicy};
-use rtfs_compiler::ccos::synthesis::graphql_importer::{GraphQLArgument, GraphQLImporter, GraphQLOperation};
+use rtfs_compiler::ccos::synthesis::governance_policies::{
+    EnterpriseSecurityPolicy, GovernancePolicy, MaxParameterCountPolicy,
+};
+use rtfs_compiler::ccos::synthesis::graphql_importer::{
+    GraphQLArgument, GraphQLImporter, GraphQLOperation,
+};
 use rtfs_compiler::ccos::synthesis::http_wrapper::{HTTPEndpoint, HTTPWrapper};
 use rtfs_compiler::ccos::synthesis::mcp_proxy_adapter::{MCPProxyAdapter, MCPProxyConfig};
-use rtfs_compiler::ccos::synthesis::missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig};
-use rtfs_compiler::ccos::synthesis::openapi_importer::{OpenAPIImporter, OpenAPIOperation, OpenAPIParameter};
+use rtfs_compiler::ccos::synthesis::missing_capability_resolver::{
+    MissingCapabilityResolver, ResolverConfig,
+};
+use rtfs_compiler::ccos::synthesis::openapi_importer::{
+    OpenAPIImporter, OpenAPIOperation, OpenAPIParameter,
+};
 use rtfs_compiler::ccos::synthesis::registration_flow::RegistrationFlow;
-use rtfs_compiler::ccos::synthesis::static_analyzers::{PerformanceAnalyzer, SecurityAnalyzer, StaticAnalyzer};
+use rtfs_compiler::ccos::synthesis::static_analyzers::{
+    PerformanceAnalyzer, SecurityAnalyzer, StaticAnalyzer,
+};
 use rtfs_compiler::ccos::synthesis::validation_harness::{ValidationHarness, ValidationStatus};
 use rtfs_compiler::ccos::synthesis::web_search_discovery::WebSearchDiscovery;
 use rtfs_compiler::ccos::{
     capabilities::registry::CapabilityRegistry,
     capability_marketplace::{
-        CapabilityMarketplace,
         types::{CapabilityManifest, LocalCapability, ProviderType},
+        CapabilityMarketplace,
     },
     checkpoint_archive::CheckpointArchive,
 };
@@ -40,7 +47,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-fn assert_auth_injection(expr: &Expression, provider: &str, auth_type: AuthType, token_param: &str) {
+fn assert_auth_injection(
+    expr: &Expression,
+    provider: &str,
+    auth_type: AuthType,
+    token_param: &str,
+) {
     match expr {
         Expression::FunctionCall { callee, arguments } => {
             match callee.as_ref() {
@@ -50,7 +62,11 @@ fn assert_auth_injection(expr: &Expression, provider: &str, auth_type: AuthType,
                 other => panic!("Expected keyword callee, got {:?}", other),
             }
 
-            assert_eq!(arguments.len(), 1, "Auth injection call should have one argument map");
+            assert_eq!(
+                arguments.len(),
+                1,
+                "Auth injection call should have one argument map"
+            );
             let map = match &arguments[0] {
                 Expression::Map(entries) => entries,
                 other => panic!("Expected map argument, got {:?}", other),
@@ -156,7 +172,10 @@ async fn test_openapi_importer_comprehensive() {
     let importer = OpenAPIImporter::new("https://api.example.com".to_string());
 
     let mut responses = HashMap::new();
-    responses.insert("200".to_string(), serde_json::json!({"description": "Success"}));
+    responses.insert(
+        "200".to_string(),
+        serde_json::json!({"description": "Success"}),
+    );
 
     let get_operation = OpenAPIOperation {
         method: "GET".to_string(),
@@ -423,7 +442,8 @@ async fn test_validation_harness_comprehensive() {
     let validation_result = harness.validate_capability(&good_capability, "(do (log \"test\") (expects (map :x string)) (call :ccos.auth.inject {:auth \"env\"}) (defn test [x] x))");
     // Accept both Passed and PassedWithWarnings for this test
     assert!(
-        validation_result.status == ValidationStatus::Passed || validation_result.status == ValidationStatus::PassedWithWarnings,
+        validation_result.status == ValidationStatus::Passed
+            || validation_result.status == ValidationStatus::PassedWithWarnings,
         "Validation should pass: {:?}",
         validation_result.status
     );
@@ -455,8 +475,14 @@ async fn test_governance_policies_comprehensive() {
     );
 
     let security_policy = EnterpriseSecurityPolicy::new();
-    let result = security_policy.check_compliance(&create_test_capability(), "(do (log \"testing\") (defn test [x] x))");
-    assert!(result.issues.is_empty(), "Security policy should pass for simple capability");
+    let result = security_policy.check_compliance(
+        &create_test_capability(),
+        "(do (log \"testing\") (defn test [x] x))",
+    );
+    assert!(
+        result.issues.is_empty(),
+        "Security policy should pass for simple capability"
+    );
 
     assert_eq!(param_policy.policy_name(), "max_parameter_count");
     assert!(!param_policy.policy_description().is_empty());
@@ -469,16 +495,25 @@ async fn test_static_analyzers_comprehensive() {
 
     let simple_code = "(defn simple [x] x)";
     let issues = perf_analyzer.analyze(&create_test_capability(), simple_code);
-    assert!(issues.is_empty(), "Simple code should have no performance issues");
+    assert!(
+        issues.is_empty(),
+        "Simple code should have no performance issues"
+    );
 
     let complex_code = "(defn complex [x] (if x (if x (if x (if x (if x (if x (if x (if x (if x (if x (if x (if x x x) x) x) x) x) x) x) x) x) x) x) x))";
     let issues = perf_analyzer.analyze(&create_test_capability(), complex_code);
-    assert!(!issues.is_empty(), "Deep nesting should trigger performance warnings");
+    assert!(
+        !issues.is_empty(),
+        "Deep nesting should trigger performance warnings"
+    );
 
     let security_analyzer = SecurityAnalyzer::new();
     let safe_code = "(defn safe [x] x)";
     let security_issues = security_analyzer.analyze(&create_test_capability(), safe_code);
-    assert!(security_issues.is_empty(), "Safe code should have no security issues");
+    assert!(
+        security_issues.is_empty(),
+        "Safe code should have no security issues"
+    );
 
     assert_eq!(perf_analyzer.name(), "Performance Analyzer");
     assert!(!perf_analyzer.description().is_empty());
@@ -508,7 +543,10 @@ async fn test_registration_flow_comprehensive() {
     let result = registration_flow
         .register_capability(bad_capability, Some(rtfs_code))
         .await;
-    assert!(result.is_ok(), "Registration should handle issues with warnings");
+    assert!(
+        result.is_ok(),
+        "Registration should handle issues with warnings"
+    );
 }
 
 /// Test continuous resolution loop
@@ -536,12 +574,8 @@ async fn test_continuous_resolution_loop() {
         high_risk_auto_resolution: false,
     };
 
-    let loop_controller = ContinuousResolutionLoop::new(
-        resolver,
-        registration_flow,
-        marketplace,
-        config,
-    );
+    let loop_controller =
+        ContinuousResolutionLoop::new(resolver, registration_flow, marketplace, config);
 
     loop_controller
         .process_pending_resolutions()

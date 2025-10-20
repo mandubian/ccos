@@ -5,7 +5,7 @@
 
 use rtfs_compiler::ccos::{
     capabilities::registry::CapabilityRegistry,
-    capability_marketplace::{CapabilityMarketplace, types::CapabilityManifest},
+    capability_marketplace::{types::CapabilityManifest, CapabilityMarketplace},
     checkpoint_archive::CheckpointArchive,
     synthesis::{
         capability_synthesizer::CapabilitySynthesizer,
@@ -14,7 +14,7 @@ use rtfs_compiler::ccos::{
         graphql_importer::GraphQLImporter,
         http_wrapper::HTTPWrapper,
         mcp_registry_client::McpRegistryClient,
-    missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig},
+        missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig},
         openapi_importer::OpenAPIImporter,
         registration_flow::RegistrationFlow,
         static_analyzers::{PerformanceAnalyzer, StaticAnalyzer},
@@ -49,11 +49,11 @@ async fn test_complete_resolution_pipeline() {
     let missing_capability_id = "external.api.weather";
 
     // Step 1: Trigger missing capability detection
-        let result = resolver.handle_missing_capability(
-            missing_capability_id.to_string(),
-            vec![Value::String("Paris".to_string())],
-            std::collections::HashMap::new(),
-        );
+    let result = resolver.handle_missing_capability(
+        missing_capability_id.to_string(),
+        vec![Value::String("Paris".to_string())],
+        std::collections::HashMap::new(),
+    );
 
     assert!(
         result.is_ok(),
@@ -81,7 +81,7 @@ async fn test_complete_resolution_pipeline() {
     test_registration_flow(marketplace.clone()).await;
 
     // Step 6: Test continuous resolution loop
-        test_continuous_resolution_loop(resolver.clone(), marketplace.clone()).await;
+    test_continuous_resolution_loop(resolver.clone(), marketplace.clone()).await;
 }
 
 /// Test MCP Registry discovery functionality
@@ -116,14 +116,13 @@ async fn test_openapi_importer() {
     let importer = OpenAPIImporter::mock("https://example.com".to_string());
 
     // Test mock spec loading
-    let spec = importer
-        .load_spec("mock")
-        .await
-        .expect("load mock spec");
+    let spec = importer.load_spec("mock").await.expect("load mock spec");
     assert!(!spec.is_null(), "Mock OpenAPI spec should not be empty");
 
     // Test operation extraction
-    let operations = importer.extract_operations(&spec).expect("extract operations");
+    let operations = importer
+        .extract_operations(&spec)
+        .expect("extract operations");
     assert!(
         !operations.is_empty(),
         "Should extract operations from spec"
@@ -156,10 +155,15 @@ async fn test_graphql_importer() {
         .expect("introspect mock schema");
     // introspect_schema returns GraphQLSchema (which may contain introspection_result)
     // Ensure we have a schema object
-    assert!(schema.schema_content.is_object() || schema.introspection_result.is_some(), "Mock GraphQL schema should not be empty");
+    assert!(
+        schema.schema_content.is_object() || schema.introspection_result.is_some(),
+        "Mock GraphQL schema should not be empty"
+    );
 
     // Test operation extraction
-    let operations = importer.extract_operations(&schema).expect("extract operations");
+    let operations = importer
+        .extract_operations(&schema)
+        .expect("extract operations");
     assert!(
         !operations.is_empty(),
         "Should extract operations from schema"
@@ -230,7 +234,7 @@ async fn test_llm_synthesis() {
         .synthesize_capability(&request)
         .await
         .expect("synthesize mock");
-        let capability = result.capability.clone();
+    let capability = result.capability.clone();
     assert!(
         !capability.id.is_empty(),
         "Generated capability should have an ID"
@@ -353,8 +357,8 @@ async fn test_static_analyzers() {
 
     // Test with complex nested code
     let complex_code = "(defn complex [x] (if x (if x (if x (if x (if x x x) x) x) x) x))";
-        let _issues = analyzer.analyze(&create_test_capability(), complex_code);
-        // Note: This might have issues depending on the analyzer implementation
+    let _issues = analyzer.analyze(&create_test_capability(), complex_code);
+    // Note: This might have issues depending on the analyzer implementation
 }
 
 /// Test registration flow functionality
@@ -403,7 +407,10 @@ async fn test_continuous_resolution_loop(
     );
 
     // Test resolution statistics
-    let stats = loop_controller.get_resolution_stats().await.expect("get stats");
+    let stats = loop_controller
+        .get_resolution_stats()
+        .await
+        .expect("get stats");
     assert!(
         stats.total_capabilities >= 0,
         "Should have non-negative total capabilities"
@@ -480,24 +487,25 @@ async fn test_error_handling_and_edge_cases() {
     ));
 
     // Test with empty capability ID
-    let _ = resolver
-        .handle_missing_capability("".to_string(), vec![], std::collections::HashMap::new());
+    let _ = resolver.handle_missing_capability(
+        "".to_string(),
+        vec![],
+        std::collections::HashMap::new(),
+    );
     // This should either succeed (empty ID is valid) or fail gracefully
     // The exact behavior depends on implementation
 
     // Test with very long capability ID
     let long_id = "a".repeat(1000);
-    let _ = resolver
-        .handle_missing_capability(long_id, vec![], std::collections::HashMap::new());
+    let _ = resolver.handle_missing_capability(long_id, vec![], std::collections::HashMap::new());
     // Should handle gracefully without panicking
 
     // Test with invalid arguments
-    let _ = resolver
-        .handle_missing_capability(
-            "test.capability".to_string(),
-            vec![Value::Map(std::collections::HashMap::new())], // Complex nested value
-            std::collections::HashMap::new(),
-        );
+    let _ = resolver.handle_missing_capability(
+        "test.capability".to_string(),
+        vec![Value::Map(std::collections::HashMap::new())], // Complex nested value
+        std::collections::HashMap::new(),
+    );
     // Should handle complex arguments gracefully
 }
 
@@ -524,12 +532,11 @@ async fn test_performance_under_load() {
     for i in 0..10 {
         let resolver_clone = resolver.clone();
         let handle = tokio::spawn(async move {
-            resolver_clone
-                .handle_missing_capability(
-                    format!("test.capability.{}", i),
-                    vec![Value::String(format!("arg{}", i))],
-                    std::collections::HashMap::new(),
-                )
+            resolver_clone.handle_missing_capability(
+                format!("test.capability.{}", i),
+                vec![Value::String(format!("arg{}", i))],
+                std::collections::HashMap::new(),
+            )
         });
         handles.push(handle);
     }

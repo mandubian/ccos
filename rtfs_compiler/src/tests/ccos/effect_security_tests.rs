@@ -59,7 +59,7 @@ fn capability_executes_when_effect_allowed() {
     // (no denied effects means all are allowed)
     let result = context.ensure_effects_allowed("ccos.io.log", &[":compute".to_string()]);
     assert!(result.is_ok(), "effect :compute should be allowed");
-    
+
     // The actual capability execution would require proper marketplace registration,
     // which is beyond the scope of this security policy test.
     // This test verifies that the security context is configured correctly.

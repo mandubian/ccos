@@ -1547,8 +1547,8 @@ impl MissingCapabilityResolver {
 mod tests {
     use super::*;
     use crate::ccos::capabilities::registry::CapabilityRegistry;
-    use tokio::sync::RwLock;
     use crate::ccos::synthesis::feature_flags::MissingCapabilityFeatureFlags;
+    use tokio::sync::RwLock;
 
     #[tokio::test]
     async fn test_missing_capability_queue() {
@@ -1587,8 +1587,8 @@ mod tests {
         // Use a testing feature configuration that enables runtime detection
         // so that the resolver will actually enqueue missing capabilities
         // during unit tests.
-    let mut test_cfg = MissingCapabilityConfig::default();
-    test_cfg.feature_flags = MissingCapabilityFeatureFlags::testing();
+        let mut test_cfg = MissingCapabilityConfig::default();
+        test_cfg.feature_flags = MissingCapabilityFeatureFlags::testing();
 
         let resolver = MissingCapabilityResolver::new(
             marketplace,
