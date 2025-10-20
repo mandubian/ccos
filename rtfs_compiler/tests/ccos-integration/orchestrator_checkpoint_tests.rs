@@ -53,7 +53,7 @@ fn test_checkpoint_and_resume_helpers() {
     }
 
     let (checkpoint_id, serialized) = orchestrator
-        .checkpoint_plan(&plan.plan_id, &plan.intent_ids[0], &evaluator)
+        .checkpoint_plan(&plan.plan_id, &plan.intent_ids[0], &evaluator, None)
         .expect("checkpoint should succeed");
     assert!(checkpoint_id.starts_with("cp-"));
     assert!(!serialized.is_empty());
