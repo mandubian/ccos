@@ -2,16 +2,17 @@
 
 ## Core Principles
 
-RTFS 2.0 is a **pure functional language** designed for **secure, auditable computation** within the CCOS (Cognitive Cognitive Operating System) ecosystem. Its design emphasizes **minimalism**, **extensibility**, and a **clear host boundary** that enables deterministic execution while delegating all side effects to the host environment.
+RTFS 2.0 is a **pure functional language** designed for **secure, auditable computation** within the CCOS (Cognitive Cognitive Operating System) ecosystem. Its design emphasizes **minimalism**, **extensibility**, and a **strict no-effect principle** that ensures deterministic execution by delegating all side effects to the host environment through capabilities.
 
 ## Pure Kernel with Host Boundary
 
-RTFS operates as a **pure functional kernel** that yields control to its host (CCOS) whenever non-pure operations are required. This design achieves:
+RTFS operates as a **pure functional kernel** with **zero side effects**. All effectful operations are delegated to CCOS through capabilities. This design achieves:
 
-- **Deterministic Execution**: All RTFS code is referentially transparent
-- **Security by Design**: Side effects are mediated through CCOS governance
+- **Deterministic Execution**: All RTFS code is referentially transparent with no effects
+- **Security by Design**: All effects are mediated through CCOS governance and providers
 - **Auditability**: Every host interaction is tracked in the causal chain
 - **Composability**: Pure functions can be safely combined and reasoned about
+- **Immutability**: All data structures are immutable - no mutation functions exist
 
 ### Control Flow Inversion
 

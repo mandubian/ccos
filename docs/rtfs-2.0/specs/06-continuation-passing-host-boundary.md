@@ -6,9 +6,10 @@ RTFS implements a strict separation between pure computation and external effect
 
 ### Core Philosophy
 
-- **RTFS Engine**: Pure, deterministic, side-effect-free computation
-- **Host Environment**: Manages all external interactions (I/O, time, randomness, etc.)
-- **Boundary Crossing**: Explicit, auditable transitions between pure and effectful code
+- **RTFS Engine**: Pure, deterministic, **no-effect** computation
+- **Host Environment**: Manages all external interactions through capability providers
+- **Boundary Crossing**: Explicit, auditable transitions through capability calls
+- **Provider Architecture**: Pluggable providers for different execution contexts
 
 ### Why This Matters
 
