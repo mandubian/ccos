@@ -1,8 +1,16 @@
 //! RTFS Secure Standard Library
 //!
-//! This module contains only pure, deterministic functions that are safe to execute
-//! in any context without security concerns. All dangerous operations (file I/O,
-//! network access, system calls) are moved to CCOS capabilities.
+//! This module contains only pure, deterministic functions with NO EFFECTS.
+//! RTFS is a no-effect language where all effects must be delegated to the host.
+//! 
+//! All functions in this module are:
+//! - Pure: same input always produces same output
+//! - Deterministic: no randomness or external state
+//! - No side effects: no I/O, no state mutation, no error throwing
+//! - Safe: can be executed in any context without security concerns
+//!
+//! All effectful operations (I/O, network, system calls, error handling) 
+//! are delegated to CCOS capabilities and the host runtime.
 
 use crate::ast::Symbol;
 use crate::ast::{Expression, MapKey};
@@ -15,7 +23,12 @@ use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext,
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Secure Standard Library - contains only pure, safe functions
+/// Secure Standard Library - contains only pure, no-effect functions
+/// 
+/// All functions are guaranteed to be:
+/// - Pure: deterministic output for given input
+/// - No effects: no side effects, I/O, or external interactions
+/// - Safe: can execute in any security context
 pub struct SecureStandardLibrary;
 
 impl SecureStandardLibrary {
@@ -810,25 +823,6 @@ impl SecureStandardLibrary {
             })),
         );
 
-        // GetMessage function
-        env.define(
-            &Symbol("getMessage".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "getMessage".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(Self::get_message),
-            })),
-        );
-
-        // Exception constructor
-        env.define(
-            &Symbol("Exception.".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "Exception.".to_string(),
-                arity: Arity::Variadic(1),
-                func: Arc::new(Self::exception_constructor),
-            })),
-        );
 
         // Numbers function
         env.define(
@@ -3486,11 +3480,9 @@ impl SecureStandardLibrary {
         for (index, item) in collection_vec.iter().enumerate() {
             let index_value = Value::Integer(index as i64);
             let func_args = vec![index_value, item.clone()];
-            
+
             let mapped_value = match function {
-                Value::Function(Function::Builtin(builtin_func)) => {
-                    (builtin_func.func)(func_args)?
-                }
+                Value::Function(Function::Builtin(builtin_func)) => (builtin_func.func)(func_args)?,
                 Value::Function(Function::BuiltinWithContext(builtin_func)) => {
                     (builtin_func.func)(func_args, evaluator, env)?
                 }
@@ -3698,41 +3690,6 @@ impl SecureStandardLibrary {
         }
     }
 
-    fn get_message(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "getMessage".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        match &args[0] {
-            Value::Error(err) => Ok(Value::String(err.message.clone())),
-            other => Err(RuntimeError::TypeError {
-                expected: "error".to_string(),
-                actual: other.type_name().to_string(),
-                operation: "getMessage".to_string(),
-            }),
-        }
-    }
-
-    fn exception_constructor(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "Exception.".to_string(),
-                expected: "1+".to_string(),
-                actual: args.len(),
-            });
-        }
-        let msg = match &args[0] {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        Ok(Value::Error(crate::runtime::values::ErrorValue {
-            message: msg,
-            stack_trace: None,
-        }))
-    }
 
     fn numbers(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 2 {
@@ -3760,9 +3717,7 @@ impl SecureStandardLibrary {
             return Ok(Value::Vector(vec![]));
         }
 
-        let numbers: Vec<Value> = (start_int..=end_int)
-            .map(Value::Integer)
-            .collect();
+        let numbers: Vec<Value> = (start_int..=end_int).map(Value::Integer).collect();
 
         Ok(Value::Vector(numbers))
     }
