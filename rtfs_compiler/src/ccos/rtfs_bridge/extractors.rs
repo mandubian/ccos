@@ -15,7 +15,10 @@ pub fn extract_intent_from_rtfs(expr: &Expression) -> Result<Intent, RtfsBridgeE
         }
         Expression::Map(map) => extract_intent_from_map(map),
         _ => Err(RtfsBridgeError::InvalidObjectFormat {
-            message: format!("Expected FunctionCall or Map for Intent, got {}", expression_to_rtfs_string(expr)),
+            message: format!(
+                "Expected FunctionCall or Map for Intent, got {}",
+                expression_to_rtfs_string(expr)
+            ),
         }),
     }
 }
@@ -31,7 +34,10 @@ pub fn extract_plan_from_rtfs(expr: &Expression) -> Result<Plan, RtfsBridgeError
         }
         Expression::Map(map) => extract_plan_from_map(map),
         _ => Err(RtfsBridgeError::InvalidObjectFormat {
-            message: format!("Expected FunctionCall or Map for Plan, got {}", expression_to_rtfs_string(expr)),
+            message: format!(
+                "Expected FunctionCall or Map for Plan, got {}",
+                expression_to_rtfs_string(expr)
+            ),
         }),
     }
 }
@@ -550,7 +556,13 @@ fn expression_to_string(expr: &Expression) -> String {
             let bindings = let_expr
                 .bindings
                 .iter()
-                .map(|b| format!("({} {})", pattern_to_string(&b.pattern), expression_to_string(&b.value)))
+                .map(|b| {
+                    format!(
+                        "({} {})",
+                        pattern_to_string(&b.pattern),
+                        expression_to_string(&b.value)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(" ");
 
@@ -606,11 +618,19 @@ pub fn expression_to_rtfs_string(expr: &Expression) -> String {
             format!("(do {})", exprs_str)
         }
         Expression::Vector(vec) => {
-            let vals = vec.iter().map(expression_to_rtfs_string).collect::<Vec<_>>().join(" ");
+            let vals = vec
+                .iter()
+                .map(expression_to_rtfs_string)
+                .collect::<Vec<_>>()
+                .join(" ");
             format!("[{}]", vals)
         }
         Expression::List(list) => {
-            let vals = list.iter().map(expression_to_rtfs_string).collect::<Vec<_>>().join(" ");
+            let vals = list
+                .iter()
+                .map(expression_to_rtfs_string)
+                .collect::<Vec<_>>()
+                .join(" ");
             format!("({})", vals)
         }
         Expression::Map(map) => {
@@ -632,7 +652,13 @@ pub fn expression_to_rtfs_string(expr: &Expression) -> String {
             let bindings = let_expr
                 .bindings
                 .iter()
-                .map(|b| format!("({} {})", pattern_to_string(&b.pattern), expression_to_rtfs_string(&b.value)))
+                .map(|b| {
+                    format!(
+                        "({} {})",
+                        pattern_to_string(&b.pattern),
+                        expression_to_rtfs_string(&b.value)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(" ");
 
@@ -660,7 +686,11 @@ fn pattern_to_string(pat: &Pattern) -> String {
     match pat {
         Pattern::Symbol(s) => s.0.clone(),
         Pattern::Wildcard => "_".to_string(),
-        Pattern::VectorDestructuring { elements, rest, as_symbol } => {
+        Pattern::VectorDestructuring {
+            elements,
+            rest,
+            as_symbol,
+        } => {
             let mut parts: Vec<String> = elements.iter().map(pattern_to_string).collect();
             if let Some(r) = rest {
                 parts.push(format!("& {}", r.0));
@@ -670,7 +700,11 @@ fn pattern_to_string(pat: &Pattern) -> String {
             }
             format!("[{}]", parts.join(" "))
         }
-        Pattern::MapDestructuring { entries, rest, as_symbol } => {
+        Pattern::MapDestructuring {
+            entries,
+            rest,
+            as_symbol,
+        } => {
             let mut parts: Vec<String> = Vec::new();
             for entry in entries {
                 match entry {
@@ -683,7 +717,11 @@ fn pattern_to_string(pat: &Pattern) -> String {
                         parts.push(format!("{} {}", key_str, pattern_to_string(pattern)));
                     }
                     crate::ast::MapDestructuringEntry::Keys(keys) => {
-                        let ks = keys.iter().map(|k| k.0.clone()).collect::<Vec<_>>().join(" ");
+                        let ks = keys
+                            .iter()
+                            .map(|k| k.0.clone())
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         parts.push(format!(":keys [{}]", ks));
                     }
                 }
@@ -758,7 +796,11 @@ pub fn capability_def_to_rtfs_string(cap: &crate::ast::CapabilityDefinition) -> 
         // property.key is a Keyword (wrapped struct) - we want the raw string without leading ':'
         let key = prop.key.0.clone();
         // Ensure keyword is prefixed with ':' for canonical form
-        let key_formatted = if key.starts_with(':') { key } else { format!(":{}", key) };
+        let key_formatted = if key.starts_with(':') {
+            key
+        } else {
+            format!(":{}", key)
+        };
         parts.push(key_formatted);
         // Serialize the value expression
         let val = expression_to_rtfs_string(&prop.value);

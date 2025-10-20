@@ -485,7 +485,9 @@ impl From<Expression> for Value {
                 let mut result_map = std::collections::HashMap::new();
                 for (key, value_expr) in metadata_map {
                     // Convert nested expressions to a readable RTFS string instead of Debug
-                    let value_str = crate::ccos::rtfs_bridge::extractors::expression_to_rtfs_string(&value_expr);
+                    let value_str = crate::ccos::rtfs_bridge::extractors::expression_to_rtfs_string(
+                        &value_expr,
+                    );
                     result_map.insert(key, Value::String(value_str));
                 }
                 Value::Map(result_map)

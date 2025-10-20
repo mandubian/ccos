@@ -208,7 +208,7 @@ impl RtfsStreamingSyntaxExecutor {
         &self,
         handle: StreamHandle,
     ) -> Result<(), crate::runtime::error::RuntimeError> {
-        let mut stop_tx = handle.stop_tx;
+        let stop_tx = handle.stop_tx;
         stop_tx.send(()).await.map_err(|e| {
             crate::runtime::error::RuntimeError::Generic(format!("failed to signal stop: {}", e))
         })

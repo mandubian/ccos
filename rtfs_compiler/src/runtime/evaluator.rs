@@ -760,7 +760,8 @@ impl Evaluator {
             _ => {
                 return Err(RuntimeError::InvalidArguments {
                     expected: "a string for the step name".to_string(),
-                    actual: serde_json::to_string(&args[0]).unwrap_or_else(|_| format!("{:?}", args[0])),
+                    actual: serde_json::to_string(&args[0])
+                        .unwrap_or_else(|_| format!("{:?}", args[0])),
                 })
             }
         };
@@ -794,7 +795,8 @@ impl Evaluator {
                                 } else {
                                     return Err(RuntimeError::InvalidArguments {
                                         expected: "vector of strings for :context-keys".to_string(),
-                                        actual: serde_json::to_string(&e).unwrap_or_else(|_| format!("{:?}", e)),
+                                        actual: serde_json::to_string(&e)
+                                            .unwrap_or_else(|_| format!("{:?}", e)),
                                     });
                                 }
                             }
@@ -811,7 +813,8 @@ impl Evaluator {
                                 } else {
                                     return Err(RuntimeError::InvalidArguments {
                                         expected: "string keys in :params map".to_string(),
-                                        actual: serde_json::to_string(&mk).unwrap_or_else(|_| format!("{:?}", mk)),
+                                        actual: serde_json::to_string(&mk)
+                                            .unwrap_or_else(|_| format!("{:?}", mk)),
                                     });
                                 }
                             }
@@ -976,7 +979,8 @@ impl Evaluator {
                                 } else {
                                     return Err(RuntimeError::InvalidArguments {
                                         expected: "vector of strings for :context-keys".to_string(),
-                                        actual: serde_json::to_string(&e).unwrap_or_else(|_| format!("{:?}", e)),
+                                        actual: serde_json::to_string(&e)
+                                            .unwrap_or_else(|_| format!("{:?}", e)),
                                     });
                                 }
                             }
@@ -1133,7 +1137,8 @@ impl Evaluator {
                                 } else {
                                     return Err(RuntimeError::InvalidArguments {
                                         expected: "vector of strings for :context-keys".to_string(),
-                                        actual: serde_json::to_string(&e).unwrap_or_else(|_| format!("{:?}", e)),
+                                        actual: serde_json::to_string(&e)
+                                            .unwrap_or_else(|_| format!("{:?}", e)),
                                     });
                                 }
                             }
@@ -1310,7 +1315,8 @@ impl Evaluator {
                                 } else {
                                     return Err(RuntimeError::InvalidArguments {
                                         expected: "vector of strings for :context-keys".to_string(),
-                                        actual: serde_json::to_string(&e).unwrap_or_else(|_| format!("{:?}", e)),
+                                        actual: serde_json::to_string(&e)
+                                            .unwrap_or_else(|_| format!("{:?}", e)),
                                     });
                                 }
                             }
@@ -1477,7 +1483,8 @@ impl Evaluator {
                 _ => {
                     return Err(RuntimeError::InvalidArguments {
                         expected: "a keyword or symbol when using (get :key) shorthand".to_string(),
-                        actual: serde_json::to_string(&args[0]).unwrap_or_else(|_| format!("{:?}", args[0])),
+                        actual: serde_json::to_string(&args[0])
+                            .unwrap_or_else(|_| format!("{:?}", args[0])),
                     })
                 }
             }
@@ -1555,7 +1562,8 @@ impl Evaluator {
                         ExecutionOutcome::Complete(other) => {
                             return Err(RuntimeError::InvalidArguments {
                                 expected: "prompt string".to_string(),
-                                actual: serde_json::to_string(&other).unwrap_or_else(|_| format!("{:?}", other)),
+                                actual: serde_json::to_string(&other)
+                                    .unwrap_or_else(|_| format!("{:?}", other)),
                             })
                         }
                         ExecutionOutcome::RequiresHost(hc) => {
@@ -1570,7 +1578,8 @@ impl Evaluator {
                 ExecutionOutcome::Complete(other) => {
                     return Err(RuntimeError::InvalidArguments {
                         expected: "model id string".to_string(),
-                        actual: serde_json::to_string(&other).unwrap_or_else(|_| format!("{:?}", other)),
+                        actual: serde_json::to_string(&other)
+                            .unwrap_or_else(|_| format!("{:?}", other)),
                     })
                 }
                 ExecutionOutcome::RequiresHost(hc) => {
@@ -1622,7 +1631,8 @@ impl Evaluator {
                     (k, v) => {
                         return Err(RuntimeError::InvalidArguments {
                             expected: format!("string value for {}", k),
-                            actual: serde_json::to_string(&v).unwrap_or_else(|_| format!("{:?}", v)),
+                            actual: serde_json::to_string(&v)
+                                .unwrap_or_else(|_| format!("{:?}", v)),
                         });
                     }
                 }

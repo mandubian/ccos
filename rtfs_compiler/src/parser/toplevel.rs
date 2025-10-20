@@ -299,27 +299,26 @@ fn build_import_definition(
     mut pairs: Pairs<Rule>,
 ) -> Result<ImportDefinition, PestParseError> {
     let parent_span = pair_to_source_span(parent_pair);
-    
+
     // Skip the import keyword
     next_significant(&mut pairs).ok_or_else(|| PestParseError::CustomError {
         message: "Expected import keyword in import_definition".to_string(),
         span: Some(parent_span.clone()),
     })?;
-    
+
     // Parse module name (symbol or namespaced identifier)
-    let module_name_pair = next_significant(&mut pairs).ok_or_else(|| PestParseError::CustomError {
-        message: "Expected module name in import_definition".to_string(),
-        span: Some(parent_span.clone()),
-    })?;
-    
+    let module_name_pair =
+        next_significant(&mut pairs).ok_or_else(|| PestParseError::CustomError {
+            message: "Expected module name in import_definition".to_string(),
+            span: Some(parent_span.clone()),
+        })?;
+
     let module_name = match module_name_pair.as_rule() {
         Rule::symbol => {
             let symbol_pair = module_name_pair.into_inner().next().unwrap();
             Symbol(symbol_pair.as_str().to_string())
         }
-        Rule::namespaced_identifier => {
-            Symbol(module_name_pair.as_str().to_string())
-        }
+        Rule::namespaced_identifier => Symbol(module_name_pair.as_str().to_string()),
         _ => {
             return Err(PestParseError::CustomError {
                 message: "Expected symbol or namespaced identifier for module name".to_string(),
@@ -327,11 +326,11 @@ fn build_import_definition(
             });
         }
     };
-    
+
     // Parse optional import options (:as alias, :only [symbols])
     let mut alias = None;
     let mut only = None;
-    
+
     while let Some(option_pair) = next_significant(&mut pairs) {
         match option_pair.as_rule() {
             Rule::import_option => {
@@ -375,7 +374,7 @@ fn build_import_definition(
             }
         }
     }
-    
+
     Ok(ImportDefinition {
         module_name,
         alias,

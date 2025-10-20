@@ -808,6 +808,15 @@ impl SecureStandardLibrary {
         );
 
         env.define(
+            &Symbol("list?".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "list?".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::list_p),
+            })),
+        );
+
+        env.define(
             &Symbol("keyword?".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "keyword?".to_string(),
@@ -1538,6 +1547,18 @@ impl SecureStandardLibrary {
             });
         }
         Ok(Value::Boolean(matches!(args[0], Value::Vector(_))))
+    }
+
+    fn list_p(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "list?".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::List(_))))
     }
 
     fn keyword_p(args: Vec<Value>) -> RuntimeResult<Value> {

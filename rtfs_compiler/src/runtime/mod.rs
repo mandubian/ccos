@@ -124,7 +124,7 @@ impl Runtime {
     pub fn evaluate(&self, input: &str) -> Result<Value, RuntimeError> {
         let parsed = match parser::parse(input) {
             Ok(p) => p,
-                Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {}", e))),
+            Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {}", e))),
         };
         let module_registry = ModuleRegistry::new();
         let security_context = RuntimeContext::pure();
@@ -217,14 +217,18 @@ impl RTFSRuntime for Runtime {
         let expr: Expression = if toplevels.len() == 1 {
             match toplevels.remove(0) {
                 TopLevel::Expression(e) => e,
-                other => Expression::Literal(Literal::String(serde_json::to_string(&other).unwrap_or_else(|_| format!("{:?}", other)))),
+                other => Expression::Literal(Literal::String(
+                    serde_json::to_string(&other).unwrap_or_else(|_| format!("{:?}", other)),
+                )),
             }
         } else {
             let exprs: Vec<Expression> = toplevels
                 .into_iter()
                 .map(|t| match t {
                     TopLevel::Expression(e) => e,
-                    other => Expression::Literal(Literal::String(serde_json::to_string(&other).unwrap_or_else(|_| format!("{:?}", other)))),
+                    other => Expression::Literal(Literal::String(
+                        serde_json::to_string(&other).unwrap_or_else(|_| format!("{:?}", other)),
+                    )),
                 })
                 .collect();
             Expression::Do(DoExpr { expressions: exprs })
