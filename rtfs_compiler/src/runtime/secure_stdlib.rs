@@ -1216,24 +1216,24 @@ impl SecureStandardLibrary {
         let args = args.as_slice();
         for arg in args {
             if !arg.is_truthy() {
-                // If any argument is falsy, return Boolean(false)
-                return Ok(Value::Boolean(false));
+                // Return the first falsy value (preserve original semantics)
+                return Ok(arg.clone());
             }
         }
-        // If all arguments are truthy or no arguments, return Boolean(true)
-        Ok(Value::Boolean(true))
+        // If all arguments are truthy, return the last argument or true if none
+        Ok(args.last().cloned().unwrap_or(Value::Boolean(true)))
     }
 
     fn or(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         for arg in args {
             if arg.is_truthy() {
-                // If any argument is truthy, return Boolean(true)
-                return Ok(Value::Boolean(true));
+                // Return the first truthy value (preserve original semantics)
+                return Ok(arg.clone());
             }
         }
-        // If all arguments are falsy or no arguments, return Boolean(false)
-        Ok(Value::Boolean(false))
+        // If all arguments are falsy or no arguments, return the last argument or Nil
+        Ok(args.last().cloned().unwrap_or(Value::Nil))
     }
 
     fn not(args: Vec<Value>) -> RuntimeResult<Value> {

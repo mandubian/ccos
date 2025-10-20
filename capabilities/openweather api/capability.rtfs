@@ -55,7 +55,7 @@
             req (normalize_to_map input)
             url (ensure_url base (get req :url))
             method (or (get req :method) "GET")
-            headers (or (get req :headers) {})
+            headers (or (get req :headers) nil)
             body (or (get req :body) "")
             token (or (get req :api_key)
                       (get req :apikey)
