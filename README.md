@@ -199,7 +199,11 @@ To understand my world, you can explore its design and implementation:
                 :path   outfile })))
         ```
     *   Guides
-        *   [Streaming Basics](./docs/rtfs-2.0/guides/streaming-basics.md)
+        *   [Quick Start](./docs/ccos/guides/quick-start.md) - Get started with CCOS demos
+        *   [Goal Examples](./docs/ccos/guides/goal-examples.md) - Examples of goal-agnostic demos
+        *   [MicroVM Security](./docs/ccos/guides/microvm-security.md) - Security and isolation guide
+        *   [Streaming Basics](./docs/rtfs-2.0/guides/streaming-basics.md) - RTFS streaming capabilities
+        *   [Streaming Roadmap](./docs/rtfs-2.0/guides/streaming-roadmap.md) - RTFS streaming development plan
 
 3.  **See the Code**:
     *   Reference Implementation (Rust): `./rtfs_compiler/`

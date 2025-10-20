@@ -1,0 +1,77 @@
+;; Capability metadata for openweather api API
+;; Generated from web discovery
+;; Source URL: https://openweathermap.org/api
+
+(capability "openweather api"
+  :name "openweather api API"
+  :version "1.0.0"
+  :description "HTTP API discovered from https://openweathermap.org/api"
+  :source_url "https://openweathermap.org/api"
+  :discovery_method "web_search"
+  :created_at "2025-10-19T13:11:41.946761085+00:00"
+  :capability_type "generic_http_api"
+  :permissions [:network.http]
+  :effects [:network_request]
+  :input-schema :any
+  :output-schema :any
+  :implementation
+    (do
+      ;; binding input convention: the host passes a single value as 'input'
+      ;; input may be a string endpoint, a list of keyword pairs, or a map
+      (defn ensure_url [base maybe]
+        (if (or (starts-with? maybe "http://") (starts-with? maybe "https://"))
+          maybe
+          (if (starts-with? maybe "/")
+            (str base maybe)
+            (str base "/" maybe))))
+
+      (defn normalize_to_map [in]
+        (if (string? in)
+          {:method "GET" :url in}
+          (if (list? in)
+            (apply hash-map in)
+            (if (map? in)
+              in
+              {:method "GET" :url (str in)}))))
+
+      (defn has_query? [url]
+        (> (count (split url "?")) 1))
+
+      (defn append_query [url param value]
+        (if (has_query? url)
+          (str url "&" param "=" value)
+          (str url "?" param "=" value)))
+
+      (defn ensure_parameter [url param value]
+        (if (or (not value) (= value ""))
+          url
+          (let [string_value (str value)
+                marker (str param "=")]
+            (if (> (count (split url marker)) 1)
+              url
+              (append_query url param string_value)))))
+
+      (let [base "https://openweathermap.org"
+            req (normalize_to_map input)
+            url (ensure_url base (get req :url))
+            method (or (get req :method) "GET")
+            headers (or (get req :headers) {})
+            body (or (get req :body) "")
+            token (or (get req :api_key)
+                      (get req :apikey)
+                      (get req :key)
+                      (get req :token)
+                      (get req :access_token)
+                      (get req :appid)
+                      (call "ccos.system.get-env" "OPENWEATHERMAP_ORG_API_KEY"))
+            url_with_primary (ensure_parameter url "api_key" token)
+            final_url (ensure_parameter url_with_primary "apikey" token)]
+        (call "ccos.network.http-fetch"
+          :method method
+          :url final_url
+          :headers headers
+          :body body))))
+
+;; Optional helpers (commented out)
+;; (defn is-recent? [] (< (days-since (parse-date "2025-10-19T13:11:41.946761085+00:00")) 30))
+;; (defn source-domain [] (second (split "https://openweathermap.org/api" "/")))
