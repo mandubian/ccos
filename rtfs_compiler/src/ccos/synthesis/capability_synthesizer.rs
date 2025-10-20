@@ -115,14 +115,20 @@ impl CapabilitySynthesizer {
         ));
 
         prompt.push_str("CRITICAL SAFETY RULES - MUST FOLLOW:\n");
-        prompt.push_str("1. Use RTFS keyword types: :string, :number, :currency (NOT \"string\", \"number\")\n");
+        prompt.push_str(
+            "1. Use RTFS keyword types: :string, :number, :currency (NOT \"string\", \"number\")\n",
+        );
         prompt.push_str("2. NEVER hardcode credentials or API keys\n");
         prompt.push_str("3. NEVER make direct HTTP calls\n");
-        prompt.push_str("4. ALL network operations MUST use (call \"ccos.network.http-fetch\" ...)\n");
+        prompt.push_str(
+            "4. ALL network operations MUST use (call \"ccos.network.http-fetch\" ...)\n",
+        );
         prompt.push_str("5. Auth tokens MUST use (call :ccos.auth.inject ...)\n");
         prompt.push_str("6. Function signature: (defn impl [... :string] :map)\n");
-        prompt.push_str("7. Return format: {:status :success :result ...} or {:status :error :message ...}\n\n");
-        
+        prompt.push_str(
+            "7. Return format: {:status :success :result ...} or {:status :error :message ...}\n\n",
+        );
+
         prompt.push_str("CCOS HTTP CAPABILITY INTERFACE:\n");
         prompt.push_str("- Capability ID: \"ccos.network.http-fetch\"\n");
         prompt.push_str("- Map format: (call \"ccos.network.http-fetch\" {:url \"https://...\" :method \"GET\" :headers {...} :body \"...\"})\n");
@@ -161,13 +167,17 @@ impl CapabilitySynthesizer {
     }
 
     /// Run static analysis checks on generated code
-    fn run_static_analysis(&self, code: &str) -> RuntimeResult<(bool, Vec<String>)> {
+    pub fn run_static_analysis(&self, code: &str) -> RuntimeResult<(bool, Vec<String>)> {
         let mut passed = true;
         let mut warnings = Vec::new();
 
         // Check 1: No hardcoded credentials
-        if code.contains("sk_") || code.contains("pk_") || code.contains("ghp_") || 
-           code.contains("Bearer ") || code.contains("Basic ") {
+        if code.contains("sk_")
+            || code.contains("pk_")
+            || code.contains("ghp_")
+            || code.contains("Bearer ")
+            || code.contains("Basic ")
+        {
             passed = false;
             warnings.push("Found hardcoded credentials in generated code".to_string());
         }
@@ -189,7 +199,10 @@ impl CapabilitySynthesizer {
         }
 
         // Check 4: Uses keyword types, not string literals
-        if code.contains("\"string\"") || code.contains("\"number\"") || code.contains("\"boolean\"") {
+        if code.contains("\"string\"")
+            || code.contains("\"number\"")
+            || code.contains("\"boolean\"")
+        {
             warnings.push("Found string literal types instead of keyword types".to_string());
         }
 
@@ -233,22 +246,24 @@ impl CapabilitySynthesizer {
     }
 
     /// Calculate quality score for synthesized capability
-    fn calculate_quality_score(&self, request: &SynthesisRequest, result: &SynthesisResult) -> f64 {
+    pub fn calculate_quality_score(&self, request: &SynthesisRequest, result: &SynthesisResult) -> f64 {
         let mut score = 0.5; // Base score
 
         // Check if input schema is properly handled
         if let Some(input_schema) = &request.input_schema {
             let expected_params = self.json_schema_to_rtfs_params(input_schema);
-            let actual_params: HashMap<String, String> = result.capability.metadata
+            let actual_params: HashMap<String, String> = result
+                .capability
+                .metadata
                 .get("parameters")
                 .and_then(|p| serde_json::from_str(p).ok())
                 .unwrap_or_default();
 
-            let param_match_ratio = expected_params.iter()
-                .filter(|(name, expected_type)| {
-                    actual_params.get(*name) == Some(expected_type)
-                })
-                .count() as f64 / expected_params.len().max(1) as f64;
+            let param_match_ratio = expected_params
+                .iter()
+                .filter(|(name, expected_type)| actual_params.get(*name) == Some(expected_type))
+                .count() as f64
+                / expected_params.len().max(1) as f64;
 
             score += param_match_ratio * 0.3;
         }
@@ -272,9 +287,12 @@ impl CapabilitySynthesizer {
     }
 
     /// Generate mock capability for testing
-    fn generate_mock_capability(&self, request: &SynthesisRequest) -> RuntimeResult<SynthesisResult> {
+    fn generate_mock_capability(
+        &self,
+        request: &SynthesisRequest,
+    ) -> RuntimeResult<SynthesisResult> {
         let capability_id = format!("synthesized.{}", request.capability_name);
-        
+
         let mut effects = vec![":network".to_string()];
         let mut metadata = HashMap::new();
         let mut implementation_code = String::new();
@@ -290,7 +308,8 @@ impl CapabilitySynthesizer {
         }
 
         // Generate basic implementation
-        implementation_code.push_str("(let response (call :http.get {:url \"https://api.example.com/endpoint\"");
+        implementation_code
+            .push_str("(let response (call :http.get {:url \"https://api.example.com/endpoint\"");
         if request.requires_auth {
             implementation_code.push_str(" :headers {:Authorization auth}");
         }
@@ -315,13 +334,16 @@ impl CapabilitySynthesizer {
         let capability = CapabilityManifest {
             id: capability_id.clone(),
             name: request.capability_name.clone(),
-            description: request.description.clone().unwrap_or_else(|| {
-                format!("Synthesized capability: {}", request.capability_name)
-            }),
+            description: request
+                .description
+                .clone()
+                .unwrap_or_else(|| format!("Synthesized capability: {}", request.capability_name)),
             provider: crate::ccos::capability_marketplace::types::ProviderType::Local(
                 crate::ccos::capability_marketplace::types::LocalCapability {
                     handler: std::sync::Arc::new(|_| {
-                        Ok(crate::runtime::values::Value::String("Synthesized capability placeholder".to_string()))
+                        Ok(crate::runtime::values::Value::String(
+                            "Synthesized capability placeholder".to_string(),
+                        ))
                     }),
                 },
             ),
@@ -348,13 +370,16 @@ impl CapabilitySynthesizer {
         warnings.push("This capability was synthesized and should be reviewed".to_string());
         warnings.push("Implementation is minimal and may need refinement".to_string());
 
-        let quality_score = self.calculate_quality_score(request, &SynthesisResult {
-            capability: capability.clone(),
-            implementation_code: implementation_code.clone(),
-            quality_score: 0.0,
-            safety_passed: true,
-            warnings: warnings.clone(),
-        });
+        let quality_score = self.calculate_quality_score(
+            request,
+            &SynthesisResult {
+                capability: capability.clone(),
+                implementation_code: implementation_code.clone(),
+                quality_score: 0.0,
+                safety_passed: true,
+                warnings: warnings.clone(),
+            },
+        );
 
         Ok(SynthesisResult {
             capability,
@@ -369,7 +394,12 @@ impl CapabilitySynthesizer {
     pub fn validate_governance(&self, capability: &CapabilityManifest) -> RuntimeResult<bool> {
         // Check 1: Effects are properly declared
         if capability.effects.contains(&":auth".to_string()) {
-            if !capability.metadata.get("auth_required").map(|v| v == "true").unwrap_or(false) {
+            if !capability
+                .metadata
+                .get("auth_required")
+                .map(|v| v == "true")
+                .unwrap_or(false)
+            {
                 return Err(RuntimeError::Generic(
                     "Capability with :auth effect must have auth_required metadata".to_string(),
                 ));
@@ -377,8 +407,18 @@ impl CapabilitySynthesizer {
         }
 
         // Check 2: Synthesized capabilities are marked appropriately
-        if capability.metadata.get("source").map(|v| v == "synthesized").unwrap_or(false) {
-            if !capability.metadata.get("guardrailed").map(|v| v == "true").unwrap_or(false) {
+        if capability
+            .metadata
+            .get("source")
+            .map(|v| v == "synthesized")
+            .unwrap_or(false)
+        {
+            if !capability
+                .metadata
+                .get("guardrailed")
+                .map(|v| v == "true")
+                .unwrap_or(false)
+            {
                 return Err(RuntimeError::Generic(
                     "Synthesized capabilities must be marked as guardrailed".to_string(),
                 ));
@@ -422,13 +462,22 @@ mod tests {
         let synthesizer = CapabilitySynthesizer::mock();
 
         let string_schema = serde_json::json!({"type": "string"});
-        assert_eq!(synthesizer.json_type_to_rtfs_type(&string_schema), ":string");
+        assert_eq!(
+            synthesizer.json_type_to_rtfs_type(&string_schema),
+            ":string"
+        );
 
         let number_schema = serde_json::json!({"type": "number"});
-        assert_eq!(synthesizer.json_type_to_rtfs_type(&number_schema), ":number");
+        assert_eq!(
+            synthesizer.json_type_to_rtfs_type(&number_schema),
+            ":number"
+        );
 
         let boolean_schema = serde_json::json!({"type": "boolean"});
-        assert_eq!(synthesizer.json_type_to_rtfs_type(&boolean_schema), ":boolean");
+        assert_eq!(
+            synthesizer.json_type_to_rtfs_type(&boolean_schema),
+            ":boolean"
+        );
     }
 
     #[test]
@@ -468,7 +517,7 @@ mod tests {
         };
 
         let result = synthesizer.synthesize_capability(&request).await.unwrap();
-        
+
         assert!(result.capability.id.contains("synthesized.test_api"));
         assert!(result.capability.effects.contains(&":auth".to_string()));
         assert!(result.safety_passed);
@@ -486,7 +535,9 @@ mod tests {
             description: "test".to_string(),
             provider: crate::ccos::capability_marketplace::types::ProviderType::Local(
                 crate::ccos::capability_marketplace::types::LocalCapability {
-                    handler: std::sync::Arc::new(|_| Ok(crate::runtime::values::Value::String("test".to_string()))),
+                    handler: std::sync::Arc::new(|_| {
+                        Ok(crate::runtime::values::Value::String("test".to_string()))
+                    }),
                 },
             ),
             version: "1.0.0".to_string(),
@@ -531,11 +582,11 @@ mod tests {
         };
 
         let prompt = synthesizer.generate_synthesis_prompt(&request);
-        
+
         assert!(prompt.contains("github_repos"));
         assert!(prompt.contains("CRITICAL SAFETY RULES"));
         assert!(prompt.contains(":string"));
-        assert!(prompt.contains("(call :http.*"));
+        assert!(prompt.contains("(call") && prompt.contains("ccos.network.http-fetch"));
         assert!(prompt.contains("Get GitHub repository info"));
     }
 }

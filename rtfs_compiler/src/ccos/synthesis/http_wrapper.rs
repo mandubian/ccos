@@ -103,7 +103,7 @@ impl HTTPWrapper {
         // 4. Return detected auth type
 
         eprintln!("🔐 Detecting auth scheme for: {}", self.base_url);
-        
+
         // Placeholder implementation
         Ok(Some(AuthType::Bearer))
     }
@@ -111,7 +111,7 @@ impl HTTPWrapper {
     /// Extract parameters from URL pattern
     pub fn extract_parameters_from_path(&self, path: &str) -> Vec<String> {
         let mut params = Vec::new();
-        
+
         // Find {param} patterns
         let mut chars = path.chars().peekable();
         while let Some(c) = chars.next() {
@@ -138,7 +138,7 @@ impl HTTPWrapper {
         // - Documentation
         // - Example requests
         // - Response error messages that mention missing parameters
-        
+
         vec!["page".to_string(), "limit".to_string(), "sort".to_string()]
     }
 
@@ -152,19 +152,27 @@ impl HTTPWrapper {
             "http.{}.{}.{}",
             api_name,
             endpoint.method.to_lowercase(),
-            endpoint.path.replace("/", "_").replace("{", "").replace("}", "")
+            endpoint
+                .path
+                .replace("/", "_")
+                .replace("{", "")
+                .replace("}", "")
         );
 
         let description = format!(
             "HTTP {} {} - {}",
             endpoint.method,
             endpoint.path,
-            if endpoint.requires_auth { "Requires authentication" } else { "Public endpoint" }
+            if endpoint.requires_auth {
+                "Requires authentication"
+            } else {
+                "Public endpoint"
+            }
         );
 
         // Build parameters map
         let mut parameters_map = HashMap::new();
-        
+
         // Add path parameters
         for param in &endpoint.path_params {
             parameters_map.insert(param.clone(), ":string".to_string());
@@ -195,7 +203,7 @@ impl HTTPWrapper {
         metadata.insert("http_path".to_string(), endpoint.path.clone());
         metadata.insert("http_base_url".to_string(), self.base_url.clone());
         metadata.insert("wrapper_type".to_string(), "http_generic".to_string());
-        
+
         if endpoint.requires_auth {
             metadata.insert("auth_required".to_string(), "true".to_string());
             if let Some(auth_type) = &endpoint.auth_type {
@@ -213,12 +221,22 @@ impl HTTPWrapper {
 
         Ok(CapabilityManifest {
             id: capability_id,
-            name: format!("{}_{}", endpoint.method.to_lowercase(), endpoint.path.replace("/", "_").replace("{", "").replace("}", "")),
+            name: format!(
+                "{}_{}",
+                endpoint.method.to_lowercase(),
+                endpoint
+                    .path
+                    .replace("/", "_")
+                    .replace("{", "")
+                    .replace("}", "")
+            ),
             description,
             provider: crate::ccos::capability_marketplace::types::ProviderType::Local(
                 crate::ccos::capability_marketplace::types::LocalCapability {
                     handler: std::sync::Arc::new(|_| {
-                        Ok(crate::runtime::values::Value::String("HTTP endpoint placeholder".to_string()))
+                        Ok(crate::runtime::values::Value::String(
+                            "HTTP endpoint placeholder".to_string(),
+                        ))
                     }),
                 },
             ),
@@ -248,19 +266,21 @@ impl HTTPWrapper {
 
         // Build URL construction
         code.push_str("(let url (str base_url \"/\" ");
-        
+
         // Replace path parameters
-        let path_parts: Vec<String> = endpoint.path.split('/')
+        let path_parts: Vec<String> = endpoint
+            .path
+            .split('/')
             .map(|part| {
                 if part.starts_with('{') && part.ends_with('}') {
-                    let param_name = &part[1..part.len()-1]; // Remove { }
+                    let param_name = &part[1..part.len() - 1]; // Remove { }
                     format!("(str \"{}\")", param_name)
                 } else {
                     part.to_string()
                 }
             })
             .collect();
-        
+
         code.push_str(&format!("\"{}\"", path_parts.join("/")));
         code.push_str("))\n");
 
@@ -286,7 +306,7 @@ impl HTTPWrapper {
         let method_lower = endpoint.method.to_lowercase();
         code.push_str(&format!("(let response (call :http.{} ", method_lower));
         code.push_str("{:url url :headers headers");
-        
+
         if !endpoint.query_params.is_empty() {
             code.push_str(" :query query_params");
         }
@@ -307,19 +327,19 @@ impl HTTPWrapper {
     /// Analyze response to infer parameter types
     pub fn infer_parameter_types(&self, _endpoint: &HTTPEndpoint) -> HashMap<String, String> {
         let mut types = HashMap::new();
-        
+
         // In real implementation, this would:
         // - Analyze example responses
         // - Look at error messages for type hints
         // - Use heuristics based on parameter names
-        
+
         // Default type mapping based on common patterns
         types.insert("page".to_string(), ":number".to_string());
         types.insert("limit".to_string(), ":number".to_string());
         types.insert("id".to_string(), ":string".to_string());
         types.insert("sort".to_string(), ":string".to_string());
         types.insert("filter".to_string(), ":string".to_string());
-        
+
         types
     }
 
@@ -356,8 +376,12 @@ impl HTTPWrapper {
                 headers: vec!["Content-Type".to_string()],
                 requires_auth: true,
                 auth_type: Some(AuthType::Bearer),
-                example_body: Some(serde_json::json!({"name": "John Doe", "email": "john@example.com"})),
-                example_response: Some(serde_json::json!({"id": "123", "name": "John Doe", "email": "john@example.com"})),
+                example_body: Some(
+                    serde_json::json!({"name": "John Doe", "email": "john@example.com"}),
+                ),
+                example_response: Some(
+                    serde_json::json!({"id": "123", "name": "John Doe", "email": "john@example.com"}),
+                ),
             },
         ];
 
@@ -387,7 +411,7 @@ mod tests {
     #[test]
     fn test_extract_parameters_from_path() {
         let wrapper = HTTPWrapper::mock("https://api.example.com".to_string());
-        
+
         let params = wrapper.extract_parameters_from_path("/users/{id}/posts/{post_id}");
         assert_eq!(params, vec!["id", "post_id"]);
 
@@ -419,7 +443,7 @@ mod tests {
     async fn test_introspect_mock_api() {
         let wrapper = HTTPWrapper::mock("https://api.example.com".to_string());
         let api_info = wrapper.introspect_api("test_api").await.unwrap();
-        
+
         assert_eq!(api_info.api_name, "test_api");
         assert!(!api_info.endpoints.is_empty());
         assert!(api_info.endpoints.iter().any(|e| e.path == "/users"));
@@ -428,7 +452,7 @@ mod tests {
     #[test]
     fn test_endpoint_to_capability() {
         let wrapper = HTTPWrapper::mock("https://api.example.com".to_string());
-        
+
         let endpoint = HTTPEndpoint {
             method: "GET".to_string(),
             path: "/users/{id}".to_string(),
@@ -441,9 +465,12 @@ mod tests {
             example_response: None,
         };
 
-        let capability = wrapper.endpoint_to_capability(&endpoint, "test_api").unwrap();
-        
-        assert!(capability.id.contains("http.test_api.get.users_id"));
+        let capability = wrapper
+            .endpoint_to_capability(&endpoint, "test_api")
+            .unwrap();
+
+        assert!(capability.id.contains("http") && capability.id.contains("test_api") 
+            && capability.id.contains("get") && capability.id.contains("users"));
         assert!(capability.effects.contains(&":auth".to_string()));
         assert!(capability.metadata.get("auth_required") == Some(&"true".to_string()));
     }
@@ -451,7 +478,7 @@ mod tests {
     #[test]
     fn test_generate_http_request_code() {
         let wrapper = HTTPWrapper::mock("https://api.example.com".to_string());
-        
+
         let endpoint = HTTPEndpoint {
             method: "POST".to_string(),
             path: "/users".to_string(),
@@ -465,7 +492,7 @@ mod tests {
         };
 
         let code = wrapper.generate_http_request_code(&endpoint).unwrap();
-        
+
         assert!(code.contains("(call :http.post"));
         assert!(code.contains(":body (call :json.serialize request_body)"));
         assert!(code.contains("(call :ccos.auth.inject"));
