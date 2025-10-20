@@ -133,11 +133,14 @@ pub struct DelegationConfig {
 }
 
 /// Agent registry configuration
-/// 
+///
 /// # Deprecation Notice
 /// This struct is deprecated. Use CapabilityMarketplace configuration instead.
 /// See AgentRegistryShim for backward compatibility.
-#[deprecated(since = "0.1.0", note = "Use CapabilityMarketplace configuration instead")]
+#[deprecated(
+    since = "0.1.0",
+    note = "Use CapabilityMarketplace configuration instead"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRegistryConfig {
     /// Registry type (in_memory, database, etc.)
@@ -160,11 +163,14 @@ pub enum RegistryType {
 }
 
 /// Agent definition
-/// 
+///
 /// # Deprecation Notice
 /// This struct is deprecated. Use CapabilityMarketplace with :kind :agent capabilities instead.
 /// See AgentRegistryShim for backward compatibility.
-#[deprecated(since = "0.1.0", note = "Use CapabilityMarketplace with :kind :agent capabilities instead")]
+#[deprecated(
+    since = "0.1.0",
+    note = "Use CapabilityMarketplace with :kind :agent capabilities instead"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentDefinition {
     /// Unique agent identifier

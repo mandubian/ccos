@@ -270,14 +270,18 @@ impl LlmArbiter {
             .unwrap_or_default();
         let store = FilePromptStore::new("assets/prompts/arbiter");
         let manager = PromptManager::new(store);
-        let context_str = serde_json::to_string(&context).unwrap_or_else(|_| format!("{:?}", context));
+        let context_str =
+            serde_json::to_string(&context).unwrap_or_else(|_| format!("{:?}", context));
         let available_capabilities = vec!["ccos.echo".to_string(), "ccos.math.add".to_string()];
         let available_caps_str = serde_json::to_string(&available_capabilities)
             .unwrap_or_else(|_| format!("{:?}", available_capabilities));
         let mut vars = std::collections::HashMap::new();
         vars.insert("natural_language".to_string(), natural_language.to_string());
         vars.insert("context".to_string(), context_str.clone());
-        vars.insert("available_capabilities".to_string(), available_caps_str.clone());
+        vars.insert(
+            "available_capabilities".to_string(),
+            available_caps_str.clone(),
+        );
 
         manager
             .render(
@@ -299,7 +303,9 @@ impl LlmArbiter {
         s.push_str(&intent.goal);
         s.push_str("\n\nAvailable capabilities: ");
         s.push_str(&available_caps_str);
-        s.push_str("\n\nGenerate a plan using RTFS syntax with step special forms. The plan should:\n");
+        s.push_str(
+            "\n\nGenerate a plan using RTFS syntax with step special forms. The plan should:\n",
+        );
         s.push_str("1. Use (step \"Step Name\" (call :capability.name args)) for each step\n");
         s.push_str("2. Use (do ...) to group multiple steps\n");
         s.push_str("3. Include appropriate error handling\n");

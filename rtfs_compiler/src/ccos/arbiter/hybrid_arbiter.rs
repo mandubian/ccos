@@ -615,8 +615,10 @@ Plan:"#,
                 );
                 meta.insert(
                     "llm_provider".to_string(),
-                    Value::String(serde_json::to_string(&self.llm_config.provider_type)
-                        .unwrap_or_else(|_| "unknown".to_string())),
+                    Value::String(
+                        serde_json::to_string(&self.llm_config.provider_type)
+                            .unwrap_or_else(|_| "unknown".to_string()),
+                    ),
                 );
                 meta
             },
