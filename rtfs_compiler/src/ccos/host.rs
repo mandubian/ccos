@@ -9,7 +9,6 @@ use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::causal_chain::CausalChain;
 use crate::ccos::types::{Action, ActionType, ExecutionResult};
 use crate::runtime::error::{RuntimeError, RuntimeResult};
-use crate::runtime::execution_outcome::{CallMetadata, HostCall};
 use crate::runtime::host_interface::HostInterface;
 use crate::runtime::security::{default_effects_for_capability, RuntimeContext};
 use crate::runtime::values::Value;
@@ -110,39 +109,14 @@ impl RuntimeHost {
             }
         }
 
-        let allow_exposure = futures::executor::block_on(async {
-            if !self.security_context.expose_readonly_context {
-                return false;
-            }
-            // Try to fetch manifest to obtain metadata/tags
-            if let Some(manifest) = self
-                .capability_marketplace
-                .get_capability(capability_id)
-                .await
-            {
-                // Tags may be stored in metadata as comma-separated under "tags" or repeated keys like tag:*
-                let mut tags: Vec<String> = Vec::new();
-                if let Some(tag_list) = manifest.metadata.get("tags") {
-                    tags.extend(
-                        tag_list
-                            .split(',')
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty()),
-                    );
-                }
-                for (k, v) in &manifest.metadata {
-                    if k.starts_with("tag:") {
-                        tags.push(v.clone());
-                    }
-                }
-                return self
-                    .security_context
-                    .is_context_exposure_allowed_for(capability_id, Some(&tags));
-            }
-            // Fallback to exact/prefix policy without tags
+        // Avoid async/await here to prevent nested runtimes; rely on static policy only
+        let allow_exposure = if !self.security_context.expose_readonly_context {
+            false
+        } else {
+            // Fallback to exact/prefix policy without tags or manifest lookup
             self.security_context
                 .is_context_exposure_allowed_for(capability_id, None)
-        });
+        };
         if !allow_exposure {
             return None;
         }
@@ -335,14 +309,23 @@ impl HostInterface for RuntimeHost {
 
         let _action_id = self.get_causal_chain()?.append(&action)?;
 
-        // 3. Execute the capability via the marketplace
-        // Bridge async marketplace to sync evaluator using futures::executor::block_on
-        let result = futures::executor::block_on(async {
-            let args_value = Value::List(args.to_vec());
-            self.capability_marketplace
-                .execute_capability(name, &args_value)
-                .await
-        });
+        // 3. Execute the capability via the marketplace without blocking current runtime
+        let name_owned = name.to_string();
+        let args_owned: Vec<Value> = args.to_vec();
+        let marketplace = self.capability_marketplace.clone();
+        let result = std::thread::spawn(move || {
+            let fut = async move {
+                let args_value = Value::List(args_owned);
+                marketplace
+                    .execute_capability(&name_owned, &args_value)
+                    .await
+            };
+            futures::executor::block_on(fut)
+        })
+        .join()
+        .map_err(|_| {
+            RuntimeError::Generic("Thread join error during capability execution".to_string())
+        })?;
 
         // 4. Log the result to the Causal Chain
         let execution_result = match &result {

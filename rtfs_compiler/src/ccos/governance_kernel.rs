@@ -96,7 +96,7 @@ impl GovernanceKernel {
         let intent = graph
             .get_intent(intent_id)
             .ok_or_else(|| RuntimeError::Generic(format!("Intent not found: {}", intent_id)))?;
-        
+
         Ok(Some(intent))
     }
 

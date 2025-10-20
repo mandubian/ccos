@@ -96,7 +96,10 @@ impl CheckpointArchive {
     }
 
     /// Find all checkpoints that are waiting for a specific capability to be resolved
-    pub fn find_checkpoints_waiting_for_capability(&self, capability_id: &str) -> Vec<CheckpointRecord> {
+    pub fn find_checkpoints_waiting_for_capability(
+        &self,
+        capability_id: &str,
+    ) -> Vec<CheckpointRecord> {
         self.id_index
             .lock()
             .ok()
@@ -104,8 +107,10 @@ impl CheckpointArchive {
                 index
                     .values()
                     .filter(|record| {
-                        record.auto_resume_enabled 
-                            && record.missing_capabilities.contains(&capability_id.to_string())
+                        record.auto_resume_enabled
+                            && record
+                                .missing_capabilities
+                                .contains(&capability_id.to_string())
                     })
                     .cloned()
                     .collect()
@@ -129,7 +134,9 @@ impl CheckpointArchive {
             .map(|index| {
                 index
                     .values()
-                    .filter(|record| record.auto_resume_enabled && !record.missing_capabilities.is_empty())
+                    .filter(|record| {
+                        record.auto_resume_enabled && !record.missing_capabilities.is_empty()
+                    })
                     .cloned()
                     .collect()
             })
