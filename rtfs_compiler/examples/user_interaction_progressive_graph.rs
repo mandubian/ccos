@@ -374,7 +374,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // result `res.value` and use its string form as the next user input. This lets
     // the LLM drive the multi-turn flow rather than hardcoding follow-ups here.
     let mut conversation_history: Vec<InteractionTurn> = Vec::new();
-    let mut current_request = "I want to build an AI-powered code review system for my team.".to_string();
+    let mut current_request =
+        "I want to build an AI-powered code review system for my team.".to_string();
 
     // Bound the simulated interaction to avoid runaway loops
     let max_turns = 8usize;
@@ -679,7 +680,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     println!(
                         "{}",
-                        "[synthesis] No capability registered; inspect logs above for details.".yellow()
+                        "[synthesis] No capability registered; inspect logs above for details."
+                            .yellow()
                     );
                 }
             }
@@ -698,10 +700,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn display_learning_baseline(history: &[InteractionTurn]) {
-    println!(
-        "\n{}",
-        "--- Learning Baseline Snapshot ---".bold()
-    );
+    println!("\n{}", "--- Learning Baseline Snapshot ---".bold());
 
     if history.is_empty() {
         println!("[learning] Conversation history is empty.");
@@ -736,10 +735,7 @@ fn display_learning_baseline(history: &[InteractionTurn]) {
 }
 
 fn display_learning_progress(history: &[InteractionTurn]) {
-    println!(
-        "\n{}",
-        "--- Learning Progress ---".bold()
-    );
+    println!("\n{}", "--- Learning Progress ---".bold());
 
     if history.is_empty() {
         println!("[learning] No progress to report.");
@@ -768,16 +764,8 @@ fn display_learning_progress(history: &[InteractionTurn]) {
         }
     }
 
-    println!(
-        "{} {}",
-        "New intents captured:".bold(),
-        intentful_turns
-    );
-    println!(
-        "{} {}",
-        "Refinement turns:".bold(),
-        refinement_turns
-    );
+    println!("{} {}", "New intents captured:".bold(), intentful_turns);
+    println!("{} {}", "Refinement turns:".bold(), refinement_turns);
     if let Some(goal) = latest_intent_goal {
         println!(
             "{} {}",
@@ -788,10 +776,7 @@ fn display_learning_progress(history: &[InteractionTurn]) {
 }
 
 fn display_learning_outcome(capability_id: &str, persisted: bool) {
-    println!(
-        "\n{}",
-        "--- Learning Outcome ---".bold()
-    );
+    println!("\n{}", "--- Learning Outcome ---".bold());
     println!(
         "{} {}",
         "Registered capability:".bold(),
@@ -814,10 +799,7 @@ fn display_learning_outcome(capability_id: &str, persisted: bool) {
 }
 
 fn demonstrate_proof_of_learning(capability_id: &str) {
-    println!(
-        "\n{}",
-        "--- Proof of Learning ---".bold()
-    );
+    println!("\n{}", "--- Proof of Learning ---".bold());
     println!(
         "[learning] Capability '{}' is now available via CCOS marketplace.",
         capability_id
@@ -929,11 +911,16 @@ async fn generate_synthesis_summary(
             println!("[synthesis.quick] Persisted synth.planner.rtfs");
         }
     }
-    if let Some(stub) = &synth_result.stub {
-        println!("[synthesis.quick] Stub:\n{}", stub);
+    // The Phase 8 API no longer returns a direct `stub` string. Instead,
+    // `pending_capabilities` lists capabilities that need resolution before
+    // execution. Print that list when present for informational purposes.
+    if !synth_result.pending_capabilities.is_empty() {
+        println!("[synthesis.quick] Pending capabilities: {:?}", synth_result.pending_capabilities);
         if persist {
-            let _ = persist_capability_spec("synth.stub", stub);
-            println!("[synthesis.quick] Persisted synth.stub.rtfs");
+            // Persist a simple marker file listing pending capabilities for debugging.
+            let contents = synth_result.pending_capabilities.join("\n");
+            let _ = persist_capability_spec("synth.pending_capabilities", &contents);
+            println!("[synthesis.quick] Persisted synth.pending_capabilities.txt");
         }
     }
 
@@ -1184,9 +1171,9 @@ async fn generate_synthesis_summary(
                                         ))
                                     {
                                         p.clone()
-                                    } else if let Some(Value::String(p)) =
-                                        m.get(&rtfs_compiler::ast::MapKey::String("prompt".to_string()))
-                                    {
+                                    } else if let Some(Value::String(p)) = m.get(
+                                        &rtfs_compiler::ast::MapKey::String("prompt".to_string()),
+                                    ) {
                                         p.clone()
                                     } else {
                                         "Please provide input:".to_string()
@@ -1209,7 +1196,8 @@ async fn generate_synthesis_summary(
                                 // Try canned env response by generating a question key
                                 let qkey = generate_question_key(&prompt_text)
                                     .unwrap_or_else(|| "last_response".to_string());
-                                let env_key = format!("CCOS_USER_ASK_RESPONSE_{}", qkey.to_uppercase());
+                                let env_key =
+                                    format!("CCOS_USER_ASK_RESPONSE_{}", qkey.to_uppercase());
                                 if let Ok(env_resp) = std::env::var(&env_key) {
                                     Ok(Value::String(env_resp))
                                 } else {
@@ -1217,7 +1205,9 @@ async fn generate_synthesis_summary(
                                     Ok(Value::Map({
                                         let mut m = std::collections::HashMap::new();
                                         m.insert(
-                                            rtfs_compiler::ast::MapKey::String("status".to_string()),
+                                            rtfs_compiler::ast::MapKey::String(
+                                                "status".to_string(),
+                                            ),
                                             Value::String("executed".to_string()),
                                         );
                                         m.insert(
@@ -1268,7 +1258,10 @@ async fn generate_synthesis_summary(
     if synthesis_completed {
         println!("{}", "[synthesis] Completed.".green());
     } else {
-        println!("{}", "[synthesis] Completed (no capability registered).".yellow());
+        println!(
+            "{}",
+            "[synthesis] Completed (no capability registered).".yellow()
+        );
     }
 
     Ok(registered_capability)
@@ -1678,8 +1671,14 @@ impl ResponseHandler {
                         ("team".to_string(), "5 developers".to_string()),
                         ("repository".to_string(), "GitHub Enterprise".to_string()),
                         ("language".to_string(), "TypeScript and Python".to_string()),
-                        ("rules".to_string(), "security vulnerabilities, code style, test coverage".to_string()),
-                        ("integration".to_string(), "GitHub Actions and Slack".to_string()),
+                        (
+                            "rules".to_string(),
+                            "security vulnerabilities, code style, test coverage".to_string(),
+                        ),
+                        (
+                            "integration".to_string(),
+                            "GitHub Actions and Slack".to_string(),
+                        ),
                         ("budget".to_string(), "$500/month".to_string()),
                     ]);
                     let suggested_response = generate_contextual_response(

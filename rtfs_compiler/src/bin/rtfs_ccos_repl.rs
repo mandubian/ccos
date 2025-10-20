@@ -7,10 +7,10 @@
 //! - Command-line configuration
 
 use clap::{Arg, Command};
-use rtfs_compiler::runtime::{values::Value, ExecutionOutcome};
 use rtfs_compiler::ccos::environment::{
     CCOSBuilder, CCOSEnvironment, CapabilityCategory, SecurityLevel,
 };
+use rtfs_compiler::runtime::{values::Value, ExecutionOutcome};
 use rustyline::Editor;
 use std::path::Path;
 
