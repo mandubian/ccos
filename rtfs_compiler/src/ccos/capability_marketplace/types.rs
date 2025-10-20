@@ -681,6 +681,7 @@ pub enum ProviderType {
     Plugin(PluginCapability),
     RemoteRTFS(RemoteRTFSCapability),
     Stream(StreamCapabilityImpl),
+    Registry(RegistryCapability),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -712,6 +713,26 @@ pub struct HttpCapability {
     pub base_url: String,
     pub auth_token: Option<String>,
     pub timeout_ms: u64,
+}
+
+#[derive(Clone)]
+pub struct RegistryCapability {
+    pub capability_id: String,
+    pub registry: Arc<RwLock<CapabilityRegistry>>,
+}
+
+impl std::fmt::Debug for RegistryCapability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegistryCapability")
+            .field("capability_id", &self.capability_id)
+            .finish()
+    }
+}
+
+impl PartialEq for RegistryCapability {
+    fn eq(&self, other: &Self) -> bool {
+        self.capability_id == other.capability_id
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -97,11 +97,14 @@ pub struct IntentDraft {
 }
 
 /// Trait for agent lookup / registration.
-/// 
+///
 /// # Deprecation Notice
 /// This trait is deprecated. Use CapabilityMarketplace with :kind :agent capabilities instead.
 /// See AgentRegistryShim for backward compatibility.
-#[deprecated(since = "0.1.0", note = "Use CapabilityMarketplace with :kind :agent capabilities instead")]
+#[deprecated(
+    since = "0.1.0",
+    note = "Use CapabilityMarketplace with :kind :agent capabilities instead"
+)]
 pub trait AgentRegistry: Send + Sync {
     fn register(&mut self, agent: AgentDescriptor);
     fn list(&self) -> Vec<AgentDescriptor>;
@@ -111,11 +114,14 @@ pub trait AgentRegistry: Send + Sync {
 }
 
 /// In‑memory implementation with simple skill & constraint scoring.
-/// 
+///
 /// # Deprecation Notice
 /// This struct is deprecated. Use CapabilityMarketplace with :kind :agent capabilities instead.
 /// See AgentRegistryShim for backward compatibility.
-#[deprecated(since = "0.1.0", note = "Use CapabilityMarketplace with :kind :agent capabilities instead")]
+#[deprecated(
+    since = "0.1.0",
+    note = "Use CapabilityMarketplace with :kind :agent capabilities instead"
+)]
 pub struct InMemoryAgentRegistry {
     agents: HashMap<String, AgentDescriptor>,
     skill_index: HashMap<String, HashSet<String>>, // skill -> agent_ids
