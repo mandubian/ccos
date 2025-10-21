@@ -84,7 +84,8 @@ impl LocalProvider {
         // For real HTTP requests, delegate to the registry's implementation
         // This would need to be refactored to avoid circular dependency
         Err(RuntimeError::Generic(
-            "Real HTTP requests not supported in LocalProvider - use marketplace provider".to_string(),
+            "Real HTTP requests not supported in LocalProvider - use marketplace provider"
+                .to_string(),
         ))
     }
 
@@ -175,12 +176,10 @@ impl LocalProvider {
         }
 
         match &args[0] {
-            Value::String(json_str) => {
-                match serde_json::from_str::<serde_json::Value>(json_str) {
-                    Ok(json_value) => Ok(Self::json_value_to_rtfs_value(&json_value)),
-                    Err(e) => Err(RuntimeError::Generic(format!("JSON parsing error: {}", e))),
-                }
-            }
+            Value::String(json_str) => match serde_json::from_str::<serde_json::Value>(json_str) {
+                Ok(json_value) => Ok(Self::json_value_to_rtfs_value(&json_value)),
+                Err(e) => Err(RuntimeError::Generic(format!("JSON parsing error: {}", e))),
+            },
             _ => Err(RuntimeError::TypeError {
                 expected: "string".to_string(),
                 actual: args[0].type_name().to_string(),
@@ -519,14 +518,16 @@ impl CapabilityProvider for LocalProvider {
         // Extract args from inputs
         let args = match inputs {
             Value::Vector(vec) => vec.clone(),
-            _ => return Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
-                actual: inputs.type_name().to_string(),
-                operation: "local provider".to_string(),
-            }),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector".to_string(),
+                    actual: inputs.type_name().to_string(),
+                    operation: "local provider".to_string(),
+                })
+            }
         };
 
-    // Route to appropriate capability implementation
+        // Route to appropriate capability implementation
         match capability_id {
             "ccos.system.get-env" => Self::get_env_capability(args),
             "ccos.system.current-time" => Self::current_time_capability(args),
@@ -546,7 +547,7 @@ impl CapabilityProvider for LocalProvider {
             "ccos.network.http-fetch" => {
                 eprintln!("LocalProvider::execute_capability handling ccos.network.http-fetch (http_mocking_enabled={})", self.http_mocking_enabled);
                 self.execute_http_fetch_local(&args)
-            },
+            }
             _ => Err(RuntimeError::Generic(format!(
                 "Capability '{}' not supported by LocalProvider",
                 capability_id
@@ -554,7 +555,10 @@ impl CapabilityProvider for LocalProvider {
         }
     }
 
-    fn initialize(&mut self, _config: &crate::ccos::capabilities::provider::ProviderConfig) -> Result<(), String> {
+    fn initialize(
+        &mut self,
+        _config: &crate::ccos::capabilities::provider::ProviderConfig,
+    ) -> Result<(), String> {
         Ok(())
     }
 
@@ -631,11 +635,10 @@ impl CapabilityRegistry {
 
     /// Register the LocalProvider for development/bootstrap capabilities
     fn register_local_provider(&mut self) {
-        let local_provider = LocalProvider::new(
-            self.http_mocking_enabled,
-            self.http_allow_hosts.clone(),
-        );
-        self.providers.insert("local".to_string(), Box::new(local_provider));
+        let local_provider =
+            LocalProvider::new(self.http_mocking_enabled, self.http_allow_hosts.clone());
+        self.providers
+            .insert("local".to_string(), Box::new(local_provider));
     }
 
     /// Enqueue a missing capability for resolution without attempting execution.
@@ -678,8 +681,10 @@ impl CapabilityRegistry {
         // If a local provider was already registered, replace it with a
         // new instance so the provider receives the updated mocking flag.
         if self.providers.contains_key("local") {
-            let new_local = LocalProvider::new(self.http_mocking_enabled, self.http_allow_hosts.clone());
-            self.providers.insert("local".to_string(), Box::new(new_local));
+            let new_local =
+                LocalProvider::new(self.http_mocking_enabled, self.http_allow_hosts.clone());
+            self.providers
+                .insert("local".to_string(), Box::new(new_local));
         }
     }
 
@@ -703,8 +708,10 @@ impl CapabilityRegistry {
         self.http_allow_hosts = Some(normalized);
         // If a local provider exists, replace it so it receives the updated allowlist
         if self.providers.contains_key("local") {
-            let new_local = LocalProvider::new(self.http_mocking_enabled, self.http_allow_hosts.clone());
-            self.providers.insert("local".to_string(), Box::new(new_local));
+            let new_local =
+                LocalProvider::new(self.http_mocking_enabled, self.http_allow_hosts.clone());
+            self.providers
+                .insert("local".to_string(), Box::new(new_local));
         }
         Ok(())
     }
@@ -725,9 +732,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.system.get-env".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "System capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "System capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -737,9 +746,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.system.current-time".to_string(),
                 arity: Arity::Fixed(0),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "System capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "System capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -749,9 +760,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.system.current-timestamp-ms".to_string(),
                 arity: Arity::Fixed(0),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "System capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "System capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
     }
@@ -763,9 +776,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.file-exists".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "I/O capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "I/O capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -774,9 +789,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.open-file".to_string(),
                 arity: Arity::Variadic(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "File operations must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "File operations must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -785,9 +802,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.read-line".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "File operations must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "File operations must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -796,9 +815,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.write-line".to_string(),
                 arity: Arity::Fixed(2),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "File operations must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "File operations must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -807,9 +828,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.close-file".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "File operations must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "File operations must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -819,9 +842,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.data.parse-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "Data capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "Data capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -830,9 +855,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.data.serialize-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "Data capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "Data capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -842,9 +869,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.log".to_string(),
                 arity: Arity::Variadic(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "Logging capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "Logging capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -853,9 +882,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.print".to_string(),
                 arity: Arity::Variadic(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "Output capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "Output capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -864,9 +895,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.io.println".to_string(),
                 arity: Arity::Variadic(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "Output capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "Output capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
     }
@@ -895,9 +928,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.agent.discover-agents".to_string(),
                 arity: Arity::Variadic(0),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "Agent capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "Agent capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -906,9 +941,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.agent.task-coordination".to_string(),
                 arity: Arity::Variadic(0),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "Agent capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "Agent capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -917,9 +954,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.agent.ask-human".to_string(),
                 arity: Arity::Variadic(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "Agent capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "Agent capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -928,9 +967,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.agent.discover-and-assess-agents".to_string(),
                 arity: Arity::Variadic(0),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "Agent capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "Agent capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -939,9 +980,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.agent.establish-system-baseline".to_string(),
                 arity: Arity::Variadic(0),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "Agent capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "Agent capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
     }
@@ -954,9 +997,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.state.kv.get".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "State capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "State capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -965,9 +1010,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.state.kv.put".to_string(),
                 arity: Arity::Fixed(2),
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "State capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "State capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -976,9 +1023,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.state.kv.cas-put".to_string(),
                 arity: Arity::Fixed(3), // key, expected_value, new_value
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "State capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "State capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -988,9 +1037,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.state.counter.inc".to_string(),
                 arity: Arity::Variadic(1), // key, increment (default 1)
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "State capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "State capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
 
@@ -1000,9 +1051,11 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.state.event.append".to_string(),
                 arity: Arity::Variadic(1), // key, event_data...
-                func: Arc::new(|_args| Err(RuntimeError::Generic(
-                    "State capabilities must be executed through providers".to_string(),
-                ))),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "State capabilities must be executed through providers".to_string(),
+                    ))
+                }),
             },
         );
     }
@@ -1132,7 +1185,10 @@ impl CapabilityRegistry {
         args: Vec<Value>,
         runtime_context: Option<&RuntimeContext>,
     ) -> RuntimeResult<Value> {
-        eprintln!("CapabilityRegistry::execute_capability_with_microvm called for {} args={:?}", capability_id, args);
+        eprintln!(
+            "CapabilityRegistry::execute_capability_with_microvm called for {} args={:?}",
+            capability_id, args
+        );
         // Perform security validation if runtime context is provided
         if let Some(context) = runtime_context {
             use crate::runtime::security::SecurityAuthorizer;

@@ -2,14 +2,14 @@
 //!
 //! This module contains only pure, deterministic functions with NO EFFECTS.
 //! RTFS is a no-effect language where all effects must be delegated to the host.
-//! 
+//!
 //! All functions in this module are:
 //! - Pure: same input always produces same output
 //! - Deterministic: no randomness or external state
 //! - No side effects: no I/O, no state mutation, no error throwing
 //! - Safe: can be executed in any context without security concerns
 //!
-//! All effectful operations (I/O, network, system calls, error handling) 
+//! All effectful operations (I/O, network, system calls, error handling)
 //! are delegated to CCOS capabilities and the host runtime.
 
 use crate::ast::Symbol;
@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Secure Standard Library - contains only pure, no-effect functions
-/// 
+///
 /// All functions are guaranteed to be:
 /// - Pure: deterministic output for given input
 /// - No effects: no side effects, I/O, or external interactions
@@ -530,7 +530,6 @@ impl SecureStandardLibrary {
             })),
         );
 
-
         env.define(
             &Symbol("get".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -611,7 +610,6 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::subvec),
             })),
         );
-
 
         env.define(
             &Symbol("count".to_string()),
@@ -770,8 +768,6 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::map_indexed_with_context),
             })),
         );
-
-
 
         // Numbers function
         env.define(
@@ -1564,8 +1560,16 @@ impl SecureStandardLibrary {
         }
         match &args[0] {
             Value::Vector(v) => Ok(v.first().cloned().unwrap_or(Value::Nil)),
+            Value::List(list) => Ok(list.first().cloned().unwrap_or(Value::Nil)),
+            Value::String(s) => {
+                if s.is_empty() {
+                    Ok(Value::Nil)
+                } else {
+                    Ok(Value::String(s.chars().next().unwrap().to_string()))
+                }
+            }
             _ => Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
+                expected: "vector, list, or string".to_string(),
                 actual: args[0].type_name().to_string(),
                 operation: "first".to_string(),
             }),
@@ -1589,8 +1593,22 @@ impl SecureStandardLibrary {
                     Ok(Value::Vector(v[1..].to_vec()))
                 }
             }
+            Value::List(list) => {
+                if list.is_empty() {
+                    Ok(Value::List(vec![]))
+                } else {
+                    Ok(Value::List(list[1..].to_vec()))
+                }
+            }
+            Value::String(s) => {
+                if s.len() <= 1 {
+                    Ok(Value::String(String::new()))
+                } else {
+                    Ok(Value::String(s.chars().skip(1).collect()))
+                }
+            }
             _ => Err(RuntimeError::TypeError {
-                expected: "vector".to_string(),
+                expected: "vector, list, or string".to_string(),
                 actual: args[0].type_name().to_string(),
                 operation: "rest".to_string(),
             }),
@@ -2091,7 +2109,6 @@ impl SecureStandardLibrary {
         Ok(min_val)
     }
 
-
     fn empty_p(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() != 1 {
@@ -2235,7 +2252,6 @@ impl SecureStandardLibrary {
     // Removed reset_bang - use host state capabilities instead
 
     // Removed assoc_bang - use host state capabilities instead
-
 
     fn factorial(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
@@ -2382,6 +2398,20 @@ impl SecureStandardLibrary {
                     Ok(v[index as usize].clone())
                 }
             }
+            Value::List(list) => {
+                if index < 0 || index as usize >= list.len() {
+                    if let Some(default_val) = default {
+                        Ok(default_val.clone())
+                    } else {
+                        Err(RuntimeError::IndexOutOfBounds {
+                            index: index,
+                            length: list.len(),
+                        })
+                    }
+                } else {
+                    Ok(list[index as usize].clone())
+                }
+            }
             Value::String(s) => {
                 let chars: Vec<char> = s.chars().collect();
                 if index < 0 || index as usize >= chars.len() {
@@ -2398,7 +2428,7 @@ impl SecureStandardLibrary {
                 }
             }
             _ => Err(RuntimeError::TypeError {
-                expected: "vector or string".to_string(),
+                expected: "vector, list, or string".to_string(),
                 actual: collection.type_name().to_string(),
                 operation: "nth".to_string(),
             }),
@@ -3339,8 +3369,6 @@ impl SecureStandardLibrary {
         }
         Ok(Value::Vector(result))
     }
-
-
 
     fn numbers(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 2 {
