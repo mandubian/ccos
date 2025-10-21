@@ -18,7 +18,10 @@ fn main() {
     // The resolver previously saved discovery to: ./capabilities/openweather api/capability.rtfs
     let manifest_path = std::path::Path::new("../capabilities/openweather api/capability.rtfs");
     if manifest_path.exists() {
-        println!("Found manifest at {:?}, executing it to register capability", manifest_path);
+        println!(
+            "Found manifest at {:?}, executing it to register capability",
+            manifest_path
+        );
         match env.execute_file(manifest_path.to_str().unwrap()) {
             Ok(out) => println!("Loaded manifest: {:?}", out),
             Err(e) => eprintln!("Failed to load manifest into environment: {:?}", e),

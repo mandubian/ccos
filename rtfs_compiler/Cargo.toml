@@ -56,6 +56,10 @@ path = "src/bin/mcp_local_server.rs"
 name = "resolve-deps"
 path = "src/bin/resolve_deps.rs"
 
+[[bin]]
+name = "test-multi-capability-synthesis"
+path = "src/bin/test_multi_capability_synthesis.rs"
+
 [dependencies]
 # Parser dependencies
 pest = { version = "2.7", optional = true }

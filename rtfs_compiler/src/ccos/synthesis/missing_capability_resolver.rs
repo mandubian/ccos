@@ -12,6 +12,9 @@ use crate::ccos::capability_marketplace::types::{
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::checkpoint_archive::CheckpointArchive;
 use crate::ccos::synthesis::feature_flags::{FeatureFlagChecker, MissingCapabilityConfig};
+use crate::ccos::synthesis::capability_synthesizer::{
+    CapabilitySynthesizer, MultiCapabilitySynthesisRequest, MultiCapabilityEndpoint,
+};
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -965,6 +968,24 @@ impl MissingCapabilityResolver {
         }
 
         let base_url = Self::infer_base_url(url);
+        
+        // Try multi-capability synthesis first for APIs that support it
+        if let Ok(Some(multi_manifests)) = self.attempt_multi_capability_synthesis(
+            capability_id,
+            &format!("API documentation from {}", url),
+            &base_url,
+        ).await {
+            if self.config.verbose_logging {
+                eprintln!(
+                    "✅ DISCOVERY: Multi-capability synthesis generated {} capabilities",
+                    multi_manifests.len()
+                );
+            }
+            // Return the first capability as the primary one
+            return Ok(multi_manifests.into_iter().next());
+        }
+
+        // Fall back to single generic HTTP API capability
         let provider_slug = Self::infer_provider_slug(capability_id, &base_url);
         let env_var_name = Self::env_var_name_for_slug(&provider_slug);
         let primary_query_param =
@@ -1539,6 +1560,437 @@ impl MissingCapabilityResolver {
         });
 
         eprintln!("AUDIT_EVENT: {}", audit_data);
+        Ok(())
+    }
+
+    /// Attempt multi-capability synthesis for APIs with multiple endpoints
+    async fn attempt_multi_capability_synthesis(
+        &self,
+        capability_id: &str,
+        api_docs: &str,
+        base_url: &str,
+    ) -> RuntimeResult<Option<Vec<CapabilityManifest>>> {
+        if self.config.verbose_logging {
+            eprintln!(
+                "🔧 MULTI-CAPABILITY: Attempting multi-capability synthesis for: {}",
+                capability_id
+            );
+        }
+
+        // Check if this looks like a multi-endpoint API
+        if !self.should_use_multi_capability_synthesis(capability_id, api_docs) {
+            if self.config.verbose_logging {
+                eprintln!("🔧 MULTI-CAPABILITY: Skipping multi-capability synthesis - not suitable");
+            }
+            return Ok(None);
+        }
+
+        // Create synthesizer
+        let synthesizer = CapabilitySynthesizer::new(); // Use real LLM-based synthesis
+
+        // Extract API domain from capability_id
+        let api_domain = capability_id
+            .split_whitespace()
+            .next()
+            .unwrap_or("api")
+            .to_string();
+
+        // Create endpoints based on common API patterns
+        let endpoints = self.infer_endpoints_from_docs(api_docs, capability_id);
+
+        // Create multi-capability synthesis request
+        let request = MultiCapabilitySynthesisRequest {
+            api_domain,
+            api_docs: api_docs.to_string(),
+            base_url: base_url.to_string(),
+            requires_auth: self.detect_auth_requirement(api_docs),
+            auth_provider: self.infer_auth_provider(capability_id),
+            endpoints,
+            target_endpoints: None,
+            generate_all_endpoints: true,
+        };
+
+        if self.config.verbose_logging {
+            eprintln!(
+                "🔧 MULTI-CAPABILITY: Synthesizing {} endpoints for {}",
+                request.endpoints.len(),
+                capability_id
+            );
+        }
+
+        // Perform synthesis
+        match synthesizer.synthesize_multi_capabilities(&request).await {
+            Ok(result) => {
+                if self.config.verbose_logging {
+                    eprintln!(
+                        "✅ MULTI-CAPABILITY: Generated {} capabilities with quality score {:.2}",
+                        result.capabilities.len(),
+                        result.overall_quality_score
+                    );
+                }
+
+                // Save each capability with its implementation code and collect manifests
+                let mut manifests = Vec::new();
+                for (i, cap_result) in result.capabilities.into_iter().enumerate() {
+                    // Find the corresponding endpoint for this capability
+                    let endpoint = if i < request.endpoints.len() {
+                        &request.endpoints[i]
+                    } else {
+                        // Fallback to a generic endpoint if index is out of bounds
+                        &MultiCapabilityEndpoint {
+                            capability_suffix: "generic".to_string(),
+                            description: "Generic endpoint".to_string(),
+                            path: "/api".to_string(),
+                            http_method: Some("GET".to_string()),
+                            input_schema: None,
+                            output_schema: None,
+                        }
+                    };
+                    
+                    self.save_multi_capability_with_code(&cap_result.capability, &cap_result.implementation_code, base_url, endpoint).await?;
+                    manifests.push(cap_result.capability);
+                }
+
+                Ok(Some(manifests))
+            }
+            Err(e) => {
+                if self.config.verbose_logging {
+                    eprintln!("⚠️ MULTI-CAPABILITY: Synthesis failed: {}", e);
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// Determine if multi-capability synthesis should be used
+    fn should_use_multi_capability_synthesis(&self, capability_id: &str, api_docs: &str) -> bool {
+        let docs_lower = api_docs.to_lowercase();
+        let capability_lower = capability_id.to_lowercase();
+
+        // Special case: Weather APIs are known to have multiple endpoints
+        if capability_lower.contains("weather") || capability_lower.contains("openweather") {
+            return true;
+        }
+
+        // Check for common multi-endpoint API patterns
+        let multi_endpoint_indicators = [
+            "weather", "forecast", "current", "historical", "geocoding",
+            "users", "posts", "comments", "auth", "profile",
+            "search", "filter", "sort", "paginate"
+        ];
+
+        // Check if API docs mention multiple endpoints
+        let has_multiple_endpoints = multi_endpoint_indicators
+            .iter()
+            .filter(|indicator| docs_lower.contains(*indicator) || capability_lower.contains(*indicator))
+            .count() >= 2;
+
+        // Check for common API patterns that suggest multiple capabilities
+        let has_api_patterns = docs_lower.contains("api") 
+            && (docs_lower.contains("endpoint") 
+                || docs_lower.contains("service")
+                || docs_lower.contains("resource"));
+
+        has_multiple_endpoints || has_api_patterns
+    }
+
+    /// Infer endpoints from API documentation
+    fn infer_endpoints_from_docs(&self, api_docs: &str, capability_id: &str) -> Vec<MultiCapabilityEndpoint> {
+        let mut endpoints = Vec::new();
+        let docs_lower = api_docs.to_lowercase();
+        let capability_lower = capability_id.to_lowercase();
+
+        // Weather API patterns - always generate for weather APIs
+        if capability_lower.contains("weather") || capability_lower.contains("openweather") || docs_lower.contains("weather") {
+            // Current weather endpoint
+            endpoints.push(MultiCapabilityEndpoint {
+                capability_suffix: "current".to_string(),
+                description: "Get current weather data".to_string(),
+                path: "/data/2.5/weather".to_string(),
+                http_method: Some("GET".to_string()),
+                input_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"},
+                        "units": {"type": "string", "enum": ["metric", "imperial", "kelvin"]}
+                    }
+                })),
+                output_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "main": {"type": "object"},
+                        "weather": {"type": "array"}
+                    }
+                })),
+            });
+
+            // Forecast endpoint
+            endpoints.push(MultiCapabilityEndpoint {
+                capability_suffix: "forecast".to_string(),
+                description: "Get weather forecast data".to_string(),
+                path: "/data/2.5/forecast".to_string(),
+                http_method: Some("GET".to_string()),
+                input_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"},
+                        "days": {"type": "number", "minimum": 1, "maximum": 5}
+                    }
+                })),
+                output_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "list": {"type": "array"}
+                    }
+                })),
+            });
+
+            // Geocoding endpoint
+            endpoints.push(MultiCapabilityEndpoint {
+                capability_suffix: "geocoding".to_string(),
+                description: "Convert location names to coordinates".to_string(),
+                path: "/geo/1.0/direct".to_string(),
+                http_method: Some("GET".to_string()),
+                input_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "q": {"type": "string", "description": "Location name to geocode"}
+                    },
+                    "required": ["q"]
+                })),
+                output_schema: Some(serde_json::json!({
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "lat": {"type": "number"},
+                            "lon": {"type": "number"}
+                        }
+                    }
+                })),
+            });
+        }
+
+        // Generic API patterns
+        if endpoints.is_empty() {
+            endpoints.push(MultiCapabilityEndpoint {
+                capability_suffix: "data".to_string(),
+                description: "Generic data endpoint".to_string(),
+                path: "/api/v1/data".to_string(),
+                http_method: Some("GET".to_string()),
+                input_schema: None,
+                output_schema: None,
+            });
+        }
+
+        endpoints
+    }
+
+    /// Detect if authentication is required
+    fn detect_auth_requirement(&self, api_docs: &str) -> bool {
+        let docs_lower = api_docs.to_lowercase();
+        docs_lower.contains("api key") 
+            || docs_lower.contains("authentication")
+            || docs_lower.contains("bearer")
+            || docs_lower.contains("token")
+    }
+
+    /// Infer authentication provider
+    fn infer_auth_provider(&self, capability_id: &str) -> Option<String> {
+        let capability_lower = capability_id.to_lowercase();
+        
+        if capability_lower.contains("openweather") {
+            Some("openweathermap".to_string())
+        } else if capability_lower.contains("github") {
+            Some("github".to_string())
+        } else if capability_lower.contains("stripe") {
+            Some("stripe".to_string())
+        } else {
+            Some("generic".to_string())
+        }
+    }
+
+    /// Save a multi-capability synthesis result
+    async fn save_multi_capability(
+        &self,
+        manifest: &CapabilityManifest,
+        base_url: &str,
+    ) -> RuntimeResult<()> {
+        let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                // Get the project root directory (parent of rtfs_compiler)
+                let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                if current_dir.ends_with("rtfs_compiler") {
+                    current_dir.parent().unwrap_or(&current_dir).join("capabilities")
+                } else {
+                    current_dir.join("capabilities")
+                }
+            });
+
+        std::fs::create_dir_all(&storage_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
+        })?;
+
+        let capability_dir = storage_dir.join(&manifest.id);
+        std::fs::create_dir_all(&capability_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create capability directory: {}", e))
+        })?;
+
+        // TODO: Save the actual RTFS implementation code
+        // For now, just create a placeholder file
+        let capability_file = capability_dir.join("capability.rtfs");
+        let placeholder_content = format!(
+            r#"(capability "{}"
+  :name "{}"
+  :version "{}"
+  :description "{}"
+  :source_url "{}"
+  :discovery_method "multi_capability_synthesis"
+  :created_at "{}"
+  :capability_type "specialized_http_api"
+  :permissions [:network.http]
+  :effects [:network_request]
+  :input-schema :any
+  :output-schema :any
+  :implementation
+    (do
+      ;; TODO: Generated RTFS implementation will be saved here
+      (call "ccos.io.println" "Multi-capability synthesis placeholder for {}")
+      {{:status "placeholder" :capability_id "{}"}})
+)"#,
+            manifest.id,
+            manifest.name,
+            manifest.version,
+            manifest.description,
+            base_url,
+            chrono::Utc::now().to_rfc3339(),
+            manifest.id,
+            manifest.id
+        );
+
+        std::fs::write(&capability_file, placeholder_content).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to write capability file: {}", e))
+        })?;
+
+        if self.config.verbose_logging {
+            eprintln!(
+                "💾 MULTI-CAPABILITY: Saved capability: {}",
+                manifest.id
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Convert JSON schema to RTFS schema string
+    fn json_schema_to_rtfs(&self, json_schema: Option<&serde_json::Value>) -> String {
+        match json_schema {
+            Some(schema) => {
+                // Convert JSON schema to RTFS format
+                // For now, create a simple RTFS schema based on the JSON structure
+                if let Some(properties) = schema.get("properties") {
+                    let mut rtfs_props = Vec::new();
+                    for (key, prop) in properties.as_object().unwrap_or(&serde_json::Map::new()) {
+                        if let Some(prop_type) = prop.get("type") {
+                            let rtfs_type = match prop_type.as_str().unwrap_or("string") {
+                                "string" => ":string",
+                                "number" => ":number", 
+                                "boolean" => ":boolean",
+                                "array" => ":vector",
+                                "object" => ":map",
+                                _ => ":any"
+                            };
+                            rtfs_props.push(format!(":{} {}", key, rtfs_type));
+                        }
+                    }
+                    if rtfs_props.is_empty() {
+                        ":any".to_string()
+                    } else {
+                        format!("(map {})", rtfs_props.join(" "))
+                    }
+                } else {
+                    ":any".to_string()
+                }
+            }
+            None => ":any".to_string()
+        }
+    }
+
+    /// Save a multi-capability synthesis result with actual RTFS implementation code
+    async fn save_multi_capability_with_code(
+        &self,
+        manifest: &CapabilityManifest,
+        implementation_code: &str,
+        base_url: &str,
+        endpoint: &MultiCapabilityEndpoint,
+    ) -> RuntimeResult<()> {
+        let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                // Get the project root directory (parent of rtfs_compiler)
+                let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                if current_dir.ends_with("rtfs_compiler") {
+                    current_dir.parent().unwrap_or(&current_dir).join("capabilities")
+                } else {
+                    current_dir.join("capabilities")
+                }
+            });
+
+        std::fs::create_dir_all(&storage_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
+        })?;
+
+        let capability_dir = storage_dir.join(&manifest.id);
+        std::fs::create_dir_all(&capability_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create capability directory: {}", e))
+        })?;
+
+        // Convert JSON schemas to RTFS format
+        let input_schema_rtfs = self.json_schema_to_rtfs(endpoint.input_schema.as_ref());
+        let output_schema_rtfs = self.json_schema_to_rtfs(endpoint.output_schema.as_ref());
+
+        // Create the full capability definition with the generated RTFS implementation
+        let capability_file = capability_dir.join("capability.rtfs");
+        let full_capability_content = format!(
+            r#"(capability "{}"
+  :name "{}"
+  :version "{}"
+  :description "{}"
+  :source_url "{}"
+  :discovery_method "multi_capability_synthesis"
+  :created_at "{}"
+  :capability_type "specialized_http_api"
+  :permissions [:network.http]
+  :effects [:network_request]
+  :input-schema {}
+  :output-schema {}
+  :implementation
+    {}
+)"#,
+            manifest.id,
+            manifest.name,
+            manifest.version,
+            manifest.description,
+            base_url,
+            chrono::Utc::now().to_rfc3339(),
+            input_schema_rtfs,
+            output_schema_rtfs,
+            implementation_code
+        );
+
+        std::fs::write(&capability_file, full_capability_content).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to write capability file: {}", e))
+        })?;
+
+        if self.config.verbose_logging {
+            eprintln!(
+                "💾 MULTI-CAPABILITY: Saved capability with RTFS implementation: {}",
+                manifest.id
+            );
+        }
+
         Ok(())
     }
 }
