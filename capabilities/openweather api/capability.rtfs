@@ -1,5 +1,7 @@
 ;; Capability metadata for openweather api API
 ;; Generated from web discovery
+;; Capability metadata for openweather api API
+;; Generated from web discovery
 ;; Source URL: https://openweathermap.org/api
 
 (capability "openweather api"
@@ -29,7 +31,10 @@
         (if (string? in)
           {:method "GET" :url in}
           (if (list? in)
-            (apply hash-map in)
+            ;; if in length is 1, it can't be converted to hash-map
+            (if (= (length in) 1)
+              {:method "GET" :url (first in)}
+              (apply hash-map in))
             (if (map? in)
               in
               {:method "GET" :url (str in)}))))
@@ -50,28 +55,37 @@
             (if (> (count (split url marker)) 1)
               url
               (append_query url param string_value)))))
+      (call "ccos.io.println" (str "[openweather-api DEBUG] input: " input))
 
-      (let [base "https://openweathermap.org"
-            req (normalize_to_map input)
-            url (ensure_url base (get req :url))
-            method (or (get req :method) "GET")
-            headers (or (get req :headers) nil)
-            body (or (get req :body) "")
-            token (or (get req :api_key)
-                      (get req :apikey)
-                      (get req :key)
-                      (get req :token)
-                      (get req :access_token)
-                      (get req :appid)
-                      (call "ccos.system.get-env" "OPENWEATHERMAP_ORG_API_KEY"))
-            url_with_primary (ensure_parameter url "api_key" token)
-            final_url (ensure_parameter url_with_primary "apikey" token)]
-        (call "ccos.network.http-fetch"
-          :method method
-          :url final_url
-          :headers headers
-          :body body))))
+    (let [base "https://api.openweathermap.org"
+          req (normalize_to_map input)
+          method (or (get req :method) "GET")
+          url_part (or (get req :url) "")
+          ;; ensure URL is absolute
+          final_url (ensure_url base url_part)
+          ;; Headers default to empty map to avoid odd-arity map errors
+          headers_raw (get req :headers)
+          headers (if (map? headers_raw) headers_raw {})
+          body (get req :body)
+          ;; Retrieve API key from environment and append as `appid` if present
+          api_key (call "ccos.system.get-env" "OPENWEATHERMAP_ORG_API_KEY")]
 
-;; Optional helpers (commented out)
-;; (defn is-recent? [] (< (days-since (parse-date "2025-10-19T13:11:41.946761085+00:00")) 30))
-;; (defn source-domain [] (second (split "https://openweathermap.org/api" "/")))
+      (call "ccos.io.println" (str "[openweather-api DEBUG] req: " req))
+
+      ;; If api_key is a string and not empty, append as query param
+      (let [final_url_with_key (if (and api_key (not (= api_key "")))
+                                 (ensure_parameter final_url "appid" api_key)
+                                 final_url)
+            ;; Execute the HTTP fetch via host capability using keyword args
+            resp (call "ccos.network.http-fetch"
+                       :method method
+                       :url final_url_with_key
+                       :headers headers
+                       :body body)]
+
+        (call "ccos.io.println" (str "[openweather-api DEBUG] resp: " resp))
+        resp
+      )
+    )
+    )
+)

@@ -1542,10 +1542,11 @@ impl SecureStandardLibrary {
 
         match &args[0] {
             Value::Vector(v) => Ok(Value::Integer(v.len() as i64)),
+            Value::List(l) => Ok(Value::Integer(l.len() as i64)),
             Value::Map(m) => Ok(Value::Integer(m.len() as i64)),
             Value::String(s) => Ok(Value::Integer(s.chars().count() as i64)),
             _ => Err(RuntimeError::TypeError {
-                expected: "vector, map, or string".to_string(),
+                expected: "vector, list, map, or string".to_string(),
                 actual: args[0].type_name().to_string(),
                 operation: "count".to_string(),
             }),
@@ -2279,10 +2280,11 @@ impl SecureStandardLibrary {
 
         match &args[0] {
             Value::Vector(v) => Ok(Value::Integer(v.len() as i64)),
+            Value::List(l) => Ok(Value::Integer(l.len() as i64)),
             Value::String(s) => Ok(Value::Integer(s.len() as i64)),
             Value::Map(m) => Ok(Value::Integer(m.len() as i64)),
             _ => Err(RuntimeError::TypeError {
-                expected: "vector, string, or map".to_string(),
+                expected: "vector, list, string, or map".to_string(),
                 actual: args[0].type_name().to_string(),
                 operation: "length".to_string(),
             }),
