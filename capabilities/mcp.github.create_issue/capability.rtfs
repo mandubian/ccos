@@ -1,0 +1,58 @@
+;; MCP Capability: create_issue
+;; Generated from MCP tool introspection
+;; MCP Server: github (http://localhost:3000/github-mcp)
+;; Tool: create_issue
+
+(capability "mcp.github.create_issue"
+  :name "create_issue"
+  :version "1.0.0"
+  :description "Create a new GitHub issue"
+  :provider "MCP"
+  :source_url "http://localhost:3000/github-mcp"
+  :discovery_method "mcp_introspection"
+  :created_at "2025-10-23T13:46:38.735419936+00:00"
+  :capability_type "mcp_tool"
+  :permissions [:network.http]
+  :effects [:network_request :mcp_call]
+  :mcp_metadata {
+    :server_url "http://localhost:3000/github-mcp"
+    :server_name "github"
+    :tool_name "create_issue"
+    :protocol_version "2024-11-05"
+  }
+  :input-schema {
+    :owner :string
+    :repo :string
+    :title :string
+    :body :string ;; optional
+    :labels [:vector :string] ;; optional
+  }
+  :output-schema {
+    :number :int
+    :url :string
+    :state :string
+  }
+  :implementation
+    (fn [input]
+  ;; MCP Tool: Create a new GitHub issue
+  ;; Runtime validates input against input_schema
+  ;; Makes MCP JSON-RPC call and validates result against output_schema
+  (let [mcp_request {:jsonrpc "2.0"
+                      :id "mcp_call"
+                      :method "tools/call"
+                      :params {:name "create_issue"
+                               :arguments input}}
+        mcp_url "http://localhost:3000/github-mcp"
+        ;; Make HTTP POST to MCP server
+        response (call "ccos.network.http-fetch"
+                      :method "POST"
+                      :url mcp_url
+                      :headers {:content-type "application/json"}
+                      :body (call "ccos.data.serialize-json" mcp_request))
+        ;; Parse MCP JSON-RPC response
+        response_json (call "ccos.data.parse-json" (get response :body))
+        ;; Extract result (MCP wraps actual result in 'result' field)
+        result (get response_json :result)]
+    ;; Return the MCP tool result (runtime validates against output_schema)
+    result))
+)
