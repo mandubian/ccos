@@ -590,6 +590,8 @@ pub struct CapabilityRegistry {
     http_allow_hosts: Option<HashSet<String>>,
     /// Execution policy for capabilities
     execution_policy: CapabilityExecutionPolicy,
+    /// Optional marketplace reference for metadata access (generic, provider-agnostic)
+    marketplace: Option<Arc<crate::ccos::CapabilityMarketplace>>,
 }
 
 impl CapabilityRegistry {
@@ -603,6 +605,7 @@ impl CapabilityRegistry {
             http_mocking_enabled: true,
             http_allow_hosts: None,
             execution_policy: CapabilityExecutionPolicy::default(),
+            marketplace: None,
         };
 
         // Register system capabilities
@@ -1083,6 +1086,35 @@ impl CapabilityRegistry {
         self.capabilities.keys().map(|k| k.as_str()).collect()
     }
 
+    /// Set marketplace reference for metadata access (generic, provider-agnostic)
+    pub fn set_marketplace(
+        &mut self,
+        marketplace: Arc<crate::ccos::CapabilityMarketplace>,
+    ) {
+        self.marketplace = Some(marketplace);
+    }
+
+    /// Get capability metadata from marketplace (generic, provider-agnostic)
+    /// 
+    /// This helper retrieves capability metadata without knowing which provider
+    /// the capability belongs to. It's used by the runtime to make informed
+    /// decisions based on metadata hints.
+    pub fn get_capability_metadata(
+        &self,
+        capability_id: &str,
+    ) -> Option<std::collections::HashMap<String, String>> {
+        // Try to get from marketplace (synchronously via blocking)
+        if let Some(marketplace) = &self.marketplace {
+            let caps_future = marketplace.list_capabilities();
+            let caps = futures::executor::block_on(caps_future);
+            
+            if let Some(cap_manifest) = caps.iter().find(|c| c.id == capability_id) {
+                return Some(cap_manifest.metadata.clone());
+            }
+        }
+        None
+    }
+
     /// Configure the MicroVM provider to use
     pub fn set_microvm_provider(&mut self, provider_name: &str) -> RuntimeResult<()> {
         let available_providers = self.microvm_factory.get_available_providers();
@@ -1214,6 +1246,28 @@ impl CapabilityRegistry {
         if let Some(context) = runtime_context {
             use crate::runtime::security::SecurityAuthorizer;
             SecurityAuthorizer::authorize_capability(context, capability_id, &args)?;
+        }
+
+        // GENERIC METADATA-DRIVEN ROUTING
+        // Check capability metadata to determine if special handling is needed
+        // This is provider-agnostic - works for MCP, OpenAPI, GraphQL, etc.
+        if let Some(metadata) = self.get_capability_metadata(capability_id) {
+            // Check for provider-specific handling requirements
+            // Each provider type can have its own metadata hints
+            
+            // Example: Session management (generic pattern for any stateful provider)
+            if let Some(requires_session) = metadata.get("mcp_requires_session") {
+                if requires_session == "true" || requires_session == "auto" {
+                    eprintln!("📋 Metadata hint: capability requires session management");
+                    // TODO Phase 2.3: Delegate to session handler
+                    // For now, log and continue with normal execution
+                }
+            }
+            
+            // Future: Other generic patterns can be added here
+            // - Rate limiting hints: metadata.get("openapi_rate_limit")
+            // - Auth requirements: metadata.get("oauth_required")
+            // - Retry policies: metadata.get("retry_strategy")
         }
 
         // Special-case: route HTTP fetch through the microvm execution helper so
