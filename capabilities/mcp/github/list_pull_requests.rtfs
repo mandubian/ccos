@@ -8,17 +8,24 @@
   :version "1.0.0"
   :description "List pull requests in a GitHub repository. If the user specifies an author, then DO NOT use this tool and use the search_pull_requests tool instead."
   :provider "MCP"
-  :source_url "https://api.githubcopilot.com/mcp/"
-  :discovery_method "mcp_introspection"
-  :created_at "2025-10-23T20:57:22.379941585+00:00"
-  :capability_type "mcp_tool"
   :permissions [:network.http]
   :effects [:network_request :mcp_call]
-  :mcp_metadata {
-    :server_url "https://api.githubcopilot.com/mcp/"
-    :server_name "github"
-    :tool_name "list_pull_requests"
-    :protocol_version "2024-11-05"
+  :metadata {
+    :mcp {
+      :server_url "https://api.githubcopilot.com/mcp/"
+      :server_name "github"
+      :tool_name "list_pull_requests"
+      :protocol_version "2024-11-05"
+      :requires_session "auto"
+      :auth_env_var "MCP_AUTH_TOKEN"
+      :server_url_override_env "MCP_SERVER_URL"
+    }
+    :discovery {
+      :method "mcp_introspection"
+      :source_url "https://api.githubcopilot.com/mcp/"
+      :created_at "2025-10-23T21:35:43.806982622+00:00"
+      :capability_type "mcp_tool"
+    }
   }
   :input-schema {
     :base :string ;; optional

@@ -8,17 +8,24 @@
   :version "1.0.0"
   :description "Create or update a single file in a GitHub repository. If updating, you must provide the SHA of the file you want to update. Use this tool to create or update a file in a GitHub repository remotely; do not use it for local file operations."
   :provider "MCP"
-  :source_url "https://api.githubcopilot.com/mcp/"
-  :discovery_method "mcp_introspection"
-  :created_at "2025-10-23T20:57:22.378726823+00:00"
-  :capability_type "mcp_tool"
   :permissions [:network.http]
   :effects [:network_request :mcp_call]
-  :mcp_metadata {
-    :server_url "https://api.githubcopilot.com/mcp/"
-    :server_name "github"
-    :tool_name "create_or_update_file"
-    :protocol_version "2024-11-05"
+  :metadata {
+    :mcp {
+      :server_url "https://api.githubcopilot.com/mcp/"
+      :server_name "github"
+      :tool_name "create_or_update_file"
+      :protocol_version "2024-11-05"
+      :requires_session "auto"
+      :auth_env_var "MCP_AUTH_TOKEN"
+      :server_url_override_env "MCP_SERVER_URL"
+    }
+    :discovery {
+      :method "mcp_introspection"
+      :source_url "https://api.githubcopilot.com/mcp/"
+      :created_at "2025-10-23T21:35:43.806576580+00:00"
+      :capability_type "mcp_tool"
+    }
   }
   :input-schema {
     :branch :string

@@ -1118,12 +1118,21 @@ impl APIIntrospector {
   :version "{}"
   :description "{}"
   :provider "{}"
-  :source_url "{}"
-  :discovery_method "api_introspection"
-  :created_at "{}"
-  :capability_type "specialized_http_api"
   :permissions {}
   :effects {}
+  :metadata {{
+    :openapi {{
+      :base_url "{}"
+      :endpoint_method "{}"
+      :endpoint_path "{}"
+    }}
+    :discovery {{
+      :method "api_introspection"
+      :source_url "{}"
+      :created_at "{}"
+      :capability_type "specialized_http_api"
+    }}
+  }}
   :input-schema {}
   :output-schema {}
   :implementation
@@ -1139,10 +1148,13 @@ impl APIIntrospector {
             capability.version,
             capability.description,
             api_title,  // Use api_title from metadata instead of provider enum
-            base_url,
-            chrono::Utc::now().to_rfc3339(),
             permissions_str,
             effects_str,
+            base_url,
+            endpoint_method,
+            endpoint_path,
+            base_url,
+            chrono::Utc::now().to_rfc3339(),
             input_schema_str,
             output_schema_str,
             implementation_code
