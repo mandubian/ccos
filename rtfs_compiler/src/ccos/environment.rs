@@ -596,12 +596,26 @@ impl CCOSEnvironment {
                 });
             }
         }
+
+        // Create session pool with MCP handler for stateful capabilities
+        let mut session_pool = crate::ccos::capabilities::SessionPoolManager::new();
+        session_pool.register_handler(
+            "mcp",
+            std::sync::Arc::new(crate::ccos::capabilities::MCPSessionHandler::new()),
+        );
+        let session_pool = std::sync::Arc::new(session_pool);
+
+        // Create and configure registry
+        let mut configured_registry = crate::ccos::capabilities::registry::CapabilityRegistry::new();
+        configured_registry.set_marketplace(marketplace.clone());
+        configured_registry.set_session_pool(session_pool);
+
         Ok(Self {
             config,
             host,
             evaluator,
             marketplace,
-            registry: crate::ccos::capabilities::registry::CapabilityRegistry::new(), // This field may be redundant now
+            registry: configured_registry,
             wm,
         })
     }
