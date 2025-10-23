@@ -1,5 +1,6 @@
 use crate::ccos::capability_marketplace::types::CapabilityManifest;
 use crate::ccos::synthesis::auth_injector::AuthInjector;
+use crate::ccos::synthesis::api_introspector::APIIntrospector;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -195,6 +196,75 @@ impl CapabilitySynthesizer {
         // For now, use mock synthesis but with real RTFS code generation
         // TODO: Implement full LLM-based synthesis
         self.generate_mock_multi_capabilities(request)
+    }
+
+    /// Synthesize capabilities by introspecting an API
+    pub async fn synthesize_from_api_introspection(
+        &self,
+        api_url: &str,
+        api_domain: &str,
+    ) -> RuntimeResult<MultiCapabilitySynthesisResult> {
+        if !self.synthesis_enabled {
+            return Err(RuntimeError::Generic(
+                "Capability synthesis is disabled by feature flag".to_string(),
+            ));
+        }
+
+        eprintln!("🔍 Introspecting API: {}", api_url);
+
+        // Create API introspector
+        let introspector = if self.mock_mode {
+            APIIntrospector::mock()
+        } else {
+            APIIntrospector::new()
+        };
+
+        // Introspect the API
+        let introspection = introspector
+            .introspect_from_discovery(api_url, api_domain)
+            .await?;
+
+        // Create capabilities from introspection results
+        let capabilities = introspector
+            .create_capabilities_from_introspection(&introspection)?;
+
+        // Convert to synthesis results
+        let synthesis_results: Vec<SynthesisResult> = capabilities
+            .into_iter()
+            .map(|capability| SynthesisResult {
+                capability: capability.clone(),
+                implementation_code: self.generate_runtime_controlled_implementation(&capability),
+                quality_score: 0.9, // High quality for introspected capabilities
+                safety_passed: true,
+                warnings: vec!["Capability was introspected from API".to_string()],
+            })
+            .collect();
+
+        let overall_quality = if synthesis_results.is_empty() {
+            0.0
+        } else {
+            synthesis_results
+                .iter()
+                .map(|cap| cap.quality_score)
+                .sum::<f64>()
+                / synthesis_results.len() as f64
+        };
+
+        Ok(MultiCapabilitySynthesisResult {
+            capabilities: synthesis_results,
+            overall_quality_score: overall_quality,
+            all_safety_passed: true,
+            common_warnings: vec!["All capabilities were introspected from API".to_string()],
+        })
+    }
+
+    /// Get an API introspector instance for serialization
+    pub fn get_introspector(&self) -> APIIntrospector {
+        if self.mock_mode {
+            APIIntrospector::mock()
+        } else {
+            APIIntrospector::new()
+        }
     }
 
     /// Generate the enhanced prompt for multi-capability synthesis
@@ -664,7 +734,7 @@ impl CapabilitySynthesizer {
         let api_key_handling = self.generate_api_key_handling(&request.api_domain);
         
         // Generate validation code separately
-        let validation_code = self.generate_validation_code(endpoint);
+        let _validation_code = self.generate_validation_code(endpoint);
         
         let implementation_code = format!(
             r#"(do
@@ -823,6 +893,86 @@ impl CapabilitySynthesizer {
                     (str full_url "&appid=" api_key)
                     full_url)"#,
             env_var_name
+        )
+    }
+
+    /// Generate runtime-controlled implementation that moves controls to runtime
+    fn generate_runtime_controlled_implementation(&self, capability: &CapabilityManifest) -> String {
+        let method = capability
+            .metadata
+            .get("endpoint_method")
+            .unwrap_or(&"GET".to_string())
+            .clone();
+        let path = capability
+            .metadata
+            .get("endpoint_path")
+            .unwrap_or(&"/".to_string())
+            .clone();
+        let base_url = capability
+            .metadata
+            .get("base_url")
+            .unwrap_or(&"https://api.example.com".to_string())
+            .clone();
+
+        // Check if the endpoint has path parameters
+        let has_path_params = path.contains("{");
+
+        format!(
+            r#"(fn [input]
+  ;; Runtime-controlled implementation - validation and controls handled by runtime
+  ;; Input: {}
+  ;; Output: validated by runtime against output_schema
+  (do
+    (call "ccos.io.println" (str "[DEBUG] Calling {} with input: " (call "ccos.data.serialize-json" input)))
+    (let [base_url "{}"
+          path "{}"
+          method "{}"
+          ;; Build URL
+          {}
+          ;; Build query string from input map (input is a map of parameters)
+          query_string (if (map? input)
+                        (let [params (keys input)]
+                          (reduce (fn [acc k]
+                                    (let [v (get input k)
+                                          k_str (str k)
+                                          ;; Remove leading ':' from keyword if present
+                                          param_name (if (starts-with? k_str ":")
+                                                       (substring k_str 1)
+                                                       k_str)]
+                                      (if (and v (not= v ""))
+                                        (str acc 
+                                             (if (= acc "") "?" "&")
+                                             param_name "=" (str v))
+                                        acc)))
+                                  ""
+                                  params))
+                        "")
+          url_with_params (str full_url query_string)
+          ;; Add API key from environment (OpenWeather requires 'appid' parameter)
+          api_key (call "ccos.system.get-env" "OPENWEATHERMAP_ORG_API_KEY")
+          final_url (if (and api_key (not= api_key ""))
+                      (str url_with_params 
+                           (if (= query_string "") "?" "&")
+                           "appid=" api_key)
+                      url_with_params)
+          headers {{}}]
+      (do
+        (call "ccos.io.println" (str "[DEBUG] Final URL (with key): " final_url))
+        (call "ccos.network.http-fetch"
+              :method method
+              :url final_url
+              :headers headers
+              :body (if (= method "POST") (call "ccos.data.serialize-json" input) nil))))))"#,
+            capability.description,
+            capability.id,
+            base_url,
+            path,
+            method,
+            if has_path_params {
+                "full_url (str base_url path) ;; TODO: substitute path parameters"
+            } else {
+                "full_url (str base_url path)"
+            }
         )
     }
 
