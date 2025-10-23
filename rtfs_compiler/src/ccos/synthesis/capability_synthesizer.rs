@@ -1,6 +1,7 @@
 use crate::ccos::capability_marketplace::types::CapabilityManifest;
 use crate::ccos::synthesis::auth_injector::AuthInjector;
 use crate::ccos::synthesis::api_introspector::APIIntrospector;
+use crate::ccos::synthesis::mcp_introspector::MCPIntrospector;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -264,6 +265,87 @@ impl CapabilitySynthesizer {
             APIIntrospector::mock()
         } else {
             APIIntrospector::new()
+        }
+    }
+
+    /// Synthesize capabilities by introspecting an MCP server
+    pub async fn synthesize_from_mcp_introspection(
+        &self,
+        server_url: &str,
+        server_name: &str,
+    ) -> RuntimeResult<MultiCapabilitySynthesisResult> {
+        if !self.synthesis_enabled {
+            return Err(RuntimeError::Generic(
+                "Capability synthesis is disabled by feature flag".to_string(),
+            ));
+        }
+
+        eprintln!("🔍 Introspecting MCP server: {} ({})", server_name, server_url);
+
+        // Create MCP introspector
+        let introspector = if self.mock_mode {
+            MCPIntrospector::mock()
+        } else {
+            MCPIntrospector::new()
+        };
+
+        // Introspect the MCP server
+        let introspection = introspector
+            .introspect_mcp_server(server_url, server_name)
+            .await?;
+
+        // Create capabilities from introspection results
+        let capabilities = introspector
+            .create_capabilities_from_mcp(&introspection)?;
+
+        // Convert to synthesis results with RTFS implementations
+        let synthesis_results: Vec<SynthesisResult> = capabilities
+            .into_iter()
+            .map(|capability| {
+                // Find the corresponding tool to generate implementation
+                let tool = introspection
+                    .tools
+                    .iter()
+                    .find(|t| capability.id.contains(&t.tool_name))
+                    .expect("Tool should exist for capability");
+
+                let implementation_code = introspector
+                    .generate_mcp_rtfs_implementation(tool, &introspection.server_url);
+
+                SynthesisResult {
+                    capability: capability.clone(),
+                    implementation_code,
+                    quality_score: 0.95, // High quality for introspected MCP tools
+                    safety_passed: true,
+                    warnings: vec!["MCP capability - requires MCP server running".to_string()],
+                }
+            })
+            .collect();
+
+        let overall_quality = if synthesis_results.is_empty() {
+            0.0
+        } else {
+            synthesis_results
+                .iter()
+                .map(|cap| cap.quality_score)
+                .sum::<f64>()
+                / synthesis_results.len() as f64
+        };
+
+        Ok(MultiCapabilitySynthesisResult {
+            capabilities: synthesis_results,
+            overall_quality_score: overall_quality,
+            all_safety_passed: true,
+            common_warnings: vec!["All capabilities introspected from MCP server".to_string()],
+        })
+    }
+
+    /// Get an MCP introspector instance for serialization
+    pub fn get_mcp_introspector(&self) -> MCPIntrospector {
+        if self.mock_mode {
+            MCPIntrospector::mock()
+        } else {
+            MCPIntrospector::new()
         }
     }
 
