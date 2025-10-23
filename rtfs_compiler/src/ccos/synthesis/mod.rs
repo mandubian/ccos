@@ -2,6 +2,7 @@ use crate::runtime::error::RuntimeResult;
 
 pub mod api_introspector;
 pub mod mcp_introspector;
+pub mod mcp_session;
 pub mod schema_serializer;
 pub mod artifact_generator;
 pub mod auth_injector;

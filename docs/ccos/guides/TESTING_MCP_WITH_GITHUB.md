@@ -6,19 +6,21 @@ The MCP introspector can discover tools from any MCP server and generate RTFS ca
 
 ## 🚧 Current Status
 
-### GitHub Copilot MCP API
+### GitHub Copilot MCP API - Session Management
 
-The GitHub Copilot MCP API (`https://api.githubcopilot.com/mcp/`) requires **session-based authentication**, not simple Bearer token auth:
+According to the [MCP Specification - Session Management](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#session-management), MCP servers using Streamable HTTP transport can implement stateful sessions:
 
-```bash
-$ cargo run --bin test_real_github_mcp
-Error: Generic("MCP server returned error (400 Bad Request): Invalid session ID\n")
-```
+**How MCP Session Management Works:**
+1. Client sends `initialize` request to the MCP endpoint
+2. Server returns `InitializeResult` with optional `Mcp-Session-Id` header
+3. Client includes this session ID in all subsequent requests
+4. Server validates session ID and returns 404 if session expires
 
-**Why this fails:**
-- The GitHub Copilot MCP API requires a **session ID** in addition to authentication
-- Session IDs are typically obtained through an OAuth or session establishment flow
-- Simple Bearer token from `GITHUB_PAT` is not sufficient
+**GitHub Copilot MCP API Requirements:**
+- Uses the MCP session management protocol
+- Requires proper initialization flow before calling `tools/list`
+- Session ID must be obtained via `initialize` request
+- Bearer token authentication + session management
 
 ### ✅ Recommended Approach: Use Cursor's MCP Server
 
