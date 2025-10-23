@@ -59,6 +59,16 @@ impl MCPIntrospector {
         server_url: &str,
         server_name: &str,
     ) -> RuntimeResult<MCPIntrospectionResult> {
+        self.introspect_mcp_server_with_auth(server_url, server_name, None).await
+    }
+
+    /// Introspect an MCP server with authentication headers
+    pub async fn introspect_mcp_server_with_auth(
+        &self,
+        server_url: &str,
+        server_name: &str,
+        auth_headers: Option<HashMap<String, String>>,
+    ) -> RuntimeResult<MCPIntrospectionResult> {
         if self.mock_mode {
             return self.introspect_mock_mcp_server(server_name);
         }
@@ -72,13 +82,35 @@ impl MCPIntrospector {
             "params": {}
         });
 
-        let response = client
+        let mut request = client
             .post(server_url)
             .json(&tools_request)
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(10));
+
+        // Add authentication headers if provided
+        if let Some(headers) = auth_headers {
+            for (key, value) in headers {
+                request = request.header(&key, &value);
+            }
+        }
+
+        let response = request
             .send()
             .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to connect to MCP server: {}", e)))?;
+
+        // Check response status
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unable to read error response".to_string());
+            return Err(RuntimeError::Generic(format!(
+                "MCP server returned error ({}): {}",
+                status, error_text
+            )));
+        }
 
         let mcp_response: serde_json::Value = response
             .json()
