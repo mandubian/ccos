@@ -1,16 +1,16 @@
-;; Capability: Get 5 Day Weather Forecast
+;; Capability: Get Current Weather
 ;; Generated from API introspection
 ;; Base URL: https://api.openweathermap.org
-;; Endpoint: GET /data/2.5/forecast
+;; Endpoint: GET /data/2.5/weather
 
-(capability "openweather_api.get_forecast"
-  :name "Get 5 Day Weather Forecast"
+(capability "openweather_api.get_current_weather"
+  :name "Get Current Weather"
   :version "2.5"
-  :description "5 day weather forecast with data every 3 hours"
+  :description "Access current weather data for any location including over 200,000 cities"
   :provider "OpenWeather API"
   :source_url "https://api.openweathermap.org"
   :discovery_method "api_introspection"
-  :created_at "2025-10-23T12:23:15.966152879+00:00"
+  :created_at "2025-10-23T20:01:33.395993017+00:00"
   :capability_type "specialized_http_api"
   :permissions [:network.http]
   :effects [:network_request :auth_required]
@@ -18,24 +18,30 @@
     :q :string ;; optional
     :lat :float ;; optional
     :lon :float ;; optional
-    :cnt :int ;; optional
+    :units :string ;; optional
+    :lang :string ;; optional
   }
   :output-schema {
-    :cnt :int
-    :list [:vector :map]
-    :city {
-    :name :string
+    :coord {
+    :lon :float
+    :lat :float
   }
+    :weather [:vector :map]
+    :main {
+    :temp :float
+    :humidity :int
+  }
+    :name :string
   }
   :implementation
     (fn [input]
   ;; Runtime-controlled implementation - validation and controls handled by runtime
-  ;; Input: 5 day weather forecast with data every 3 hours
+  ;; Input: Access current weather data for any location including over 200,000 cities
   ;; Output: validated by runtime against output_schema
   (do
-    (call "ccos.io.println" (str "[DEBUG] Calling openweather_api.get_forecast with input: " (call "ccos.data.serialize-json" input)))
+    (call "ccos.io.println" (str "[DEBUG] Calling openweather_api.get_current_weather with input: " (call "ccos.data.serialize-json" input)))
     (let [base_url "https://api.openweathermap.org"
-          path "/data/2.5/forecast"
+          path "/data/2.5/weather"
           method "GET"
           ;; Build URL
           full_url (str base_url path)
