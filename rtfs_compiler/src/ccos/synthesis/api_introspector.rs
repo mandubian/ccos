@@ -1150,23 +1150,42 @@ impl APIIntrospector {
     }
 
     /// Save capability to RTFS file
+    /// 
+    /// Uses hierarchical directory structure:
+    /// output_dir/openapi/<api_name>/<endpoint_name>.rtfs
+    /// 
+    /// Example: capabilities/openapi/openweather/get_current_weather.rtfs
     pub fn save_capability_to_rtfs(
         &self,
         capability: &CapabilityManifest,
         implementation_code: &str,
         output_dir: &std::path::Path,
     ) -> RuntimeResult<std::path::PathBuf> {
-        std::fs::create_dir_all(output_dir).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to create output directory: {}", e))
-        })?;
+        // Parse capability ID: "openweather_api.get_current_weather" or similar
+        // Extract API name and endpoint name from ID
+        let parts: Vec<&str> = capability.id.split('.').collect();
+        if parts.len() < 2 {
+            return Err(RuntimeError::Generic(format!(
+                "Invalid capability ID format: {}. Expected: <api>.<endpoint>",
+                capability.id
+            )));
+        }
 
-        let capability_dir = output_dir.join(&capability.id);
+        // Extract api name (remove _api suffix if present)
+        let api_name_raw = parts[0];
+        let api_name = api_name_raw.trim_end_matches("_api");
+        
+        // Extract endpoint name (join all remaining parts)
+        let endpoint_name = parts[1..].join("_");
+
+        // Create directory: output_dir/openapi/<api_name>/
+        let capability_dir = output_dir.join("openapi").join(api_name);
         std::fs::create_dir_all(&capability_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create capability directory: {}", e))
         })?;
 
         let rtfs_content = self.capability_to_rtfs_string(capability, implementation_code);
-        let rtfs_file = capability_dir.join("capability.rtfs");
+        let rtfs_file = capability_dir.join(format!("{}.rtfs", endpoint_name));
 
         std::fs::write(&rtfs_file, rtfs_content).map_err(|e| {
             RuntimeError::Generic(format!("Failed to write RTFS file: {}", e))

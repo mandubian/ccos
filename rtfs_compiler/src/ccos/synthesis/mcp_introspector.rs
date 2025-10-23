@@ -10,9 +10,20 @@
 //! 4. Parse and validate the response
 //!
 //! This makes MCP tools trivially callable from RTFS/CCOS plans alongside OpenAPI capabilities.
+//!
+//! ## Session Management
+//!
+//! This module properly implements MCP session management according to the specification:
+//! https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#session-management
+//!
+//! The flow is:
+//! 1. Initialize session → Get Mcp-Session-Id
+//! 2. Call tools/list with session ID
+//! 3. Terminate session when done
 
 use crate::ast::{Keyword, MapTypeEntry, TypeExpr};
 use crate::ccos::capability_marketplace::types::CapabilityManifest;
+use crate::ccos::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo};
 use crate::ccos::synthesis::schema_serializer::type_expr_to_rtfs_pretty;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -63,6 +74,11 @@ impl MCPIntrospector {
     }
 
     /// Introspect an MCP server with authentication headers
+    ///
+    /// This properly implements MCP session management:
+    /// 1. Initialize session (get Mcp-Session-Id)
+    /// 2. Call tools/list with session ID
+    /// 3. Terminate session when done
     pub async fn introspect_mcp_server_with_auth(
         &self,
         server_url: &str,
@@ -73,49 +89,31 @@ impl MCPIntrospector {
             return self.introspect_mock_mcp_server(server_name);
         }
 
-        // Call MCP server's tools/list endpoint
-        let client = reqwest::Client::new();
-        let tools_request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": "discover_tools",
-            "method": "tools/list",
-            "params": {}
-        });
+        println!("🔍 Introspecting MCP server: {} ({})", server_name, server_url);
 
-        let mut request = client
-            .post(server_url)
-            .json(&tools_request)
-            .timeout(std::time::Duration::from_secs(10));
+        // Create session manager with authentication
+        let session_manager = MCPSessionManager::new(auth_headers);
 
-        // Add authentication headers if provided
-        if let Some(headers) = auth_headers {
-            for (key, value) in headers {
-                request = request.header(&key, &value);
-            }
-        }
+        // Step 1: Initialize MCP session
+        let client_info = MCPServerInfo {
+            name: "ccos-introspector".to_string(),
+            version: "1.0.0".to_string(),
+        };
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to connect to MCP server: {}", e)))?;
+        let session = session_manager
+            .initialize_session(server_url, &client_info)
+            .await?;
 
-        // Check response status
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unable to read error response".to_string());
-            return Err(RuntimeError::Generic(format!(
-                "MCP server returned error ({}): {}",
-                status, error_text
-            )));
-        }
+        // Step 2: Call tools/list with session
+        let tools_response = session_manager
+            .make_request(&session, "tools/list", serde_json::json!({}))
+            .await;
 
-        let mcp_response: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse MCP response: {}", e)))?;
+        // Step 3: Terminate session (even if tools/list failed)
+        let _ = session_manager.terminate_session(&session).await;
+
+        // Check tools/list result
+        let mcp_response = tools_response?;
 
         // Extract tools from response
         let tools_array = mcp_response
@@ -134,7 +132,7 @@ impl MCPIntrospector {
         Ok(MCPIntrospectionResult {
             server_url: server_url.to_string(),
             server_name: server_name.to_string(),
-            protocol_version: "2024-11-05".to_string(),
+            protocol_version: session.protocol_version.clone(),
             tools: discovered_tools,
         })
     }
@@ -437,23 +435,38 @@ impl MCPIntrospector {
     }
 
     /// Save MCP capability to RTFS file
+    /// 
+    /// Uses hierarchical directory structure:
+    /// output_dir/mcp/<namespace>/<tool_name>.rtfs
+    /// 
+    /// Example: capabilities/mcp/github/list_issues.rtfs
     pub fn save_capability_to_rtfs(
         &self,
         capability: &CapabilityManifest,
         implementation_code: &str,
         output_dir: &std::path::Path,
     ) -> RuntimeResult<std::path::PathBuf> {
-        std::fs::create_dir_all(output_dir).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to create output directory: {}", e))
-        })?;
+        // Parse capability ID: "mcp.namespace.tool_name"
+        let parts: Vec<&str> = capability.id.split('.').collect();
+        if parts.len() < 3 {
+            return Err(RuntimeError::Generic(format!(
+                "Invalid capability ID format: {}. Expected: mcp.<namespace>.<tool>",
+                capability.id
+            )));
+        }
 
-        let capability_dir = output_dir.join(&capability.id);
+        let provider_type = parts[0]; // "mcp"
+        let namespace = parts[1];     // "github"
+        let tool_name = parts[2..].join("_"); // "list_issues" or "add_comment_to_pending_review"
+
+        // Create directory: output_dir/mcp/<namespace>/
+        let capability_dir = output_dir.join(provider_type).join(namespace);
         std::fs::create_dir_all(&capability_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create capability directory: {}", e))
         })?;
 
         let rtfs_content = self.capability_to_rtfs_string(capability, implementation_code);
-        let rtfs_file = capability_dir.join("capability.rtfs");
+        let rtfs_file = capability_dir.join(format!("{}.rtfs", tool_name));
 
         std::fs::write(&rtfs_file, rtfs_content).map_err(|e| {
             RuntimeError::Generic(format!("Failed to write RTFS file: {}", e))

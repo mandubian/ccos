@@ -1,0 +1,59 @@
+;; MCP Capability: add_comment_to_pending_review
+;; Generated from MCP tool introspection
+;; MCP Server: github (https://api.githubcopilot.com/mcp/)
+;; Tool: add_comment_to_pending_review
+
+(capability "mcp.github.add_comment_to_pending_review"
+  :name "add_comment_to_pending_review"
+  :version "1.0.0"
+  :description "Add review comment to the requester's latest pending pull request review. A pending review needs to already exist to call this (check with the user if not sure)."
+  :provider "MCP"
+  :source_url "https://api.githubcopilot.com/mcp/"
+  :discovery_method "mcp_introspection"
+  :created_at "2025-10-23T20:00:10.545034913+00:00"
+  :capability_type "mcp_tool"
+  :permissions [:network.http]
+  :effects [:network_request :mcp_call]
+  :mcp_metadata {
+    :server_url "https://api.githubcopilot.com/mcp/"
+    :server_name "github"
+    :tool_name "add_comment_to_pending_review"
+    :protocol_version "2024-11-05"
+  }
+  :input-schema {
+    :body :string
+    :line :float ;; optional
+    :owner :string
+    :path :string
+    :pullNumber :float
+    :repo :string
+    :side :string ;; optional
+    :startLine :float ;; optional
+    :startSide :string ;; optional
+    :subjectType :string
+  }
+  :output-schema :any
+  :implementation
+    (fn [input]
+  ;; MCP Tool: Add review comment to the requester's latest pending pull request review. A pending review needs to already exist to call this (check with the user if not sure).
+  ;; Runtime validates input against input_schema
+  ;; Makes MCP JSON-RPC call and validates result against output_schema
+  (let [mcp_request {:jsonrpc "2.0"
+                      :id "mcp_call"
+                      :method "tools/call"
+                      :params {:name "add_comment_to_pending_review"
+                               :arguments input}}
+        mcp_url "https://api.githubcopilot.com/mcp/"
+        ;; Make HTTP POST to MCP server
+        response (call "ccos.network.http-fetch"
+                      :method "POST"
+                      :url mcp_url
+                      :headers {:content-type "application/json"}
+                      :body (call "ccos.data.serialize-json" mcp_request))
+        ;; Parse MCP JSON-RPC response
+        response_json (call "ccos.data.parse-json" (get response :body))
+        ;; Extract result (MCP wraps actual result in 'result' field)
+        result (get response_json :result)]
+    ;; Return the MCP tool result (runtime validates against output_schema)
+    result))
+)
