@@ -54,4 +54,4 @@ rtfs_compiler/rtfs_compiler/
 rtfs_compiler/capabilities/
 
 rtfs_compiler/.rtfs_repl_history
-rtfs_compiler/.rtfs_ccos_repl_history
+rtfs_compiler/.rtfs_ccos_repl_historyrtfs_compiler/src/bin/demo_introspected_with_mock_key.rs

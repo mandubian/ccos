@@ -1,5 +1,6 @@
 use crate::ast::{Keyword, MapTypeEntry, TypeExpr};
 use crate::ccos::capability_marketplace::types::CapabilityManifest;
+use crate::ccos::synthesis::schema_serializer::type_expr_to_rtfs_pretty;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 
@@ -1050,47 +1051,9 @@ impl APIIntrospector {
         })
     }
 
-    /// Convert TypeExpr to RTFS schema string
+    /// Convert TypeExpr to RTFS schema string (using shared utility)
     fn type_expr_to_rtfs_string(expr: &TypeExpr) -> String {
-        match expr {
-            TypeExpr::Primitive(prim) => match prim {
-                crate::ast::PrimitiveType::Int => ":int".to_string(),
-                crate::ast::PrimitiveType::Float => ":float".to_string(),
-                crate::ast::PrimitiveType::String => ":string".to_string(),
-                crate::ast::PrimitiveType::Bool => ":bool".to_string(),
-                crate::ast::PrimitiveType::Nil => ":nil".to_string(),
-                _ => ":any".to_string(),
-            },
-            TypeExpr::Vector(inner) => {
-                format!("[:vector {}]", Self::type_expr_to_rtfs_string(inner))
-            }
-            TypeExpr::Map { entries, wildcard } => {
-                if entries.is_empty() && wildcard.is_none() {
-                    return ":map".to_string();
-                }
-
-                let mut map_parts = vec!["{".to_string()];
-                
-                for entry in entries {
-                    let key_str = &entry.key.0;
-                    let value_str = Self::type_expr_to_rtfs_string(&entry.value_type);
-                    if entry.optional {
-                        map_parts.push(format!("    :{} {} ;; optional", key_str, value_str));
-                    } else {
-                        map_parts.push(format!("    :{} {}", key_str, value_str));
-                    }
-                }
-
-                if let Some(wildcard_type) = wildcard {
-                    map_parts.push(format!("    :* {}", Self::type_expr_to_rtfs_string(wildcard_type)));
-                }
-
-                map_parts.push("  }".to_string());
-                map_parts.join("\n")
-            }
-            TypeExpr::Any => ":any".to_string(),
-            _ => ":any".to_string(),
-        }
+        type_expr_to_rtfs_pretty(expr)
     }
 
     /// Serialize capability to RTFS format

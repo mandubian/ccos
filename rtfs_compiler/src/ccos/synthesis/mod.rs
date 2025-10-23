@@ -1,6 +1,7 @@
 use crate::runtime::error::RuntimeResult;
 
 pub mod api_introspector;
+pub mod schema_serializer;
 pub mod artifact_generator;
 pub mod auth_injector;
 pub mod capability_synthesizer;

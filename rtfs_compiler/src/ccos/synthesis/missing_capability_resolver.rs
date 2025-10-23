@@ -1323,7 +1323,8 @@ impl MissingCapabilityResolver {
     }
 
     fn type_expr_to_rtfs_string(expr: &TypeExpr) -> String {
-        expr.to_string()
+        // Use shared schema serializer for consistent formatting
+        crate::ccos::synthesis::schema_serializer::type_expr_to_rtfs_string(expr)
     }
 
     fn infer_base_url(url: &str) -> String {
