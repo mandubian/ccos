@@ -309,27 +309,36 @@ impl MCPIntrospector {
   ;; MCP Tool: {}
   ;; Runtime validates input against input_schema
   ;; Makes MCP JSON-RPC call and validates result against output_schema
-  (let [mcp_request {{:jsonrpc "2.0"
+  ;; 
+  ;; Note: This capability requires an MCP server.
+  ;; Set MCP_SERVER_URL environment variable to override the default.
+  ;; For local testing, you can use: export MCP_SERVER_URL=http://localhost:3000/mcp/github
+  (let [default_url "{}"
+        env_url (call "ccos.system.get-env" "MCP_SERVER_URL")
+        mcp_url (if env_url env_url default_url)
+        mcp_request {{:jsonrpc "2.0"
                       :id "mcp_call"
                       :method "tools/call"
                       :params {{:name "{}"
                                :arguments input}}}}
-        mcp_url "{}"
         ;; Make HTTP POST to MCP server
         response (call "ccos.network.http-fetch"
                       :method "POST"
                       :url mcp_url
                       :headers {{:content-type "application/json"}}
-                      :body (call "ccos.data.serialize-json" mcp_request))
-        ;; Parse MCP JSON-RPC response
-        response_json (call "ccos.data.parse-json" (get response :body))
-        ;; Extract result (MCP wraps actual result in 'result' field)
-        result (get response_json :result)]
-    ;; Return the MCP tool result (runtime validates against output_schema)
-    result))"#,
+                      :body (call "ccos.data.serialize-json" mcp_request))]
+    ;; Check if response body is nil or empty
+    (if (get response :body)
+      (let [response_json (call "ccos.data.parse-json" (get response :body))
+            ;; Extract result (MCP wraps actual result in 'result' field)
+            result (get response_json :result)]
+        ;; Return the MCP tool result (runtime validates against output_schema)
+        result)
+      ;; Return error if no body
+      {{:error "No response from MCP server" :url mcp_url}})))"#,
             tool.description.as_deref().unwrap_or(&tool.tool_name),
-            tool.tool_name,
-            server_url
+            server_url,
+            tool.tool_name
         )
     }
 

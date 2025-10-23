@@ -114,6 +114,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("👤 Test 2: GitHub MCP - Get Current User");
     println!("-----------------------------------------");
     
+    // MCP capabilities can use custom server URL via environment variable
+    if let Ok(url) = std::env::var("MCP_SERVER_URL") {
+        println!("✅ MCP_SERVER_URL configured: {}", url);
+    } else {
+        println!("ℹ️  MCP_SERVER_URL not set, using default: https://api.githubcopilot.com/mcp/");
+        println!("   For local testing: export MCP_SERVER_URL=http://localhost:3000/mcp/github");
+    }
+    
     if let Ok(token) = std::env::var("GITHUB_PAT") {
         std::env::set_var("GITHUB_PAT", token);
         println!("✅ GitHub PAT configured");
