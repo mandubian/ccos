@@ -919,6 +919,21 @@ impl CapabilityRegistry {
 				}),
 			},
 		);
+
+        // MCP operations with session management
+        self.capabilities.insert(
+            "ccos.mcp.call-with-session".to_string(),
+            Capability {
+                id: "ccos.mcp.call-with-session".to_string(),
+                arity: Arity::Variadic(1),
+                func: Arc::new(|_args| {
+                    // MCP session management must be executed through MicroVM isolation
+                    Err(RuntimeError::Generic(
+                        "MCP operations must be executed through MicroVM isolation. Use CapabilityRegistry::execute_capability_with_microvm()".to_string(),
+                    ))
+                }),
+            },
+        );
     }
 
     fn register_agent_capabilities(&mut self) {
@@ -1103,6 +1118,12 @@ impl CapabilityRegistry {
         runtime_context: Option<&RuntimeContext>,
     ) -> RuntimeResult<Value> {
         eprintln!("CapabilityRegistry::execute_in_microvm called for {} with args={:?} http_mocking_enabled={}", capability_id, args, self.http_mocking_enabled);
+        
+        // For MCP operations with session management
+        if capability_id == "ccos.mcp.call-with-session" {
+            return self.execute_mcp_with_session(&args);
+        }
+        
         // For HTTP operations, return a mock response for testing
         if capability_id == "ccos.network.http-fetch" {
             if self.http_mocking_enabled {
@@ -1381,6 +1402,61 @@ impl CapabilityRegistry {
         );
 
         Ok(Value::Map(response_map))
+    }
+
+    /// Execute MCP call with proper session management
+    ///
+    /// Expected args format (as keyword pairs):
+    /// :server-url "https://api.githubcopilot.com/mcp/"
+    /// :tool-name "list_issues"
+    /// :arguments {:owner "..." :repo "..."}
+    /// :auth-token "optional_bearer_token" (optional, can use GITHUB_PAT env)
+    fn execute_mcp_with_session(&self, args: &[Value]) -> RuntimeResult<Value> {
+        eprintln!("CapabilityRegistry::execute_mcp_with_session called with args={:?}", args);
+        
+        // Parse arguments
+        let pairs = self.collect_keyword_pairs(args)?;
+        
+        let server_url = pairs.iter()
+            .find(|(k, _)| k == "server-url")
+            .and_then(|(_, v)| v.as_string())
+            .ok_or_else(|| RuntimeError::Generic(":server-url required".to_string()))?;
+            
+        let tool_name = pairs.iter()
+            .find(|(k, _)| k == "tool-name")
+            .and_then(|(_, v)| v.as_string())
+            .ok_or_else(|| RuntimeError::Generic(":tool-name required".to_string()))?;
+            
+        let arguments = pairs.iter()
+            .find(|(k, _)| k == "arguments")
+            .map(|(_, v)| v.clone())
+            .unwrap_or(Value::Map(std::collections::HashMap::new()));
+            
+        let auth_token = pairs.iter()
+            .find(|(k, _)| k == "auth-token")
+            .and_then(|(_, v)| v.as_string());
+
+        // TODO: Implement async session management
+        // For now, return a helpful error message
+        let mut error_map = std::collections::HashMap::new();
+        error_map.insert(
+            MapKey::Keyword(crate::ast::Keyword("status".to_string())),
+            Value::String("not_implemented".to_string())
+        );
+        error_map.insert(
+            MapKey::Keyword(crate::ast::Keyword("message".to_string())),
+            Value::String("MCP session management requires async runtime - use local MCP server via MCP_SERVER_URL".to_string())
+        );
+        error_map.insert(
+            MapKey::Keyword(crate::ast::Keyword("server-url".to_string())),
+            Value::String(server_url.to_string())
+        );
+        error_map.insert(
+            MapKey::Keyword(crate::ast::Keyword("tool-name".to_string())),
+            Value::String(tool_name.to_string())
+        );
+        
+        Ok(Value::Map(error_map))
     }
 
     fn parse_http_request(&self, args: &[Value]) -> RuntimeResult<HttpRequestConfig> {
