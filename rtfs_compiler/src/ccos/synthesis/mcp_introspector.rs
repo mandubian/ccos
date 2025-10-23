@@ -261,6 +261,11 @@ impl MCPIntrospector {
         metadata.insert("mcp_tool_name".to_string(), tool.tool_name.clone());
         metadata.insert("mcp_protocol_version".to_string(), introspection.protocol_version.clone());
         metadata.insert("discovery_method".to_string(), "mcp_introspection".to_string());
+        
+        // MCP session management hints (generic, not server-specific)
+        metadata.insert("mcp_requires_session".to_string(), "auto".to_string()); // auto, true, false
+        metadata.insert("mcp_auth_env_var".to_string(), "MCP_AUTH_TOKEN".to_string()); // generic env var name
+        metadata.insert("mcp_server_url_override_env".to_string(), "MCP_SERVER_URL".to_string());
 
         if let Some(input_json) = &tool.input_schema_json {
             metadata.insert("mcp_input_schema_json".to_string(), input_json.to_string());
@@ -299,6 +304,15 @@ impl MCPIntrospector {
     }
 
     /// Generate RTFS implementation for MCP tool
+    /// 
+    /// This is a generic MCP wrapper that:
+    /// 1. Reads MCP server URL from metadata (overridable via MCP_SERVER_URL env var)
+    /// 2. Optionally gets auth token from input schema or env var (MCP_AUTH_TOKEN)
+    /// 3. Makes standard JSON-RPC call to MCP server
+    /// 4. Returns result with schema validation by runtime
+    ///
+    /// Session management is handled transparently by the runtime/registry based on
+    /// capability metadata (mcp_requires_session, mcp_auth_env_var).
     pub fn generate_mcp_rtfs_implementation(
         &self,
         tool: &DiscoveredMCPTool,
@@ -307,35 +321,45 @@ impl MCPIntrospector {
         format!(
             r#"(fn [input]
   ;; MCP Tool: {}
-  ;; Runtime validates input against input_schema
-  ;; Makes MCP JSON-RPC call and validates result against output_schema
+  ;; Runtime validates input against input_schema and output_schema
+  ;; Makes standard MCP JSON-RPC call to tools/call endpoint
   ;; 
-  ;; Note: This capability requires an MCP server.
-  ;; Set MCP_SERVER_URL environment variable to override the default.
-  ;; For local testing, you can use: export MCP_SERVER_URL=http://localhost:3000/mcp/github
+  ;; Configuration:
+  ;;   - MCP_SERVER_URL: Override server URL (default from metadata)
+  ;;   - MCP_AUTH_TOKEN: Optional auth token for MCP server
+  ;;
+  ;; Session management is handled by the runtime based on capability metadata.
   (let [default_url "{}"
         env_url (call "ccos.system.get-env" "MCP_SERVER_URL")
         mcp_url (if env_url env_url default_url)
+        ;; Optional: get auth token from input or env
+        auth_token (or (get input :auth-token)
+                       (call "ccos.system.get-env" "MCP_AUTH_TOKEN"))
+        ;; Build MCP JSON-RPC request
         mcp_request {{:jsonrpc "2.0"
                       :id "mcp_call"
                       :method "tools/call"
                       :params {{:name "{}"
                                :arguments input}}}}
-        ;; Make HTTP POST to MCP server
-        response (call "ccos.network.http-fetch"
-                      :method "POST"
-                      :url mcp_url
-                      :headers {{:content-type "application/json"}}
-                      :body (call "ccos.data.serialize-json" mcp_request))]
-    ;; Check if response body is nil or empty
-    (if (get response :body)
-      (let [response_json (call "ccos.data.parse-json" (get response :body))
-            ;; Extract result (MCP wraps actual result in 'result' field)
-            result (get response_json :result)]
-        ;; Return the MCP tool result (runtime validates against output_schema)
-        result)
-      ;; Return error if no body
-      {{:error "No response from MCP server" :url mcp_url}})))"#,
+        ;; Build headers with optional auth
+        headers (if auth_token
+                  {{:content-type "application/json"
+                    :authorization (str "Bearer " auth_token)}}
+                  {{:content-type "application/json"}})]
+    ;; Make HTTP POST to MCP server
+    (let [response (call "ccos.network.http-fetch"
+                        :method "POST"
+                        :url mcp_url
+                        :headers headers
+                        :body (call "ccos.data.serialize-json" mcp_request))]
+      ;; Parse response and extract result
+      (if (get response :body)
+        (let [response_json (call "ccos.data.parse-json" (get response :body))
+              result (get response_json :result)]
+          ;; Return MCP tool result (runtime validates against output_schema)
+          result)
+        ;; Return error if no response body
+        {{:error "No response from MCP server" :url mcp_url}}))))"#,
             tool.description.as_deref().unwrap_or(&tool.tool_name),
             server_url,
             tool.tool_name
