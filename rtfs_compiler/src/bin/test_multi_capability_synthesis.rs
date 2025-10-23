@@ -1,7 +1,9 @@
-//! Test program for multi-capability synthesis
+//! Test program for multi-capability synthesis with API introspection
 //!
-//! This program demonstrates the enhanced capability synthesizer that can generate
-//! multiple specialized capabilities from a single API discovery.
+//! This program demonstrates the enhanced capability synthesizer that can:
+//! 1. Introspect APIs to discover endpoints and schemas
+//! 2. Encode API schemas in capability input_schema and output_schema fields
+//! 3. Move controls to runtime rather than hardcoding them in implementations
 
 use rtfs_compiler::ccos::synthesis::capability_synthesizer::{
     CapabilitySynthesizer, MultiCapabilityEndpoint, MultiCapabilitySynthesisRequest,
@@ -9,13 +11,99 @@ use rtfs_compiler::ccos::synthesis::capability_synthesizer::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🚀 Testing Multi-Capability Synthesis System");
-    println!("=============================================");
+    println!("🚀 Testing Multi-Capability Synthesis with API Introspection");
+    println!("=============================================================");
 
     // Create a mock synthesizer for testing
     let synthesizer = CapabilitySynthesizer::mock();
 
-    // Create a multi-capability synthesis request for OpenWeatherMap API
+    // Test 1: API Introspection (NEW APPROACH)
+    println!("\n🔍 Test 1: API Introspection");
+    println!("----------------------------");
+    
+    let api_url = "https://api.unifieddata.example.com";
+    let api_domain = "unifieddata";
+    
+    println!("Introspecting API: {}", api_url);
+    let introspection_result = synthesizer
+        .synthesize_from_api_introspection(api_url, api_domain)
+        .await?;
+
+    println!("✅ API Introspection Complete!");
+    println!("  Discovered {} capabilities", introspection_result.capabilities.len());
+    println!(
+        "  Overall Quality Score: {:.2}",
+        introspection_result.overall_quality_score
+    );
+    println!("  All Safety Passed: {}", introspection_result.all_safety_passed);
+    println!();
+
+    // Display introspected capabilities with proper schema encoding
+    for (i, capability_result) in introspection_result.capabilities.iter().enumerate() {
+        println!(
+            "🔧 Introspected Capability {}: {}",
+            i + 1,
+            capability_result.capability.name
+        );
+        println!("   ID: {}", capability_result.capability.id);
+        println!(
+            "   Description: {}",
+            capability_result.capability.description
+        );
+        println!("   Quality Score: {:.2}", capability_result.quality_score);
+        println!("   Safety Passed: {}", capability_result.safety_passed);
+
+        // Show that schemas are properly encoded in the capability
+        if let Some(input_schema) = &capability_result.capability.input_schema {
+            println!("   ✅ Input Schema: {:?}", input_schema);
+        } else {
+            println!("   ❌ No Input Schema");
+        }
+
+        if let Some(output_schema) = &capability_result.capability.output_schema {
+            println!("   ✅ Output Schema: {:?}", output_schema);
+        } else {
+            println!("   ❌ No Output Schema");
+        }
+
+        println!("   Runtime-Controlled Implementation:");
+        println!("   {}", capability_result.implementation_code);
+        println!();
+    }
+
+    // Demonstrate RTFS serialization
+    println!("\n📄 RTFS Serialization");
+    println!("---------------------");
+    println!("Each capability is saved as a separate capability.rtfs file:");
+    println!();
+
+    for (i, capability_result) in introspection_result.capabilities.iter().enumerate() {
+        println!(
+            "📝 Capability {}: {} → {}/capability.rtfs",
+            i + 1,
+            capability_result.capability.id,
+            capability_result.capability.id
+        );
+
+        // Get the introspector instance (recreate for serialization)
+        let introspector = synthesizer.get_introspector();
+        
+        // Serialize to RTFS string
+        let rtfs_content = introspector.capability_to_rtfs_string(
+            &capability_result.capability,
+            &capability_result.implementation_code,
+        );
+
+        println!("\n{}", "=".repeat(80));
+        println!("{}", rtfs_content);
+        println!("{}", "=".repeat(80));
+        println!();
+    }
+
+    // Test 2: Legacy Hardcoded Approach (for comparison)
+    println!("\n📋 Test 2: Legacy Hardcoded Approach (for comparison)");
+    println!("----------------------------------------------------");
+    
     let request = MultiCapabilitySynthesisRequest {
         api_domain: "unifieddata".to_string(),
         api_docs: r#"
@@ -93,7 +181,7 @@ Insights API:
         generate_all_endpoints: false,
     };
 
-    println!("📋 Synthesis Request:");
+    println!("📋 Legacy Synthesis Request:");
     println!("  API Domain: {}", request.api_domain);
     println!("  Base URL: {}", request.base_url);
     println!("  Requires Auth: {}", request.requires_auth);
@@ -103,17 +191,11 @@ Insights API:
     );
     println!();
 
-    // Generate the enhanced prompt
-    let prompt = synthesizer.generate_multi_capability_prompt(&request);
-    println!("🤖 Generated Multi-Capability Prompt:");
-    println!("{}", prompt);
-    println!();
-
-    // Synthesize multiple capabilities
-    println!("⚡ Synthesizing Multiple Capabilities...");
+    // Synthesize multiple capabilities using legacy approach
+    println!("⚡ Synthesizing Multiple Capabilities (Legacy)...");
     let result = synthesizer.synthesize_multi_capabilities(&request).await?;
 
-    println!("✅ Synthesis Complete!");
+    println!("✅ Legacy Synthesis Complete!");
     println!("  Generated {} capabilities", result.capabilities.len());
     println!(
         "  Overall Quality Score: {:.2}",
@@ -122,10 +204,10 @@ Insights API:
     println!("  All Safety Passed: {}", result.all_safety_passed);
     println!();
 
-    // Display each generated capability
+    // Display each generated capability (legacy approach)
     for (i, capability_result) in result.capabilities.iter().enumerate() {
         println!(
-            "🔧 Capability {}: {}",
+            "🔧 Legacy Capability {}: {}",
             i + 1,
             capability_result.capability.name
         );
@@ -137,21 +219,20 @@ Insights API:
         println!("   Quality Score: {:.2}", capability_result.quality_score);
         println!("   Safety Passed: {}", capability_result.safety_passed);
 
+        // Show that schemas are NOT properly encoded in legacy approach
         if let Some(input_schema) = &capability_result.capability.input_schema {
-            println!(
-                "   Input Schema: {}",
-                serde_json::to_string_pretty(input_schema)?
-            );
+            println!("   ❌ Input Schema: {:?} (hardcoded)", input_schema);
+        } else {
+            println!("   ❌ No Input Schema");
         }
 
         if let Some(output_schema) = &capability_result.capability.output_schema {
-            println!(
-                "   Output Schema: {}",
-                serde_json::to_string_pretty(output_schema)?
-            );
+            println!("   ❌ Output Schema: {:?} (hardcoded)", output_schema);
+        } else {
+            println!("   ❌ No Output Schema");
         }
 
-        println!("   RTFS Implementation:");
+        println!("   Hardcoded Implementation:");
         println!("   {}", capability_result.implementation_code);
         println!();
     }
@@ -165,22 +246,37 @@ Insights API:
         println!();
     }
 
-    // Demonstrate the difference from single capability synthesis
-    println!("🔄 Comparison with Single Capability Synthesis:");
-    println!("   Single capability synthesis generates one generic HTTP wrapper");
-    println!("   Multi-capability synthesis generates specialized, domain-specific capabilities");
-    println!("   Each capability has its own input/output schema and RTFS implementation");
+    // Show the key differences
+    println!("🔄 Key Differences: API Introspection vs Legacy Approach");
+    println!("========================================================");
+    println!();
+    println!("✅ API Introspection Approach:");
+    println!("   🔍 Discovers endpoints automatically from OpenAPI specs");
+    println!("   📋 Encodes schemas in capability.input_schema and output_schema");
+    println!("   🎛️  Moves controls to runtime (validation, auth, rate limiting)");
+    println!("   🛡️  Runtime handles security and governance");
+    println!("   🔧 Generates clean, runtime-controlled implementations");
+    println!();
+    println!("❌ Legacy Hardcoded Approach:");
+    println!("   📝 Requires manual endpoint specification");
+    println!("   🔧 Hardcodes schemas in implementation code");
+    println!("   🎛️  Embeds controls directly in capability implementation");
+    println!("   🚫 Mixes business logic with control logic");
+    println!("   🔧 Generates complex, hardcoded implementations");
     println!();
 
-    println!("🎯 Benefits of Multi-Capability Synthesis:");
+    println!("🎯 Benefits of API Introspection Approach:");
+    println!("   ✅ Automatic Discovery - No manual endpoint specification needed");
+    println!("   ✅ Schema Encoding - Proper input/output schemas in capabilities");
+    println!("   ✅ Runtime Controls - Validation, auth, rate limiting handled by runtime");
+    println!("   ✅ Clean Separation - Business logic separate from control logic");
     println!("   ✅ Type Safety - RTFS schemas ensure correct input/output");
     println!("   ✅ Better UX - Domain-specific function names and parameters");
-    println!("   ✅ Validation - Automatic parameter validation");
     println!("   ✅ Documentation - Self-documenting capabilities");
-    println!("   ✅ Composability - Mix and match different weather APIs");
+    println!("   ✅ Composability - Mix and match different APIs");
     println!("   ✅ Pure RTFS - All logic generated in RTFS, no hardcoded Rust");
     println!();
 
-    println!("🚀 Multi-Capability Synthesis Test Complete!");
+    println!("🚀 Multi-Capability Synthesis with API Introspection Test Complete!");
     Ok(())
 }
