@@ -274,6 +274,16 @@ impl CapabilitySynthesizer {
         server_url: &str,
         server_name: &str,
     ) -> RuntimeResult<MultiCapabilitySynthesisResult> {
+        self.synthesize_from_mcp_introspection_with_auth(server_url, server_name, None).await
+    }
+
+    /// Synthesize capabilities by introspecting an MCP server with authentication
+    pub async fn synthesize_from_mcp_introspection_with_auth(
+        &self,
+        server_url: &str,
+        server_name: &str,
+        auth_headers: Option<HashMap<String, String>>,
+    ) -> RuntimeResult<MultiCapabilitySynthesisResult> {
         if !self.synthesis_enabled {
             return Err(RuntimeError::Generic(
                 "Capability synthesis is disabled by feature flag".to_string(),
@@ -291,7 +301,7 @@ impl CapabilitySynthesizer {
 
         // Introspect the MCP server
         let introspection = introspector
-            .introspect_mcp_server(server_url, server_name)
+            .introspect_mcp_server_with_auth(server_url, server_name, auth_headers)
             .await?;
 
         // Create capabilities from introspection results
