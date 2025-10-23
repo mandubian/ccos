@@ -1381,6 +1381,16 @@ impl CapabilityRegistry {
         let resp_body = response
             .text()
             .map_err(|e| RuntimeError::NetworkError(e.to_string()))?;
+        
+        // Debug: Log HTTP response for MCP calls
+        if request.url.to_string().contains("/mcp/") {
+            eprintln!("🌐 HTTP Response: status={}, body_len={}", status, resp_body.len());
+            if resp_body.len() < 500 {
+                eprintln!("   Body: {}", resp_body);
+            } else {
+                eprintln!("   Body (first 500 chars): {}", &resp_body[..500]);
+            }
+        }
 
         let mut response_map = HashMap::new();
         response_map.insert(MapKey::String("status".to_string()), Value::Integer(status));

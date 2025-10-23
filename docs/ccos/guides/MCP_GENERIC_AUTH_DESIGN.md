@@ -10,7 +10,7 @@ This document describes the **generic, provider-agnostic** approach to handling 
 - MCP capability generation should work for **any** MCP server
 - No hardcoded provider-specific logic (GitHub, OpenWeather, etc.)
 - Configuration through metadata and environment variables
-
+xpo
 ### 2. **Separation of Concerns**
 - **Capability**: Pure business logic - what the tool does
 - **Metadata**: Declarative hints about auth/session requirements

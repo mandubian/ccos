@@ -1171,7 +1171,15 @@ impl StandardLibrary {
                 for (key, value) in map {
                     let key_str = match key {
                         crate::ast::MapKey::String(s) => s.clone(),
-                        crate::ast::MapKey::Keyword(k) => k.0.clone(),
+                        crate::ast::MapKey::Keyword(k) => {
+                            // Strip leading ':' from keyword for JSON keys
+                            let s = &k.0;
+                            if s.starts_with(':') {
+                                s[1..].to_string()
+                            } else {
+                                s.clone()
+                            }
+                        },
                         crate::ast::MapKey::Integer(i) => i.to_string(),
                     };
                     json_object.insert(key_str, Self::rtfs_value_to_json(value)?);
