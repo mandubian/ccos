@@ -592,6 +592,8 @@ pub struct CapabilityRegistry {
     execution_policy: CapabilityExecutionPolicy,
     /// Optional marketplace reference for metadata access (generic, provider-agnostic)
     marketplace: Option<Arc<crate::ccos::CapabilityMarketplace>>,
+    /// Optional session pool for stateful capability providers (generic, provider-agnostic)
+    session_pool: Option<Arc<super::session_pool::SessionPoolManager>>,
 }
 
 impl CapabilityRegistry {
@@ -606,6 +608,7 @@ impl CapabilityRegistry {
             http_allow_hosts: None,
             execution_policy: CapabilityExecutionPolicy::default(),
             marketplace: None,
+            session_pool: None,
         };
 
         // Register system capabilities
@@ -1094,6 +1097,14 @@ impl CapabilityRegistry {
         self.marketplace = Some(marketplace);
     }
 
+    /// Set session pool for stateful capabilities (generic, provider-agnostic)
+    pub fn set_session_pool(
+        &mut self,
+        session_pool: Arc<super::session_pool::SessionPoolManager>,
+    ) {
+        self.session_pool = Some(session_pool);
+    }
+
     /// Get capability metadata from marketplace (generic, provider-agnostic)
     /// 
     /// This helper retrieves capability metadata without knowing which provider
@@ -1113,6 +1124,17 @@ impl CapabilityRegistry {
             }
         }
         None
+    }
+
+    /// Check if capability requires session management (generic)
+    /// 
+    /// Inspects metadata for any provider's session requirements.
+    /// Works for MCP, GraphQL, gRPC, or any future provider.
+    fn requires_session(&self, metadata: &std::collections::HashMap<String, String>) -> bool {
+        // Check for *_requires_session keys (any provider)
+        metadata.iter().any(|(k, v)| {
+            k.ends_with("_requires_session") && (v == "true" || v == "auto")
+        })
     }
 
     /// Configure the MicroVM provider to use
@@ -1252,22 +1274,24 @@ impl CapabilityRegistry {
         // Check capability metadata to determine if special handling is needed
         // This is provider-agnostic - works for MCP, OpenAPI, GraphQL, etc.
         if let Some(metadata) = self.get_capability_metadata(capability_id) {
-            // Check for provider-specific handling requirements
-            // Each provider type can have its own metadata hints
-            
-            // Example: Session management (generic pattern for any stateful provider)
-            if let Some(requires_session) = metadata.get("mcp_requires_session") {
-                if requires_session == "true" || requires_session == "auto" {
-                    eprintln!("📋 Metadata hint: capability requires session management");
-                    // TODO Phase 2.3: Delegate to session handler
-                    // For now, log and continue with normal execution
+            // Check if capability requires session management (generic)
+            if self.requires_session(&metadata) {
+                eprintln!("📋 Metadata hint: capability requires session management");
+                
+                // Delegate to session pool (completely generic!)
+                if let Some(session_pool) = &self.session_pool {
+                    eprintln!("🔄 Delegating to session pool for: {}", capability_id);
+                    return session_pool.execute_with_session(capability_id, &metadata, &args);
+                } else {
+                    eprintln!("⚠️  Session management required but no session pool configured");
+                    // Fall through to normal execution (will likely fail with 401)
                 }
             }
             
             // Future: Other generic patterns can be added here
-            // - Rate limiting hints: metadata.get("openapi_rate_limit")
-            // - Auth requirements: metadata.get("oauth_required")
-            // - Retry policies: metadata.get("retry_strategy")
+            // - Rate limiting hints: metadata.get("*_rate_limit")
+            // - Auth requirements: metadata.get("*_oauth_required")
+            // - Retry policies: metadata.get("*_retry_strategy")
         }
 
         // Special-case: route HTTP fetch through the microvm execution helper so
