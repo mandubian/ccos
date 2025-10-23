@@ -427,17 +427,24 @@ impl MCPIntrospector {
   :version "{}"
   :description "{}"
   :provider "MCP"
-  :source_url "{}"
-  :discovery_method "mcp_introspection"
-  :created_at "{}"
-  :capability_type "mcp_tool"
   :permissions {}
   :effects {}
-  :mcp_metadata {{
-    :server_url "{}"
-    :server_name "{}"
-    :tool_name "{}"
-    :protocol_version "{}"
+  :metadata {{
+    :mcp {{
+      :server_url "{}"
+      :server_name "{}"
+      :tool_name "{}"
+      :protocol_version "{}"
+      :requires_session "auto"
+      :auth_env_var "MCP_AUTH_TOKEN"
+      :server_url_override_env "MCP_SERVER_URL"
+    }}
+    :discovery {{
+      :method "mcp_introspection"
+      :source_url "{}"
+      :created_at "{}"
+      :capability_type "mcp_tool"
+    }}
   }}
   :input-schema {}
   :output-schema {}
@@ -453,14 +460,14 @@ impl MCPIntrospector {
             capability.name,
             capability.version,
             capability.description,
-            mcp_server_url,
-            chrono::Utc::now().to_rfc3339(),
             permissions_str,
             effects_str,
             mcp_server_url,
             mcp_server_name,
             mcp_tool_name,
             capability.metadata.get("mcp_protocol_version").map(|s| s.as_str()).unwrap_or("2024-11-05"),
+            mcp_server_url,
+            chrono::Utc::now().to_rfc3339(),
             input_schema_str,
             output_schema_str,
             implementation_code

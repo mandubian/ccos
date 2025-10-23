@@ -616,6 +616,48 @@ impl CapabilityMarketplace {
         Ok(())
     }
 
+    /// Register a local capability with schema and metadata
+    /// 
+    /// Generic method that works for any provider type (MCP, OpenAPI, etc.)
+    /// The metadata HashMap can contain provider-specific fields flattened from
+    /// hierarchical RTFS structure.
+    pub async fn register_local_capability_with_metadata(
+        &self,
+        id: String,
+        name: String,
+        description: String,
+        handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync>,
+        input_schema: Option<TypeExpr>,
+        output_schema: Option<TypeExpr>,
+        metadata: HashMap<String, String>,
+    ) -> Result<(), RuntimeError> {
+        let provenance = CapabilityProvenance {
+            source: "local".to_string(),
+            version: Some("1.0.0".to_string()),
+            content_hash: self.compute_content_hash(&format!("{}{}{}", id, name, description)),
+            custody_chain: vec!["local_registration".to_string()],
+            registered_at: chrono::Utc::now(),
+        };
+        let capability = CapabilityManifest {
+            id: id.clone(),
+            name,
+            description,
+            provider: ProviderType::Local(LocalCapability { handler }),
+            version: "1.0.0".to_string(),
+            input_schema,
+            output_schema,
+            attestation: None,
+            provenance: Some(provenance),
+            permissions: vec![],
+            effects: vec![],
+            metadata,  // Provider-specific metadata (generic)
+            agent_metadata: None,
+        };
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
+    }
+
     pub async fn register_http_capability(
         &self,
         id: String,

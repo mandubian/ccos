@@ -8,17 +8,24 @@
   :version "1.0.0"
   :description "Fast and precise code search across ALL GitHub repositories using GitHub's native search engine. Best for finding exact symbols, functions, classes, or specific code patterns."
   :provider "MCP"
-  :source_url "https://api.githubcopilot.com/mcp/"
-  :discovery_method "mcp_introspection"
-  :created_at "2025-10-23T20:57:22.380308188+00:00"
-  :capability_type "mcp_tool"
   :permissions [:network.http]
   :effects [:network_request :mcp_call]
-  :mcp_metadata {
-    :server_url "https://api.githubcopilot.com/mcp/"
-    :server_name "github"
-    :tool_name "search_code"
-    :protocol_version "2024-11-05"
+  :metadata {
+    :mcp {
+      :server_url "https://api.githubcopilot.com/mcp/"
+      :server_name "github"
+      :tool_name "search_code"
+      :protocol_version "2024-11-05"
+      :requires_session "auto"
+      :auth_env_var "MCP_AUTH_TOKEN"
+      :server_url_override_env "MCP_SERVER_URL"
+    }
+    :discovery {
+      :method "mcp_introspection"
+      :source_url "https://api.githubcopilot.com/mcp/"
+      :created_at "2025-10-23T21:35:43.807206164+00:00"
+      :capability_type "mcp_tool"
+    }
   }
   :input-schema {
     :order :string ;; optional

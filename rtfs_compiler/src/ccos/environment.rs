@@ -764,6 +764,7 @@ impl CCOSEnvironment {
                         let mut description: Option<String> = None;
                         let mut version: Option<String> = None;
                         let mut source_url: Option<String> = None;
+                        let mut flat_metadata: std::collections::HashMap<String, String> = std::collections::HashMap::new();
                         // Implementation program to execute at call time
                         let mut implementation_expr: Option<crate::ast::Expression> = None;
 
@@ -789,6 +790,15 @@ impl CCOSEnvironment {
                                         evaluator.evaluate(&prop.value)?
                                     {
                                         source_url = Some(s);
+                                    }
+                                }
+                                "metadata" => {
+                                    // Parse nested metadata structure generically
+                                    // Flattens { :provider { :key "value" } } -> "provider_key" = "value"
+                                    if let ExecutionOutcome::Complete(Value::Map(meta_map)) =
+                                        evaluator.evaluate(&prop.value)?
+                                    {
+                                        Self::flatten_metadata_map(&meta_map, "", &mut flat_metadata);
                                     }
                                 }
                                 "implementation" => {
@@ -855,13 +865,19 @@ impl CCOSEnvironment {
                                     },
                                 );
 
+                                // Clone metadata for the async block
+                                let metadata_for_cap = flat_metadata.clone();
+                                
                                 let fut = async move {
                                     marketplace_for_cap
-                                        .register_local_capability(
+                                        .register_local_capability_with_metadata(
                                             capability_id,
                                             cap_name,
                                             cap_desc,
                                             handler,
+                                            None,  // input_schema (could be parsed from :input-schema)
+                                            None,  // output_schema (could be parsed from :output-schema)
+                                            metadata_for_cap,  // Generic metadata
                                         )
                                         .await
                                         .map_err(|e| {
@@ -1330,6 +1346,81 @@ impl CCOSEnvironment {
             })?;
 
         Ok(Arc::new(module))
+    }
+
+    /// Get reference to the capability marketplace
+    pub fn marketplace(&self) -> &Arc<CapabilityMarketplace> {
+        &self.marketplace
+    }
+
+    /// Flatten nested metadata map into flat key-value pairs
+    /// 
+    /// Generic helper for parsing hierarchical capability metadata.
+    /// Works for any provider (MCP, OpenAPI, GraphQL, etc.).
+    /// 
+    /// Example transformation:
+    /// ```
+    /// { :mcp { :server_url "https://..." :requires_session "auto" }
+    ///   :discovery { :method "mcp_introspection" } }
+    /// ```
+    /// Becomes:
+    /// ```
+    /// { "mcp_server_url" -> "https://..."
+    ///   "mcp_requires_session" -> "auto"
+    ///   "discovery_method" -> "mcp_introspection" }
+    /// ```
+    fn flatten_metadata_map(
+        map: &std::collections::HashMap<crate::ast::MapKey, Value>,
+        prefix: &str,
+        output: &mut std::collections::HashMap<String, String>,
+    ) {
+        for (key, value) in map {
+            // Extract key string (handle keywords with leading ':')
+            let key_str = match key {
+                crate::ast::MapKey::String(s) => s.clone(),
+                crate::ast::MapKey::Keyword(k) => {
+                    let s = &k.0;
+                    if s.starts_with(':') {
+                        s[1..].to_string()
+                    } else {
+                        s.clone()
+                    }
+                }
+                crate::ast::MapKey::Integer(i) => i.to_string(),
+            };
+
+            // Build flattened key with prefix
+            let flat_key = if prefix.is_empty() {
+                key_str.clone()
+            } else {
+                format!("{}_{}", prefix, key_str)
+            };
+
+            match value {
+                Value::String(s) => {
+                    // String value: store directly
+                    output.insert(flat_key, s.clone());
+                }
+                Value::Integer(i) => {
+                    // Integer: convert to string
+                    output.insert(flat_key, i.to_string());
+                }
+                Value::Float(f) => {
+                    // Float: convert to string
+                    output.insert(flat_key, f.to_string());
+                }
+                Value::Boolean(b) => {
+                    // Boolean: convert to string
+                    output.insert(flat_key, b.to_string());
+                }
+                Value::Map(nested_map) => {
+                    // Nested map: recurse with updated prefix
+                    Self::flatten_metadata_map(nested_map, &flat_key, output);
+                }
+                // Ignore other types (vectors, functions, etc.)
+                _ => {}
+            }
+        }
     }
 }
 
