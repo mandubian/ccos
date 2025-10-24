@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--------------------------------------------");
     
     let call_code = r#"
-        ((call "mcp.github.list_issues") {
+        (call "mcp.github.list_issues" {
             :owner "mandubian"
             :repo "ccos"
         })
@@ -149,7 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("-------------------------------------------");
     
     let call_code2 = r#"
-        ((call "mcp.github.list_issues") {
+        (call "mcp.github.list_issues" {
             :owner "mandubian"
             :repo "ccos"
             :state "open"

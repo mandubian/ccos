@@ -608,7 +608,13 @@ impl CCOSEnvironment {
         // Create and configure registry
         let mut configured_registry = crate::ccos::capabilities::registry::CapabilityRegistry::new();
         configured_registry.set_marketplace(marketplace.clone());
-        configured_registry.set_session_pool(session_pool);
+        configured_registry.set_session_pool(session_pool.clone());
+
+        // CRITICAL: Set session pool in marketplace for session-managed execution
+        // This enables marketplace to delegate to session pool when metadata indicates
+        tokio_rt.block_on(async {
+            marketplace.set_session_pool(session_pool.clone()).await;
+        });
 
         Ok(Self {
             config,
