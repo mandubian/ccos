@@ -393,9 +393,9 @@ See `rtfs_compiler/src/bin/test_end_to_end_session.rs` for a complete example.
 
 ## Related Documentation
 
-- **Using MCP capabilities**: `mcp-runtime-guide.md` (this guide's companion)
-- **Session management architecture**: `SESSION_MANAGEMENT_COMPLETE.md`
-- **Overall success summary**: `PHASE_2_FINAL_SUCCESS.md`
+- **Using MCP capabilities**: `mcp-runtime-guide.md`
+- **Session management architecture**: `session-management-architecture.md`
+- **Phase 2 overview**: `metadata-driven-capabilities.md`
 
 ---
 

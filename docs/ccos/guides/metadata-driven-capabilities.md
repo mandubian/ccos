@@ -72,12 +72,48 @@ Handler IMPLEMENTS protocol specifically
 - **Tests**: 3 unit + 2 integration, all passing
 - **Real API calls**: Working ✅
 
-## Documentation
+## Related Documentation
 
-- **Using MCP**: `mcp-runtime-guide.md`
+- **Using MCP capabilities**: `mcp-runtime-guide.md`
 - **Creating MCP capabilities**: `mcp-synthesis-guide.md`
-- **Architecture**: `session-management-architecture.md`
-- **Summary**: `phase2-summary.md` (this file)
+- **Technical architecture**: `session-management-architecture.md`
+
+## Unified Capability Pattern
+
+All synthesized capabilities (OpenAPI, MCP, GraphQL) follow the **same pattern**:
+
+### Consistency Across Providers
+
+**OpenAPI Capability**:
+```rtfs
+(call "openapi.openweather.get_current_weather" {:q "Paris"})
+```
+
+**MCP Capability**:
+```rtfs
+(call "mcp.github.list_issues" {:owner "mandubian" :repo "ccos"})
+```
+
+**Same syntax, same validation, same execution model!**
+
+### Benefits
+
+1. **LLM-Friendly**: LLM doesn't need to know if capability is OpenAPI or MCP
+2. **Composable**: Mix different providers in same plan
+3. **Type-Safe**: All validated against schemas
+4. **Transparent**: Can inspect RTFS code
+5. **Testable**: Can mock HTTP calls easily
+
+### Comparison: Old vs New MCP
+
+| Feature | Old (ProviderType::MCP) | New (RTFS-First) |
+|---------|-------------------------|------------------|
+| **Schemas** | ❌ None | ✅ Full TypeExpr |
+| **Callable** | ❌ Complex | ✅ `(call "mcp.tool")` |
+| **Composable** | ❌ Different pattern | ✅ Same as OpenAPI |
+| **LLM-Friendly** | ❌ Special syntax | ✅ Standard |
+| **Validated** | ❌ No | ✅ Runtime validates |
+| **Transparent** | ❌ Black box | ✅ See RTFS code |
 
 ## Next Steps
 
