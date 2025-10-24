@@ -152,7 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (call "mcp.github.list_issues" {
             :owner "mandubian"
             :repo "ccos"
-            :state "open"
+            :state "OPEN"
         })
     "#;
 
