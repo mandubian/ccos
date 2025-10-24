@@ -23,7 +23,7 @@
     :discovery {
       :method "mcp_introspection"
       :source_url "https://api.githubcopilot.com/mcp/"
-      :created_at "2025-10-23T21:35:43.806556266+00:00"
+      :created_at "2025-10-24T09:02:22.094171339+00:00"
       :capability_type "mcp_tool"
     }
   }

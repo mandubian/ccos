@@ -768,6 +768,9 @@ pub struct CapabilityMarketplace {
     pub(crate) causal_chain: Option<Arc<std::sync::Mutex<crate::ccos::causal_chain::CausalChain>>>,
     pub(crate) resource_monitor: Option<Arc<super::resource_monitor::ResourceMonitor>>,
     pub(crate) debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    /// Optional session pool for stateful capabilities (generic, provider-agnostic)
+    /// Uses RwLock for interior mutability since marketplace is wrapped in Arc
+    pub(crate) session_pool: Arc<RwLock<Option<Arc<crate::ccos::capabilities::SessionPoolManager>>>>,
 }
 
 /// Trait for capability discovery providers

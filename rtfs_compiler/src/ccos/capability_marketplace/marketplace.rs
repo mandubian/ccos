@@ -55,6 +55,7 @@ impl CapabilityMarketplace {
             causal_chain,
             resource_monitor: None,
             debug_callback,
+            session_pool: Arc::new(RwLock::new(None)),
         };
         marketplace.executor_registry.insert(
             TypeId::of::<MCPCapability>(),
@@ -85,6 +86,14 @@ impl CapabilityMarketplace {
         F: Fn(String) + Send + Sync + 'static,
     {
         self.debug_callback = Some(Arc::new(callback));
+    }
+
+    /// Set session pool for stateful capabilities (generic, provider-agnostic)
+    pub async fn set_session_pool(
+        &self,
+        session_pool: Arc<crate::ccos::capabilities::SessionPoolManager>,
+    ) {
+        *self.session_pool.write().await = Some(session_pool);
     }
 
     /// Create marketplace with resource monitoring enabled
@@ -1246,24 +1255,30 @@ impl CapabilityMarketplace {
             if requires_session {
                 eprintln!("📋 Metadata indicates session management required for: {}", id);
                 
-                // Delegate to registry for session-managed execution
-                // The registry will:
-                // 1. Detect provider type from metadata
-                // 2. Route to SessionPoolManager
-                // 3. Manager delegates to appropriate SessionHandler
-                // 4. Handler manages session lifecycle
-                let registry = self.capability_registry.read().await;
-                let args = match inputs {
-                    Value::List(list) => list.clone(),
-                    _ => vec![inputs.clone()],
+                // Delegate to session pool for session-managed execution
+                let pool_opt = {
+                    let guard = self.session_pool.read().await;
+                    guard.clone() // Clone the Arc<SessionPoolManager>
                 };
-                eprintln!("🔄 Delegating to registry for session management");
-                drop(registry); // Release lock before execution
                 
-                // For now, fall through to normal execution
-                // TODO: Implement registry routing for session management
-                // This will be completed when we wire the registry's session pool
-                eprintln!("⚠️  Session management delegation not yet implemented in marketplace");
+                if let Some(pool) = pool_opt {
+                    eprintln!("🔄 Delegating to session pool for session management");
+                    let args = match inputs {
+                        Value::List(list) => list.clone(),
+                        _ => vec![inputs.clone()],
+                    };
+                    
+                    // Session pool will:
+                    // 1. Detect provider type from metadata (mcp_, graphql_, etc.)
+                    // 2. Route to appropriate SessionHandler
+                    // 3. Handler initializes/reuses session
+                    // 4. Handler executes with session (auth, headers, etc.)
+                    // 5. Returns result
+                    return pool.execute_with_session(id, &manifest.metadata, &args);
+                } else {
+                    eprintln!("⚠️  Session management required but no session pool configured");
+                    eprintln!("   Falling through to normal execution (will likely fail with 401)");
+                }
             }
         }
 

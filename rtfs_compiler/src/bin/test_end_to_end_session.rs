@@ -123,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     
     let call_code = r#"
-        ((call "mcp.github.get_me") {})
+        (call "mcp.github.get_me" {})
     "#;
     
     match env.execute_code(call_code) {
