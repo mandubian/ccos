@@ -1235,6 +1235,38 @@ impl CapabilityMarketplace {
             return Err(RuntimeError::UnknownCapability(id.to_string()));
         };
 
+        // Check for session management requirements (generic, metadata-driven)
+        // This works for ANY provider that declares session needs via metadata
+        if !manifest.metadata.is_empty() {
+            // Check if capability requires session management (generic pattern)
+            let requires_session = manifest.metadata.iter().any(|(k, v)| {
+                k.ends_with("_requires_session") && (v == "true" || v == "auto")
+            });
+            
+            if requires_session {
+                eprintln!("📋 Metadata indicates session management required for: {}", id);
+                
+                // Delegate to registry for session-managed execution
+                // The registry will:
+                // 1. Detect provider type from metadata
+                // 2. Route to SessionPoolManager
+                // 3. Manager delegates to appropriate SessionHandler
+                // 4. Handler manages session lifecycle
+                let registry = self.capability_registry.read().await;
+                let args = match inputs {
+                    Value::List(list) => list.clone(),
+                    _ => vec![inputs.clone()],
+                };
+                eprintln!("🔄 Delegating to registry for session management");
+                drop(registry); // Release lock before execution
+                
+                // For now, fall through to normal execution
+                // TODO: Implement registry routing for session management
+                // This will be completed when we wire the registry's session pool
+                eprintln!("⚠️  Session management delegation not yet implemented in marketplace");
+            }
+        }
+
         // Prepare boundary verification context
         let boundary_context = VerificationContext::capability_boundary(id);
         let type_config = TypeCheckingConfig::default();
