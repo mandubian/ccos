@@ -393,11 +393,11 @@ GitHub uses GraphQL conventions (uppercase):
 | `MCP_AUTH_TOKEN` | Authentication token (e.g., GitHub PAT) | Yes (for authenticated APIs) | None |
 | `MCP_SERVER_URL` | Override MCP server URL | No | From capability metadata |
 
-## Next Steps
+## Related Documentation
 
-- **Using MCP**: You're reading it! ✅
-- **Creating MCP capabilities**: See `mcp-synthesis-guide.md`
-- **Adding new providers**: See `SESSION_MANAGEMENT_COMPLETE.md`
+- **Creating MCP capabilities**: `mcp-synthesis-guide.md`
+- **Session management architecture**: `session-management-architecture.md`
+- **Phase 2 overview**: `metadata-driven-capabilities.md`
 
 ---
 
