@@ -42,8 +42,9 @@ pub mod capability_marketplace;
 pub mod environment;
 pub mod host;
 pub mod observability;
+pub mod prelude;
 pub mod state_provider;
-pub mod streaming;
+pub mod streaming; // CCOS prelude: effectful helpers registered into RTFS env
 
 // Advanced components
 pub mod context_horizon;
@@ -268,7 +269,8 @@ impl CCOS {
             // Create LLM config for delegating arbiter
             let provider_hint =
                 std::env::var("CCOS_LLM_PROVIDER_HINT").unwrap_or_else(|_| String::from(""));
-            let provider_type = if model == "stub-model"
+            let provider_type = if provider_hint.eq_ignore_ascii_case("stub")
+                || model == "stub-model"
                 || model == "deterministic-stub-model"
                 || model == "stub"
             {

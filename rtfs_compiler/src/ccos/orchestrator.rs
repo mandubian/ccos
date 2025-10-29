@@ -699,7 +699,9 @@ impl Orchestrator {
         );
         let module_registry = std::sync::Arc::new(ModuleRegistry::new());
         let host_iface: Arc<dyn HostInterface> = host.clone();
-        let evaluator = Evaluator::new(module_registry, context.clone(), host_iface);
+        let mut evaluator = Evaluator::new(module_registry, context.clone(), host_iface);
+        // Load CCOS prelude (effectful helpers) into the evaluator's environment
+        crate::ccos::prelude::load_prelude(&mut evaluator.env);
 
         // Initialize context manager for the plan execution
         {
@@ -1259,7 +1261,9 @@ impl Orchestrator {
         host.set_execution_context(plan_id.clone(), plan.intent_ids.clone(), "".to_string());
         let module_registry = std::sync::Arc::new(ModuleRegistry::new());
         let host_iface: Arc<dyn HostInterface> = host.clone();
-        let evaluator = Evaluator::new(module_registry, context.clone(), host_iface);
+        let mut evaluator = Evaluator::new(module_registry, context.clone(), host_iface);
+        // Load CCOS prelude (effectful helpers) into the evaluator's environment
+        crate::ccos::prelude::load_prelude(&mut evaluator.env);
 
         // Initialize context manager for resumed execution
         {
