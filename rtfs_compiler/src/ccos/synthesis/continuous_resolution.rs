@@ -315,10 +315,11 @@ impl ContinuousResolutionLoop {
         let attempts = history.get(capability_id).cloned().unwrap_or_default();
         drop(history);
 
-        let attempt_count = attempts.len() as u32;
+        // Number of attempts already recorded for this capability
+        let base_attempt_count = attempts.len() as u32;
 
         // Check if we've exceeded max retry attempts
-        if attempt_count >= self.config.max_retry_attempts {
+        if base_attempt_count >= self.config.max_retry_attempts {
             println!(
                 "❌ Max retry attempts exceeded for capability: {}",
                 capability_id
@@ -329,17 +330,29 @@ impl ContinuousResolutionLoop {
             )));
         }
 
-        // Calculate backoff delay
-        let backoff_delay = self.calculate_backoff_delay(attempt_count);
-
         // Try different resolution methods in order of preference
         let methods = self.get_resolution_methods(risk_assessment);
 
-        for method in methods {
+        let mut last_attempt_number: u32 = base_attempt_count;
+        for (idx, method) in methods.into_iter().enumerate() {
+            // Compute the current attempt number including prior attempts and this method index
+            let current_attempt = base_attempt_count + (idx as u32) + 1;
+
+            // Respect max attempts across methods as well
+            if current_attempt > self.config.max_retry_attempts {
+                println!(
+                    "⛔ Reached max retry attempts ({}), skipping remaining methods",
+                    self.config.max_retry_attempts
+                );
+                break;
+            }
+
+            // Calculate backoff delay based on current attempt number
+            let backoff_delay = self.calculate_backoff_delay(current_attempt);
             let attempt = ResolutionAttempt {
                 capability_id: capability_id.to_string(),
                 attempted_at: Utc::now(),
-                attempt_count: attempt_count + 1,
+                attempt_count: current_attempt,
                 resolution_method: method.clone(),
                 success: false,
                 error_message: None,
@@ -380,14 +393,15 @@ impl ContinuousResolutionLoop {
                     attempts.push(failed_attempt);
                 }
             }
+
+            last_attempt_number = current_attempt;
         }
 
         // All methods failed, schedule retry if under limit
-        if attempt_count + 1 < self.config.max_retry_attempts {
+        if last_attempt_number < self.config.max_retry_attempts {
             println!(
                 "⏳ Scheduling retry for capability: {} (attempt {})",
-                capability_id,
-                attempt_count + 1
+                capability_id, last_attempt_number
             );
         } else {
             println!(
@@ -496,8 +510,8 @@ impl ContinuousResolutionLoop {
         human_approval_queue: &Arc<RwLock<Vec<PendingApproval>>>,
         config: &ResolutionConfig,
     ) -> RuntimeResult<()> {
-        // Get pending capabilities from resolver (placeholder)
-        let pending_capabilities: Vec<String> = vec![]; // TODO: integrate with actual resolver
+        // Pull pending capabilities from the resolver queue
+        let pending_capabilities: Vec<String> = resolver.list_pending_capabilities();
 
         for capability_id in pending_capabilities {
             // Check if we're still trying to resolve this capability

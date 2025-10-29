@@ -15,7 +15,7 @@ use rtfs_compiler::ccos::synthesis::missing_capability_resolver::{
 };
 use rtfs_compiler::runtime::values::Value;
 use serde_json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -247,24 +247,24 @@ async fn handle_resolve(
         capability_id
     );
 
-    // Check if capability already exists in marketplace
-    {
-        let capabilities = marketplace.list_capabilities().await;
-        let capability_ids: Vec<String> = capabilities.iter().map(|c| c.id.clone()).collect();
-        if capability_ids.contains(&capability_id.to_string()) {
-            println!(
-                "❌ ERROR: Capability '{}' already exists in marketplace!",
-                capability_id
-            );
-            println!("📋 Available capabilities: {:?}", capability_ids);
-            return Ok(());
-        } else {
-            println!(
-                "✅ Capability '{}' is missing from marketplace - proceeding with resolution",
-                capability_id
-            );
-        }
+    // Check if capability already exists in marketplace and track initial state
+    let existing_capabilities = marketplace.list_capabilities().await;
+    let capability_ids: Vec<String> = existing_capabilities.iter().map(|c| c.id.clone()).collect();
+    if capability_ids.contains(&capability_id.to_string()) {
+        println!(
+            "❌ ERROR: Capability '{}' already exists in marketplace!",
+            capability_id
+        );
+        println!("📋 Available capabilities: {:?}", capability_ids);
+        return Ok(());
+    } else {
+        println!(
+            "✅ Capability '{}' is missing from marketplace - proceeding with resolution",
+            capability_id
+        );
     }
+
+    let before_capability_ids: HashSet<String> = capability_ids.iter().cloned().collect();
 
     resolver.handle_missing_capability(
         capability_id.to_string(),
@@ -282,6 +282,31 @@ async fn handle_resolve(
     println!("   In Progress: {}", stats.in_progress_count);
     println!("   Failed: {}", stats.failed_count);
     println!("   Success Rate: {:.1}%", calculate_success_rate(&stats));
+
+    let post_resolution_capabilities = marketplace.list_capabilities().await;
+    let mut reported_path = false;
+    for capability in &post_resolution_capabilities {
+        if !before_capability_ids.contains(&capability.id) {
+            if let Some(storage_path) = capability.metadata.get("storage_path") {
+                println!(
+                    "📁 Capability '{}' stored at: {}",
+                    capability.id, storage_path
+                );
+                reported_path = true;
+            }
+        }
+    }
+
+    if !reported_path {
+        if let Some(resolved_capability) = post_resolution_capabilities
+            .iter()
+            .find(|cap| cap.id == capability_id)
+        {
+            if let Some(storage_path) = resolved_capability.metadata.get("storage_path") {
+                println!("📁 Capability stored at: {}", storage_path);
+            }
+        }
+    }
 
     println!("✅ Dependency resolution completed!");
     Ok(())

@@ -23,7 +23,7 @@
 
 use crate::ast::{Keyword, MapTypeEntry, TypeExpr};
 use crate::ccos::capability_marketplace::types::CapabilityManifest;
-use crate::ccos::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo};
+use crate::ccos::synthesis::mcp_session::{MCPServerInfo, MCPSessionManager};
 use crate::ccos::synthesis::schema_serializer::type_expr_to_rtfs_pretty;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -70,7 +70,8 @@ impl MCPIntrospector {
         server_url: &str,
         server_name: &str,
     ) -> RuntimeResult<MCPIntrospectionResult> {
-        self.introspect_mcp_server_with_auth(server_url, server_name, None).await
+        self.introspect_mcp_server_with_auth(server_url, server_name, None)
+            .await
     }
 
     /// Introspect an MCP server with authentication headers
@@ -89,7 +90,10 @@ impl MCPIntrospector {
             return self.introspect_mock_mcp_server(server_name);
         }
 
-        println!("🔍 Introspecting MCP server: {} ({})", server_name, server_url);
+        println!(
+            "🔍 Introspecting MCP server: {} ({})",
+            server_name, server_url
+        );
 
         // Create session manager with authentication
         let session_manager = MCPSessionManager::new(auth_headers);
@@ -248,24 +252,43 @@ impl MCPIntrospector {
         tool: &DiscoveredMCPTool,
         introspection: &MCPIntrospectionResult,
     ) -> RuntimeResult<CapabilityManifest> {
-        let capability_id = format!("mcp.{}.{}", 
-            introspection.server_name.replace("/", ".").replace(" ", "_"),
+        let capability_id = format!(
+            "mcp.{}.{}",
+            introspection
+                .server_name
+                .replace("/", ".")
+                .replace(" ", "_"),
             tool.tool_name.replace("-", "_")
         );
 
         let mut effects = vec!["network_request".to_string(), "mcp_call".to_string()];
-        
+
         let mut metadata = HashMap::new();
-        metadata.insert("mcp_server_url".to_string(), introspection.server_url.clone());
-        metadata.insert("mcp_server_name".to_string(), introspection.server_name.clone());
+        metadata.insert(
+            "mcp_server_url".to_string(),
+            introspection.server_url.clone(),
+        );
+        metadata.insert(
+            "mcp_server_name".to_string(),
+            introspection.server_name.clone(),
+        );
         metadata.insert("mcp_tool_name".to_string(), tool.tool_name.clone());
-        metadata.insert("mcp_protocol_version".to_string(), introspection.protocol_version.clone());
-        metadata.insert("discovery_method".to_string(), "mcp_introspection".to_string());
-        
+        metadata.insert(
+            "mcp_protocol_version".to_string(),
+            introspection.protocol_version.clone(),
+        );
+        metadata.insert(
+            "discovery_method".to_string(),
+            "mcp_introspection".to_string(),
+        );
+
         // MCP session management hints (generic, not server-specific)
         metadata.insert("mcp_requires_session".to_string(), "auto".to_string()); // auto, true, false
         metadata.insert("mcp_auth_env_var".to_string(), "MCP_AUTH_TOKEN".to_string()); // generic env var name
-        metadata.insert("mcp_server_url_override_env".to_string(), "MCP_SERVER_URL".to_string());
+        metadata.insert(
+            "mcp_server_url_override_env".to_string(),
+            "MCP_SERVER_URL".to_string(),
+        );
 
         if let Some(input_json) = &tool.input_schema_json {
             metadata.insert("mcp_input_schema_json".to_string(), input_json.to_string());
@@ -274,7 +297,9 @@ impl MCPIntrospector {
         Ok(CapabilityManifest {
             id: capability_id,
             name: tool.tool_name.clone(),
-            description: tool.description.clone()
+            description: tool
+                .description
+                .clone()
                 .unwrap_or_else(|| format!("MCP tool: {}", tool.tool_name)),
             provider: crate::ccos::capability_marketplace::types::ProviderType::Local(
                 crate::ccos::capability_marketplace::types::LocalCapability {
@@ -289,13 +314,15 @@ impl MCPIntrospector {
             input_schema: tool.input_schema.clone(),
             output_schema: tool.output_schema.clone(),
             attestation: None,
-            provenance: Some(crate::ccos::capability_marketplace::types::CapabilityProvenance {
-                source: "mcp_introspector".to_string(),
-                version: Some("1.0.0".to_string()),
-                content_hash: format!("mcp_{}_{}", introspection.server_name, tool.tool_name),
-                custody_chain: vec!["mcp_introspector".to_string()],
-                registered_at: chrono::Utc::now(),
-            }),
+            provenance: Some(
+                crate::ccos::capability_marketplace::types::CapabilityProvenance {
+                    source: "mcp_introspector".to_string(),
+                    version: Some("1.0.0".to_string()),
+                    content_hash: format!("mcp_{}_{}", introspection.server_name, tool.tool_name),
+                    custody_chain: vec!["mcp_introspector".to_string()],
+                    registered_at: chrono::Utc::now(),
+                },
+            ),
             permissions: vec!["network.http".to_string()],
             effects,
             metadata,
@@ -304,7 +331,7 @@ impl MCPIntrospector {
     }
 
     /// Generate RTFS implementation for MCP tool
-    /// 
+    ///
     /// This is a generic MCP wrapper that:
     /// 1. Reads MCP server URL from metadata (overridable via MCP_SERVER_URL env var)
     /// 2. Optionally gets auth token from input schema or env var (MCP_AUTH_TOKEN)
@@ -412,9 +439,21 @@ impl MCPIntrospector {
             )
         };
 
-        let mcp_server_url = capability.metadata.get("mcp_server_url").map(|s| s.as_str()).unwrap_or("");
-        let mcp_tool_name = capability.metadata.get("mcp_tool_name").map(|s| s.as_str()).unwrap_or("");
-        let mcp_server_name = capability.metadata.get("mcp_server_name").map(|s| s.as_str()).unwrap_or("");
+        let mcp_server_url = capability
+            .metadata
+            .get("mcp_server_url")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        let mcp_tool_name = capability
+            .metadata
+            .get("mcp_tool_name")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        let mcp_server_name = capability
+            .metadata
+            .get("mcp_server_name")
+            .map(|s| s.as_str())
+            .unwrap_or("");
 
         format!(
             r#";; MCP Capability: {}
@@ -465,7 +504,11 @@ impl MCPIntrospector {
             mcp_server_url,
             mcp_server_name,
             mcp_tool_name,
-            capability.metadata.get("mcp_protocol_version").map(|s| s.as_str()).unwrap_or("2024-11-05"),
+            capability
+                .metadata
+                .get("mcp_protocol_version")
+                .map(|s| s.as_str())
+                .unwrap_or("2024-11-05"),
             mcp_server_url,
             chrono::Utc::now().to_rfc3339(),
             input_schema_str,
@@ -475,10 +518,10 @@ impl MCPIntrospector {
     }
 
     /// Save MCP capability to RTFS file
-    /// 
+    ///
     /// Uses hierarchical directory structure:
     /// output_dir/mcp/<namespace>/<tool_name>.rtfs
-    /// 
+    ///
     /// Example: capabilities/mcp/github/list_issues.rtfs
     pub fn save_capability_to_rtfs(
         &self,
@@ -496,7 +539,7 @@ impl MCPIntrospector {
         }
 
         let provider_type = parts[0]; // "mcp"
-        let namespace = parts[1];     // "github"
+        let namespace = parts[1]; // "github"
         let tool_name = parts[2..].join("_"); // "list_issues" or "add_comment_to_pending_review"
 
         // Create directory: output_dir/mcp/<namespace>/
@@ -508,15 +551,17 @@ impl MCPIntrospector {
         let rtfs_content = self.capability_to_rtfs_string(capability, implementation_code);
         let rtfs_file = capability_dir.join(format!("{}.rtfs", tool_name));
 
-        std::fs::write(&rtfs_file, rtfs_content).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to write RTFS file: {}", e))
-        })?;
+        std::fs::write(&rtfs_file, rtfs_content)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write RTFS file: {}", e)))?;
 
         Ok(rtfs_file)
     }
 
     /// Mock MCP server introspection for testing
-    fn introspect_mock_mcp_server(&self, server_name: &str) -> RuntimeResult<MCPIntrospectionResult> {
+    fn introspect_mock_mcp_server(
+        &self,
+        server_name: &str,
+    ) -> RuntimeResult<MCPIntrospectionResult> {
         // Special handling for GitHub MCP
         if server_name.contains("github") {
             return self.introspect_mock_github_mcp();
@@ -527,33 +572,31 @@ impl MCPIntrospector {
             server_url: format!("http://localhost:3000/{}", server_name),
             server_name: server_name.to_string(),
             protocol_version: "2024-11-05".to_string(),
-            tools: vec![
-                DiscoveredMCPTool {
-                    tool_name: "example_tool".to_string(),
-                    description: Some("Example MCP tool".to_string()),
-                    input_schema: Some(TypeExpr::Map {
-                        entries: vec![
-                            MapTypeEntry {
-                                key: Keyword("query".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
-                                optional: false,
-                            },
-                        ],
-                        wildcard: None,
-                    }),
-                    output_schema: Some(TypeExpr::Map {
-                        entries: vec![
-                            MapTypeEntry {
-                                key: Keyword("result".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
-                                optional: false,
-                            },
-                        ],
-                        wildcard: None,
-                    }),
-                    input_schema_json: None,
-                },
-            ],
+            tools: vec![DiscoveredMCPTool {
+                tool_name: "example_tool".to_string(),
+                description: Some("Example MCP tool".to_string()),
+                input_schema: Some(TypeExpr::Map {
+                    entries: vec![MapTypeEntry {
+                        key: Keyword("query".to_string()),
+                        value_type: Box::new(TypeExpr::Primitive(
+                            crate::ast::PrimitiveType::String,
+                        )),
+                        optional: false,
+                    }],
+                    wildcard: None,
+                }),
+                output_schema: Some(TypeExpr::Map {
+                    entries: vec![MapTypeEntry {
+                        key: Keyword("result".to_string()),
+                        value_type: Box::new(TypeExpr::Primitive(
+                            crate::ast::PrimitiveType::String,
+                        )),
+                        optional: false,
+                    }],
+                    wildcard: None,
+                }),
+                input_schema_json: None,
+            }],
         })
     }
 
@@ -571,27 +614,37 @@ impl MCPIntrospector {
                         entries: vec![
                             MapTypeEntry {
                                 key: Keyword("owner".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                             MapTypeEntry {
                                 key: Keyword("repo".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                             MapTypeEntry {
                                 key: Keyword("title".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                             MapTypeEntry {
                                 key: Keyword("body".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: true,
                             },
                             MapTypeEntry {
                                 key: Keyword("labels".to_string()),
-                                value_type: Box::new(TypeExpr::Vector(Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)))),
+                                value_type: Box::new(TypeExpr::Vector(Box::new(
+                                    TypeExpr::Primitive(crate::ast::PrimitiveType::String),
+                                ))),
                                 optional: true,
                             },
                         ],
@@ -601,17 +654,23 @@ impl MCPIntrospector {
                         entries: vec![
                             MapTypeEntry {
                                 key: Keyword("number".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::Int)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::Int,
+                                )),
                                 optional: false,
                             },
                             MapTypeEntry {
                                 key: Keyword("url".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                             MapTypeEntry {
                                 key: Keyword("state".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                         ],
@@ -626,17 +685,23 @@ impl MCPIntrospector {
                         entries: vec![
                             MapTypeEntry {
                                 key: Keyword("owner".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                             MapTypeEntry {
                                 key: Keyword("repo".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                             MapTypeEntry {
                                 key: Keyword("state".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: true,
                             },
                         ],
@@ -707,4 +772,3 @@ mod tests {
         assert!(create_issue_cap.output_schema.is_some());
     }
 }
-

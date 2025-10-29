@@ -1,6 +1,7 @@
 use crate::ast::TypeExpr;
 use crate::ccos::capability_marketplace::types::{
-    CapabilityManifest, CapabilityProvenance, HttpCapability, ProviderType,
+    CapabilityManifest, CapabilityProvenance, OpenApiAuth, OpenApiCapability, OpenApiOperation,
+    ProviderType,
 };
 use crate::ccos::synthesis::auth_injector::AuthInjector;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
@@ -246,10 +247,16 @@ impl OpenAPIImporter {
         };
 
         // Create capability manifest
-        let manifest = self.create_capability_manifest(capability_id, &metadata)?;
+        let mut manifest =
+            self.create_capability_manifest(capability_id, Some(spec_url), &metadata)?;
 
         // Save capability to storage
-        self.save_capability(&manifest, &metadata).await?;
+        let storage_path = self.save_capability(&manifest, &metadata).await?;
+
+        manifest.metadata.insert(
+            "storage_path".to_string(),
+            storage_path.display().to_string(),
+        );
 
         eprintln!("✅ Created and saved RTFS capability: {}", capability_id);
         Ok(manifest)
@@ -656,6 +663,7 @@ impl OpenAPIImporter {
     fn create_capability_manifest(
         &self,
         capability_id: &str,
+        spec_url: Option<&str>,
         metadata: &OpenAPICapabilityMetadata,
     ) -> RuntimeResult<CapabilityManifest> {
         let rtfs_code = self.generate_rtfs_module(metadata);
@@ -686,14 +694,25 @@ impl OpenAPIImporter {
             serde_json::to_string(&metadata.auth_requirements).unwrap_or_default(),
         );
 
+        if let Some(spec) = spec_url {
+            manifest_metadata.insert("openapi_spec_url".to_string(), spec.to_string());
+        }
+        manifest_metadata.insert("openapi_base_url".to_string(), self.base_url.clone());
+
         Ok(CapabilityManifest {
             id: capability_id.to_string(),
             name: metadata.api_info.title.clone(),
             description: metadata.api_info.description.clone().unwrap_or_default(),
             version: metadata.api_info.version.clone(),
-            provider: ProviderType::Http(HttpCapability {
+            provider: ProviderType::OpenApi(OpenApiCapability {
                 base_url: self.base_url.clone(),
-                auth_token: None, // Never store secrets
+                spec_url: spec_url.map(|s| s.to_string()),
+                operations: metadata
+                    .endpoints
+                    .iter()
+                    .map(Self::convert_operation)
+                    .collect(),
+                auth: Self::convert_auth(&metadata.auth_requirements),
                 timeout_ms: 30000,
             }),
             input_schema: Some(input_schema),
@@ -710,6 +729,32 @@ impl OpenAPIImporter {
             effects: vec!["network_call".to_string()],
             metadata: manifest_metadata,
             agent_metadata: None,
+        })
+    }
+
+    fn convert_operation(operation: &OpenAPIOperation) -> OpenApiOperation {
+        OpenApiOperation {
+            operation_id: operation.operation_id.clone(),
+            method: operation.method.to_uppercase(),
+            path: operation.path.clone(),
+            summary: operation.summary.clone(),
+            description: operation.description.clone(),
+        }
+    }
+
+    fn convert_auth(requirements: &AuthRequirements) -> Option<OpenApiAuth> {
+        if !requirements.required
+            && requirements.auth_type.is_empty()
+            && requirements.auth_param_name.is_empty()
+        {
+            return None;
+        }
+        Some(OpenApiAuth {
+            auth_type: requirements.auth_type.clone(),
+            location: requirements.auth_location.clone(),
+            parameter_name: requirements.auth_param_name.clone(),
+            env_var_name: requirements.env_var_name.clone(),
+            required: requirements.required,
         })
     }
 
@@ -767,7 +812,7 @@ impl OpenAPIImporter {
         &self,
         manifest: &CapabilityManifest,
         metadata: &OpenAPICapabilityMetadata,
-    ) -> RuntimeResult<()> {
+    ) -> RuntimeResult<PathBuf> {
         // Create storage directory if it doesn't exist
         fs::create_dir_all(&self.storage_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
@@ -941,7 +986,7 @@ impl OpenAPIImporter {
         }
 
         eprintln!("💾 Saved capability to: {}", capability_dir.display());
-        Ok(())
+        Ok(metadata_path)
     }
 
     /// Parse a single OpenAPI operation

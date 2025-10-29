@@ -1,5 +1,7 @@
+use super::executors::CapabilityExecutor;
 use super::executors::{
-    A2AExecutor, ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor, RegistryExecutor,
+    A2AExecutor, ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor, OpenApiExecutor,
+    RegistryExecutor,
 };
 use super::resource_monitor::ResourceMonitor;
 use super::types::*;
@@ -10,14 +12,208 @@ use super::types::*;
 use crate::ast::{MapKey, TypeExpr};
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 // RuntimeContext no longer needed in missing-capability path
+use super::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
+use crate::ccos::synthesis::schema_serializer::type_expr_to_rtfs_pretty;
 use crate::runtime::streaming::{McpStreamingProvider, StreamType, StreamingProvider};
 use crate::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
 use crate::runtime::values::Value;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Serializable representation of ProviderType (subset of variants without closures)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SerializableProvider {
+    Http {
+        base_url: String,
+        timeout_ms: u64,
+        auth_token: Option<String>,
+    },
+    OpenApi {
+        base_url: String,
+        spec_url: Option<String>,
+        timeout_ms: u64,
+        operations: Vec<OpenApiOperation>,
+        auth: Option<OpenApiAuth>,
+    },
+    Mcp {
+        server_url: String,
+        tool_name: String,
+        timeout_ms: u64,
+    },
+    A2a {
+        agent_id: String,
+        endpoint: String,
+        protocol: String,
+        timeout_ms: u64,
+    },
+    RemoteRtfs {
+        endpoint: String,
+        timeout_ms: u64,
+        auth_token: Option<String>,
+    },
+    // Non-serializable variants (Local/Stream/Registry/Plugin) are intentionally omitted
+}
+
+impl SerializableProvider {
+    fn from_provider(p: &ProviderType) -> Option<Self> {
+        match p {
+            ProviderType::Http(h) => Some(SerializableProvider::Http {
+                base_url: h.base_url.clone(),
+                timeout_ms: h.timeout_ms,
+                auth_token: h.auth_token.clone(),
+            }),
+            ProviderType::OpenApi(o) => Some(SerializableProvider::OpenApi {
+                base_url: o.base_url.clone(),
+                spec_url: o.spec_url.clone(),
+                timeout_ms: o.timeout_ms,
+                operations: o.operations.clone(),
+                auth: o.auth.clone(),
+            }),
+            ProviderType::MCP(m) => Some(SerializableProvider::Mcp {
+                server_url: m.server_url.clone(),
+                tool_name: m.tool_name.clone(),
+                timeout_ms: m.timeout_ms,
+            }),
+            ProviderType::A2A(a) => Some(SerializableProvider::A2a {
+                agent_id: a.agent_id.clone(),
+                endpoint: a.endpoint.clone(),
+                protocol: a.protocol.clone(),
+                timeout_ms: a.timeout_ms,
+            }),
+            ProviderType::RemoteRTFS(r) => Some(SerializableProvider::RemoteRtfs {
+                endpoint: r.endpoint.clone(),
+                timeout_ms: r.timeout_ms,
+                auth_token: r.auth_token.clone(),
+            }),
+            // Skip non-serializable providers
+            ProviderType::Local(_)
+            | ProviderType::Stream(_)
+            | ProviderType::Registry(_)
+            | ProviderType::Plugin(_) => None,
+        }
+    }
+
+    fn into_provider(self) -> ProviderType {
+        match self {
+            SerializableProvider::Http {
+                base_url,
+                timeout_ms,
+                auth_token,
+            } => ProviderType::Http(HttpCapability {
+                base_url,
+                auth_token,
+                timeout_ms,
+            }),
+            SerializableProvider::OpenApi {
+                base_url,
+                spec_url,
+                timeout_ms,
+                operations,
+                auth,
+            } => ProviderType::OpenApi(OpenApiCapability {
+                base_url,
+                spec_url,
+                operations,
+                auth,
+                timeout_ms,
+            }),
+            SerializableProvider::Mcp {
+                server_url,
+                tool_name,
+                timeout_ms,
+            } => ProviderType::MCP(MCPCapability {
+                server_url,
+                tool_name,
+                timeout_ms,
+            }),
+            SerializableProvider::A2a {
+                agent_id,
+                endpoint,
+                protocol,
+                timeout_ms,
+            } => ProviderType::A2A(A2ACapability {
+                agent_id,
+                endpoint,
+                protocol,
+                timeout_ms,
+            }),
+            SerializableProvider::RemoteRtfs {
+                endpoint,
+                timeout_ms,
+                auth_token,
+            } => ProviderType::RemoteRTFS(RemoteRTFSCapability {
+                endpoint,
+                timeout_ms,
+                auth_token,
+            }),
+        }
+    }
+}
+
+/// Serializable DTO for capability manifests
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SerializableManifest {
+    id: String,
+    name: String,
+    description: String,
+    version: String,
+    provider: SerializableProvider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_schema: Option<TypeExpr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_schema: Option<TypeExpr>,
+    #[serde(default)]
+    permissions: Vec<String>,
+    #[serde(default)]
+    effects: Vec<String>,
+    #[serde(default)]
+    metadata: HashMap<String, String>,
+}
+
+impl From<&CapabilityManifest> for Option<SerializableManifest> {
+    fn from(c: &CapabilityManifest) -> Self {
+        let provider = SerializableProvider::from_provider(&c.provider)?;
+        Some(SerializableManifest {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            description: c.description.clone(),
+            version: c.version.clone(),
+            provider,
+            input_schema: c.input_schema.clone(),
+            output_schema: c.output_schema.clone(),
+            permissions: c.permissions.clone(),
+            effects: c.effects.clone(),
+            metadata: c.metadata.clone(),
+        })
+    }
+}
+
+impl From<SerializableManifest> for CapabilityManifest {
+    fn from(s: SerializableManifest) -> Self {
+        CapabilityManifest {
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            provider: s.provider.into_provider(),
+            version: s.version,
+            input_schema: s.input_schema,
+            output_schema: s.output_schema,
+            attestation: None,
+            provenance: None,
+            permissions: s.permissions,
+            effects: s.effects,
+            metadata: s.metadata,
+            agent_metadata: None,
+        }
+    }
+}
 
 impl CapabilityMarketplace {
     pub fn new(
@@ -72,6 +268,10 @@ impl CapabilityMarketplace {
         marketplace.executor_registry.insert(
             TypeId::of::<HttpCapability>(),
             ExecutorVariant::Http(HttpExecutor),
+        );
+        marketplace.executor_registry.insert(
+            TypeId::of::<OpenApiCapability>(),
+            ExecutorVariant::OpenApi(OpenApiExecutor),
         );
         marketplace.executor_registry.insert(
             TypeId::of::<RegistryCapability>(),
@@ -626,7 +826,7 @@ impl CapabilityMarketplace {
     }
 
     /// Register a local capability with schema and metadata
-    /// 
+    ///
     /// Generic method that works for any provider type (MCP, OpenAPI, etc.)
     /// The metadata HashMap can contain provider-specific fields flattened from
     /// hierarchical RTFS structure.
@@ -659,7 +859,7 @@ impl CapabilityMarketplace {
             provenance: Some(provenance),
             permissions: vec![],
             effects: vec![],
-            metadata,  // Provider-specific metadata (generic)
+            metadata, // Provider-specific metadata (generic)
             agent_metadata: None,
         };
         let mut caps = self.capabilities.write().await;
@@ -1248,26 +1448,30 @@ impl CapabilityMarketplace {
         // This works for ANY provider that declares session needs via metadata
         if !manifest.metadata.is_empty() {
             // Check if capability requires session management (generic pattern)
-            let requires_session = manifest.metadata.iter().any(|(k, v)| {
-                k.ends_with("_requires_session") && (v == "true" || v == "auto")
-            });
-            
+            let requires_session = manifest
+                .metadata
+                .iter()
+                .any(|(k, v)| k.ends_with("_requires_session") && (v == "true" || v == "auto"));
+
             if requires_session {
-                eprintln!("📋 Metadata indicates session management required for: {}", id);
-                
+                eprintln!(
+                    "📋 Metadata indicates session management required for: {}",
+                    id
+                );
+
                 // Delegate to session pool for session-managed execution
                 let pool_opt = {
                     let guard = self.session_pool.read().await;
                     guard.clone() // Clone the Arc<SessionPoolManager>
                 };
-                
+
                 if let Some(pool) = pool_opt {
                     eprintln!("🔄 Delegating to session pool for session management");
                     let args = match inputs {
                         Value::List(list) => list.clone(),
                         _ => vec![inputs.clone()],
                     };
-                    
+
                     // Session pool will:
                     // 1. Detect provider type from metadata (mcp_, graphql_, etc.)
                     // 2. Route to appropriate SessionHandler
@@ -1300,6 +1504,7 @@ impl CapabilityMarketplace {
                 ProviderType::Http(_) => std::any::TypeId::of::<HttpCapability>(),
                 ProviderType::MCP(_) => std::any::TypeId::of::<MCPCapability>(),
                 ProviderType::A2A(_) => std::any::TypeId::of::<A2ACapability>(),
+                ProviderType::OpenApi(_) => std::any::TypeId::of::<OpenApiCapability>(),
                 ProviderType::Plugin(_) => std::any::TypeId::of::<PluginCapability>(),
                 ProviderType::RemoteRTFS(_) => std::any::TypeId::of::<RemoteRTFSCapability>(),
                 ProviderType::Stream(_) => std::any::TypeId::of::<StreamCapabilityImpl>(),
@@ -1310,6 +1515,10 @@ impl CapabilityMarketplace {
             match &manifest.provider {
                 ProviderType::Local(local) => (local.handler)(inputs),
                 ProviderType::Http(http) => self.execute_http_capability(http, inputs).await,
+                ProviderType::OpenApi(_) => {
+                    let executor = OpenApiExecutor;
+                    executor.execute(&manifest.provider, inputs).await
+                }
                 ProviderType::MCP(_mcp) => {
                     Err(RuntimeError::Generic("MCP not configured".to_string()))
                 }
@@ -1602,6 +1811,7 @@ impl CapabilityMarketplace {
             let provider_type = match &manifest.provider {
                 ProviderType::Local(_) => "local",
                 ProviderType::Http(_) => "http",
+                ProviderType::OpenApi(_) => "openapi",
                 ProviderType::MCP(_) => "mcp",
                 ProviderType::A2A(_) => "a2a",
                 ProviderType::Plugin(_) => "plugin",
@@ -1631,6 +1841,7 @@ impl CapabilityMarketplace {
             let provider_label: &'static str = match &manifest.provider {
                 ProviderType::Local(_) => "local",
                 ProviderType::Http(_) => "http",
+                ProviderType::OpenApi(_) => "openapi",
                 ProviderType::MCP(_) => "mcp",
                 ProviderType::A2A(_) => "a2a",
                 ProviderType::Plugin(_) => "plugin",
@@ -1656,5 +1867,701 @@ impl CapabilityMarketplace {
             "denied_patterns": self.isolation_policy.denied_capabilities,
             "time_constraints_active": self.isolation_policy.time_constraints.is_some(),
         })
+    }
+
+    /// Export serializable capabilities to RTFS files for documentation or external tooling.
+    /// This is not used for runtime import yet; it complements JSON export with a human-friendly format.
+    pub async fn export_capabilities_to_rtfs_dir<P: AsRef<Path>>(
+        &self,
+        dir: P,
+    ) -> RuntimeResult<usize> {
+        let out_dir = dir.as_ref();
+        fs::create_dir_all(out_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create RTFS export dir: {}", e))
+        })?;
+        let caps = self.capabilities.read().await;
+        let mut written = 0usize;
+        for cap in caps.values() {
+            // Skip non-serializable provider types
+            let provider_label = match &cap.provider {
+                ProviderType::Http(_) => ":http",
+                ProviderType::OpenApi(_) => ":openapi",
+                ProviderType::MCP(_) => ":mcp",
+                ProviderType::A2A(_) => ":a2a",
+                ProviderType::RemoteRTFS(_) => ":remote_rtfs",
+                ProviderType::Local(_)
+                | ProviderType::Stream(_)
+                | ProviderType::Registry(_)
+                | ProviderType::Plugin(_) => {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Skipping RTFS export for non-serializable provider: {}",
+                            cap.id
+                        ));
+                    }
+                    continue;
+                }
+            };
+
+            let input_schema_str = cap
+                .input_schema
+                .as_ref()
+                .map(|s| type_expr_to_rtfs_pretty(s))
+                .unwrap_or_else(|| ":any".to_string());
+            let output_schema_str = cap
+                .output_schema
+                .as_ref()
+                .map(|s| type_expr_to_rtfs_pretty(s))
+                .unwrap_or_else(|| ":any".to_string());
+
+            let permissions_str = if cap.permissions.is_empty() {
+                "[]".to_string()
+            } else {
+                format!(
+                    "[{}]",
+                    cap.permissions
+                        .iter()
+                        .map(|p| if p.starts_with(':') {
+                            p.clone()
+                        } else {
+                            format!(":{}", p)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            };
+
+            let effects_str = if cap.effects.is_empty() {
+                "[]".to_string()
+            } else {
+                format!(
+                    "[{}]",
+                    cap.effects
+                        .iter()
+                        .map(|e| if e.starts_with(':') {
+                            e.clone()
+                        } else {
+                            format!(":{}", e)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            };
+
+            let provider_meta = match &cap.provider {
+                ProviderType::Http(h) => format!(
+                    ":provider-meta {{:base_url \"{}\" :timeout_ms {} }}",
+                    h.base_url, h.timeout_ms
+                ),
+                ProviderType::OpenApi(o) => {
+                    let mut parts = vec![format!(":base_url \"{}\"", o.base_url)];
+                    parts.push(format!(":timeout_ms {}", o.timeout_ms));
+                    if let Some(spec) = &o.spec_url {
+                        parts.push(format!(":spec_url \"{}\"", spec));
+                    }
+                    parts.push(format!(":operations {}", o.operations.len()));
+                    if let Some(auth) = &o.auth {
+                        parts.push(format!(":auth_type \"{}\"", auth.auth_type));
+                        parts.push(format!(":auth_location \"{}\"", auth.location));
+                    }
+                    format!(":provider-meta {{{}}}", parts.join(" "))
+                }
+                ProviderType::MCP(m) => {
+                    let mut parts = vec![
+                        format!(":server_url \"{}\"", m.server_url),
+                        format!(":tool_name \"{}\"", m.tool_name),
+                        format!(":timeout_ms {}", m.timeout_ms),
+                    ];
+                    if let Some(requires) = cap.metadata.get("mcp_requires_session") {
+                        parts.push(format!(
+                            ":requires_session \"{}\"",
+                            requires.replace('"', "\\\"")
+                        ));
+                    }
+                    format!(":provider-meta {{{}}}", parts.join(" "))
+                }
+                ProviderType::A2A(a) => format!(
+                    ":provider-meta {{:agent_id \"{}\" :endpoint \"{}\" :protocol \"{}\" :timeout_ms {} }}",
+                    a.agent_id, a.endpoint, a.protocol, a.timeout_ms
+                ),
+                ProviderType::RemoteRTFS(r) => format!(
+                    ":provider-meta {{:endpoint \"{}\" :timeout_ms {} }}",
+                    r.endpoint, r.timeout_ms
+                ),
+                _ => String::new(),
+            };
+
+            let metadata_block = if cap.metadata.is_empty() {
+                "  :metadata nil".to_string()
+            } else {
+                let mut entries: Vec<_> = cap.metadata.iter().collect();
+                entries.sort_by(|a, b| a.0.cmp(b.0));
+                let mut lines = Vec::with_capacity(entries.len());
+                for (key, value) in entries {
+                    let escaped = value.replace('"', "\\\"");
+                    lines.push(format!("    :{} \"{}\"", key, escaped));
+                }
+                format!("  :metadata {{\n{}\n  }}", lines.join("\n"))
+            };
+
+            let rtfs_content = format!(
+                r#";; Exported capability snapshot (read-only)
+;; Generated at {}
+
+(capability "{}"
+  :name "{}"
+  :version "{}"
+  :description "{}"
+  :provider {}
+  {}
+{}
+  :permissions {}
+  :effects {}
+  :input-schema {}
+  :output-schema {}
+  :implementation
+    (fn [input]
+      "Exported manifest only; runtime-managed execution"
+      input)
+)
+"#,
+                chrono::Utc::now().to_rfc3339(),
+                cap.id,
+                cap.name,
+                cap.version,
+                cap.description.replace('"', "'"),
+                provider_label,
+                provider_meta,
+                metadata_block,
+                permissions_str,
+                effects_str,
+                input_schema_str,
+                output_schema_str
+            );
+
+            let mut file_name = cap.id.replace('/', "_").replace(' ', "_");
+            if !file_name.ends_with(".rtfs") {
+                file_name.push_str(".rtfs");
+            }
+            let file_path = out_dir.join(file_name);
+            fs::write(&file_path, rtfs_content).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to write RTFS export for {}: {}", cap.id, e))
+            })?;
+            written += 1;
+        }
+        Ok(written)
+    }
+
+    /// Export serializable capabilities to a JSON file.
+    /// Skips non-serializable providers (Local, Stream, Registry, Plugin).
+    pub async fn export_capabilities_to_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> RuntimeResult<usize> {
+        let caps = self.capabilities.read().await;
+        let mut serializable = Vec::new();
+        for cap in caps.values() {
+            if let Some(s) = Option::<SerializableManifest>::from(cap) {
+                serializable.push(s);
+            } else if let Some(cb) = &self.debug_callback {
+                cb(format!(
+                    "Skipping non-serializable provider for capability {}",
+                    cap.id
+                ));
+            }
+        }
+        let json = serde_json::to_string_pretty(&serializable).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to serialize capabilities: {}", e))
+        })?;
+        std::fs::write(&path, json)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write export file: {}", e)))?;
+        Ok(serializable.len())
+    }
+
+    /// Import capabilities from a JSON file that was previously exported.
+    /// Returns the number of capabilities loaded into the marketplace.
+    pub async fn import_capabilities_from_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> RuntimeResult<usize> {
+        let data = std::fs::read_to_string(&path)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to read import file: {}", e)))?;
+        let list: Vec<SerializableManifest> = serde_json::from_str(&data)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to parse import file: {}", e)))?;
+        let mut loaded = 0usize;
+        let mut caps = self.capabilities.write().await;
+        for s in list {
+            let cap: CapabilityManifest = s.into();
+            caps.insert(cap.id.clone(), cap);
+            loaded += 1;
+        }
+        Ok(loaded)
+    }
+
+    /// Import capabilities exported as RTFS files (one .rtfs per capability) from a directory.
+    /// Only supports provider types that are expressible in the exported RTFS (http, mcp, a2a, remote_rtfs).
+    pub async fn import_capabilities_from_rtfs_dir<P: AsRef<Path>>(
+        &self,
+        dir: P,
+    ) -> RuntimeResult<usize> {
+        let dir_path = dir.as_ref();
+        let mut loaded = 0usize;
+
+        let entries = std::fs::read_dir(dir_path).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to read RTFS dir {}: {}",
+                dir_path.display(),
+                e
+            ))
+        })?;
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                if ext != "rtfs" {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+
+            // First try: use MCPDiscoveryProvider parsing helpers (robust path)
+            let parser_res = MCPDiscoveryProvider::new(MCPServerConfig::default());
+            if let Ok(parser) = parser_res {
+                match parser.load_rtfs_capabilities(path.to_str().unwrap_or_default()) {
+                    Ok(module) => {
+                        for cap_def in module.capabilities {
+                            match parser.rtfs_to_capability_manifest(&cap_def) {
+                                Ok(manifest) => {
+                                    let mut caps = self.capabilities.write().await;
+                                    caps.insert(manifest.id.clone(), manifest);
+                                    loaded += 1;
+                                }
+                                Err(e) => {
+                                    if let Some(cb) = &self.debug_callback {
+                                        cb(format!(
+                                            "Failed to convert RTFS capability in {}: {}",
+                                            path.display(),
+                                            e
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    Err(_) => {
+                        // fall through to heuristic parser below
+                    }
+                }
+            }
+
+            // Fallback: heuristic parsing (legacy behavior)
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Failed to read RTFS file {}: {}",
+                            path.display(),
+                            e
+                        ));
+                    }
+                    continue;
+                }
+            };
+
+            // --- existing heuristic parsing logic ---
+            // Helper closures for simple RTFS-extracted fields
+            let extract_quoted = |key: &str, src: &str| -> Option<String> {
+                if let Some(pos) = src.find(key) {
+                    let after = &src[pos + key.len()..];
+                    if let Some(q1) = after.find('"') {
+                        let rest = &after[q1 + 1..];
+                        if let Some(q2) = rest.find('"') {
+                            return Some(rest[..q2].to_string());
+                        }
+                    }
+                }
+                None
+            };
+
+            let extract_keyword = |key: &str, src: &str| -> Option<String> {
+                if let Some(pos) = src.find(key) {
+                    let after = &src[pos + key.len()..];
+                    // Split on whitespace/newline and take first token
+                    let tok = after
+                        .split_whitespace()
+                        .next()
+                        .map(|s| s.trim().to_string());
+                    tok
+                } else {
+                    None
+                }
+            };
+
+            let extract_provider_meta = |src: &str| -> HashMap<String, String> {
+                let mut map = HashMap::new();
+                if let Some(pos) = src.find(":provider-meta") {
+                    if let Some(brace_start) = src[pos..].find('{') {
+                        let abs_start = pos + brace_start;
+                        let mut depth = 0isize;
+                        let mut end = None;
+                        for (i, ch) in src[abs_start..].chars().enumerate() {
+                            match ch {
+                                '{' => depth += 1,
+                                '}' => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        end = Some(abs_start + i + 1);
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(abs_end) = end {
+                            let block = &src[abs_start + 1..abs_end - 1];
+                            let mut chars = block.chars().peekable();
+                            while let Some(ch) = chars.next() {
+                                if ch == ':' {
+                                    let mut key = String::new();
+                                    while let Some(&c) = chars.peek() {
+                                        if c.is_whitespace() || c == ':' || c == '{' || c == '}' {
+                                            break;
+                                        }
+                                        key.push(c);
+                                        chars.next();
+                                    }
+                                    if key.is_empty() {
+                                        continue;
+                                    }
+                                    while let Some(&c) = chars.peek() {
+                                        if c.is_whitespace() {
+                                            chars.next();
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    let mut value = String::new();
+                                    if let Some(&next_ch) = chars.peek() {
+                                        if next_ch == '"' {
+                                            chars.next();
+                                            while let Some(c) = chars.next() {
+                                                if c == '"' {
+                                                    break;
+                                                }
+                                                value.push(c);
+                                            }
+                                        } else {
+                                            while let Some(&c) = chars.peek() {
+                                                if c.is_whitespace() || c == ':' || c == '}' {
+                                                    break;
+                                                }
+                                                value.push(c);
+                                                chars.next();
+                                            }
+                                        }
+                                    }
+                                    if !key.is_empty() {
+                                        map.insert(key.replace('-', "_"), value);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                map
+            };
+
+            let extract_metadata = |src: &str| -> HashMap<String, String> {
+                let mut map = HashMap::new();
+                if let Some(pos) = src.find(":metadata") {
+                    if let Some(brace_start) = src[pos..].find('{') {
+                        let abs_start = pos + brace_start;
+                        let mut depth = 0isize;
+                        let mut end = None;
+                        for (i, ch) in src[abs_start..].chars().enumerate() {
+                            match ch {
+                                '{' => depth += 1,
+                                '}' => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        end = Some(abs_start + i + 1);
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(abs_end) = end {
+                            let block = &src[abs_start + 1..abs_end - 1];
+                            let mut chars = block.chars().peekable();
+                            while let Some(ch) = chars.next() {
+                                if ch == ':' {
+                                    let mut key = String::new();
+                                    while let Some(&c) = chars.peek() {
+                                        if c.is_whitespace() || c == ':' || c == '{' || c == '}' {
+                                            break;
+                                        }
+                                        key.push(c);
+                                        chars.next();
+                                    }
+                                    if key.is_empty() {
+                                        continue;
+                                    }
+                                    while let Some(&c) = chars.peek() {
+                                        if c.is_whitespace() {
+                                            chars.next();
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    if let Some(&next_ch) = chars.peek() {
+                                        if next_ch == '"' {
+                                            chars.next();
+                                            let mut value = String::new();
+                                            while let Some(c) = chars.next() {
+                                                if c == '"' {
+                                                    break;
+                                                }
+                                                value.push(c);
+                                            }
+                                            map.insert(key.replace('-', "_"), value);
+                                        } else if next_ch == '{' {
+                                            // Skip nested map
+                                            let mut nested_depth = 0isize;
+                                            while let Some(c) = chars.next() {
+                                                match c {
+                                                    '{' => nested_depth += 1,
+                                                    '}' => {
+                                                        nested_depth -= 1;
+                                                        if nested_depth == 0 {
+                                                            break;
+                                                        }
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        } else {
+                                            let mut value = String::new();
+                                            while let Some(&c) = chars.peek() {
+                                                if c.is_whitespace() || c == ':' || c == '}' {
+                                                    break;
+                                                }
+                                                value.push(c);
+                                                chars.next();
+                                            }
+                                            if !value.is_empty() {
+                                                map.insert(key.replace('-', "_"), value);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                map
+            };
+
+            // Extract basic fields
+            let id = extract_quoted(":id", &content).or_else(|| {
+                // fallback to filename-based id
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+            });
+            let name = extract_quoted(":name", &content).unwrap_or_else(|| "".to_string());
+            let description =
+                extract_quoted(":description", &content).unwrap_or_else(|| "".to_string());
+            let version =
+                extract_quoted(":version", &content).unwrap_or_else(|| "1.0.0".to_string());
+
+            if id.is_none() {
+                if let Some(cb) = &self.debug_callback {
+                    cb(format!("Skipping RTFS file without id: {}", path.display()));
+                }
+                continue;
+            }
+
+            let id = id.unwrap();
+
+            // provider label e.g. :provider :http
+            let provider_token = extract_keyword(":provider", &content).unwrap_or_default();
+
+            let provider_meta = extract_provider_meta(&content);
+            let mut metadata_map = extract_metadata(&content);
+
+            // parse schemas
+            let input_schema_opt = if let Some(s) = extract_keyword(":input-schema", &content) {
+                let s_trim = s.trim();
+                if s_trim == "nil" || s_trim == ":any" || s_trim == "nil," {
+                    None
+                } else {
+                    // If the schema token is complex (starts with '[' or '('), we try to extract whole bracketed expr from content
+                    // Simple heuristic: find the substring ":input-schema" and take remainder of that line
+                    if let Some(pos) = content.find(":input-schema") {
+                        if let Some(line_end) = content[pos..].find('\n') {
+                            let line = content[pos..pos + line_end].to_string();
+                            // remove key
+                            if let Some(idx) = line.find(":input-schema") {
+                                let remainder = line[idx + ":input-schema".len()..].trim();
+                                let expr =
+                                    remainder.trim().trim_end_matches(',').trim().to_string();
+                                match TypeExpr::from_str(&expr) {
+                                    Ok(texpr) => Some(texpr),
+                                    Err(_) => None,
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            let output_schema_opt = if let Some(s) = extract_keyword(":output-schema", &content) {
+                let s_trim = s.trim();
+                if s_trim == "nil" || s_trim == ":any" || s_trim == "nil," {
+                    None
+                } else {
+                    if let Some(pos) = content.find(":output-schema") {
+                        if let Some(line_end) = content[pos..].find('\n') {
+                            let line = content[pos..pos + line_end].to_string();
+                            if let Some(idx) = line.find(":output-schema") {
+                                let remainder = line[idx + ":output-schema".len()..].trim();
+                                let expr =
+                                    remainder.trim().trim_end_matches(',').trim().to_string();
+                                match TypeExpr::from_str(&expr) {
+                                    Ok(texpr) => Some(texpr),
+                                    Err(_) => None,
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            // Build provider
+            let provider = if provider_token.contains(":http") || provider_token == ":http" {
+                let base_url = provider_meta.get("base_url").cloned().unwrap_or_default();
+                let timeout_ms = provider_meta
+                    .get("timeout_ms")
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(30000);
+                ProviderType::Http(HttpCapability {
+                    base_url,
+                    auth_token: None,
+                    timeout_ms,
+                })
+            } else if provider_token.contains(":mcp") || provider_token == ":mcp" {
+                let server_url = provider_meta.get("server_url").cloned().unwrap_or_default();
+                let tool_name = provider_meta.get("tool_name").cloned().unwrap_or_default();
+                let timeout_ms = provider_meta
+                    .get("timeout_ms")
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(5000);
+                ProviderType::MCP(MCPCapability {
+                    server_url,
+                    tool_name,
+                    timeout_ms,
+                })
+            } else if provider_token.contains(":a2a") || provider_token == ":a2a" {
+                let agent_id = provider_meta.get("agent_id").cloned().unwrap_or_default();
+                let endpoint = provider_meta.get("endpoint").cloned().unwrap_or_default();
+                let protocol = provider_meta.get("protocol").cloned().unwrap_or_default();
+                let timeout_ms = provider_meta
+                    .get("timeout_ms")
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(5000);
+                ProviderType::A2A(A2ACapability {
+                    agent_id,
+                    endpoint,
+                    protocol,
+                    timeout_ms,
+                })
+            } else if provider_token.contains(":remote_rtfs") || provider_token == ":remote_rtfs" {
+                let endpoint = provider_meta.get("endpoint").cloned().unwrap_or_default();
+                let timeout_ms = provider_meta
+                    .get("timeout_ms")
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(5000);
+                ProviderType::RemoteRTFS(RemoteRTFSCapability {
+                    endpoint,
+                    timeout_ms,
+                    auth_token: None,
+                })
+            } else {
+                // Unsupported provider for import
+                if let Some(cb) = &self.debug_callback {
+                    cb(format!(
+                        "Skipping RTFS import for unsupported provider in {}",
+                        id
+                    ));
+                }
+                continue;
+            };
+
+            if let ProviderType::MCP(m) = &provider {
+                metadata_map
+                    .entry("mcp_server_url".to_string())
+                    .or_insert_with(|| m.server_url.clone());
+                metadata_map
+                    .entry("mcp_tool_name".to_string())
+                    .or_insert_with(|| m.tool_name.clone());
+                if let Some(req) = provider_meta.get("requires_session").cloned() {
+                    metadata_map
+                        .entry("mcp_requires_session".to_string())
+                        .or_insert(req);
+                }
+            }
+
+            let manifest = CapabilityManifest {
+                id: id.clone(),
+                name: name.clone(),
+                description: description.clone(),
+                provider,
+                version: version.clone(),
+                input_schema: input_schema_opt,
+                output_schema: output_schema_opt,
+                attestation: None,
+                provenance: None,
+                permissions: vec![],
+                effects: vec![],
+                metadata: metadata_map,
+                agent_metadata: None,
+            };
+
+            // Register
+            {
+                let mut caps = self.capabilities.write().await;
+                caps.insert(id.clone(), manifest);
+            }
+            loaded += 1;
+        }
+
+        Ok(loaded)
     }
 }

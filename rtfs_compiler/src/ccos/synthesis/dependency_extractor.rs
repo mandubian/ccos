@@ -40,7 +40,7 @@ pub fn extract_dependencies(rtfs_code: &str) -> RuntimeResult<DependencyExtracti
 
     let dependency_ids: HashSet<String> = dependencies
         .iter()
-        .map(|d| d.capability_id.clone())
+        .map(|d| d.capability_id.trim().trim_matches('"').to_string())
         .collect();
 
     let resolved_dependencies = HashSet::new();
@@ -90,7 +90,7 @@ fn extract_capability_calls(rtfs_code: &str) -> RuntimeResult<Vec<CapabilityDepe
     for (line_num, line) in rtfs_code.lines().enumerate() {
         if let Some(captures) = call_regex.captures(line) {
             if let Some(capability_id) = captures.get(1) {
-                let capability_id = capability_id.as_str().to_string();
+                let capability_id = capability_id.as_str().trim().trim_matches('"').to_string();
                 let call_expression = line.trim().to_string();
 
                 dependencies.push(CapabilityDependency {
@@ -112,12 +112,12 @@ pub fn check_dependencies_against_marketplace(
 ) -> (HashSet<String>, HashSet<String>) {
     let marketplace_ids: HashSet<String> = marketplace_snapshot
         .iter()
-        .map(|manifest| manifest.id.clone())
+        .map(|manifest| manifest.id.trim().trim_matches('"').to_string())
         .collect();
 
     let dependency_ids: HashSet<String> = dependencies
         .iter()
-        .map(|d| d.capability_id.clone())
+        .map(|d| d.capability_id.trim().trim_matches('"').to_string())
         .collect();
 
     let resolved: HashSet<String> = dependency_ids

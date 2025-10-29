@@ -26,22 +26,20 @@ fn main() {
     println!("📦 Loading capability from: {}", capability_path);
 
     match fs::read_to_string(capability_path) {
-        Ok(capability_code) => {
-            match env.execute_code(&capability_code) {
-                Ok(outcome) => match outcome {
-                    ExecutionOutcome::Complete(v) => {
-                        println!("   ✅ Capability loaded: {:?}\n", v);
-                    }
-                    ExecutionOutcome::RequiresHost(h) => {
-                        println!("   ⚠️  Host call required: {:?}\n", h);
-                    }
-                },
-                Err(e) => {
-                    println!("   ❌ Failed to load: {:?}\n", e);
-                    return;
+        Ok(capability_code) => match env.execute_code(&capability_code) {
+            Ok(outcome) => match outcome {
+                ExecutionOutcome::Complete(v) => {
+                    println!("   ✅ Capability loaded: {:?}\n", v);
                 }
+                ExecutionOutcome::RequiresHost(h) => {
+                    println!("   ⚠️  Host call required: {:?}\n", h);
+                }
+            },
+            Err(e) => {
+                println!("   ❌ Failed to load: {:?}\n", e);
+                return;
             }
-        }
+        },
         Err(e) => {
             println!("   ❌ Failed to read file: {}\n", e);
             return;
@@ -76,4 +74,3 @@ fn main() {
     println!("   The URL should contain 'appid=mock_api_key_123456' in the debug output above.");
     println!("   Even though it's a mock key, this demonstrates that the API key injection works!");
 }
-

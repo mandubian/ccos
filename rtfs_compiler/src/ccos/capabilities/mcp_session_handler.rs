@@ -4,9 +4,9 @@
 //! Manages MCP session lifecycle: initialize, execute tools/call, terminate.
 
 use super::session_pool::{SessionHandler, SessionId};
-use crate::ast::{MapKey, Keyword};
-use crate::runtime::values::Value;
+use crate::ast::{Keyword, MapKey};
 use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::values::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -27,8 +27,8 @@ pub struct MCPSessionHandler {
     /// Session pool: capability_id → session
     /// Simple 1:1 mapping for MVP, can be extended to pools per server
     sessions: Arc<Mutex<HashMap<String, MCPSession>>>,
-    /// HTTP client for making MCP requests
-    http_client: reqwest::blocking::Client,
+    /// HTTP client for making MCP requests (async client; calls wrapped via block_in_place)
+    http_client: reqwest::Client,
 }
 
 impl MCPSessionHandler {
@@ -36,7 +36,7 @@ impl MCPSessionHandler {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            http_client: reqwest::blocking::Client::new(),
+            http_client: reqwest::Client::new(),
         }
     }
 
@@ -89,32 +89,40 @@ impl MCPSessionHandler {
 
         // Build headers
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            "Content-Type",
-            "application/json".parse().unwrap(),
-        );
+        headers.insert("Content-Type", "application/json".parse().unwrap());
         if let Some(token) = auth_token {
-            headers.insert(
-                "Authorization",
-                format!("Bearer {}", token).parse().unwrap(),
-            );
+            // Use token as-is; env should include scheme if required
+            headers.insert("Authorization", token.parse().unwrap());
         }
 
-        // Make request
-        let response = self
-            .http_client
-            .post(server_url)
-            .headers(headers)
-            .json(&init_request)
-            .send()
-            .map_err(|e| RuntimeError::Generic(format!("MCP initialize request failed: {}", e)))?;
+        // Make request (wrap async send in a blocking section without creating a nested runtime)
+        let response = tokio::task::block_in_place(|| {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                self.http_client
+                    .post(server_url)
+                    .headers(headers)
+                    .json(&init_request)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        RuntimeError::Generic(format!("MCP initialize request failed: {}", e))
+                    })
+            })
+        })?;
 
         // Check status
         if !response.status().is_success() {
             let status = response.status();
-            let body = response
-                .text()
-                .unwrap_or_else(|_| "could not read body".to_string());
+            let body = tokio::task::block_in_place(|| {
+                let handle = tokio::runtime::Handle::current();
+                handle.block_on(async {
+                    response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "could not read body".to_string())
+                })
+            });
             return Err(RuntimeError::Generic(format!(
                 "MCP initialize failed ({} {}): {}",
                 status.as_u16(),
@@ -144,7 +152,10 @@ impl MCPSessionHandler {
         tool_name: &str,
         args: &[Value],
     ) -> RuntimeResult<Value> {
-        eprintln!("🔧 Calling MCP tool: {} with session {}", tool_name, session.session_id);
+        eprintln!(
+            "🔧 Calling MCP tool: {} with session {}",
+            tool_name, session.session_id
+        );
 
         // Convert args to MCP arguments (expect a single map)
         let mcp_args = if args.is_empty() {
@@ -193,36 +204,41 @@ impl MCPSessionHandler {
 
         // Build headers
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            "Content-Type",
-            "application/json".parse().unwrap(),
-        );
-        headers.insert(
-            "Mcp-Session-Id",
-            session.session_id.parse().unwrap(),
-        );
+        headers.insert("Content-Type", "application/json".parse().unwrap());
+        headers.insert("Mcp-Session-Id", session.session_id.parse().unwrap());
         if let Some(ref token) = session.auth_token {
-            headers.insert(
-                "Authorization",
-                format!("Bearer {}", token).parse().unwrap(),
-            );
+            // Use token as-is; env should include scheme if required
+            headers.insert("Authorization", token.parse().unwrap());
         }
 
-        // Make request
-        let response = self
-            .http_client
-            .post(&session.server_url)
-            .headers(headers)
-            .json(&mcp_request)
-            .send()
-            .map_err(|e| RuntimeError::Generic(format!("MCP tool call request failed: {}", e)))?;
+        // Make request (wrap async send in a blocking section without creating a nested runtime)
+        let response = tokio::task::block_in_place(|| {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                self.http_client
+                    .post(&session.server_url)
+                    .headers(headers)
+                    .json(&mcp_request)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        RuntimeError::Generic(format!("MCP tool call request failed: {}", e))
+                    })
+            })
+        })?;
 
         // Check status
         if !response.status().is_success() {
             let status = response.status();
-            let body = response
-                .text()
-                .unwrap_or_else(|_| "could not read body".to_string());
+            let body = tokio::task::block_in_place(|| {
+                let handle = tokio::runtime::Handle::current();
+                handle.block_on(async {
+                    response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "could not read body".to_string())
+                })
+            });
             return Err(RuntimeError::Generic(format!(
                 "MCP tool call failed ({} {}): {}",
                 status.as_u16(),
@@ -232,13 +248,17 @@ impl MCPSessionHandler {
         }
 
         // Parse response
-        let body_text = response
-            .text()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to read response body: {}", e)))?;
-
-        let json: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to parse MCP response: {}", e))
+        let body_text = tokio::task::block_in_place(|| {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                response.text().await.map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to read response body: {}", e))
+                })
+            })
         })?;
+
+        let json: serde_json::Value = serde_json::from_str(&body_text)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to parse MCP response: {}", e)))?;
 
         // Extract result from JSON-RPC response
         if let Some(result) = json.get("result") {
@@ -316,12 +336,9 @@ impl SessionHandler for MCPSessionHandler {
         }
 
         // Extract tool name from capability_id (e.g., "mcp.github.list_issues" → "list_issues")
-        let tool_name = capability_id
-            .split('.')
-            .last()
-            .ok_or_else(|| {
-                RuntimeError::Generic(format!("Invalid MCP capability ID: {}", capability_id))
-            })?;
+        let tool_name = capability_id.split('.').last().ok_or_else(|| {
+            RuntimeError::Generic(format!("Invalid MCP capability ID: {}", capability_id))
+        })?;
 
         // Execute MCP call
         self.execute_mcp_call(&session, tool_name, args)
@@ -384,9 +401,7 @@ fn rtfs_value_to_json(value: &Value) -> serde_json::Value {
             })
         }
         Value::Symbol(s) => serde_json::Value::String(s.0.clone()),
-        Value::Vector(v) => {
-            serde_json::Value::Array(v.iter().map(rtfs_value_to_json).collect())
-        }
+        Value::Vector(v) => serde_json::Value::Array(v.iter().map(rtfs_value_to_json).collect()),
         Value::Map(m) => {
             let mut obj = serde_json::Map::new();
             for (key, val) in m.iter() {
@@ -447,4 +462,3 @@ impl Default for MCPSessionHandler {
         Self::new()
     }
 }
-

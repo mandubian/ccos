@@ -3,8 +3,8 @@
 //! Provides provider-agnostic session management infrastructure.
 //! Delegates to provider-specific handlers based on capability metadata.
 
-use crate::runtime::values::Value;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
+use crate::runtime::values::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -118,15 +118,12 @@ impl SessionPoolManager {
         let provider_type = self.detect_provider_type(metadata)?;
 
         // Get handler for this provider
-        let handler = self
-            .handlers
-            .get(&provider_type)
-            .ok_or_else(|| {
-                RuntimeError::Generic(format!(
-                    "No session handler registered for provider type: {}",
-                    provider_type
-                ))
-            })?;
+        let handler = self.handlers.get(&provider_type).ok_or_else(|| {
+            RuntimeError::Generic(format!(
+                "No session handler registered for provider type: {}",
+                provider_type
+            ))
+        })?;
 
         // Get or create session
         let session_id = handler.get_or_create_session(capability_id, metadata)?;
@@ -223,12 +220,18 @@ mod tests {
 
         // MCP provider
         let mut mcp_meta = HashMap::new();
-        mcp_meta.insert("mcp_server_url".to_string(), "https://mcp.example.com".to_string());
+        mcp_meta.insert(
+            "mcp_server_url".to_string(),
+            "https://mcp.example.com".to_string(),
+        );
         assert_eq!(pool.detect_provider_type(&mcp_meta).unwrap(), "mcp");
 
         // GraphQL provider
         let mut gql_meta = HashMap::new();
-        gql_meta.insert("graphql_endpoint".to_string(), "https://api.example.com/graphql".to_string());
+        gql_meta.insert(
+            "graphql_endpoint".to_string(),
+            "https://api.example.com/graphql".to_string(),
+        );
         assert_eq!(pool.detect_provider_type(&gql_meta).unwrap(), "graphql");
 
         // Unknown provider
@@ -256,7 +259,10 @@ mod tests {
 
         // Test MCP routing
         let mut mcp_meta = HashMap::new();
-        mcp_meta.insert("mcp_server_url".to_string(), "https://mcp.example.com".to_string());
+        mcp_meta.insert(
+            "mcp_server_url".to_string(),
+            "https://mcp.example.com".to_string(),
+        );
 
         let result = pool
             .execute_with_session("test.mcp.capability", &mcp_meta, &[])
@@ -271,7 +277,10 @@ mod tests {
 
         // Test GraphQL routing
         let mut gql_meta = HashMap::new();
-        gql_meta.insert("graphql_endpoint".to_string(), "https://api.example.com/graphql".to_string());
+        gql_meta.insert(
+            "graphql_endpoint".to_string(),
+            "https://api.example.com/graphql".to_string(),
+        );
 
         let result = pool
             .execute_with_session("test.graphql.capability", &gql_meta, &[])
@@ -290,7 +299,10 @@ mod tests {
         let pool = SessionPoolManager::new(); // No handlers registered
 
         let mut meta = HashMap::new();
-        meta.insert("mcp_server_url".to_string(), "https://mcp.example.com".to_string());
+        meta.insert(
+            "mcp_server_url".to_string(),
+            "https://mcp.example.com".to_string(),
+        );
 
         let result = pool.execute_with_session("test.capability", &meta, &[]);
         assert!(result.is_err());
@@ -300,4 +312,3 @@ mod tests {
             .contains("No session handler registered"));
     }
 }
-

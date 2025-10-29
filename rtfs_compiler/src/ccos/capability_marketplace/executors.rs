@@ -3,10 +3,14 @@ use crate::ast::MapKey;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::values::Value;
 use async_trait::async_trait;
+use regex::Regex;
 use reqwest;
 use serde_json::json;
 use std::any::TypeId;
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::time::Duration;
+use urlencoding::encode;
 
 #[async_trait(?Send)]
 pub trait CapabilityExecutor: Send + Sync {
@@ -287,6 +291,416 @@ impl CapabilityExecutor for RegistryExecutor {
     }
 }
 
+pub struct OpenApiExecutor;
+
+#[async_trait(?Send)]
+impl CapabilityExecutor for OpenApiExecutor {
+    fn provider_type_id(&self) -> TypeId {
+        TypeId::of::<OpenApiCapability>()
+    }
+
+    async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
+        if let ProviderType::OpenApi(openapi) = provider {
+            self.execute_openapi(openapi, inputs).await
+        } else {
+            Err(RuntimeError::Generic(
+                "ProviderType mismatch for OpenApiExecutor".to_string(),
+            ))
+        }
+    }
+}
+
+impl OpenApiExecutor {
+    async fn execute_openapi(
+        &self,
+        openapi: &OpenApiCapability,
+        inputs: &Value,
+    ) -> RuntimeResult<Value> {
+        let mut input_map = Self::extract_input_map(inputs)?;
+        let operation_hint = input_map
+            .remove("operation")
+            .or_else(|| input_map.remove("operation_id"))
+            .map(|v| Self::value_to_string(&v))
+            .transpose()?;
+        let params_value = input_map.remove("params");
+        let headers_value = input_map.remove("headers");
+        let body_value = input_map.remove("body");
+
+        let mut params = HashMap::new();
+        if let Some(params_val) = params_value {
+            params.extend(Self::value_to_value_map(&params_val)?);
+        }
+        for (key, value) in input_map.into_iter() {
+            params.insert(key, value);
+        }
+
+        let operation = Self::resolve_operation(openapi, operation_hint.as_deref())?;
+        let mut path = operation.path.clone();
+        Self::apply_path_params(&mut path, &mut params)?;
+
+        let mut url = Self::build_url(&openapi.base_url, &path)?;
+
+        let mut headers = if let Some(h) = headers_value {
+            Self::value_to_string_map(&h)?
+        } else {
+            HashMap::new()
+        };
+
+        let auth_override = params
+            .remove("auth_token")
+            .map(|v| Self::value_to_string(&v))
+            .transpose()?;
+
+        let mut query_pairs: Vec<(String, String)> = Vec::new();
+        for (key, value) in params.iter() {
+            let value_str = Self::value_to_string(value)?;
+            if !value_str.is_empty() {
+                query_pairs.push((key.clone(), value_str));
+            }
+        }
+
+        if let Some(auth) = &openapi.auth {
+            let mut token = auth_override.clone();
+            if token.is_none() {
+                token = Self::extract_auth_token(auth, &mut query_pairs, &mut headers)?;
+            }
+            if token.is_none() {
+                token = Self::read_env_token(auth);
+            }
+            if auth.required && token.is_none() {
+                return Err(RuntimeError::Generic(format!(
+                    "Missing credentials for OpenAPI capability using parameter '{}'",
+                    auth.parameter_name
+                )));
+            }
+            if let Some(token) = token {
+                Self::apply_auth(auth, token, &mut query_pairs, &mut headers);
+            }
+        }
+
+        if !query_pairs.is_empty() {
+            let mut pairs = url.query_pairs_mut();
+            for (k, v) in query_pairs {
+                pairs.append_pair(&k, &v);
+            }
+        }
+
+        let method = reqwest::Method::from_bytes(operation.method.as_bytes())
+            .unwrap_or(reqwest::Method::GET);
+        let disable_proxy = url
+            .host_str()
+            .map(Self::should_disable_proxy_for_host)
+            .unwrap_or(false);
+        let client = if disable_proxy {
+            reqwest::Client::builder().no_proxy().build().map_err(|e| {
+                RuntimeError::Generic(format!("Failed to build OpenAPI client: {}", e))
+            })?
+        } else {
+            reqwest::Client::new()
+        };
+        let mut request = client.request(method.clone(), url);
+
+        for (key, value) in headers.iter() {
+            request = request.header(key, value);
+        }
+
+        if let Some(body) = body_value {
+            if method != reqwest::Method::GET {
+                match &body {
+                    Value::String(s) => {
+                        if !headers
+                            .keys()
+                            .any(|h| h.eq_ignore_ascii_case("content-type"))
+                        {
+                            request = request.header("Content-Type", "application/json");
+                        }
+                        request = request.body(s.clone());
+                    }
+                    _ => {
+                        let json_body = A2AExecutor::value_to_json(&body)?;
+                        request = request.json(&json_body);
+                    }
+                }
+            }
+        }
+
+        let response = request
+            .timeout(Duration::from_millis(openapi.timeout_ms.max(1)))
+            .send()
+            .await
+            .map_err(|e| RuntimeError::Generic(format!("OpenAPI request failed: {}", e)))?;
+
+        let status = response.status().as_u16() as i64;
+        let response_headers = response.headers().clone();
+        let bytes = response.bytes().await.map_err(|e| {
+            RuntimeError::Generic(format!("Failed to read OpenAPI response: {}", e))
+        })?;
+        let body_text = String::from_utf8_lossy(&bytes).to_string();
+
+        let mut response_map = HashMap::new();
+        response_map.insert(MapKey::String("status".to_string()), Value::Integer(status));
+        response_map.insert(
+            MapKey::String("body".to_string()),
+            Value::String(body_text.clone()),
+        );
+
+        let mut headers_map = HashMap::new();
+        for (key, value) in response_headers.iter() {
+            headers_map.insert(
+                MapKey::String(key.to_string()),
+                Value::String(value.to_str().unwrap_or("").to_string()),
+            );
+        }
+        response_map.insert(
+            MapKey::String("headers".to_string()),
+            Value::Map(headers_map),
+        );
+
+        if !bytes.is_empty() {
+            if let Ok(json_value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Ok(rtfs_json) = CapabilityMarketplace::json_to_rtfs_value(&json_value) {
+                    response_map.insert(MapKey::String("json".to_string()), rtfs_json);
+                }
+            }
+        }
+
+        Ok(Value::Map(response_map))
+    }
+
+    fn extract_input_map(inputs: &Value) -> RuntimeResult<HashMap<String, Value>> {
+        match inputs {
+            Value::Map(m) => m
+                .iter()
+                .map(|(k, v)| Ok((Self::map_key_to_string(k)?, v.clone())))
+                .collect(),
+            Value::List(list) | Value::Vector(list) => {
+                if let Some(Value::Map(m)) = list.first() {
+                    m.iter()
+                        .map(|(k, v)| Ok((Self::map_key_to_string(k)?, v.clone())))
+                        .collect()
+                } else {
+                    Err(RuntimeError::Generic(
+                        "OpenAPI executor expects map input".to_string(),
+                    ))
+                }
+            }
+            _ => Err(RuntimeError::Generic(
+                "OpenAPI executor expects map input".to_string(),
+            )),
+        }
+    }
+
+    fn map_key_to_string(key: &MapKey) -> RuntimeResult<String> {
+        match key {
+            MapKey::String(s) => Ok(s.clone()),
+            MapKey::Keyword(k) => Ok(k.0.clone()),
+            MapKey::Integer(i) => Ok(i.to_string()),
+        }
+    }
+
+    fn value_to_value_map(value: &Value) -> RuntimeResult<HashMap<String, Value>> {
+        if let Value::Map(map) = value {
+            map.iter()
+                .map(|(k, v)| Ok((Self::map_key_to_string(k)?, v.clone())))
+                .collect()
+        } else {
+            Err(RuntimeError::Generic(
+                "Expected map value for OpenAPI parameters".to_string(),
+            ))
+        }
+    }
+
+    fn value_to_string_map(value: &Value) -> RuntimeResult<HashMap<String, String>> {
+        if let Value::Map(map) = value {
+            map.iter()
+                .map(|(k, v)| Ok((Self::map_key_to_string(k)?, Self::value_to_string(v)?)))
+                .collect()
+        } else {
+            Err(RuntimeError::Generic(
+                "Expected map value for OpenAPI headers".to_string(),
+            ))
+        }
+    }
+
+    fn value_to_string(value: &Value) -> RuntimeResult<String> {
+        match value {
+            Value::String(s) => Ok(s.clone()),
+            Value::Integer(i) => Ok(i.to_string()),
+            Value::Float(f) => Ok(f.to_string()),
+            Value::Boolean(b) => Ok(b.to_string()),
+            Value::Nil => Ok(String::new()),
+            Value::Vector(_) | Value::List(_) | Value::Map(_) => {
+                let json = A2AExecutor::value_to_json(value)?;
+                Ok(json.to_string())
+            }
+            _ => Err(RuntimeError::Generic(format!(
+                "Unsupported value type '{}' for OpenAPI parameter",
+                value.type_name()
+            ))),
+        }
+    }
+
+    fn resolve_operation<'a>(
+        openapi: &'a OpenApiCapability,
+        hint: Option<&str>,
+    ) -> RuntimeResult<&'a OpenApiOperation> {
+        if let Some(hint) = hint {
+            let hint_lower = hint.to_lowercase();
+            if let Some(op) = openapi.operations.iter().find(|op| {
+                op.operation_id
+                    .as_deref()
+                    .map(|id| id.eq_ignore_ascii_case(&hint_lower))
+                    .unwrap_or(false)
+            }) {
+                return Ok(op);
+            }
+            if let Some(op) = openapi.operations.iter().find(|op| {
+                let method_path = format!("{} {}", op.method.to_lowercase(), op.path);
+                method_path == hint_lower
+            }) {
+                return Ok(op);
+            }
+            if let Some(op) = openapi.operations.iter().find(|op| {
+                op.summary
+                    .as_ref()
+                    .map(|s| s.to_lowercase() == hint_lower)
+                    .unwrap_or(false)
+            }) {
+                return Ok(op);
+            }
+            if let Some(op) = openapi.operations.iter().find(|op| op.path == hint) {
+                return Ok(op);
+            }
+            return Err(RuntimeError::Generic(format!(
+                "No OpenAPI operation matches '{}'; available operations: {}",
+                hint,
+                openapi
+                    .operations
+                    .iter()
+                    .filter_map(|op| op.operation_id.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+
+        match openapi.operations.len() {
+            0 => Err(RuntimeError::Generic(
+                "OpenAPI provider has no operations defined".to_string(),
+            )),
+            1 => Ok(&openapi.operations[0]),
+            _ => Err(RuntimeError::Generic(
+                "Multiple OpenAPI operations available; specify :operation".to_string(),
+            )),
+        }
+    }
+
+    fn apply_path_params(
+        path: &mut String,
+        params: &mut HashMap<String, Value>,
+    ) -> RuntimeResult<()> {
+        let regex = Regex::new(r"\{([^}/]+)\}").map_err(|e| {
+            RuntimeError::Generic(format!("Failed to compile path parameter regex: {}", e))
+        })?;
+
+        for capture in regex.captures_iter(path.clone().as_str()) {
+            let key = capture.get(1).unwrap().as_str();
+            let value = params.remove(key).ok_or_else(|| {
+                RuntimeError::Generic(format!(
+                    "Missing required path parameter '{}' for OpenAPI call",
+                    key
+                ))
+            })?;
+            let value_str = Self::value_to_string(&value)?;
+            let encoded = encode(&value_str).into_owned();
+            *path = path.replace(&format!("{{{}}}", key), &encoded);
+        }
+        Ok(())
+    }
+
+    fn build_url(base_url: &str, path: &str) -> RuntimeResult<reqwest::Url> {
+        let mut base = base_url.trim_end_matches('/').to_string();
+        let mut final_path = path.to_string();
+        if !final_path.starts_with('/') {
+            final_path = format!("/{}", final_path);
+        }
+        base.push_str(&final_path);
+        reqwest::Url::parse(&base)
+            .map_err(|e| RuntimeError::Generic(format!("Invalid OpenAPI URL '{}': {}", base, e)))
+    }
+
+    fn extract_auth_token(
+        auth: &OpenApiAuth,
+        query_pairs: &mut Vec<(String, String)>,
+        headers: &mut HashMap<String, String>,
+    ) -> RuntimeResult<Option<String>> {
+        if auth.location.eq_ignore_ascii_case("query") {
+            if let Some((index, _)) = query_pairs
+                .iter()
+                .enumerate()
+                .find(|(_, (k, _))| k == &auth.parameter_name)
+            {
+                let (_, value) = query_pairs.remove(index);
+                return Ok(Some(value));
+            }
+        }
+        if auth.location.eq_ignore_ascii_case("header") {
+            if let Some(value) = headers.remove(&auth.parameter_name) {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
+    }
+
+    fn read_env_token(auth: &OpenApiAuth) -> Option<String> {
+        auth.env_var_name
+            .as_ref()
+            .and_then(|env| std::env::var(env).ok())
+    }
+
+    fn apply_auth(
+        auth: &OpenApiAuth,
+        token: String,
+        query_pairs: &mut Vec<(String, String)>,
+        headers: &mut HashMap<String, String>,
+    ) {
+        if auth.location.eq_ignore_ascii_case("query") {
+            query_pairs.push((auth.parameter_name.clone(), token));
+        } else if auth.location.eq_ignore_ascii_case("header") {
+            let header_value = if auth.auth_type.eq_ignore_ascii_case("bearer")
+                && !token.to_lowercase().starts_with("bearer ")
+            {
+                format!("Bearer {}", token)
+            } else {
+                token
+            };
+            headers.insert(auth.parameter_name.clone(), header_value);
+        } else if auth.location.eq_ignore_ascii_case("cookie") {
+            let cookie_value = format!("{}={}", auth.parameter_name, token);
+            headers
+                .entry("Cookie".to_string())
+                .and_modify(|existing| {
+                    if existing.is_empty() {
+                        *existing = cookie_value.clone();
+                    } else {
+                        existing.push_str("; ");
+                        existing.push_str(&cookie_value);
+                    }
+                })
+                .or_insert(cookie_value);
+        }
+    }
+
+    fn should_disable_proxy_for_host(host: &str) -> bool {
+        if host.eq_ignore_ascii_case("localhost") {
+            return true;
+        }
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return ip.is_loopback();
+        }
+        false
+    }
+}
+
 pub struct HttpExecutor;
 
 #[async_trait(?Send)]
@@ -374,6 +788,7 @@ pub enum ExecutorVariant {
     A2A(A2AExecutor),
     Local(LocalExecutor),
     Http(HttpExecutor),
+    OpenApi(OpenApiExecutor),
     Registry(RegistryExecutor),
 }
 
@@ -384,6 +799,7 @@ impl ExecutorVariant {
             ExecutorVariant::A2A(e) => e.execute(provider, inputs).await,
             ExecutorVariant::Local(e) => e.execute(provider, inputs).await,
             ExecutorVariant::Http(e) => e.execute(provider, inputs).await,
+            ExecutorVariant::OpenApi(e) => e.execute(provider, inputs).await,
             ExecutorVariant::Registry(e) => e.execute(provider, inputs).await,
         }
     }

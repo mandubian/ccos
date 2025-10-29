@@ -7,12 +7,11 @@ fn main() {
     println!("=====================================================\n");
 
     // Try to get API key from environment, or use a test key if not set
-    let api_key = std::env::var("OPENWEATHERMAP_ORG_API_KEY")
-        .unwrap_or_else(|_| {
-            println!("⚠️  OPENWEATHERMAP_ORG_API_KEY not found in environment");
-            println!("   Using test key (will fail authentication but demonstrate functionality)\n");
-            "test_api_key_demo".to_string()
-        });
+    let api_key = std::env::var("OPENWEATHERMAP_ORG_API_KEY").unwrap_or_else(|_| {
+        println!("⚠️  OPENWEATHERMAP_ORG_API_KEY not found in environment");
+        println!("   Using test key (will fail authentication but demonstrate functionality)\n");
+        "test_api_key_demo".to_string()
+    });
 
     // Set the API key so the capability can access it
     std::env::set_var("OPENWEATHERMAP_ORG_API_KEY", &api_key);
@@ -41,22 +40,20 @@ fn main() {
         println!("   Path: {}", capability_path);
 
         match fs::read_to_string(&capability_path) {
-            Ok(capability_code) => {
-                match env.execute_code(&capability_code) {
-                    Ok(outcome) => match outcome {
-                        ExecutionOutcome::Complete(v) => {
-                            println!("   ✅ Loaded successfully: {:?}\n", v);
-                        }
-                        ExecutionOutcome::RequiresHost(h) => {
-                            println!("   ⚠️  Host call required during loading: {:?}\n", h);
-                        }
-                    },
-                    Err(e) => {
-                        println!("   ❌ Failed to load capability: {:?}\n", e);
-                        return;
+            Ok(capability_code) => match env.execute_code(&capability_code) {
+                Ok(outcome) => match outcome {
+                    ExecutionOutcome::Complete(v) => {
+                        println!("   ✅ Loaded successfully: {:?}\n", v);
                     }
+                    ExecutionOutcome::RequiresHost(h) => {
+                        println!("   ⚠️  Host call required during loading: {:?}\n", h);
+                    }
+                },
+                Err(e) => {
+                    println!("   ❌ Failed to load capability: {:?}\n", e);
+                    return;
                 }
-            }
+            },
             Err(e) => {
                 println!("   ❌ Failed to read capability file: {}\n", e);
                 return;
@@ -134,4 +131,3 @@ fn execute_test(env: &rtfs_compiler::ccos::environment::CCOSEnvironment, expr: &
         Err(e) => println!("❌ Execution error: {:?}", e),
     }
 }
-

@@ -333,6 +333,24 @@ Examples
 
 CCOS doesn’t seek to replace agent networks or standards; it provides a smarter, safer node that runs within them.
 
+## Discovery samples (separated)
+
+Two focused discovery samples are available, each demonstrating the full lifecycle for a specific provider type.
+
+- OpenWeather via OpenAPI synthesis
+    - Flow: introspect → synthesize RTFS → register → live HTTP call → export/import → re-exec.
+    - Requires: `OPENWEATHERMAP_ORG_API_KEY` for live calls.
+    - Run from `rtfs_compiler/`:
+        - `cargo run --bin discover_openweather`
+
+- GitHub via MCP discovery
+    - Flow: MCP introspection → synthesize RTFS → register → session‑managed live call (list_issues) → export/import.
+    - Requires: `MCP_SERVER_URL` (e.g., `https://api.githubcopilot.com/mcp/`). If auth is needed, set `MCP_AUTH_TOKEN` (value used verbatim; include scheme like `Bearer ...` if required). Optional: `MCP_DEMO_OWNER`, `MCP_DEMO_REPO`.
+    - Run from `rtfs_compiler/`:
+        - `cargo run --bin discover_github_mcp`
+
+The previous combined sample remains available as `discover_and_export` if you prefer a single run that covers both.
+
 ## Contributing
 
 We welcome research, implementation, documentation, testing, and infrastructure contributions.

@@ -23,10 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test 1: Load MCP capability with nested metadata
     println!("📋 Test 1: Load MCP Capability with Metadata");
     println!("---------------------------------------------");
-    
+
     let mcp_capability_path = "../capabilities/mcp/github/list_issues.rtfs";
     println!("Loading: {}", mcp_capability_path);
-    
+
     match env.execute_file(mcp_capability_path) {
         Ok(ExecutionOutcome::Complete(_)) => {
             println!("✅ MCP capability loaded successfully");
@@ -44,13 +44,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test 2: Verify metadata was extracted
     println!("🔍 Test 2: Verify Metadata Extraction");
     println!("--------------------------------------");
-    
+
     // Get the capability from marketplace
     let marketplace = env.marketplace();
     let caps = futures::executor::block_on(marketplace.list_capabilities());
-    
+
     println!("📦 Found {} capabilities", caps.len());
-    
+
     if let Some(mcp_cap) = caps.iter().find(|c| c.id.contains("list_issues")) {
         println!();
         println!("✅ Found capability: {}", mcp_cap.id);
@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("   Description: {}", mcp_cap.description);
         println!();
         println!("📊 Metadata (flattened):");
-        
+
         // Check for MCP-specific metadata (flattened)
         let expected_keys = vec![
             "mcp_server_url",
@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "discovery_created_at",
             "discovery_capability_type",
         ];
-        
+
         let mut found_count = 0;
         for key in &expected_keys {
             if let Some(value) = mcp_cap.metadata.get(*key) {
@@ -83,10 +83,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("   ⚠️  {} = <missing>", key);
             }
         }
-        
+
         println!();
-        println!("📈 Results: {}/{} expected keys found", found_count, expected_keys.len());
-        
+        println!(
+            "📈 Results: {}/{} expected keys found",
+            found_count,
+            expected_keys.len()
+        );
+
         if found_count >= 7 {
             println!("✅ Metadata parsing SUCCESS!");
         } else {
@@ -100,10 +104,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test 3: Load OpenAPI capability
     println!("📋 Test 3: Load OpenAPI Capability with Metadata");
     println!("-------------------------------------------------");
-    
+
     let openapi_capability_path = "../capabilities/openapi/openweather/get_current_weather.rtfs";
     println!("Loading: {}", openapi_capability_path);
-    
+
     match env.execute_file(openapi_capability_path) {
         Ok(ExecutionOutcome::Complete(_)) => {
             println!("✅ OpenAPI capability loaded successfully");
@@ -121,14 +125,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test 4: Verify OpenAPI metadata
     println!("🔍 Test 4: Verify OpenAPI Metadata");
     println!("-----------------------------------");
-    
+
     let caps = futures::executor::block_on(marketplace.list_capabilities());
-    
+
     if let Some(openapi_cap) = caps.iter().find(|c| c.id.contains("openweather")) {
         println!("✅ Found capability: {}", openapi_cap.id);
         println!();
         println!("📊 Metadata (flattened):");
-        
+
         let expected_openapi_keys = vec![
             "openapi_base_url",
             "openapi_endpoint_method",
@@ -136,7 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "discovery_method",
             "discovery_source_url",
         ];
-        
+
         let mut found_count = 0;
         for key in &expected_openapi_keys {
             if let Some(value) = openapi_cap.metadata.get(*key) {
@@ -146,9 +150,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("   ⚠️  {} = <missing>", key);
             }
         }
-        
+
         println!();
-        println!("📈 Results: {}/{} expected keys found", found_count, expected_openapi_keys.len());
+        println!(
+            "📈 Results: {}/{} expected keys found",
+            found_count,
+            expected_openapi_keys.len()
+        );
     }
     println!();
 
@@ -173,4 +181,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

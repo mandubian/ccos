@@ -20,15 +20,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .verbose(true)
         .build()
         .expect("Failed to build environment");
-    
+
     println!("✅ Environment ready");
     println!();
 
     // Load the MCP capability
     let capability_path = "../capabilities/mcp.github.list_issues/capability.rtfs";
-    
+
     println!("📂 Loading capability from: {}", capability_path);
-    
+
     let capability_code = match fs::read_to_string(capability_path) {
         Ok(code) => code,
         Err(_) => {
@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err("Capability file not found".into());
         }
     };
-    
+
     println!("✅ Capability file loaded");
     println!();
 
@@ -76,10 +76,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📝 RTFS code:");
     println!("{}", call_code);
     println!();
-    
+
     println!("⏳ Executing capability...");
     println!();
-    
+
     match env.execute_code(call_code) {
         Ok(ExecutionOutcome::Complete(result)) => {
             println!("✅ Success!");
@@ -138,4 +138,3 @@ fn format_result(value: &Value) -> String {
         other => format!("{:?}", other),
     }
 }
-

@@ -1,6 +1,6 @@
 use crate::ccos::capability_marketplace::types::CapabilityManifest;
-use crate::ccos::synthesis::auth_injector::AuthInjector;
 use crate::ccos::synthesis::api_introspector::APIIntrospector;
+use crate::ccos::synthesis::auth_injector::AuthInjector;
 use crate::ccos::synthesis::mcp_introspector::MCPIntrospector;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -226,8 +226,7 @@ impl CapabilitySynthesizer {
             .await?;
 
         // Create capabilities from introspection results
-        let capabilities = introspector
-            .create_capabilities_from_introspection(&introspection)?;
+        let capabilities = introspector.create_capabilities_from_introspection(&introspection)?;
 
         // Convert to synthesis results
         let synthesis_results: Vec<SynthesisResult> = capabilities
@@ -274,7 +273,8 @@ impl CapabilitySynthesizer {
         server_url: &str,
         server_name: &str,
     ) -> RuntimeResult<MultiCapabilitySynthesisResult> {
-        self.synthesize_from_mcp_introspection_with_auth(server_url, server_name, None).await
+        self.synthesize_from_mcp_introspection_with_auth(server_url, server_name, None)
+            .await
     }
 
     /// Synthesize capabilities by introspecting an MCP server with authentication
@@ -290,7 +290,10 @@ impl CapabilitySynthesizer {
             ));
         }
 
-        eprintln!("🔍 Introspecting MCP server: {} ({})", server_name, server_url);
+        eprintln!(
+            "🔍 Introspecting MCP server: {} ({})",
+            server_name, server_url
+        );
 
         // Create MCP introspector
         let introspector = if self.mock_mode {
@@ -305,8 +308,7 @@ impl CapabilitySynthesizer {
             .await?;
 
         // Create capabilities from introspection results
-        let capabilities = introspector
-            .create_capabilities_from_mcp(&introspection)?;
+        let capabilities = introspector.create_capabilities_from_mcp(&introspection)?;
 
         // Convert to synthesis results with RTFS implementations
         let synthesis_results: Vec<SynthesisResult> = capabilities
@@ -319,8 +321,8 @@ impl CapabilitySynthesizer {
                     .find(|t| capability.id.contains(&t.tool_name))
                     .expect("Tool should exist for capability");
 
-                let implementation_code = introspector
-                    .generate_mcp_rtfs_implementation(tool, &introspection.server_url);
+                let implementation_code =
+                    introspector.generate_mcp_rtfs_implementation(tool, &introspection.server_url);
 
                 SynthesisResult {
                     capability: capability.clone(),
@@ -818,16 +820,16 @@ impl CapabilitySynthesizer {
 
         // Generate input parameter extraction based on the endpoint schema
         let input_extraction = self.generate_input_extraction(endpoint);
-        
+
         // Generate query parameter construction
         let query_construction = self.generate_query_construction(endpoint);
-        
+
         // Generate API key handling
         let api_key_handling = self.generate_api_key_handling(&request.api_domain);
-        
+
         // Generate validation code separately
         let _validation_code = self.generate_validation_code(endpoint);
-        
+
         let implementation_code = format!(
             r#"(do
   ;; {desc}
@@ -921,16 +923,16 @@ impl CapabilitySynthesizer {
             if let Some(properties) = input_schema.get("properties") {
                 if let Some(props_obj) = properties.as_object() {
                     let mut validations = Vec::new();
-                    
+
                     for (key, _) in props_obj {
                         validations.push(format!("    (if (not (get input_map :{})) (throw \"MissingRequiredParameter\" \"{}\"))", key, key));
                     }
-                    
+
                     return validations.join("\n");
                 }
             }
         }
-        
+
         "    ;; No input schema provided - this should not happen".to_string()
     }
 
@@ -940,19 +942,19 @@ impl CapabilitySynthesizer {
             if let Some(properties) = input_schema.get("properties") {
                 if let Some(props_obj) = properties.as_object() {
                     let mut extractions = Vec::new();
-                    
+
                     for (key, _) in props_obj {
                         extractions.push(format!("        {} (get input_map :{})", key, key));
                     }
-                    
+
                     return extractions.join("\n");
                 }
             }
         }
-        
+
         "        ;; No input schema provided - this should not happen".to_string()
     }
-    
+
     /// Generate query parameter construction code
     fn generate_query_construction(&self, endpoint: &MultiCapabilityEndpoint) -> String {
         if let Some(input_schema) = &endpoint.input_schema {
@@ -968,16 +970,16 @@ impl CapabilitySynthesizer {
                 }
             }
         }
-        
+
         // No fallback - schema validation is required
         "        ;; No input schema provided - this should not happen".to_string()
     }
-    
+
     /// Generate API key handling code
     fn generate_api_key_handling(&self, api_domain: &str) -> String {
         // Generate generic API key handling
         let env_var_name = format!("{}_API_KEY", api_domain.to_uppercase());
-        
+
         format!(
             r#"        api_key (call "ccos.system.get-env" "{}")
         ;; Add API key to query params
@@ -989,7 +991,10 @@ impl CapabilitySynthesizer {
     }
 
     /// Generate runtime-controlled implementation that moves controls to runtime
-    fn generate_runtime_controlled_implementation(&self, capability: &CapabilityManifest) -> String {
+    fn generate_runtime_controlled_implementation(
+        &self,
+        capability: &CapabilityManifest,
+    ) -> String {
         let method = capability
             .metadata
             .get("endpoint_method")
@@ -1049,7 +1054,9 @@ impl CapabilitySynthesizer {
                       url_with_params)
           headers {{}}]
       (do
-        (call "ccos.io.println" (str "[DEBUG] Final URL (with key): " final_url))
+    ;; Security: avoid logging secrets (API keys) in plaintext
+    ;; Log the URL without the appid query parameter to prevent secret leakage
+    (call "ccos.io.println" (str "[DEBUG] Final URL (key masked): " url_with_params))
         (call "ccos.network.http-fetch"
               :method method
               :url final_url

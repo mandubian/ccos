@@ -1,9 +1,6 @@
 use crate::runtime::error::RuntimeResult;
 
 pub mod api_introspector;
-pub mod mcp_introspector;
-pub mod mcp_session;
-pub mod schema_serializer;
 pub mod artifact_generator;
 pub mod auth_injector;
 pub mod capability_synthesizer;
@@ -13,13 +10,17 @@ pub mod feature_flags;
 pub mod governance_policies;
 pub mod graphql_importer;
 pub mod http_wrapper;
+pub mod mcp_introspector;
 pub mod mcp_proxy_adapter;
 pub mod mcp_registry_client;
+pub mod mcp_session;
 pub mod missing_capability_resolver;
 pub mod openapi_importer;
 pub mod preference_schema;
 pub mod registration_flow;
 pub mod schema_builder;
+pub mod schema_serializer;
+pub mod server_trust;
 pub mod skill_extractor;
 pub mod static_analyzers;
 pub mod status;
@@ -100,13 +101,32 @@ pub fn synthesize_from_dialogue(_dialogue: &str) -> RuntimeResult<SynthesizedCap
 
 /// Synthesize RTFS capabilities from conversation history.
 ///
-/// Phase 8 implementation: extracts parameters, generates collector/planner/stub, emits telemetry.
+/// This Phase 8 pipeline emits two artifacts by design:
+/// - collector: a narrow capability whose only job is to ask the right questions (via user.ask or similar)
+///   to collect missing parameters and preferences from the user. It encodes the clarification questions
+///   and their bindings. Questions are a means to gather inputs, not the end-goal.
+/// - planner: a goal-fulfilling capability that orchestrates actual calls to domain capabilities
+///   (discovered/known in the marketplace). The planner is the artifact to execute/persist.
+///
+/// Returns both artifacts (when generated) and minimal synthesis metrics.
+/// Questions are not the output; they feed the collector stage which unblocks planner creation and execution.
+///
+/// Phase 8 implementation: extracts parameters, generates collector/planner, emits telemetry.
 pub fn synthesize_capabilities(_conversation: &[InteractionTurn]) -> SynthesisResult {
     // Backwards-compatible call: no marketplace snapshot available -> delegate
     synthesize_capabilities_with_marketplace(_conversation, &[])
 }
 
-/// New: synthesis entrypoint that allows providing a marketplace snapshot for registry-first planner generation (v0.1)
+/// Synthesis entrypoint that accepts a marketplace snapshot for registry-first planner generation (v0.1).
+///
+/// - conversation: interaction turns (prompt/answer pairs) typically sourced from causal chain user.ask traces
+/// - marketplace_snapshot: optional list of known capabilities to bias planning toward existing registry entries
+///
+/// Returns a SynthesisResult containing:
+/// - collector: optional RTFS capability that collects missing inputs (questions → parameter bindings)
+/// - planner: optional RTFS capability that fulfills the goal (calls capabilities, returns a result map)
+/// - pending_capabilities: referenced capabilities in the planner that are not resolvable in the snapshot
+/// - metrics: coarse coverage and missing-required counts for observability
 pub fn synthesize_capabilities_with_marketplace(
     _conversation: &[InteractionTurn],
     marketplace_snapshot: &[crate::ccos::capability_marketplace::types::CapabilityManifest],

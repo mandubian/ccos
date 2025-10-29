@@ -98,10 +98,9 @@ impl MCPSessionManager {
             }
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to connect to MCP server: {}", e)))?;
+        let response = request.send().await.map_err(|e| {
+            RuntimeError::Generic(format!("Failed to connect to MCP server: {}", e))
+        })?;
 
         // Extract session ID from Mcp-Session-Id header if present
         let session_id = response
@@ -130,15 +129,14 @@ impl MCPSessionManager {
         }
 
         // Parse initialize result
-        let init_response: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse initialize response: {}", e)))?;
+        let init_response: serde_json::Value = response.json().await.map_err(|e| {
+            RuntimeError::Generic(format!("Failed to parse initialize response: {}", e))
+        })?;
 
         // Extract server info and capabilities from result
-        let result = init_response
-            .get("result")
-            .ok_or_else(|| RuntimeError::Generic("Initialize response missing result".to_string()))?;
+        let result = init_response.get("result").ok_or_else(|| {
+            RuntimeError::Generic("Initialize response missing result".to_string())
+        })?;
 
         let server_info = MCPServerInfo {
             name: result
@@ -283,4 +281,3 @@ impl MCPSessionManager {
         Ok(())
     }
 }
-

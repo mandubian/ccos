@@ -1,0 +1,36 @@
+;; Exported capability snapshot (read-only)
+;; Generated at 2025-10-26T00:00:00Z
+
+(capability "sample.openapi.weather"
+  :name "OpenAPI Weather"
+  :version "1.0.0"
+  :description "Fetch current weather conditions from OpenWeather"
+  :provider :openapi
+  :provider-meta {:base_url "https://api.openweathermap.org" :timeout_ms 5000 :spec_url "https://spec.weather.example.com/openapi.json" :operations 1 :auth_type "api_key" :auth_location "header" }
+  :metadata {
+    :openapi_provider_kind "weather_api"
+    :openapi_operation "GET /data/2.5/weather"
+    :sample_tag "demo"
+  }
+  :permissions [:http:request]
+  :effects [:network]
+  :input-schema {
+    :q :string ;; optional city name
+    :lat :float ;; optional latitude
+    :lon :float ;; optional longitude
+    :units :string ;; optional ("standard", "metric", "imperial")
+    :lang :string ;; optional language code
+  }
+  :output-schema {
+    :coord {:lon :float :lat :float}
+    :weather [:vector {:id :int :main :string :description :string :icon :string}]
+    :main {:temp :float :feels_like :float :humidity :int}
+    :wind {:speed :float :deg :int}
+    :name :string
+    :dt :int ;; unix timestamp
+  }
+  :implementation
+    (fn [input]
+      "Exported manifest only; runtime-managed execution"
+      input)
+)
