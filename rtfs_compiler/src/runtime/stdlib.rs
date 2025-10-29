@@ -90,199 +90,34 @@ impl StandardLibrary {
     /// network, and system clock. They are considered "impure" because they
     /// can have side-effects.
     fn load_tool_functions(env: &mut Environment) {
-        // File I/O
-        env.define(
-            &Symbol("tool/open-file".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "tool/open-file".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::tool_open_file(args)),
-            })),
-        );
+        // Note: RTFS stdlib is pure. Effectful helpers previously registered here
+        // (e.g., tool/open-file, http-fetch, tool/log, time-ms, file-exists?, get-env,
+        // println, thread/sleep, read-lines, step, kv/*!) have been moved to the CCOS prelude.
+        // The only registrations left here must be pure.
 
-        // HTTP requests
-        env.define(
-            &Symbol("tool/http-fetch".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "tool/http-fetch".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::tool_http_fetch(args)),
-            })),
-        );
+        // (no JSON functions here; they are pure and registered in secure stdlib)
 
-        env.define(
-            &Symbol("http-fetch".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "http-fetch".to_string(),
-                arity: Arity::Fixed(1),
-                func: std::sync::Arc::new(Self::tool_http_fetch),
-            })),
-        );
+        // Control flow functions are evaluator special-forms; do not re-register here.
 
-        // Convenience testing stub: (http/get url) -> {:status 200 :url url :body "ok"}
-        env.define(
-            &Symbol("http/get".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "http/get".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 1 {
-                        return Err(RuntimeError::ArityMismatch {
-                            function: "http/get".to_string(),
-                            expected: "1".to_string(),
-                            actual: args.len(),
-                        });
-                    }
-                    let url = match &args[0] {
-                        Value::String(s) => s.clone(),
-                        other => {
-                            return Err(RuntimeError::TypeError {
-                                expected: "string".to_string(),
-                                actual: other.type_name().to_string(),
-                                operation: "http/get".to_string(),
-                            })
-                        }
-                    };
-                    let mut map: HashMap<MapKey, Value> = HashMap::new();
-                    map.insert(
-                        MapKey::Keyword(Keyword("status".into())),
-                        Value::Integer(200),
-                    );
-                    map.insert(MapKey::Keyword(Keyword("url".into())), Value::String(url));
-                    map.insert(
-                        MapKey::Keyword(Keyword("body".into())),
-                        Value::String("ok".into()),
-                    );
-                    Ok(Value::Map(map))
-                }),
-            })),
-        );
+        // Intentionally minimal: only pure utilities should be registered here.
+    }
 
-        // Convenience testing stub: (db/query sql) -> vector of maps with :row and :sql
-        env.define(
-            &Symbol("db/query".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "db/query".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 1 {
-                        return Err(RuntimeError::ArityMismatch {
-                            function: "db/query".to_string(),
-                            expected: "1".to_string(),
-                            actual: args.len(),
-                        });
-                    }
-                    let sql = match &args[0] {
-                        Value::String(s) => s.clone(),
-                        other => {
-                            return Err(RuntimeError::TypeError {
-                                expected: "string".to_string(),
-                                actual: other.type_name().to_string(),
-                                operation: "db/query".to_string(),
-                            })
-                        }
-                    };
-                    let mut row1: HashMap<MapKey, Value> = HashMap::new();
-                    row1.insert(MapKey::Keyword(Keyword("row".into())), Value::Integer(1));
-                    row1.insert(
-                        MapKey::Keyword(Keyword("sql".into())),
-                        Value::String(sql.clone()),
-                    );
-                    let mut row2: HashMap<MapKey, Value> = HashMap::new();
-                    row2.insert(MapKey::Keyword(Keyword("row".into())), Value::Integer(2));
-                    row2.insert(MapKey::Keyword(Keyword("sql".into())), Value::String(sql));
-                    Ok(Value::Vector(vec![Value::Map(row1), Value::Map(row2)]))
-                }),
-            })),
-        );
+    /// Loads the secure standard library functions into the environment.
+    ///
+    /// These functions are pure and safe to execute in any context.
+    fn load_secure_functions(env: &mut Environment) {
+        // RTFS secure stdlib: only pure helpers here. Effectful I/O, logging, time,
+        // env, and state helpers are provided by the CCOS prelude layer.
 
-        // Logging
-        env.define(
-            &Symbol("tool/log".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "tool/log".to_string(),
-                arity: Arity::Variadic(1),
-                func: Arc::new(|args: Vec<Value>| Self::tool_log(args)),
-            })),
-        );
+        // Control flow functions are evaluator special-forms; do not re-register here.
 
-        // Alias for dot notation (tool.log)
-        env.define(
-            &Symbol("tool.log".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "tool.log".to_string(),
-                arity: Arity::Variadic(1),
-                func: Arc::new(|args: Vec<Value>| Self::tool_log(args)),
-            })),
-        );
-
-        // System time
-        env.define(
-            &Symbol("tool/time-ms".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "tool/time-ms".to_string(),
-                arity: Arity::Fixed(0),
-                func: Arc::new(|args: Vec<Value>| Self::tool_time_ms(args)),
-            })),
-        );
-
-        // Alias for dot notation (tool.time-ms)
-        env.define(
-            &Symbol("tool.time-ms".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "tool.time-ms".to_string(),
-                arity: Arity::Fixed(0),
-                func: Arc::new(|args: Vec<Value>| Self::tool_time_ms(args)),
-            })),
-        );
-
-        // Alias expected by tests: (current-time-millis)
-        env.define(
-            &Symbol("current-time-millis".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "current-time-millis".to_string(),
-                arity: Arity::Fixed(0),
-                func: Arc::new(|args: Vec<Value>| Self::tool_time_ms(args)),
-            })),
-        );
-
-        // File existence check
-        env.define(
-            &Symbol("file-exists?".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "file-exists?".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::file_exists(args)),
-            })),
-        );
-
-        // Environment variable access
-        env.define(
-            &Symbol("get-env".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "get-env".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::get_env(args)),
-            })),
-        );
-
-        // Simple log function (alias for tool/log)
-        env.define(
-            &Symbol("log".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "log".to_string(),
-                arity: Arity::Variadic(0),
-                func: Arc::new(|args: Vec<Value>| Self::tool_log(args)),
-            })),
-        );
-
-        // JSON functions
+        // Pure JSON helpers
         env.define(
             &Symbol("tool/serialize-json".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "tool/serialize-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::tool_serialize_json(args)),
+                func: std::sync::Arc::new(|args: Vec<Value>| Self::tool_serialize_json(args)),
             })),
         );
 
@@ -291,7 +126,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "serialize-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::tool_serialize_json(args)),
+                func: std::sync::Arc::new(|args: Vec<Value>| Self::tool_serialize_json(args)),
             })),
         );
 
@@ -300,7 +135,7 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "tool/parse-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::tool_parse_json(args)),
+                func: std::sync::Arc::new(|args: Vec<Value>| Self::tool_parse_json(args)),
             })),
         );
 
@@ -309,322 +144,9 @@ impl StandardLibrary {
             Value::Function(Function::Builtin(BuiltinFunction {
                 name: "parse-json".to_string(),
                 arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::tool_parse_json(args)),
+                func: std::sync::Arc::new(|args: Vec<Value>| Self::tool_parse_json(args)),
             })),
         );
-
-        // Print functions
-        env.define(
-            &Symbol("println".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "println".to_string(),
-                arity: Arity::Variadic(0),
-                func: Arc::new(|args: Vec<Value>| Self::println(args)),
-            })),
-        );
-
-        // Thread functions
-        env.define(
-            &Symbol("thread/sleep".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "thread/sleep".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::thread_sleep(args)),
-            })),
-        );
-
-        // File I/O functions
-        env.define(
-            &Symbol("read-lines".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "read-lines".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::read_lines(args)),
-            })),
-        );
-
-        // Logging/debugging functions
-        env.define(
-            &Symbol("step".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "step".to_string(),
-                arity: Arity::Variadic(1),
-                func: Arc::new(|args: Vec<Value>| Self::step(args)),
-            })),
-        );
-
-        // Control flow functions are evaluator special-forms; do not re-register here.
-
-        // Collection helpers: keys
-        env.define(
-            &Symbol("keys".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "keys".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::keys(args)),
-            })),
-        );
-
-        // Collection helpers: vals
-        env.define(
-            &Symbol("vals".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "vals".to_string(),
-                arity: Arity::Fixed(1),
-                func: Arc::new(|args: Vec<Value>| Self::vals(args)),
-            })),
-        );
-
-        // Map lookup returning entry pair or nil: (find m k) -> [k v] | nil
-        env.define(
-            &Symbol("find".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "find".to_string(),
-                arity: Arity::Fixed(2),
-                func: Arc::new(Self::find),
-            })),
-        );
-
-        // Collection helpers: update (map key f) or (update map key default f)
-        env.define(
-            &Symbol("update".to_string()),
-            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
-                name: "update".to_string(),
-                arity: Arity::Variadic(3), // allow 3 or 4, runtime validates upper bound
-                func: Arc::new(
-                    |args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment| {
-                        Self::update(args, evaluator, env)
-                    },
-                ),
-            })),
-        );
-
-        // No atoms - use host state capabilities instead
-        // Removed: atom, deref, reset!, swap! - migrate to host capabilities
-        // Use: (call :ccos.state.kv.get {...}) or (call :ccos.state.counter.inc {...})
-        env.define(
-            &Symbol("coordinate-work".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "coordinate-work".to_string(),
-                arity: Arity::Variadic(0),
-                func: std::sync::Arc::new(Self::coordinate_work_stub),
-            })),
-        );
-
-        // Numbers: returns a vector of numbers from start to end
-        env.define(
-            &Symbol("numbers".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "numbers".to_string(),
-                arity: Arity::Fixed(2),
-                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 2 {
-                        return Err(RuntimeError::ArityMismatch {
-                            function: "numbers".to_string(),
-                            expected: "2".to_string(),
-                            actual: args.len(),
-                        });
-                    }
-                    let start = args[0].as_number().ok_or_else(|| RuntimeError::TypeError {
-                        expected: "number".to_string(),
-                        actual: args[0].type_name().to_string(),
-                        operation: "numbers".to_string(),
-                    })?;
-                    let end = args[1].as_number().ok_or_else(|| RuntimeError::TypeError {
-                        expected: "number".to_string(),
-                        actual: args[1].type_name().to_string(),
-                        operation: "numbers".to_string(),
-                    })?;
-
-                    let mut result = Vec::new();
-                    let start_int = start as i64;
-                    let end_int = end as i64;
-                    for i in start_int..=end_int {
-                        result.push(Value::Integer(i));
-                    }
-                    Ok(Value::Vector(result))
-                }),
-            })),
-        );
-
-        // Connect-db: stub for database connection capability
-        env.define(
-            &Symbol("connect-db".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "connect-db".to_string(),
-                arity: Arity::Fixed(1),
-                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 1 {
-                        return Err(RuntimeError::ArityMismatch {
-                            function: "connect-db".to_string(),
-                            expected: "1".to_string(),
-                            actual: args.len(),
-                        });
-                    }
-                    // Return a mock connection string
-                    Ok(Value::String("mock-db-connection".to_string()))
-                }),
-            })),
-        );
-
-        // Plan-id: stub for CCOS plan ID access
-        env.define(
-            &Symbol("plan-id".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "plan-id".to_string(),
-                arity: Arity::Fixed(0),
-                func: std::sync::Arc::new(|_args: Vec<Value>| -> RuntimeResult<Value> {
-                    // Return a mock plan ID
-                    Ok(Value::String("mock-plan-123".to_string()))
-                }),
-            })),
-        );
-
-        // Point: stub for Point type definition
-        env.define(
-            &Symbol("Point".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "Point".to_string(),
-                arity: Arity::Fixed(2),
-                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 2 {
-                        return Err(RuntimeError::ArityMismatch {
-                            function: "Point".to_string(),
-                            expected: "2".to_string(),
-                            actual: args.len(),
-                        });
-                    }
-                    // Return a map representing a Point
-                    let mut point = HashMap::new();
-                    point.insert(MapKey::Keyword(Keyword("x".to_string())), args[0].clone());
-                    point.insert(MapKey::Keyword(Keyword("y".to_string())), args[1].clone());
-                    Ok(Value::Map(point))
-                }),
-            })),
-        );
-
-        // For: loop construct for iteration
-        env.define(
-            &Symbol("for".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "for".to_string(),
-                arity: Arity::Fixed(3),
-                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 3 {
-                        return Err(RuntimeError::ArityMismatch {
-                            function: "for".to_string(),
-                            expected: "3".to_string(),
-                            actual: args.len(),
-                        });
-                    }
-                    // For now, return a simple result
-                    // In a full implementation, this would need special handling in the evaluator
-                    Ok(Value::Integer(0))
-                }),
-            })),
-        );
-
-        // Map iteration: iterate over map entries
-        env.define(
-            &Symbol("map".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "map".to_string(),
-                arity: Arity::Fixed(2),
-                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 2 {
-                        return Err(RuntimeError::ArityMismatch {
-                            function: "map".to_string(),
-                            expected: "2".to_string(),
-                            actual: args.len(),
-                        });
-                    }
-
-                    let function = &args[0];
-                    let collection = &args[1];
-
-                    match collection {
-                        Value::Vector(v) => {
-                            let mut result = Vec::new();
-                            for item in v {
-                                // For now, just add the item as-is
-                                // In a full implementation, this would call the function
-                                result.push(item.clone());
-                            }
-                            Ok(Value::Vector(result))
-                        }
-                        Value::Map(m) => {
-                            let mut result = Vec::new();
-                            for (k, v) in m {
-                                // For maps, we can iterate over key-value pairs
-                                let mut pair = HashMap::new();
-                                pair.insert(
-                                    MapKey::Keyword(Keyword("key".to_string())),
-                                    Value::String("key".to_string()),
-                                );
-                                pair.insert(
-                                    MapKey::Keyword(Keyword("value".to_string())),
-                                    Value::String(k.to_string()),
-                                );
-                                result.push(Value::Map(pair));
-                            }
-                            Ok(Value::Vector(result))
-                        }
-                        _ => Err(RuntimeError::TypeError {
-                            expected: "vector or map".to_string(),
-                            actual: collection.type_name().to_string(),
-                            operation: "map".to_string(),
-                        }),
-                    }
-                }),
-            })),
-        );
-    }
-
-    /// Loads the secure standard library functions into the environment.
-    ///
-    /// These functions are pure and safe to execute in any context.
-    fn load_secure_functions(env: &mut Environment) {
-        // Basic I/O functions
-        env.define(
-            &Symbol("println".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "println".to_string(),
-                arity: Arity::Variadic(0),
-                func: std::sync::Arc::new(Self::println),
-            })),
-        );
-
-        // Thread/sleep function
-        env.define(
-            &Symbol("thread/sleep".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "thread/sleep".to_string(),
-                arity: Arity::Fixed(1),
-                func: std::sync::Arc::new(Self::thread_sleep),
-            })),
-        );
-
-        // File I/O functions
-        env.define(
-            &Symbol("read-lines".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "read-lines".to_string(),
-                arity: Arity::Fixed(1),
-                func: std::sync::Arc::new(Self::read_lines),
-            })),
-        );
-
-        // Logging/debugging functions
-        env.define(
-            &Symbol("step".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "step".to_string(),
-                arity: Arity::Variadic(1),
-                func: std::sync::Arc::new(Self::step),
-            })),
-        );
-
-        // Control flow functions are evaluator special-forms; do not re-register here.
 
         // Collection helpers: keys
         env.define(
@@ -643,6 +165,16 @@ impl StandardLibrary {
                 name: "vals".to_string(),
                 arity: Arity::Fixed(1),
                 func: std::sync::Arc::new(Self::vals),
+            })),
+        );
+
+        // Map lookup returning entry pair or nil: (find m k) -> [k v] | nil
+        env.define(
+            &Symbol("find".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "find".to_string(),
+                arity: Arity::Fixed(2),
+                func: std::sync::Arc::new(Self::find),
             })),
         );
 
@@ -763,117 +295,19 @@ impl StandardLibrary {
         );
 
         // Numbers: returns a vector of numbers from start to end
-        env.define(
-            &Symbol("numbers".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "numbers".to_string(),
-                arity: Arity::Fixed(2),
-                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 2 {
-                        return Err(RuntimeError::ArityMismatch {
-                            function: "numbers".to_string(),
-                            expected: "2".to_string(),
-                            actual: args.len(),
-                        });
-                    }
-                    let start = args[0].as_number().ok_or_else(|| RuntimeError::TypeError {
-                        expected: "number".to_string(),
-                        actual: args[0].type_name().to_string(),
-                        operation: "numbers".to_string(),
-                    })?;
-                    let end = args[1].as_number().ok_or_else(|| RuntimeError::TypeError {
-                        expected: "number".to_string(),
-                        actual: args[1].type_name().to_string(),
-                        operation: "numbers".to_string(),
-                    })?;
-
-                    let mut result = Vec::new();
-                    let start_int = start as i64;
-                    let end_int = end as i64;
-                    for i in start_int..=end_int {
-                        result.push(Value::Integer(i));
-                    }
-                    Ok(Value::Vector(result))
-                }),
-            })),
-        );
+        // 'numbers' is pure and remains available via other helpers/tests; remove duplicate here if any.
 
         // Connect-db: stub for database connection capability
-        env.define(
-            &Symbol("connect-db".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "connect-db".to_string(),
-                arity: Arity::Fixed(1),
-                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 1 {
-                        return Err(RuntimeError::ArityMismatch {
-                            function: "connect-db".to_string(),
-                            expected: "1".to_string(),
-                            actual: args.len(),
-                        });
-                    }
-                    // Return a mock connection string
-                    Ok(Value::String("mock-db-connection".to_string()))
-                }),
-            })),
-        );
+        // remove impure stubs from secure stdlib (e.g., connect-db) – keep such wiring in host/prelude.
 
         // Plan-id: stub for CCOS plan ID access
-        env.define(
-            &Symbol("plan-id".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "plan-id".to_string(),
-                arity: Arity::Fixed(0),
-                func: std::sync::Arc::new(|_args: Vec<Value>| -> RuntimeResult<Value> {
-                    // Return a mock plan ID
-                    Ok(Value::String("mock-plan-123".to_string()))
-                }),
-            })),
-        );
+        // remove plan-id stub from secure stdlib – host-side concern.
 
         // Point: stub for Point type definition
-        env.define(
-            &Symbol("Point".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "Point".to_string(),
-                arity: Arity::Fixed(2),
-                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 2 {
-                        return Err(RuntimeError::ArityMismatch {
-                            function: "Point".to_string(),
-                            expected: "2".to_string(),
-                            actual: args.len(),
-                        });
-                    }
-                    // Return a map representing a Point
-                    let mut point = HashMap::new();
-                    point.insert(MapKey::Keyword(Keyword("x".to_string())), args[0].clone());
-                    point.insert(MapKey::Keyword(Keyword("y".to_string())), args[1].clone());
-                    Ok(Value::Map(point))
-                }),
-            })),
-        );
+        // trim demo/test-specific constructs from secure stdlib.
 
         // For: loop construct for iteration
-        env.define(
-            &Symbol("for".to_string()),
-            Value::Function(Function::Builtin(BuiltinFunction {
-                name: "for".to_string(),
-                arity: Arity::Fixed(3),
-                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
-                    if args.len() != 3 {
-                        return Err(RuntimeError::ArityMismatch {
-                            function: "for".to_string(),
-                            expected: "3".to_string(),
-                            actual: args.len(),
-                        });
-                    }
-                    // For now, return a simple result
-                    // In a full implementation, this would need special handling in the evaluator
-                    Ok(Value::Integer(0))
-                }),
-            })),
-        );
+        // leave loop constructs to evaluator special-forms; do not re-register here.
 
         // Map iteration: iterate over map entries
         env.define(
@@ -929,6 +363,42 @@ impl StandardLibrary {
                 }),
             })),
         );
+
+        // Numbers: returns a vector of numbers from start to end
+        env.define(
+            &Symbol("numbers".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "numbers".to_string(),
+                arity: Arity::Fixed(2),
+                func: std::sync::Arc::new(|args: Vec<Value>| -> RuntimeResult<Value> {
+                    if args.len() != 2 {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "numbers".to_string(),
+                            expected: "2".to_string(),
+                            actual: args.len(),
+                        });
+                    }
+                    let start = args[0].as_number().ok_or_else(|| RuntimeError::TypeError {
+                        expected: "number".to_string(),
+                        actual: args[0].type_name().to_string(),
+                        operation: "numbers".to_string(),
+                    })?;
+                    let end = args[1].as_number().ok_or_else(|| RuntimeError::TypeError {
+                        expected: "number".to_string(),
+                        actual: args[1].type_name().to_string(),
+                        operation: "numbers".to_string(),
+                    })?;
+
+                    let mut result = Vec::new();
+                    let start_int = start as i64;
+                    let end_int = end as i64;
+                    for i in start_int..=end_int {
+                        result.push(Value::Integer(i));
+                    }
+                    Ok(Value::Vector(result))
+                }),
+            })),
+        );
     }
 
     /// Loads the CCOS capability functions into the environment.
@@ -980,9 +450,14 @@ impl StandardLibrary {
 
     /// `(tool.http-fetch "http://example.com")`
     ///
-    /// Fetches content from a URL and returns it as a string.
-    /// Note: This is a blocking operation.
-    fn tool_http_fetch(args: Vec<Value>) -> RuntimeResult<Value> {
+    /// Delegates HTTP fetching to the host capability `ccos.network.http-fetch`.
+    /// Keeps the symbol for backward-compatibility while ensuring side effects
+    /// happen in the host, not in the RTFS stdlib.
+    fn http_fetch_via_host(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        _env: &mut Environment,
+    ) -> RuntimeResult<Value> {
         if args.len() != 1 {
             return Err(RuntimeError::ArityMismatch {
                 function: "tool/http-fetch".to_string(),
@@ -991,30 +466,248 @@ impl StandardLibrary {
             });
         }
 
-        let url = match &args[0] {
-            Value::String(s) => s,
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "string".to_string(),
-                    actual: args[0].type_name().to_string(),
-                    operation: "tool.http-fetch".to_string(),
-                })
+        // Validate argument type early for clearer errors
+        if !matches!(args.get(0), Some(Value::String(_))) {
+            return Err(RuntimeError::TypeError {
+                expected: "string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "tool/http-fetch".to_string(),
+            });
+        }
+
+        evaluator
+            .host
+            .execute_capability("ccos.network.http-fetch", &args)
+    }
+
+    /// `(tool/open-file path)` delegates to host capability ccos.io.open-file; falls back to local read
+    fn open_file_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+        match evaluator
+            .host
+            .execute_capability("ccos.io.open-file", &args)
+        {
+            Ok(v) => Ok(v),
+            Err(_e) => Self::tool_open_file(args),
+        }
+    }
+
+    /// `(tool/log ...)` delegates to host capability ccos.io.log; falls back to local impl
+    fn tool_log_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+        match evaluator.host.execute_capability("ccos.io.log", &args) {
+            Ok(v) => Ok(v),
+            Err(_e) => Self::tool_log(args),
+        }
+    }
+
+    /// `(tool/time-ms)` delegates to host capability ccos.system.current-timestamp-ms; falls back to local impl
+    fn time_ms_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+        match evaluator
+            .host
+            .execute_capability("ccos.system.current-timestamp-ms", &args)
+        {
+            Ok(v) => Ok(v),
+            Err(_e) => Self::tool_time_ms(args),
+        }
+    }
+
+    /// `(file-exists? path)` delegates to host capability ccos.io.file-exists; falls back to local impl
+    fn file_exists_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+        match evaluator
+            .host
+            .execute_capability("ccos.io.file-exists", &args)
+        {
+            Ok(v) => Ok(v),
+            Err(_e) => Self::file_exists(args),
+        }
+    }
+
+    /// `(get-env key)` delegates to host capability ccos.system.get-env; falls back to local impl
+    fn get_env_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+        match evaluator
+            .host
+            .execute_capability("ccos.system.get-env", &args)
+        {
+            Ok(v) => Ok(v),
+            Err(_e) => Self::get_env(args),
+        }
+    }
+
+    /// `(println ...)` delegates to host capability ccos.io.println; falls back to local impl
+    fn println_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+        match evaluator.host.execute_capability("ccos.io.println", &args) {
+            Ok(v) => Ok(v),
+            Err(_e) => Self::println(args),
+        }
+    }
+
+    /// `(thread/sleep ms)` optionally delegates if a host capability exists; currently falls back to local impl
+    fn thread_sleep_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+        match evaluator
+            .host
+            .execute_capability("ccos.system.sleep-ms", &args)
+        {
+            Ok(v) => Ok(v),
+            Err(_e) => Self::thread_sleep(args),
+        }
+    }
+
+    /// `(read-lines path)` delegates where possible; currently falls back to local impl
+    fn read_lines_via_host(args: Vec<Value>, _evaluator: &Evaluator) -> RuntimeResult<Value> {
+        // A richer host flow would stream via ccos.io.open-file + ccos.io.read-line; keep local for now
+        Self::read_lines(args)
+    }
+
+    /// `(step ...)` delegates to host println for observability; falls back to local step formatter
+    fn step_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+        match evaluator.host.execute_capability("ccos.io.println", &args) {
+            Ok(v) => Ok(v),
+            Err(_e) => Self::step(args),
+        }
+    }
+
+    /// `(kv/assoc! key k v [k v]...)` -> get value at key, assoc, put back, return new value
+    fn kv_assoc_bang(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() < 3 || args.len() % 2 == 0 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "kv/assoc!".to_string(),
+                expected: "(kv/assoc! key k v [k v]...)".to_string(),
+                actual: args.len(),
+            });
+        }
+        let kv_key = args[0].clone();
+        let pairs = args[1..].to_vec();
+
+        let current = evaluator
+            .host
+            .execute_capability("ccos.state.kv.get", &[kv_key.clone()])
+            .unwrap_or(Value::Nil);
+        let base = match current {
+            Value::Nil => Value::Map(std::collections::HashMap::new()),
+            other => other,
+        };
+
+        // Resolve assoc from environment and apply
+        let assoc_sym = crate::ast::Symbol("assoc".to_string());
+        let assoc_fn = env
+            .lookup(&assoc_sym)
+            .ok_or_else(|| RuntimeError::Generic("assoc not found".to_string()))?;
+        let mut assoc_args = Vec::with_capacity(1 + pairs.len());
+        assoc_args.push(base);
+        assoc_args.extend(pairs);
+        let updated = match evaluator.call_function(assoc_fn, &assoc_args, env)? {
+            ExecutionOutcome::Complete(v) => v,
+            ExecutionOutcome::RequiresHost(hc) => {
+                return Err(RuntimeError::Generic(format!(
+                    "Host call required in assoc: {}",
+                    hc.capability_id
+                )))
             }
         };
 
-        // Since this is a synchronous function, we need to block on the async call
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to create async runtime: {}", e)))?;
+        let _ = evaluator
+            .host
+            .execute_capability("ccos.state.kv.put", &[kv_key, updated.clone()]);
+        Ok(updated)
+    }
 
-        rt.block_on(async {
-            match reqwest::get(url).await {
-                Ok(response) => match response.text().await {
-                    Ok(text) => Ok(Value::String(text)),
-                    Err(e) => Err(RuntimeError::NetworkError(e.to_string())),
-                },
-                Err(e) => Err(RuntimeError::NetworkError(e.to_string())),
+    /// `(kv/dissoc! key k1 k2 ...)` -> get map, dissoc keys, put back, return new map
+    fn kv_dissoc_bang(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() < 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "kv/dissoc!".to_string(),
+                expected: "(kv/dissoc! key k1 k2 ...)".to_string(),
+                actual: args.len(),
+            });
+        }
+        let kv_key = args[0].clone();
+        let ds_keys = args[1..].to_vec();
+
+        let current = evaluator
+            .host
+            .execute_capability("ccos.state.kv.get", &[kv_key.clone()])
+            .unwrap_or(Value::Nil);
+        let base = match current {
+            Value::Nil => Value::Map(std::collections::HashMap::new()),
+            other => other,
+        };
+
+        let dissoc_sym = crate::ast::Symbol("dissoc".to_string());
+        let dissoc_fn = env
+            .lookup(&dissoc_sym)
+            .ok_or_else(|| RuntimeError::Generic("dissoc not found".to_string()))?;
+        let mut dissoc_args = Vec::with_capacity(1 + ds_keys.len());
+        dissoc_args.push(base);
+        dissoc_args.extend(ds_keys);
+        let updated = match evaluator.call_function(dissoc_fn, &dissoc_args, env)? {
+            ExecutionOutcome::Complete(v) => v,
+            ExecutionOutcome::RequiresHost(hc) => {
+                return Err(RuntimeError::Generic(format!(
+                    "Host call required in dissoc: {}",
+                    hc.capability_id
+                )))
             }
-        })
+        };
+
+        let _ = evaluator
+            .host
+            .execute_capability("ccos.state.kv.put", &[kv_key, updated.clone()]);
+        Ok(updated)
+    }
+
+    /// `(kv/conj! key x1 x2 ...)` -> get vector, conj items, put back, return new vector
+    fn kv_conj_bang(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() < 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "kv/conj!".to_string(),
+                expected: "(kv/conj! key x1 x2 ...)".to_string(),
+                actual: args.len(),
+            });
+        }
+        let kv_key = args[0].clone();
+        let items = args[1..].to_vec();
+
+        let current = evaluator
+            .host
+            .execute_capability("ccos.state.kv.get", &[kv_key.clone()])
+            .unwrap_or(Value::Nil);
+        let base = match current {
+            Value::Nil => Value::Vector(Vec::new()),
+            other => other,
+        };
+
+        let conj_sym = crate::ast::Symbol("conj".to_string());
+        let conj_fn = env
+            .lookup(&conj_sym)
+            .ok_or_else(|| RuntimeError::Generic("conj not found".to_string()))?;
+        let mut conj_args = Vec::with_capacity(1 + items.len());
+        conj_args.push(base);
+        conj_args.extend(items);
+        let updated = match evaluator.call_function(conj_fn, &conj_args, env)? {
+            ExecutionOutcome::Complete(v) => v,
+            ExecutionOutcome::RequiresHost(hc) => {
+                return Err(RuntimeError::Generic(format!(
+                    "Host call required in conj: {}",
+                    hc.capability_id
+                )))
+            }
+        };
+
+        let _ = evaluator
+            .host
+            .execute_capability("ccos.state.kv.put", &[kv_key, updated.clone()]);
+        Ok(updated)
     }
 
     /// `(tool.log "message" 1 2 3)`
@@ -1179,7 +872,7 @@ impl StandardLibrary {
                             } else {
                                 s.clone()
                             }
-                        },
+                        }
                         crate::ast::MapKey::Integer(i) => i.to_string(),
                     };
                     json_object.insert(key_str, Self::rtfs_value_to_json(value)?);

@@ -579,9 +579,10 @@ pub fn default_effects_for_capability(capability_id: &str) -> &'static [&'static
         // Network operations
         "ccos.network.http-fetch" => &[":network"],
         // System introspection
-        "ccos.system.get-env" | "ccos.system.current-time" | "ccos.system.current-timestamp-ms" => {
-            &[":system"]
-        }
+        "ccos.system.get-env"
+        | "ccos.system.current-time"
+        | "ccos.system.current-timestamp-ms"
+        | "ccos.system.sleep-ms" => &[":system"],
         // AI and agent operations
         "ccos.ai.llm-execute" => &[":ai"],
         cap if cap.starts_with("ccos.agent.") => &[":agent"],
@@ -600,8 +601,6 @@ impl SecurityPolicies {
     pub fn user_code() -> RuntimeContext {
         RuntimeContext::controlled(vec![
             "ccos.io.log".to_string(),
-            "ccos.data.parse-json".to_string(),
-            "ccos.data.serialize-json".to_string(),
             // Allow safe LLM calls in user code
             "ccos.ai.llm-execute".to_string(),
         ])
@@ -614,8 +613,6 @@ impl SecurityPolicies {
             "ccos.io.print".to_string(),
             "ccos.io.println".to_string(),
             "ccos.io.file-exists".to_string(),
-            "ccos.data.parse-json".to_string(),
-            "ccos.data.serialize-json".to_string(),
             "ccos.system.current-time".to_string(),
             "ccos.system.current-timestamp-ms".to_string(),
             // Allow LLM calls for system prompts (audited)
@@ -627,9 +624,6 @@ impl SecurityPolicies {
     pub fn data_processing() -> RuntimeContext {
         RuntimeContext::controlled(vec![
             "ccos.io.log".to_string(),
-            "ccos.data.parse-json".to_string(),
-            "ccos.data.serialize-json".to_string(),
-            "ccos.network.http-fetch".to_string(),
             "ccos.echo".to_string(),
             "ccos.math.add".to_string(),
             "ccos.ask-human".to_string(),
@@ -679,11 +673,25 @@ impl SecurityPolicies {
             "ccos.math.add".to_string(),
             "ccos.ask-human".to_string(),
             "ccos.io.log".to_string(),
-            "ccos.data.parse-json".to_string(),
-            "ccos.data.serialize-json".to_string(),
             // Enable LLM for tests
             "ccos.ai.llm-execute".to_string(),
         ])
+    }
+
+    /// Policy for running networking operations (HTTP, etc.) under isolation
+    pub fn networking() -> RuntimeContext {
+        let mut ctx = RuntimeContext::controlled(vec![
+            "ccos.io.log".to_string(),
+            "ccos.network.http-fetch".to_string(),
+        ]);
+
+        // Enforce microVM for network operations per validator policy
+        ctx.use_microvm = true;
+        // Reasonable defaults for network tasks
+        ctx.max_execution_time = Some(10000); // 10 seconds
+        ctx.max_memory_usage = Some(32 * 1024 * 1024); // 32MB
+
+        ctx
     }
 }
 
