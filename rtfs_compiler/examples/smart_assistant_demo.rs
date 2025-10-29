@@ -217,19 +217,27 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
 
     let needs_value = build_needs_capabilities(&plan_steps);
     
-    // For now, collect matched capabilities and report. Full orchestrator coming next.
-    let mut plan = Plan::new_rtfs(
-        "(do ;; Orchestrator will be synthesized here\n)".to_string(),
-        vec![],
-    );
+    // Resolve missing capabilities and build orchestrating agent
+    let resolved_steps = resolve_and_stub_capabilities(&ccos, &plan_steps, &matches).await?;
+    let orchestrator_rtfs = generate_orchestrator_capability(&goal, &resolved_steps)?;
+    
+    let mut plan = Plan::new_rtfs(orchestrator_rtfs, vec![]);
     plan.metadata
         .insert("needs_capabilities".to_string(), needs_value.clone());
     plan.metadata.insert(
         "generated_at".to_string(),
         Value::String(Utc::now().to_rfc3339()),
     );
+    plan.metadata.insert(
+        "resolved_steps".to_string(),
+        build_resolved_steps_metadata(&resolved_steps),
+    );
 
     print_plan_draft(&plan_steps, &matches, &plan);
+    println!(
+        "\n{}",
+        "✅ Orchestrator generated and ready for execution".bold().green()
+    );
 
     Ok(())
 }
@@ -1567,7 +1575,6 @@ enum ResolutionStrategy {
 }
 
 /// Resolve missing capabilities by searching marketplace or creating stubs.
-#[allow(dead_code)]
 async fn resolve_and_stub_capabilities(
     ccos: &Arc<CCOS>,
     steps: &[ProposedStep],
@@ -1638,7 +1645,6 @@ async fn register_stub_capability(
 }
 
 /// Generate an RTFS orchestrator capability that chains all resolved steps.
-#[allow(dead_code)]
 fn generate_orchestrator_capability(
     goal: &str,
     resolved_steps: &[ResolvedStep],
@@ -1715,7 +1721,6 @@ fn build_final_output(resolved_steps: &[ResolvedStep]) -> DemoResult<String> {
     }
 }
 
-#[allow(dead_code)]
 fn build_resolved_steps_metadata(resolved_steps: &[ResolvedStep]) -> Value {
     let entries: Vec<Value> = resolved_steps
         .iter()
@@ -1845,6 +1850,11 @@ fn print_plan_draft(steps: &[ProposedStep], matches: &[CapabilityMatch], plan: &
         {
             println!("   • {}", note.as_str().dim());
         }
+    }
+
+    println!("\n{}", "📋 Generated Orchestrator RTFS".bold());
+    if let rtfs_compiler::ccos::types::PlanBody::Rtfs(code) = &plan.body {
+        println!("{}", code.as_str().cyan());
     }
 
     println!("\n{}", "🧾 Plan metadata".bold());
