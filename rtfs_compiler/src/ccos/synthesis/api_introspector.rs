@@ -257,14 +257,13 @@ impl APIIntrospector {
                 .and_then(|arr| arr.first())
                 .and_then(|s| s.as_str())
                 .unwrap_or("https");
-            let base_path = spec
-                .get("basePath")
-                .and_then(|p| p.as_str())
-                .unwrap_or("");
+            let base_path = spec.get("basePath").and_then(|p| p.as_str()).unwrap_or("");
             return Ok(format!("{}://{}{}", scheme, host, base_path));
         }
 
-        Err(RuntimeError::Generic("No base URL found in OpenAPI spec".to_string()))
+        Err(RuntimeError::Generic(
+            "No base URL found in OpenAPI spec".to_string(),
+        ))
     }
 
     /// Extract endpoints with their schemas from OpenAPI spec
@@ -591,7 +590,10 @@ impl APIIntrospector {
     }
 
     /// Extract rate limits
-    fn extract_rate_limits(&self, spec: &serde_json::Value) -> RuntimeResult<Option<RateLimitInfo>> {
+    fn extract_rate_limits(
+        &self,
+        spec: &serde_json::Value,
+    ) -> RuntimeResult<Option<RateLimitInfo>> {
         // Try to extract from x-rate-limit extensions
         if let Some(extensions) = spec.get("x-ccos-rate-limits") {
             Ok(Some(RateLimitInfo {
@@ -619,7 +621,11 @@ impl APIIntrospector {
         endpoint: &DiscoveredEndpoint,
         introspection: &APIIntrospectionResult,
     ) -> RuntimeResult<CapabilityManifest> {
-        let capability_id = format!("{}.{}", introspection.api_title.to_lowercase().replace(" ", "_"), endpoint.endpoint_id);
+        let capability_id = format!(
+            "{}.{}",
+            introspection.api_title.to_lowercase().replace(" ", "_"),
+            endpoint.endpoint_id
+        );
 
         let mut effects = vec!["network_request".to_string()];
         if endpoint.requires_auth {
@@ -660,13 +666,15 @@ impl APIIntrospector {
             input_schema: endpoint.input_schema.clone(),
             output_schema: endpoint.output_schema.clone(),
             attestation: None,
-            provenance: Some(crate::ccos::capability_marketplace::types::CapabilityProvenance {
-                source: "api_introspector".to_string(),
-                version: Some("1.0.0".to_string()),
-                content_hash: format!("introspected_{}", endpoint.endpoint_id),
-                custody_chain: vec!["api_introspector".to_string()],
-                registered_at: chrono::Utc::now(),
-            }),
+            provenance: Some(
+                crate::ccos::capability_marketplace::types::CapabilityProvenance {
+                    source: "api_introspector".to_string(),
+                    version: Some("1.0.0".to_string()),
+                    content_hash: format!("introspected_{}", endpoint.endpoint_id),
+                    custody_chain: vec!["api_introspector".to_string()],
+                    registered_at: chrono::Utc::now(),
+                },
+            ),
             permissions: vec!["network.http".to_string()],
             effects,
             metadata,
@@ -708,12 +716,16 @@ impl APIIntrospector {
                         entries: vec![
                             MapTypeEntry {
                                 key: Keyword("userId".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                             MapTypeEntry {
                                 key: Keyword("expand".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::Bool)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::Bool,
+                                )),
                                 optional: true,
                             },
                         ],
@@ -723,17 +735,23 @@ impl APIIntrospector {
                         entries: vec![
                             MapTypeEntry {
                                 key: Keyword("id".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                             MapTypeEntry {
                                 key: Keyword("name".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                             MapTypeEntry {
                                 key: Keyword("email".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                         ],
@@ -764,46 +782,46 @@ impl APIIntrospector {
                     method: "POST".to_string(),
                     path: "/v1/activities".to_string(),
                     input_schema: Some(TypeExpr::Map {
-                        entries: vec![
-                            MapTypeEntry {
-                                key: Keyword("events".to_string()),
-                                value_type: Box::new(TypeExpr::Vector(Box::new(TypeExpr::Map {
-                                    entries: vec![],
-                                    wildcard: None,
-                                }))),
-                                optional: false,
-                            },
-                        ],
+                        entries: vec![MapTypeEntry {
+                            key: Keyword("events".to_string()),
+                            value_type: Box::new(TypeExpr::Vector(Box::new(TypeExpr::Map {
+                                entries: vec![],
+                                wildcard: None,
+                            }))),
+                            optional: false,
+                        }],
                         wildcard: None,
                     }),
                     output_schema: Some(TypeExpr::Map {
                         entries: vec![
                             MapTypeEntry {
                                 key: Keyword("id".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                             MapTypeEntry {
                                 key: Keyword("status".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(crate::ast::PrimitiveType::String)),
+                                value_type: Box::new(TypeExpr::Primitive(
+                                    crate::ast::PrimitiveType::String,
+                                )),
                                 optional: false,
                             },
                         ],
                         wildcard: None,
                     }),
                     requires_auth: true,
-                    parameters: vec![
-                        EndpointParameter {
-                            name: "events".to_string(),
-                            param_type: TypeExpr::Vector(Box::new(TypeExpr::Map {
-                                entries: vec![],
-                                wildcard: None,
-                            })),
-                            required: true,
-                            location: "body".to_string(),
-                            description: Some("Activity events to record".to_string()),
-                        },
-                    ],
+                    parameters: vec![EndpointParameter {
+                        name: "events".to_string(),
+                        param_type: TypeExpr::Vector(Box::new(TypeExpr::Map {
+                            entries: vec![],
+                            wildcard: None,
+                        })),
+                        required: true,
+                        location: "body".to_string(),
+                        description: Some("Activity events to record".to_string()),
+                    }],
                 },
             ],
             auth_requirements: AuthRequirements {
@@ -1102,10 +1120,26 @@ impl APIIntrospector {
             )
         };
 
-        let base_url = capability.metadata.get("base_url").map(|s| s.as_str()).unwrap_or("");
-        let endpoint_path = capability.metadata.get("endpoint_path").map(|s| s.as_str()).unwrap_or("/");
-        let endpoint_method = capability.metadata.get("endpoint_method").map(|s| s.as_str()).unwrap_or("GET");
-        let api_title = capability.metadata.get("api_title").map(|s| s.as_str()).unwrap_or("API");
+        let base_url = capability
+            .metadata
+            .get("base_url")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        let endpoint_path = capability
+            .metadata
+            .get("endpoint_path")
+            .map(|s| s.as_str())
+            .unwrap_or("/");
+        let endpoint_method = capability
+            .metadata
+            .get("endpoint_method")
+            .map(|s| s.as_str())
+            .unwrap_or("GET");
+        let api_title = capability
+            .metadata
+            .get("api_title")
+            .map(|s| s.as_str())
+            .unwrap_or("API");
 
         format!(
             r#";; Capability: {}
@@ -1147,7 +1181,7 @@ impl APIIntrospector {
             capability.name,
             capability.version,
             capability.description,
-            api_title,  // Use api_title from metadata instead of provider enum
+            api_title, // Use api_title from metadata instead of provider enum
             permissions_str,
             effects_str,
             base_url,
@@ -1162,10 +1196,10 @@ impl APIIntrospector {
     }
 
     /// Save capability to RTFS file
-    /// 
+    ///
     /// Uses hierarchical directory structure:
     /// output_dir/openapi/<api_name>/<endpoint_name>.rtfs
-    /// 
+    ///
     /// Example: capabilities/openapi/openweather/get_current_weather.rtfs
     pub fn save_capability_to_rtfs(
         &self,
@@ -1186,7 +1220,7 @@ impl APIIntrospector {
         // Extract api name (remove _api suffix if present)
         let api_name_raw = parts[0];
         let api_name = api_name_raw.trim_end_matches("_api");
-        
+
         // Extract endpoint name (join all remaining parts)
         let endpoint_name = parts[1..].join("_");
 
@@ -1199,9 +1233,8 @@ impl APIIntrospector {
         let rtfs_content = self.capability_to_rtfs_string(capability, implementation_code);
         let rtfs_file = capability_dir.join(format!("{}.rtfs", endpoint_name));
 
-        std::fs::write(&rtfs_file, rtfs_content).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to write RTFS file: {}", e))
-        })?;
+        std::fs::write(&rtfs_file, rtfs_content)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write RTFS file: {}", e)))?;
 
         Ok(rtfs_file)
     }
@@ -1243,8 +1276,14 @@ mod tests {
 
         assert_eq!(result.api_title, "testapi API");
         assert_eq!(result.endpoints.len(), 2);
-        assert!(result.endpoints.iter().any(|e| e.endpoint_id == "get_user_profile"));
-        assert!(result.endpoints.iter().any(|e| e.endpoint_id == "create_activity"));
+        assert!(result
+            .endpoints
+            .iter()
+            .any(|e| e.endpoint_id == "get_user_profile"));
+        assert!(result
+            .endpoints
+            .iter()
+            .any(|e| e.endpoint_id == "create_activity"));
     }
 
     #[test]
@@ -1256,8 +1295,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(capabilities.len(), 2);
-        assert!(capabilities.iter().any(|c| c.id.contains("get_user_profile")));
-        assert!(capabilities.iter().any(|c| c.id.contains("create_activity")));
+        assert!(capabilities
+            .iter()
+            .any(|c| c.id.contains("get_user_profile")));
+        assert!(capabilities
+            .iter()
+            .any(|c| c.id.contains("create_activity")));
 
         // Check that schemas are properly encoded
         let profile_cap = capabilities

@@ -146,6 +146,37 @@ impl LocalProvider {
         Ok(Value::Integer(timestamp as i64))
     }
 
+    fn sleep_ms_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "ccos.system.sleep-ms".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let ms = match &args[0] {
+            Value::Integer(i) => {
+                if *i < 0 {
+                    return Err(RuntimeError::InvalidArgument(
+                        "Sleep duration cannot be negative".to_string(),
+                    ));
+                }
+                *i as u64
+            }
+            other => {
+                return Err(RuntimeError::TypeError {
+                    expected: "integer".to_string(),
+                    actual: other.type_name().to_string(),
+                    operation: "ccos.system.sleep-ms".to_string(),
+                })
+            }
+        };
+
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        Ok(Value::Nil)
+    }
+
     // I/O capability implementations
     fn file_exists_capability(args: Vec<Value>) -> RuntimeResult<Value> {
         if args.len() != 1 {
@@ -532,6 +563,7 @@ impl CapabilityProvider for LocalProvider {
             "ccos.system.get-env" => Self::get_env_capability(args),
             "ccos.system.current-time" => Self::current_time_capability(args),
             "ccos.system.current-timestamp-ms" => Self::current_timestamp_ms_capability(args),
+            "ccos.system.sleep-ms" => Self::sleep_ms_capability(args),
             "ccos.io.file-exists" => Self::file_exists_capability(args),
             "ccos.data.parse-json" => Self::parse_json_capability(args),
             "ccos.data.serialize-json" => Self::serialize_json_capability(args),
@@ -766,6 +798,20 @@ impl CapabilityRegistry {
             Capability {
                 id: "ccos.system.current-timestamp-ms".to_string(),
                 arity: Arity::Fixed(0),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "System capabilities must be executed through providers".to_string(),
+                    ))
+                }),
+            },
+        );
+
+        // Sleep capability - delegates to provider
+        self.capabilities.insert(
+            "ccos.system.sleep-ms".to_string(),
+            Capability {
+                id: "ccos.system.sleep-ms".to_string(),
+                arity: Arity::Fixed(1),
                 func: Arc::new(|_args| {
                     Err(RuntimeError::Generic(
                         "System capabilities must be executed through providers".to_string(),
@@ -1090,23 +1136,17 @@ impl CapabilityRegistry {
     }
 
     /// Set marketplace reference for metadata access (generic, provider-agnostic)
-    pub fn set_marketplace(
-        &mut self,
-        marketplace: Arc<crate::ccos::CapabilityMarketplace>,
-    ) {
+    pub fn set_marketplace(&mut self, marketplace: Arc<crate::ccos::CapabilityMarketplace>) {
         self.marketplace = Some(marketplace);
     }
 
     /// Set session pool for stateful capabilities (generic, provider-agnostic)
-    pub fn set_session_pool(
-        &mut self,
-        session_pool: Arc<super::session_pool::SessionPoolManager>,
-    ) {
+    pub fn set_session_pool(&mut self, session_pool: Arc<super::session_pool::SessionPoolManager>) {
         self.session_pool = Some(session_pool);
     }
 
     /// Get capability metadata from marketplace (generic, provider-agnostic)
-    /// 
+    ///
     /// This helper retrieves capability metadata without knowing which provider
     /// the capability belongs to. It's used by the runtime to make informed
     /// decisions based on metadata hints.
@@ -1118,7 +1158,7 @@ impl CapabilityRegistry {
         if let Some(marketplace) = &self.marketplace {
             let caps_future = marketplace.list_capabilities();
             let caps = futures::executor::block_on(caps_future);
-            
+
             if let Some(cap_manifest) = caps.iter().find(|c| c.id == capability_id) {
                 return Some(cap_manifest.metadata.clone());
             }
@@ -1127,14 +1167,14 @@ impl CapabilityRegistry {
     }
 
     /// Check if capability requires session management (generic)
-    /// 
+    ///
     /// Inspects metadata for any provider's session requirements.
     /// Works for MCP, GraphQL, gRPC, or any future provider.
     fn requires_session(&self, metadata: &std::collections::HashMap<String, String>) -> bool {
         // Check for *_requires_session keys (any provider)
-        metadata.iter().any(|(k, v)| {
-            k.ends_with("_requires_session") && (v == "true" || v == "auto")
-        })
+        metadata
+            .iter()
+            .any(|(k, v)| k.ends_with("_requires_session") && (v == "true" || v == "auto"))
     }
 
     /// Configure the MicroVM provider to use
@@ -1171,13 +1211,69 @@ impl CapabilityRegistry {
         args: Vec<Value>,
         runtime_context: Option<&RuntimeContext>,
     ) -> RuntimeResult<Value> {
-        eprintln!("CapabilityRegistry::execute_in_microvm called for {} with args={:?} http_mocking_enabled={}", capability_id, args, self.http_mocking_enabled);
-        
+        // Sanitize potentially sensitive data in logs (e.g., API keys in URLs or auth headers)
+        fn mask_appid(url: &str) -> String {
+            if let Some(start) = url.find("appid=") {
+                let prefix = &url[..start + "appid=".len()];
+                // Find end of query param value (next '&' or end of string)
+                if let Some(end) = url[start + "appid=".len()..].find('&') {
+                    format!(
+                        "{}***REDACTED***{}",
+                        prefix,
+                        &url[start + "appid=".len() + end..]
+                    )
+                } else {
+                    format!("{}***REDACTED***", prefix)
+                }
+            } else {
+                url.to_string()
+            }
+        }
+
+        if capability_id == "ccos.network.http-fetch" {
+            // Attempt to extract and mask the URL argument specifically for http-fetch
+            let mut sanitized_url: Option<String> = None;
+            // Args are typically alternating Keyword/Value pairs, look for Keyword(:url)
+            let mut i = 0usize;
+            while i + 1 < args.len() {
+                if let Value::Keyword(k) = &args[i] {
+                    if k.0 == ":url" || k.0.eq_ignore_ascii_case(":url") {
+                        if let Value::String(url) = &args[i + 1] {
+                            sanitized_url = Some(mask_appid(url));
+                            break;
+                        }
+                    }
+                }
+                i += 1;
+            }
+
+            if let Some(url) = sanitized_url {
+                eprintln!(
+                    "CapabilityRegistry::execute_in_microvm called for {} with url={} http_mocking_enabled={}",
+                    capability_id,
+                    url,
+                    self.http_mocking_enabled
+                );
+            } else {
+                // Fall back to non-verbose log if URL not found
+                eprintln!(
+                    "CapabilityRegistry::execute_in_microvm called for {} http_mocking_enabled={}",
+                    capability_id, self.http_mocking_enabled
+                );
+            }
+        } else {
+            // For non-network capabilities, avoid dumping raw args to prevent accidental leaks
+            eprintln!(
+                "CapabilityRegistry::execute_in_microvm called for {} http_mocking_enabled={}",
+                capability_id, self.http_mocking_enabled
+            );
+        }
+
         // For MCP operations with session management
         if capability_id == "ccos.mcp.call-with-session" {
             return self.execute_mcp_with_session(&args);
         }
-        
+
         // For HTTP operations, return a mock response for testing
         if capability_id == "ccos.network.http-fetch" {
             if self.http_mocking_enabled {
@@ -1260,9 +1356,46 @@ impl CapabilityRegistry {
         args: Vec<Value>,
         runtime_context: Option<&RuntimeContext>,
     ) -> RuntimeResult<Value> {
+        // Sanitize potential secrets (e.g., URL query appid) in logs only
+        fn redact_appid_in_str(s: &str) -> String {
+            if let Some(pos) = s.find("appid=") {
+                let start = pos + "appid=".len();
+                let bytes = s.as_bytes();
+                let mut end = bytes.len();
+                for i in start..bytes.len() {
+                    if bytes[i] == b'&' {
+                        end = i;
+                        break;
+                    }
+                }
+                let mut out = String::with_capacity(s.len());
+                out.push_str(&s[..start]);
+                out.push_str("***REDACTED***");
+                out.push_str(&s[end..]);
+                out
+            } else {
+                s.to_string()
+            }
+        }
+        fn sanitize_value(v: &Value) -> Value {
+            match v {
+                Value::String(s) => Value::String(redact_appid_in_str(s)),
+                Value::Map(m) => {
+                    let mut out = std::collections::HashMap::new();
+                    for (k, vv) in m.iter() {
+                        out.insert(k.clone(), sanitize_value(vv));
+                    }
+                    Value::Map(out)
+                }
+                Value::Vector(vec) => Value::Vector(vec.iter().map(sanitize_value).collect()),
+                Value::List(list) => Value::List(list.iter().map(sanitize_value).collect()),
+                _ => v.clone(),
+            }
+        }
+        let sanitized_args: Vec<Value> = args.iter().map(sanitize_value).collect();
         eprintln!(
             "CapabilityRegistry::execute_capability_with_microvm called for {} args={:?}",
-            capability_id, args
+            capability_id, sanitized_args
         );
         // Perform security validation if runtime context is provided
         if let Some(context) = runtime_context {
@@ -1277,7 +1410,7 @@ impl CapabilityRegistry {
             // Check if capability requires session management (generic)
             if self.requires_session(&metadata) {
                 eprintln!("📋 Metadata hint: capability requires session management");
-                
+
                 // Delegate to session pool (completely generic!)
                 if let Some(session_pool) = &self.session_pool {
                     eprintln!("🔄 Delegating to session pool for: {}", capability_id);
@@ -1287,7 +1420,7 @@ impl CapabilityRegistry {
                     // Fall through to normal execution (will likely fail with 401)
                 }
             }
-            
+
             // Future: Other generic patterns can be added here
             // - Rate limiting hints: metadata.get("*_rate_limit")
             // - Auth requirements: metadata.get("*_oauth_required")
@@ -1459,10 +1592,14 @@ impl CapabilityRegistry {
         let resp_body = response
             .text()
             .map_err(|e| RuntimeError::NetworkError(e.to_string()))?;
-        
+
         // Debug: Log HTTP response for MCP calls
         if request.url.to_string().contains("/mcp/") {
-            eprintln!("🌐 HTTP Response: status={}, body_len={}", status, resp_body.len());
+            eprintln!(
+                "🌐 HTTP Response: status={}, body_len={}",
+                status,
+                resp_body.len()
+            );
             if resp_body.len() < 500 {
                 eprintln!("   Body: {}", resp_body);
             } else {
@@ -1500,27 +1637,34 @@ impl CapabilityRegistry {
     /// :arguments {:owner "..." :repo "..."}
     /// :auth-token "optional_bearer_token" (optional, can use GITHUB_PAT env)
     fn execute_mcp_with_session(&self, args: &[Value]) -> RuntimeResult<Value> {
-        eprintln!("CapabilityRegistry::execute_mcp_with_session called with args={:?}", args);
-        
+        eprintln!(
+            "CapabilityRegistry::execute_mcp_with_session called with args={:?}",
+            args
+        );
+
         // Parse arguments
         let pairs = self.collect_keyword_pairs(args)?;
-        
-        let server_url = pairs.iter()
+
+        let server_url = pairs
+            .iter()
             .find(|(k, _)| k == "server-url")
             .and_then(|(_, v)| v.as_string())
             .ok_or_else(|| RuntimeError::Generic(":server-url required".to_string()))?;
-            
-        let tool_name = pairs.iter()
+
+        let tool_name = pairs
+            .iter()
             .find(|(k, _)| k == "tool-name")
             .and_then(|(_, v)| v.as_string())
             .ok_or_else(|| RuntimeError::Generic(":tool-name required".to_string()))?;
-            
-        let arguments = pairs.iter()
+
+        let arguments = pairs
+            .iter()
             .find(|(k, _)| k == "arguments")
             .map(|(_, v)| v.clone())
             .unwrap_or(Value::Map(std::collections::HashMap::new()));
-            
-        let auth_token = pairs.iter()
+
+        let auth_token = pairs
+            .iter()
             .find(|(k, _)| k == "auth-token")
             .and_then(|(_, v)| v.as_string());
 
@@ -1529,7 +1673,7 @@ impl CapabilityRegistry {
         let mut error_map = std::collections::HashMap::new();
         error_map.insert(
             MapKey::Keyword(crate::ast::Keyword("status".to_string())),
-            Value::String("not_implemented".to_string())
+            Value::String("not_implemented".to_string()),
         );
         error_map.insert(
             MapKey::Keyword(crate::ast::Keyword("message".to_string())),
@@ -1537,13 +1681,13 @@ impl CapabilityRegistry {
         );
         error_map.insert(
             MapKey::Keyword(crate::ast::Keyword("server-url".to_string())),
-            Value::String(server_url.to_string())
+            Value::String(server_url.to_string()),
         );
         error_map.insert(
             MapKey::Keyword(crate::ast::Keyword("tool-name".to_string())),
-            Value::String(tool_name.to_string())
+            Value::String(tool_name.to_string()),
         );
-        
+
         Ok(Value::Map(error_map))
     }
 

@@ -97,6 +97,33 @@ pub struct CapabilityManifest {
     pub agent_metadata: Option<AgentMetadata>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenApiCapability {
+    pub base_url: String,
+    pub spec_url: Option<String>,
+    pub operations: Vec<OpenApiOperation>,
+    pub auth: Option<OpenApiAuth>,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenApiOperation {
+    pub operation_id: Option<String>,
+    pub method: String,
+    pub path: String,
+    pub summary: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenApiAuth {
+    pub auth_type: String,
+    pub location: String,
+    pub parameter_name: String,
+    pub env_var_name: Option<String>,
+    pub required: bool,
+}
+
 /// Metadata flags to distinguish agents from capabilities in the unified model
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentMetadata {
@@ -678,6 +705,7 @@ pub enum ProviderType {
     Http(HttpCapability),
     MCP(MCPCapability),
     A2A(A2ACapability),
+    OpenApi(OpenApiCapability),
     Plugin(PluginCapability),
     RemoteRTFS(RemoteRTFSCapability),
     Stream(StreamCapabilityImpl),
@@ -770,7 +798,8 @@ pub struct CapabilityMarketplace {
     pub(crate) debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
     /// Optional session pool for stateful capabilities (generic, provider-agnostic)
     /// Uses RwLock for interior mutability since marketplace is wrapped in Arc
-    pub(crate) session_pool: Arc<RwLock<Option<Arc<crate::ccos::capabilities::SessionPoolManager>>>>,
+    pub(crate) session_pool:
+        Arc<RwLock<Option<Arc<crate::ccos::capabilities::SessionPoolManager>>>>,
 }
 
 /// Trait for capability discovery providers

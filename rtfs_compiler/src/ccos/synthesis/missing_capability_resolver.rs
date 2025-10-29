@@ -11,13 +11,30 @@ use crate::ccos::capability_marketplace::types::{
 };
 use crate::ccos::capability_marketplace::CapabilityMarketplace;
 use crate::ccos::checkpoint_archive::CheckpointArchive;
-use crate::ccos::synthesis::feature_flags::{FeatureFlagChecker, MissingCapabilityConfig};
 use crate::ccos::synthesis::capability_synthesizer::{
-    CapabilitySynthesizer, MultiCapabilitySynthesisRequest, MultiCapabilityEndpoint,
+    CapabilitySynthesizer, MultiCapabilityEndpoint, MultiCapabilitySynthesisRequest,
+};
+use crate::ccos::synthesis::feature_flags::{FeatureFlagChecker, MissingCapabilityConfig};
+use crate::ccos::synthesis::server_trust::{
+    create_default_trust_registry, ServerCandidate, ServerSelectionHandler, ServerTrustRegistry,
 };
 use crate::runtime::error::{RuntimeError, RuntimeResult};
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
+
+/// Curated overrides file format for MCP server discovery
+#[derive(Debug, Clone, Deserialize)]
+struct CuratedOverrides {
+    pub entries: Vec<CuratedEntry>,
+}
+
+/// One curated entry with match patterns and the MCP server descriptor
+#[derive(Debug, Clone, Deserialize)]
+struct CuratedEntry {
+    pub matches: Vec<String>,
+    pub server: crate::ccos::synthesis::mcp_registry_client::McpServer,
+}
 
 /// Represents a missing capability that needs resolution
 #[derive(Debug, Clone)]
@@ -140,9 +157,7 @@ impl MissingCapabilityQueue {
             } => {
                 // Remove from in_progress, will be retried later
                 self.in_progress.remove(capability_id);
-
                 // If retry_after is specified, we could implement a delayed retry mechanism
-                // For now, we'll just remove from in_progress and let it be re-queued
             }
             ResolutionResult::Resolved { .. } => {
                 // Successfully resolved, remove from failed_resolutions if present
@@ -186,6 +201,8 @@ pub struct MissingCapabilityResolver {
     config: ResolverConfig,
     /// Feature flag checker for controlling system behavior
     feature_checker: FeatureFlagChecker,
+    /// Server trust registry for managing server trust and user interaction
+    trust_registry: ServerTrustRegistry,
 }
 
 /// Configuration for the missing capability resolver
@@ -210,6 +227,13 @@ impl Default for ResolverConfig {
 }
 
 impl MissingCapabilityResolver {
+    /// Normalize capability IDs by trimming whitespace and stray quotes
+    fn normalize_capability_id(input: &str) -> String {
+        // First trim surrounding whitespace, then strip surrounding quotes,
+        // then trim again to remove any whitespace that was inside quotes.
+        input.trim().trim_matches('"').trim().to_string()
+    }
+
     /// Create a new missing capability resolver
     pub fn new(
         marketplace: Arc<CapabilityMarketplace>,
@@ -223,6 +247,25 @@ impl MissingCapabilityResolver {
             checkpoint_archive,
             config,
             feature_checker: FeatureFlagChecker::new(feature_config),
+            trust_registry: create_default_trust_registry(),
+        }
+    }
+
+    /// Create a new missing capability resolver with custom trust registry
+    pub fn with_trust_registry(
+        marketplace: Arc<CapabilityMarketplace>,
+        checkpoint_archive: Arc<CheckpointArchive>,
+        config: ResolverConfig,
+        feature_config: MissingCapabilityConfig,
+        trust_registry: ServerTrustRegistry,
+    ) -> Self {
+        Self {
+            queue: Arc::new(Mutex::new(MissingCapabilityQueue::new())),
+            marketplace,
+            checkpoint_archive,
+            config,
+            feature_checker: FeatureFlagChecker::new(feature_config),
+            trust_registry,
         }
     }
 
@@ -233,9 +276,10 @@ impl MissingCapabilityResolver {
         arguments: Vec<crate::runtime::values::Value>,
         context: HashMap<String, String>,
     ) -> RuntimeResult<()> {
+        let normalized_id = Self::normalize_capability_id(&capability_id);
         eprintln!(
             "🔍 HANDLE MISSING: Attempting to handle missing capability '{}'",
-            capability_id
+            normalized_id
         );
 
         // Check if missing capability resolution is enabled
@@ -251,7 +295,7 @@ impl MissingCapabilityResolver {
 
         eprintln!("✅ HANDLE MISSING: Feature is enabled, proceeding with queue");
         let request = MissingCapabilityRequest {
-            capability_id: capability_id.clone(),
+            capability_id: normalized_id.clone(),
             arguments,
             context,
             requested_at: std::time::SystemTime::now(),
@@ -266,12 +310,12 @@ impl MissingCapabilityResolver {
         if self.config.verbose_logging {
             eprintln!(
                 "🔍 MISSING CAPABILITY: Added '{}' to resolution queue",
-                capability_id
+                normalized_id
             );
         }
 
         // Emit audit event for missing capability
-        self.emit_missing_capability_audit(&capability_id)?;
+        self.emit_missing_capability_audit(&normalized_id)?;
 
         Ok(())
     }
@@ -282,56 +326,57 @@ impl MissingCapabilityResolver {
         request: &MissingCapabilityRequest,
     ) -> RuntimeResult<ResolutionResult> {
         let capability_id = &request.capability_id;
-
-        // Check if auto-resolution is enabled
-        if !self.feature_checker.is_auto_resolution_enabled() {
-            return Ok(ResolutionResult::Failed {
-                capability_id: capability_id.clone(),
-                reason: "Auto-resolution is disabled".to_string(),
-                retry_after: None,
-            });
-        }
+        let capability_id_normalized = Self::normalize_capability_id(capability_id);
 
         eprintln!(
             "🔍 RESOLVING: Attempting to resolve capability '{}'",
-            capability_id
+            capability_id_normalized
         );
 
-        // Phase 2: Marketplace Discovery
-        // Check if capability already exists in marketplace (race condition check)
+        // Phase 1: Cheap race-condition check against marketplace
+        // Always perform this, even when auto-resolution is disabled.
         {
             let capabilities = self.marketplace.capabilities.read().await;
             eprintln!(
                 "🔍 DEBUG: Checking marketplace for '{}' - found {} capabilities",
-                capability_id,
+                capability_id_normalized,
                 capabilities.len()
             );
-            if capabilities.contains_key(capability_id) {
+            if capabilities.contains_key(&capability_id_normalized) {
                 eprintln!(
                     "✅ RESOLUTION: Capability '{}' already exists in marketplace",
-                    capability_id
+                    capability_id_normalized
                 );
                 return Ok(ResolutionResult::Resolved {
-                    capability_id: capability_id.clone(),
+                    capability_id: capability_id_normalized.clone(),
                     resolution_method: "marketplace_found".to_string(),
                     provider_info: Some("already_registered".to_string()),
                 });
             }
             eprintln!(
                 "✅ Capability '{}' is missing from marketplace - proceeding with discovery",
-                capability_id
+                capability_id_normalized
             );
+        }
+
+        // Phase 2: Fan-out discovery requires auto-resolution to be enabled
+        if !self.feature_checker.is_auto_resolution_enabled() {
+            return Ok(ResolutionResult::Failed {
+                capability_id: capability_id_normalized.clone(),
+                reason: "Auto-resolution is disabled".to_string(),
+                retry_after: None,
+            });
         }
 
         // Try to find similar capabilities using marketplace discovery
         eprintln!(
             "🔍 DISCOVERY: Starting discovery for capability '{}'",
-            capability_id
+            capability_id_normalized
         );
-        let discovery_result = self.discover_capability(capability_id).await?;
+        let discovery_result = self.discover_capability(&capability_id_normalized).await?;
         eprintln!(
             "🔍 DISCOVERY: Discovery result for '{}': {:?}",
-            capability_id,
+            capability_id_normalized,
             discovery_result.is_some()
         );
 
@@ -339,7 +384,7 @@ impl MissingCapabilityResolver {
             Some(manifest) => {
                 eprintln!(
                     "✅ DISCOVERY: Successfully discovered capability '{}'",
-                    capability_id
+                    capability_id_normalized
                 );
                 // Register the discovered capability
                 self.marketplace
@@ -347,11 +392,11 @@ impl MissingCapabilityResolver {
                     .await?;
 
                 // Trigger auto-resume for any checkpoints waiting for this capability
-                self.trigger_auto_resume_for_capability(capability_id)
+                self.trigger_auto_resume_for_capability(&capability_id_normalized)
                     .await?;
 
                 Ok(ResolutionResult::Resolved {
-                    capability_id: capability_id.clone(),
+                    capability_id: capability_id_normalized.clone(),
                     resolution_method: "marketplace_discovery".to_string(),
                     provider_info: Some(format!("{:?}", manifest.provider)),
                 })
@@ -359,7 +404,7 @@ impl MissingCapabilityResolver {
             None => {
                 // No capability found through discovery
                 Ok(ResolutionResult::Failed {
-                    capability_id: capability_id.clone(),
+                    capability_id: capability_id_normalized.clone(),
                     reason: "No matching capability found through discovery".to_string(),
                     retry_after: Some(std::time::Duration::from_secs(60)), // Retry in 1 minute
                 })
@@ -438,11 +483,10 @@ impl MissingCapabilityResolver {
             capabilities.keys().collect::<Vec<_>>()
         );
 
-        if let Some(manifest) = capabilities.get(capability_id) {
-            eprintln!(
-                "🔍 DISCOVERY: Found exact match in marketplace: '{}'",
-                capability_id
-            );
+        // Normalize the lookup key to avoid trailing/leading whitespace mismatches
+        let key = capability_id.trim().trim_matches('"');
+        if let Some(manifest) = capabilities.get(key) {
+            eprintln!("🔍 DISCOVERY: Found exact match in marketplace: '{}'", key);
             return Ok(Some(manifest.clone()));
         }
         eprintln!("🔍 DEBUG: No exact match found for '{}'", capability_id);
@@ -537,7 +581,7 @@ impl MissingCapabilityResolver {
         let registry_client = crate::ccos::synthesis::mcp_registry_client::McpRegistryClient::new();
 
         // Try semantic search first if the query looks like a description
-        let servers = if self.is_semantic_query(capability_id) {
+        let mut servers = if self.is_semantic_query(capability_id) {
             eprintln!(
                 "🔍 SEMANTIC SEARCH: Detected semantic query '{}'",
                 capability_id
@@ -552,6 +596,23 @@ impl MissingCapabilityResolver {
                 .await?
         };
 
+        // Augment with curated overrides provided by the user (if any)
+        let curated = self.load_curated_overrides_for(capability_id)?;
+        if !curated.is_empty() {
+            if self.config.verbose_logging {
+                eprintln!(
+                    "📦 DISCOVERY: Loaded {} curated MCP server override(s) for '{}'",
+                    curated.len(),
+                    capability_id
+                );
+            }
+            servers.extend(curated);
+        } else if self.config.verbose_logging {
+            eprintln!(
+                "ℹ️  DISCOVERY: No curated overrides found (capabilities/mcp/overrides.json)."
+            );
+        }
+
         // Process the servers
         if self.config.verbose_logging {
             eprintln!(
@@ -564,34 +625,99 @@ impl MissingCapabilityResolver {
         // Rank and filter servers
         let ranked_servers = self.rank_mcp_servers(capability_id, servers);
 
+        if self.config.verbose_logging && !ranked_servers.is_empty() {
+            eprintln!(
+                "📊 DISCOVERY: Ranked {} server(s) with score >= 0.3 for '{}'",
+                ranked_servers.len(),
+                capability_id
+            );
+            if ranked_servers.len() <= 5 {
+                for (i, ranked) in ranked_servers.iter().enumerate() {
+                    eprintln!(
+                        "   {}. {} (score: {:.2})",
+                        i + 1,
+                        ranked.server.name,
+                        ranked.score
+                    );
+                }
+            }
+        }
+
         if ranked_servers.is_empty() {
             if self.config.verbose_logging {
                 eprintln!(
                     "❌ DISCOVERY: No suitable MCP servers found for '{}'",
                     capability_id
                 );
+                eprintln!(
+                    "💡 TIP: If you know the official server for this capability, you can add it to 'capabilities/mcp/overrides.json' so it's considered during discovery."
+                );
             }
             return Ok(None);
         }
 
-        // If multiple good options, ask user to choose
-        let selected_server = if ranked_servers.len() > 1 {
-            self.interactive_server_selection(capability_id, &ranked_servers)
-                .await?
-        } else {
-            &ranked_servers[0]
-        };
+        // Convert ranked servers to candidates for trust-based selection
+        let candidates: Vec<ServerCandidate> = ranked_servers
+            .iter()
+            .map(|ranked| {
+                let domain = self.extract_domain_from_server_name(&ranked.server.name);
+                let repository_url = ranked
+                    .server
+                    .repository
+                    .as_ref()
+                    .map(|repo| repo.url.clone())
+                    .unwrap_or_else(|| "".to_string());
+
+                ServerCandidate::new(
+                    domain,
+                    ranked.server.name.clone(),
+                    ranked.server.description.clone(),
+                )
+                .with_repository(repository_url)
+                .with_score(ranked.score)
+            })
+            .collect();
+
+        // Use trust-based server selection
+        let mut selection_handler = ServerSelectionHandler::new(self.trust_registry.clone());
+        let selection_result = selection_handler
+            .select_server(capability_id, candidates)
+            .await?;
+
+        // Find the selected server from ranked servers; if not found, reload curated overrides (user may have added one)
+        let mut selected_server_opt: Option<
+            crate::ccos::synthesis::mcp_registry_client::McpServer,
+        > = ranked_servers
+            .iter()
+            .find(|ranked| {
+                self.extract_domain_from_server_name(&ranked.server.name)
+                    == selection_result.selected_domain
+            })
+            .map(|r| r.server.clone());
+
+        if selected_server_opt.is_none() {
+            // Try curated overrides again to include any newly added entry during interaction
+            if let Ok(curated_again) = self.load_curated_overrides_for(capability_id) {
+                selected_server_opt = curated_again.into_iter().find(|srv| {
+                    self.extract_domain_from_server_name(&srv.name)
+                        == selection_result.selected_domain
+                });
+            }
+        }
+
+        let selected_server = selected_server_opt.ok_or_else(|| {
+            RuntimeError::Generic("Selected server not found in candidates".to_string())
+        })?;
 
         if self.config.verbose_logging {
             eprintln!(
                 "✅ DISCOVERY: Selected MCP server '{}' for capability '{}'",
-                selected_server.server.name, capability_id
+                selected_server.name, capability_id
             );
         }
 
         // Convert MCP server to CCOS capability manifest
-        match registry_client.convert_to_capability_manifest(&selected_server.server, capability_id)
-        {
+        match registry_client.convert_to_capability_manifest(&selected_server, capability_id) {
             Ok(manifest) => return Ok(Some(manifest)),
             Err(e) => {
                 if self.config.verbose_logging {
@@ -685,6 +811,42 @@ impl MissingCapabilityResolver {
         // Bonus for official/well-known providers (generic pattern matching)
         if self.is_official_provider(&name_lower, &requested_lower) {
             score += 2.0;
+        }
+
+        // Additional boost for servers that look official/curated based on repository or packages
+        if requested_lower.contains("github") {
+            // Repository URL pointing to GitHub orgs that likely indicate officialness
+            if let Some(repo) = &server.repository {
+                let repo_url_lower = repo.url.to_lowercase();
+                if repo_url_lower.contains("github.com") {
+                    // Mild boost for any GitHub-hosted repo
+                    score += 1.0;
+                    // Extra boost if under the github org or clearly official
+                    if repo_url_lower.contains("github.com/github/") {
+                        score += 1.0;
+                    }
+                }
+            }
+
+            // NPM packages under @github scope or identifiers containing github
+            if let Some(packages) = &server.packages {
+                if packages
+                    .iter()
+                    .any(|p| p.identifier.to_lowercase().starts_with("@github/"))
+                {
+                    score += 1.0;
+                } else if packages
+                    .iter()
+                    .any(|p| p.identifier.to_lowercase().contains("github"))
+                {
+                    score += 0.5;
+                }
+            }
+
+            // Name hints like "mcp" and provider name
+            if name_lower.contains("mcp") {
+                score += 0.5;
+            }
         }
 
         // Normalize score to 0-1 range
@@ -796,32 +958,97 @@ impl MissingCapabilityResolver {
         Ok(unique_servers)
     }
 
-    /// Interactive server selection when multiple good options are available
-    async fn interactive_server_selection<'a>(
+    /// Extract domain from server name (fallback when URL is not available)
+    fn extract_domain_from_server_name(&self, name: &str) -> String {
+        // Try to extract domain from server name patterns
+        // e.g., "ai.smithery/Hint-Services-obsidian-github-mcp" -> "ai.smithery"
+        if let Some(slash_pos) = name.find('/') {
+            name[..slash_pos].to_string()
+        } else if let Some(dot_pos) = name.find('.') {
+            // If it contains dots, use the first part
+            name[..dot_pos].to_string()
+        } else {
+            // Fallback to the full name
+            name.to_string()
+        }
+    }
+
+    /// Load curated MCP server overrides from a local JSON file and select those matching the capability id
+    fn load_curated_overrides_for(
         &self,
         capability_id: &str,
-        ranked_servers: &'a [RankedMcpServer],
-    ) -> RuntimeResult<&'a RankedMcpServer> {
-        println!("\n🔍 Multiple MCP servers found for '{}':", capability_id);
-        println!("Please select the most appropriate one:\n");
+    ) -> RuntimeResult<Vec<crate::ccos::synthesis::mcp_registry_client::McpServer>> {
+        use std::fs;
+        use std::path::Path;
 
-        for (i, ranked) in ranked_servers.iter().enumerate() {
-            let server = &ranked.server;
-            println!("{}. {} (Score: {:.2})", i + 1, server.name, ranked.score);
-            println!("   Description: {}", server.description);
-            if let Some(ref repository) = server.repository {
-                println!("   Repository: {:?}", repository);
-            }
-            println!();
+        let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        // Try workspace root 'capabilities/mcp/overrides.json'. If we are inside rtfs_compiler, go up one level
+        let overrides_path = if root.ends_with("rtfs_compiler") {
+            root.parent()
+                .unwrap_or(&root)
+                .join("capabilities/mcp/overrides.json")
+        } else {
+            root.join("capabilities/mcp/overrides.json")
+        };
+
+        if !Path::new(&overrides_path).exists() {
+            return Ok(Vec::new());
         }
 
-        // For now, return the highest scored server
-        // TODO: Implement actual user input in a real CLI environment
-        println!(
-            "🤖 Auto-selecting highest scored server: {}",
-            ranked_servers[0].server.name
-        );
-        Ok(&ranked_servers[0])
+        let content = fs::read_to_string(&overrides_path).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to read curated overrides file '{}': {}",
+                overrides_path.display(),
+                e
+            ))
+        })?;
+
+        let parsed: CuratedOverrides = serde_json::from_str(&content).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to parse curated overrides JSON '{}': {}",
+                overrides_path.display(),
+                e
+            ))
+        })?;
+
+        let mut matched = Vec::new();
+        for entry in parsed.entries.iter() {
+            if entry
+                .matches
+                .iter()
+                .any(|pat| Self::pattern_match(pat, capability_id))
+            {
+                matched.push(entry.server.clone());
+            }
+        }
+
+        Ok(matched)
+    }
+
+    /// Simple wildcard pattern matching supporting:
+    /// - exact match
+    /// - suffix '*' (prefix match)
+    /// - '*' anywhere (contains match)
+    fn pattern_match(pattern: &str, text: &str) -> bool {
+        if pattern == text {
+            return true;
+        }
+        if let Some(idx) = pattern.find('*') {
+            let (pre, post) = pattern.split_at(idx);
+            let post = &post[1..];
+            if pre.is_empty() && post.is_empty() {
+                return true;
+            }
+            let starts_ok = pre.is_empty() || text.starts_with(pre);
+            let ends_ok = post.is_empty() || text.ends_with(post);
+            if starts_ok && ends_ok {
+                return true;
+            }
+            // Fallback contains when '*' in middle
+            let needle = format!("{}{}", pre, post);
+            return text.contains(&needle);
+        }
+        false
     }
 
     fn is_capability_match(
@@ -968,13 +1195,16 @@ impl MissingCapabilityResolver {
         }
 
         let base_url = Self::infer_base_url(url);
-        
+
         // Try multi-capability synthesis first for APIs that support it
-        if let Ok(Some(multi_manifests)) = self.attempt_multi_capability_synthesis(
-            capability_id,
-            &format!("API documentation from {}", url),
-            &base_url,
-        ).await {
+        if let Ok(Some(multi_manifests)) = self
+            .attempt_multi_capability_synthesis(
+                capability_id,
+                &format!("API documentation from {}", url),
+                &base_url,
+            )
+            .await
+        {
             if self.config.verbose_logging {
                 eprintln!(
                     "✅ DISCOVERY: Multi-capability synthesis generated {} capabilities",
@@ -1442,6 +1672,17 @@ impl MissingCapabilityResolver {
         queue.stats()
     }
 
+    /// List capability IDs currently pending in the resolution queue
+    pub fn list_pending_capabilities(&self) -> Vec<String> {
+        let queue = self.queue.lock().unwrap();
+        // Collect IDs from the queue in FIFO order without consuming it
+        queue
+            .queue
+            .iter()
+            .map(|req| req.capability_id.clone())
+            .collect()
+    }
+
     /// Get the checkpoint archive reference
     pub fn get_checkpoint_archive(&self) -> &Arc<CheckpointArchive> {
         &self.checkpoint_archive
@@ -1581,7 +1822,9 @@ impl MissingCapabilityResolver {
         // Check if this looks like a multi-endpoint API
         if !self.should_use_multi_capability_synthesis(capability_id, api_docs) {
             if self.config.verbose_logging {
-                eprintln!("🔧 MULTI-CAPABILITY: Skipping multi-capability synthesis - not suitable");
+                eprintln!(
+                    "🔧 MULTI-CAPABILITY: Skipping multi-capability synthesis - not suitable"
+                );
             }
             return Ok(None);
         }
@@ -1647,9 +1890,22 @@ impl MissingCapabilityResolver {
                             output_schema: None,
                         }
                     };
-                    
-                    self.save_multi_capability_with_code(&cap_result.capability, &cap_result.implementation_code, base_url, endpoint).await?;
-                    manifests.push(cap_result.capability);
+                    let mut capability_manifest = cap_result.capability;
+                    let storage_path = self
+                        .save_multi_capability_with_code(
+                            &capability_manifest,
+                            &cap_result.implementation_code,
+                            base_url,
+                            endpoint,
+                        )
+                        .await?;
+
+                    capability_manifest.metadata.insert(
+                        "storage_path".to_string(),
+                        storage_path.display().to_string(),
+                    );
+
+                    manifests.push(capability_manifest);
                 }
 
                 Ok(Some(manifests))
@@ -1675,20 +1931,34 @@ impl MissingCapabilityResolver {
 
         // Check for common multi-endpoint API patterns
         let multi_endpoint_indicators = [
-            "weather", "forecast", "current", "historical", "geocoding",
-            "users", "posts", "comments", "auth", "profile",
-            "search", "filter", "sort", "paginate"
+            "weather",
+            "forecast",
+            "current",
+            "historical",
+            "geocoding",
+            "users",
+            "posts",
+            "comments",
+            "auth",
+            "profile",
+            "search",
+            "filter",
+            "sort",
+            "paginate",
         ];
 
         // Check if API docs mention multiple endpoints
         let has_multiple_endpoints = multi_endpoint_indicators
             .iter()
-            .filter(|indicator| docs_lower.contains(*indicator) || capability_lower.contains(*indicator))
-            .count() >= 2;
+            .filter(|indicator| {
+                docs_lower.contains(*indicator) || capability_lower.contains(*indicator)
+            })
+            .count()
+            >= 2;
 
         // Check for common API patterns that suggest multiple capabilities
-        let has_api_patterns = docs_lower.contains("api") 
-            && (docs_lower.contains("endpoint") 
+        let has_api_patterns = docs_lower.contains("api")
+            && (docs_lower.contains("endpoint")
                 || docs_lower.contains("service")
                 || docs_lower.contains("resource"));
 
@@ -1696,13 +1966,20 @@ impl MissingCapabilityResolver {
     }
 
     /// Infer endpoints from API documentation
-    fn infer_endpoints_from_docs(&self, api_docs: &str, capability_id: &str) -> Vec<MultiCapabilityEndpoint> {
+    fn infer_endpoints_from_docs(
+        &self,
+        api_docs: &str,
+        capability_id: &str,
+    ) -> Vec<MultiCapabilityEndpoint> {
         let mut endpoints = Vec::new();
         let docs_lower = api_docs.to_lowercase();
         let capability_lower = capability_id.to_lowercase();
 
         // Weather API patterns - always generate for weather APIs
-        if capability_lower.contains("weather") || capability_lower.contains("openweather") || docs_lower.contains("weather") {
+        if capability_lower.contains("weather")
+            || capability_lower.contains("openweather")
+            || docs_lower.contains("weather")
+        {
             // Current weather endpoint
             endpoints.push(MultiCapabilityEndpoint {
                 capability_suffix: "current".to_string(),
@@ -1791,7 +2068,7 @@ impl MissingCapabilityResolver {
     /// Detect if authentication is required
     fn detect_auth_requirement(&self, api_docs: &str) -> bool {
         let docs_lower = api_docs.to_lowercase();
-        docs_lower.contains("api key") 
+        docs_lower.contains("api key")
             || docs_lower.contains("authentication")
             || docs_lower.contains("bearer")
             || docs_lower.contains("token")
@@ -1800,7 +2077,7 @@ impl MissingCapabilityResolver {
     /// Infer authentication provider
     fn infer_auth_provider(&self, capability_id: &str) -> Option<String> {
         let capability_lower = capability_id.to_lowercase();
-        
+
         if capability_lower.contains("openweather") {
             Some("openweathermap".to_string())
         } else if capability_lower.contains("github") {
@@ -1822,9 +2099,13 @@ impl MissingCapabilityResolver {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
                 // Get the project root directory (parent of rtfs_compiler)
-                let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let current_dir =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 if current_dir.ends_with("rtfs_compiler") {
-                    current_dir.parent().unwrap_or(&current_dir).join("capabilities")
+                    current_dir
+                        .parent()
+                        .unwrap_or(&current_dir)
+                        .join("capabilities")
                 } else {
                     current_dir.join("capabilities")
                 }
@@ -1876,10 +2157,7 @@ impl MissingCapabilityResolver {
         })?;
 
         if self.config.verbose_logging {
-            eprintln!(
-                "💾 MULTI-CAPABILITY: Saved capability: {}",
-                manifest.id
-            );
+            eprintln!("💾 MULTI-CAPABILITY: Saved capability: {}", manifest.id);
         }
 
         Ok(())
@@ -1897,11 +2175,11 @@ impl MissingCapabilityResolver {
                         if let Some(prop_type) = prop.get("type") {
                             let rtfs_type = match prop_type.as_str().unwrap_or("string") {
                                 "string" => ":string",
-                                "number" => ":number", 
+                                "number" => ":number",
                                 "boolean" => ":boolean",
                                 "array" => ":vector",
                                 "object" => ":map",
-                                _ => ":any"
+                                _ => ":any",
                             };
                             rtfs_props.push(format!(":{} {}", key, rtfs_type));
                         }
@@ -1915,7 +2193,7 @@ impl MissingCapabilityResolver {
                     ":any".to_string()
                 }
             }
-            None => ":any".to_string()
+            None => ":any".to_string(),
         }
     }
 
@@ -1926,14 +2204,18 @@ impl MissingCapabilityResolver {
         implementation_code: &str,
         base_url: &str,
         endpoint: &MultiCapabilityEndpoint,
-    ) -> RuntimeResult<()> {
+    ) -> RuntimeResult<std::path::PathBuf> {
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
                 // Get the project root directory (parent of rtfs_compiler)
-                let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let current_dir =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 if current_dir.ends_with("rtfs_compiler") {
-                    current_dir.parent().unwrap_or(&current_dir).join("capabilities")
+                    current_dir
+                        .parent()
+                        .unwrap_or(&current_dir)
+                        .join("capabilities")
                 } else {
                     current_dir.join("capabilities")
                 }
@@ -1987,12 +2269,13 @@ impl MissingCapabilityResolver {
 
         if self.config.verbose_logging {
             eprintln!(
-                "💾 MULTI-CAPABILITY: Saved capability with RTFS implementation: {}",
-                manifest.id
+                "💾 MULTI-CAPABILITY: Saved capability with RTFS implementation: {} ({})",
+                manifest.id,
+                capability_file.display()
             );
         }
 
-        Ok(())
+        Ok(capability_file)
     }
 }
 
@@ -2061,5 +2344,76 @@ mod tests {
 
         let stats = resolver.get_stats();
         assert_eq!(stats.pending_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_capability_id_normalization_on_resolution() {
+        use crate::ccos::capability_marketplace::types::{
+            CapabilityManifest, LocalCapability, ProviderType,
+        };
+        use crate::runtime::values::Value;
+
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+        let checkpoint_archive = Arc::new(CheckpointArchive::new());
+
+        // Register a capability with a clean ID
+        let cap_id = "synth.domain.generated.capability.v1".to_string();
+        let manifest = CapabilityManifest {
+            id: cap_id.clone(),
+            name: "Test Generated Capability".to_string(),
+            description: "Test manifest for normalization".to_string(),
+            version: "1.0.0".to_string(),
+            provider: ProviderType::Local(LocalCapability {
+                handler: Arc::new(|_args| Ok(Value::String("ok".to_string()))),
+            }),
+            input_schema: None,
+            output_schema: None,
+            attestation: None,
+            provenance: None,
+            permissions: vec![],
+            effects: vec![],
+            metadata: std::collections::HashMap::new(),
+            agent_metadata: None,
+        };
+        marketplace
+            .register_capability_manifest(manifest)
+            .await
+            .unwrap();
+
+        let mut test_cfg = MissingCapabilityConfig::default();
+        test_cfg.feature_flags = MissingCapabilityFeatureFlags::testing();
+        let resolver = MissingCapabilityResolver::new(
+            Arc::clone(&marketplace),
+            checkpoint_archive,
+            ResolverConfig {
+                verbose_logging: true,
+                ..ResolverConfig::default()
+            },
+            test_cfg,
+        );
+
+        // Create a request with trailing whitespace/newline and quotes
+        let request = MissingCapabilityRequest {
+            capability_id: format!("\"{}\n\"", cap_id),
+            arguments: vec![],
+            context: HashMap::new(),
+            requested_at: std::time::SystemTime::now(),
+            attempt_count: 0,
+        };
+
+        // The resolver should normalize and detect the already-registered capability
+        let result = resolver.resolve_capability(&request).await.unwrap();
+        match result {
+            ResolutionResult::Resolved {
+                capability_id,
+                resolution_method,
+                ..
+            } => {
+                assert_eq!(capability_id, cap_id);
+                assert_eq!(resolution_method, "marketplace_found".to_string());
+            }
+            other => panic!("Expected Resolved, got: {:?}", other),
+        }
     }
 }

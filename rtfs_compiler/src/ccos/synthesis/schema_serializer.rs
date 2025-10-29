@@ -21,7 +21,7 @@ pub fn type_expr_to_rtfs_compact(expr: &TypeExpr) -> String {
 /// - Multiline formatting for readability
 ///
 /// # Example
-/// ```
+/// ```rtfs
 /// {
 ///   :userId :string
 ///   :expand :bool ;; optional
@@ -46,7 +46,7 @@ pub fn type_expr_to_rtfs_pretty(expr: &TypeExpr) -> String {
             }
 
             let mut map_parts = vec!["{".to_string()];
-            
+
             for entry in entries {
                 let key_str = &entry.key.0;
                 let value_str = type_expr_to_rtfs_pretty(&entry.value_type);
@@ -58,7 +58,10 @@ pub fn type_expr_to_rtfs_pretty(expr: &TypeExpr) -> String {
             }
 
             if let Some(wildcard_type) = wildcard {
-                map_parts.push(format!("    :* {}", type_expr_to_rtfs_pretty(wildcard_type)));
+                map_parts.push(format!(
+                    "    :* {}",
+                    type_expr_to_rtfs_pretty(wildcard_type)
+                ));
             }
 
             map_parts.push("  }".to_string());
@@ -123,4 +126,3 @@ mod tests {
         assert_eq!(type_expr_to_rtfs_pretty(&vec_type), "[:vector :int]");
     }
 }
-

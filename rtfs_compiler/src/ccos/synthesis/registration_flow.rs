@@ -314,9 +314,13 @@ impl RegistrationFlow {
             if let Some(capability) = self.marketplace.get_capability(&dependent_id).await {
                 // Re-evaluate the capability's dependencies
                 if let Some(deps) = capability.metadata.get("needs_capabilities") {
-                    let needed: Vec<&str> = deps.split(',').collect();
+                    let needed: Vec<String> = deps
+                        .split(',')
+                        .map(|s| s.trim().trim_matches('"').to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
                     let mut still_missing: Vec<String> = vec![];
-                    for &dep in &needed {
+                    for dep in &needed {
                         if !self.marketplace.has_capability(dep).await {
                             still_missing.push(dep.to_string());
                         }
@@ -361,8 +365,12 @@ impl RegistrationFlow {
 
         for capability in capabilities {
             if let Some(deps) = capability.metadata.get("needs_capabilities") {
-                let needed: Vec<&str> = deps.split(',').collect();
-                if needed.contains(&capability_id) {
+                let needed: Vec<String> = deps
+                    .split(',')
+                    .map(|s| s.trim().trim_matches('"').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if needed.iter().any(|dep| dep == capability_id) {
                     dependents.push(capability.id.clone());
                 }
             }

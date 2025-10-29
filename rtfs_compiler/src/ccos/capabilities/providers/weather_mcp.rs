@@ -402,17 +402,16 @@ impl CapabilityProvider for WeatherMCPCapability {
         // Create a RuntimeContext from ExecutionContext (simplified)
         let runtime_context = RuntimeContext::controlled(vec!["weather.query".to_string()]);
 
-        // Execute the tool (this is a sync wrapper around async)
-        // In a real implementation, you'd want to use an async runtime properly
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to create async runtime: {}", e)))?;
-
-        let result = rt.block_on(async {
-            // Need to clone self for the async call since we can't move
-            let mut capability = self.clone();
-            capability
-                .call_tool(tool_name, &arguments, &runtime_context)
-                .await
+        // Execute the tool without creating a nested Tokio runtime.
+        let result = tokio::task::block_in_place(|| {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                // Need to clone self for the async call since we can't move
+                let mut capability = self.clone();
+                capability
+                    .call_tool(tool_name, &arguments, &runtime_context)
+                    .await
+            })
         })?;
 
         // Convert back to RuntimeValue

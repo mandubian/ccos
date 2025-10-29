@@ -29,10 +29,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load an MCP capability from file
     println!("📦 Loading MCP Capability from File");
     println!("-----------------------------------");
-    
+
     let capability_path = "capabilities/mcp/github/get_me.rtfs";
     println!("Loading: {}", capability_path);
-    
+
     match env.execute_file(capability_path) {
         Ok(ExecutionOutcome::Complete(_)) => {
             println!("✅ Capability loaded and registered");
@@ -50,44 +50,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Verify capability is registered in marketplace
     println!("🔍 Verifying Marketplace Registration");
     println!("-------------------------------------");
-    
+
     let marketplace = env.marketplace();
     let capabilities_future = marketplace.list_capabilities();
     let capabilities = futures::executor::block_on(capabilities_future);
-    
+
     let mcp_cap = capabilities.iter().find(|c| c.id == "mcp.github.get_me");
-    
+
     match mcp_cap {
         Some(cap) => {
             println!("✅ Capability found in marketplace: {}", cap.id);
             println!("   Name: {}", cap.name);
             println!("   Description: {}", cap.description);
             println!();
-            
+
             // Check metadata
             println!("📋 Metadata Analysis");
             println!("-------------------");
             println!("   Metadata entries: {}", cap.metadata.len());
-            
+
             // Check for session management metadata
             if let Some(requires_session) = cap.metadata.get("mcp_requires_session") {
                 println!("   ✅ mcp_requires_session: {}", requires_session);
             } else {
                 println!("   ⚠️  mcp_requires_session: NOT FOUND");
             }
-            
+
             if let Some(server_url) = cap.metadata.get("mcp_server_url") {
                 println!("   ✅ mcp_server_url: {}", server_url);
             } else {
                 println!("   ⚠️  mcp_server_url: NOT FOUND");
             }
-            
+
             if let Some(auth_env) = cap.metadata.get("mcp_auth_env_var") {
                 println!("   ✅ mcp_auth_env_var: {}", auth_env);
             } else {
                 println!("   ⚠️  mcp_auth_env_var: NOT FOUND");
             }
-            
+
             println!();
             println!("   All metadata keys:");
             for (key, value) in &cap.metadata {
@@ -110,7 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Now test calling the capability
     println!("🚀 Testing Capability Execution");
     println!("-------------------------------");
-    
+
     // Check if GITHUB_PAT is set
     let has_github_pat = std::env::var("GITHUB_PAT").is_ok();
     if !has_github_pat {
@@ -118,19 +118,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("   Set GITHUB_PAT environment variable to test with real API");
         println!();
     }
-    
+
     println!("Executing: (call \"mcp.github.get_me\")");
     println!();
-    
+
     let call_code = r#"
         (call "mcp.github.get_me" {})
     "#;
-    
+
     match env.execute_code(call_code) {
         Ok(ExecutionOutcome::Complete(result)) => {
             println!("✅ Capability executed successfully");
             println!();
-            
+
             let result_str = format!("{:?}", result);
             if result_str.contains("login") || result_str.contains("id") {
                 println!("🎉 SUCCESS! Got user data from GitHub API");
@@ -180,7 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   ├─ Metadata accessible via CapabilityManifest.metadata");
     println!("   └─ All session management keys present");
     println!();
-    
+
     if has_github_pat {
         println!("✅ Session Management Flow");
         println!("   ├─ Registry checks metadata for requires_session");
@@ -202,4 +202,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

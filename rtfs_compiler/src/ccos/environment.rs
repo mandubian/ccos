@@ -606,7 +606,8 @@ impl CCOSEnvironment {
         let session_pool = std::sync::Arc::new(session_pool);
 
         // Create and configure registry
-        let mut configured_registry = crate::ccos::capabilities::registry::CapabilityRegistry::new();
+        let mut configured_registry =
+            crate::ccos::capabilities::registry::CapabilityRegistry::new();
         configured_registry.set_marketplace(marketplace.clone());
         configured_registry.set_session_pool(session_pool.clone());
 
@@ -784,7 +785,8 @@ impl CCOSEnvironment {
                         let mut description: Option<String> = None;
                         let mut version: Option<String> = None;
                         let mut source_url: Option<String> = None;
-                        let mut flat_metadata: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+                        let mut flat_metadata: std::collections::HashMap<String, String> =
+                            std::collections::HashMap::new();
                         // Implementation program to execute at call time
                         let mut implementation_expr: Option<crate::ast::Expression> = None;
 
@@ -818,7 +820,11 @@ impl CCOSEnvironment {
                                     if let ExecutionOutcome::Complete(Value::Map(meta_map)) =
                                         evaluator.evaluate(&prop.value)?
                                     {
-                                        Self::flatten_metadata_map(&meta_map, "", &mut flat_metadata);
+                                        Self::flatten_metadata_map(
+                                            &meta_map,
+                                            "",
+                                            &mut flat_metadata,
+                                        );
                                     }
                                 }
                                 "implementation" => {
@@ -887,7 +893,7 @@ impl CCOSEnvironment {
 
                                 // Clone metadata for the async block
                                 let metadata_for_cap = flat_metadata.clone();
-                                
+
                                 let fut = async move {
                                     marketplace_for_cap
                                         .register_local_capability_with_metadata(
@@ -895,9 +901,9 @@ impl CCOSEnvironment {
                                             cap_name,
                                             cap_desc,
                                             handler,
-                                            None,  // input_schema (could be parsed from :input-schema)
-                                            None,  // output_schema (could be parsed from :output-schema)
-                                            metadata_for_cap,  // Generic metadata
+                                            None, // input_schema (could be parsed from :input-schema)
+                                            None, // output_schema (could be parsed from :output-schema)
+                                            metadata_for_cap, // Generic metadata
                                         )
                                         .await
                                         .map_err(|e| {
@@ -1374,17 +1380,17 @@ impl CCOSEnvironment {
     }
 
     /// Flatten nested metadata map into flat key-value pairs
-    /// 
+    ///
     /// Generic helper for parsing hierarchical capability metadata.
     /// Works for any provider (MCP, OpenAPI, GraphQL, etc.).
-    /// 
+    ///
     /// Example transformation:
-    /// ```
+    /// ```rtfs
     /// { :mcp { :server_url "https://..." :requires_session "auto" }
     ///   :discovery { :method "mcp_introspection" } }
     /// ```
     /// Becomes:
-    /// ```
+    /// ```text
     /// { "mcp_server_url" -> "https://..."
     ///   "mcp_requires_session" -> "auto"
     ///   "discovery_method" -> "mcp_introspection" }

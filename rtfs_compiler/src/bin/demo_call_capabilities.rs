@@ -34,8 +34,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("-----------------------");
 
     let capabilities = vec![
-        ("OpenWeather: Get Current Weather", "../capabilities/openapi/openweather/get_current_weather.rtfs"),
-        ("GitHub: List Issues", "../capabilities/mcp/github/list_issues.rtfs"),
+        (
+            "OpenWeather: Get Current Weather",
+            "../capabilities/openapi/openweather/get_current_weather.rtfs",
+        ),
+        (
+            "GitHub: List Issues",
+            "../capabilities/mcp/github/list_issues.rtfs",
+        ),
         ("GitHub: Get Me", "../capabilities/mcp/github/get_me.rtfs"),
     ];
 
@@ -64,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test 1: Call OpenWeather API
     println!("🌤️  Test 1: OpenWeather - Get Current Weather for Paris");
     println!("--------------------------------------------------------");
-    
+
     // Set API key if available
     if let Ok(key) = std::env::var("OPENWEATHERMAP_ORG_API_KEY") {
         std::env::set_var("OPENWEATHERMAP_ORG_API_KEY", key);
@@ -113,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test 2: Call GitHub MCP - Get Me
     println!("👤 Test 2: GitHub MCP - Get Current User");
     println!("-----------------------------------------");
-    
+
     // MCP capabilities can use custom server URL via environment variable
     if let Ok(url) = std::env::var("MCP_SERVER_URL") {
         println!("✅ MCP_SERVER_URL configured: {}", url);
@@ -121,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("ℹ️  MCP_SERVER_URL not set, using default: https://api.githubcopilot.com/mcp/");
         println!("   For local testing: export MCP_SERVER_URL=http://localhost:3000/mcp/github");
     }
-    
+
     if let Ok(token) = std::env::var("GITHUB_PAT") {
         std::env::set_var("GITHUB_PAT", token);
         println!("✅ GitHub PAT configured");
@@ -228,4 +234,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

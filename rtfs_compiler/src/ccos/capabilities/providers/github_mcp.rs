@@ -566,10 +566,12 @@ impl CapabilityProvider for GitHubMCPCapability {
             .ok_or_else(|| RuntimeError::Generic("Missing 'tool' parameter".to_string()))?;
         let arguments = &json_inputs["arguments"];
 
-        // Execute the tool
-        let result = tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(self.execute_tool(tool_name, arguments))?;
+        // Execute the tool without creating a nested Tokio runtime.
+        // Use the current runtime handle and block_in_place to avoid drop panics.
+        let result = tokio::task::block_in_place(|| {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(self.execute_tool(tool_name, arguments))
+        })?;
 
         // Convert JSON result back to RTFS Value
         self.json_to_runtime_value(&result)

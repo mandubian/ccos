@@ -1,0 +1,19 @@
+;; Exported capability snapshot (read-only)
+;; Generated at 2025-10-26T00:00:00Z
+
+(capability "sample.http.search"
+  :name "HTTP Search"
+  :version "1.0.0"
+  :description "A simple HTTP-based search capability"
+  :provider :http
+  :provider-meta {:base_url "https://api.example.com" :timeout_ms 30000 }
+  :metadata nil
+  :permissions [:http:request]
+  :effects [:network]
+  :input-schema :any
+  :output-schema :any
+  :implementation
+    (fn [input]
+      "Exported manifest only; runtime-managed execution"
+      input)
+)

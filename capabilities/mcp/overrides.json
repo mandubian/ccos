@@ -1,0 +1,82 @@
+{
+  "entries": [
+    {
+      "matches": [
+        "github.*",
+        "mcp.github.*",
+        "github.search_code"
+      ],
+      "server": {
+        "$schema": null,
+        "name": "github/github-mcp",
+        "description": "Official GitHub MCP Server",
+        "version": "1.0.0",
+        "repository": {
+          "url": "https://github.com/github/github-mcp",
+          "source": "github"
+        },
+        "packages": [
+          {
+            "registryType": "npm",
+            "identifier": "@github/github-mcp",
+            "version": "^1.0.0",
+            "registryBaseUrl": "https://registry.npmjs.org",
+            "runtimeHint": "node",
+            "transport": {
+              "type": "stdio"
+            },
+            "environmentVariables": [
+              {
+                "name": "GITHUB_TOKEN",
+                "description": null,
+                "isSecret": true,
+                "isRequired": true,
+                "format": null,
+                "default": null
+              }
+            ]
+          }
+        ],
+        "remotes": [
+          {
+            "type": "websocket",
+            "url": "wss://mcp.github.com",
+            "headers": [
+              {
+                "name": "Authorization",
+                "description": null,
+                "value": null,
+                "isSecret": true,
+                "isRequired": false
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "matches": [
+        "github.search_code",
+        "github.*"
+      ],
+      "server": {
+        "$schema": null,
+        "name": "github/git-mcp-test",
+        "description": "User-added MCP server for github.search_code",
+        "version": "1.0.0",
+        "repository": {
+          "url": "https://github.com/github/github-mcp",
+          "source": "github"
+        },
+        "packages": null,
+        "remotes": [
+          {
+            "type": "http",
+            "url": "https://github.com/github/github-mcp",
+            "headers": null
+          }
+        ]
+      }
+    }
+  ]
+}
