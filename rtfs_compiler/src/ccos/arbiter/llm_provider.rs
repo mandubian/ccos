@@ -15,6 +15,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap; // for validating reduced-grammar RTFS plans
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
+use sha2::{Digest, Sha256};
 
 /// Convert a HashMap<String, Value> into an RTFS map literal string.
 /// Example: {:k1 "v" :k2 123}
@@ -110,6 +113,108 @@ pub struct RetryMetrics {
     pub first_attempt_successes: AtomicU64,
     /// Number of first attempts that failed (required retry)
     pub first_attempt_failures: AtomicU64,
+}
+
+/// Captures summary details about a single LLM completion.
+struct LlmCompletion {
+    content: String,
+    prompt_hash: String,
+    response_hash: String,
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
+    total_tokens: Option<u32>,
+    latency_ms: u128,
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
+}
+
+fn clamp_latency_to_i64(latency_ms: u128) -> i64 {
+    latency_ms.min(i64::MAX as u128) as i64
+}
+
+fn attach_completion_metadata_to_intent(
+    intent: &mut StorableIntent,
+    config: &LlmProviderConfig,
+    completion: &LlmCompletion,
+) {
+    intent
+        .metadata
+        .insert("llm.prompt_hash".to_string(), completion.prompt_hash.clone());
+    intent
+        .metadata
+        .insert("llm.response_hash".to_string(), completion.response_hash.clone());
+    intent
+        .metadata
+        .insert("llm.model".to_string(), config.model.clone());
+    intent.metadata.insert(
+        "llm.provider".to_string(),
+        format!("{:?}", config.provider_type),
+    );
+    intent
+        .metadata
+        .insert("llm.latency_ms".to_string(), completion.latency_ms.to_string());
+    if let Some(tokens) = completion.prompt_tokens {
+        intent
+            .metadata
+            .insert("llm.prompt_tokens".to_string(), tokens.to_string());
+    }
+    if let Some(tokens) = completion.completion_tokens {
+        intent
+            .metadata
+            .insert("llm.completion_tokens".to_string(), tokens.to_string());
+    }
+    if let Some(tokens) = completion.total_tokens {
+        intent
+            .metadata
+            .insert("llm.total_tokens".to_string(), tokens.to_string());
+    }
+}
+
+fn attach_completion_metadata_to_plan(
+    plan: &mut Plan,
+    config: &LlmProviderConfig,
+    completion: &LlmCompletion,
+) {
+    plan.metadata.insert(
+        "llm.prompt_hash".to_string(),
+        Value::String(completion.prompt_hash.clone()),
+    );
+    plan.metadata.insert(
+        "llm.response_hash".to_string(),
+        Value::String(completion.response_hash.clone()),
+    );
+    plan.metadata
+        .insert("llm.model".to_string(), Value::String(config.model.clone()));
+    plan.metadata.insert(
+        "llm.provider".to_string(),
+        Value::String(format!("{:?}", config.provider_type)),
+    );
+    plan.metadata.insert(
+        "llm.latency_ms".to_string(),
+        Value::Integer(clamp_latency_to_i64(completion.latency_ms)),
+    );
+    if let Some(tokens) = completion.prompt_tokens {
+        plan.metadata.insert(
+            "llm.prompt_tokens".to_string(),
+            Value::Integer(tokens as i64),
+        );
+    }
+    if let Some(tokens) = completion.completion_tokens {
+        plan.metadata.insert(
+            "llm.completion_tokens".to_string(),
+            Value::Integer(tokens as i64),
+        );
+    }
+    if let Some(tokens) = completion.total_tokens {
+        plan.metadata.insert(
+            "llm.total_tokens".to_string(),
+            Value::Integer(tokens as i64),
+        );
+    }
 }
 
 impl RetryMetrics {
@@ -429,7 +534,10 @@ impl OpenAILlmProvider {
         None
     }
 
-    async fn make_request(&self, messages: Vec<OpenAIMessage>) -> Result<String, RuntimeError> {
+    async fn make_request(
+        &self,
+        messages: Vec<OpenAIMessage>,
+    ) -> Result<LlmCompletion, RuntimeError> {
         let api_key = self.config.api_key.as_ref().ok_or_else(|| {
             RuntimeError::Generic("API key required for OpenAI provider".to_string())
         })?;
@@ -447,34 +555,69 @@ impl OpenAILlmProvider {
             max_tokens: self.config.max_tokens,
             temperature: self.config.temperature,
         };
+        let payload_bytes = serde_json::to_vec(&request_body).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to serialize request body: {}", e))
+        })?;
+        let prompt_hash = sha256_hex(&payload_bytes);
 
-        let response = self
+        let mut request_builder = self
             .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&request_body)
+            .header("Content-Type", "application/json");
+
+        if base_url.contains("openrouter.ai") {
+            let referer = std::env::var("OPENROUTER_HTTP_REFERER")
+                .unwrap_or_else(|_| "https://github.com/mandubian/ccos".to_string());
+            let title = std::env::var("OPENROUTER_TITLE")
+                .unwrap_or_else(|_| "CCOS Smart Assistant Demo".to_string());
+            request_builder = request_builder
+                .header("HTTP-Referer", referer)
+                .header("X-Title", title);
+        }
+
+        let start = Instant::now();
+        let response = request_builder
+            .body(payload_bytes)
             .send()
             .await
             .map_err(|e| RuntimeError::Generic(format!("HTTP request failed: {}", e)))?;
+        let status = response.status();
+        let raw_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
 
-        if !response.status().is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+        if !status.is_success() {
             return Err(RuntimeError::Generic(format!(
                 "API request failed: {}",
-                error_text
+                raw_body
             )));
         }
 
-        let response_body: OpenAIResponse = response
-            .json()
-            .await
+        let response_hash = sha256_hex(raw_body.as_bytes());
+
+        let response_body: OpenAIResponse = serde_json::from_str(&raw_body)
             .map_err(|e| RuntimeError::Generic(format!("Failed to parse response: {}", e)))?;
 
-        Ok(response_body.choices[0].message.content.clone())
+        let content = response_body
+            .choices
+            .first()
+            .map(|choice| choice.message.content.clone())
+            .ok_or_else(|| RuntimeError::Generic("LLM response missing choices".to_string()))?;
+
+        let usage = response_body.usage.unwrap_or_default();
+        let elapsed_ms = start.elapsed().as_millis();
+
+        Ok(LlmCompletion {
+            content,
+            prompt_hash,
+            response_hash,
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+            latency_ms: elapsed_ms,
+        })
     }
 
     fn parse_intent_from_json(&self, json_str: &str) -> Result<StorableIntent, RuntimeError> {
@@ -562,6 +705,7 @@ impl OpenAILlmProvider {
             annotations: HashMap::new(),
         })
     }
+
 }
 
 #[async_trait]
@@ -629,15 +773,17 @@ Only respond with valid JSON."#.to_string()
             },
         ];
 
-        let response = self.make_request(messages).await?;
+        let completion = self.make_request(messages).await?;
 
         if show_prompts {
             println!(
                 "\n=== LLM Raw Response (Intent Generation) ===\n{}\n=== END RESPONSE ===\n",
-                response
+                completion.content
             );
         }
-        self.parse_intent_from_json(&response)
+    let mut intent = self.parse_intent_from_json(&completion.content)?;
+    attach_completion_metadata_to_intent(&mut intent, &self.config, &completion);
+        Ok(intent)
     }
 
     async fn generate_plan(
@@ -751,7 +897,8 @@ Final step should return a structured map with keyword keys for downstream reuse
             },
         ];
 
-        let response = self.make_request(messages).await?;
+        let completion = self.make_request(messages).await?;
+        let response = completion.content.clone();
         if show_prompts {
             println!(
                 "\n=== LLM Raw Response (Plan Generation) ===\n{}\n=== END RESPONSE ===\n",
@@ -775,7 +922,7 @@ Final step should return a structured map with keyword keys for downstream reuse
                     if let Some(name) = Self::extract_quoted_value_after_key(&plan_block, ":name") {
                         plan_name = Some(name);
                     }
-                    return Ok(Plan {
+                    let mut plan = Plan {
                         plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
                         name: plan_name,
                         intent_ids: vec![intent.intent_id.clone()],
@@ -792,7 +939,9 @@ Final step should return a structured map with keyword keys for downstream reuse
                         policies: HashMap::new(),
                         capabilities_required: vec![],
                         annotations: HashMap::new(),
-                    });
+                    };
+                    attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
+                    return Ok(plan);
                 }
             }
         }
@@ -802,7 +951,7 @@ Final step should return a structured map with keyword keys for downstream reuse
             // If we successfully extracted a (do ...) block, use it
             // Parser validation is skipped because the LLM may generate function calls
             // that aren't yet defined in the parser's symbol table
-            return Ok(Plan {
+            let mut plan = Plan {
                 plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
                 name: None,
                 intent_ids: vec![intent.intent_id.clone()],
@@ -819,11 +968,15 @@ Final step should return a structured map with keyword keys for downstream reuse
                 policies: HashMap::new(),
                 capabilities_required: vec![],
                 annotations: HashMap::new(),
-            });
+            };
+            attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
+            return Ok(plan);
         }
 
         // Fallback: previous JSON-wrapped steps contract
-        self.parse_plan_from_json(&response, &intent.intent_id)
+    let mut plan = self.parse_plan_from_json(&response, &intent.intent_id)?;
+    attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
+        Ok(plan)
     }
 
     async fn generate_plan_with_retry(
@@ -927,13 +1080,14 @@ Final step should return a structured map with keyword keys for downstream reuse
                 };
 
                 // Make request with rendered messages
-                let response = self.make_request(messages).await?;
+                let completion = self.make_request(messages).await?;
+                let response = completion.content.clone();
 
                 // Validate and parse the plan just like the legacy path
                 let plan_result =
                     if let Some(do_block) = OpenAILlmProvider::extract_do_block(&response) {
                         if parser::parse(&do_block).is_ok() {
-                            Ok(Plan {
+                            let mut plan = Plan {
                                 plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
                                 name: None,
                                 intent_ids: vec![intent.intent_id.clone()],
@@ -950,7 +1104,13 @@ Final step should return a structured map with keyword keys for downstream reuse
                                 policies: HashMap::new(),
                                 capabilities_required: vec![],
                                 annotations: HashMap::new(),
-                            })
+                            };
+                            attach_completion_metadata_to_plan(
+                                &mut plan,
+                                &self.config,
+                                &completion,
+                            );
+                            Ok(plan)
                         } else {
                             Err(RuntimeError::Generic(format!(
                                 "Failed to parse RTFS plan: {}",
@@ -959,7 +1119,13 @@ Final step should return a structured map with keyword keys for downstream reuse
                         }
                     } else {
                         // Fallback to JSON parsing
-                        self.parse_plan_from_json(&response, &intent.intent_id)
+                        let mut plan = self.parse_plan_from_json(&response, &intent.intent_id)?;
+                        attach_completion_metadata_to_plan(
+                            &mut plan,
+                            &self.config,
+                            &completion,
+                        );
+                        Ok(plan)
                     };
 
                 match plan_result {
@@ -1002,7 +1168,7 @@ Final step should return a structured map with keyword keys for downstream reuse
 
             // If we reach here, prompt asset rendering failed; fall back to legacy inline prompt construction
             // Create prompt based on attempt
-            let prompt = if attempt == 1 {
+            let messages = if attempt == 1 {
                 // Initial prompt
                 let system_message = r#"You translate an RTFS intent into a concrete RTFS execution body using a reduced grammar.
 
@@ -1270,13 +1436,14 @@ Return exactly one (plan ...) with these constraints.
                 ]
             };
 
-            let response = self.make_request(prompt).await?;
+            let completion = self.make_request(messages).await?;
+            let response = completion.content.clone();
 
             // Validate and parse the plan
             let plan_result = if let Some(do_block) = OpenAILlmProvider::extract_do_block(&response)
             {
                 if parser::parse(&do_block).is_ok() {
-                    Ok(Plan {
+                    let mut plan = Plan {
                         plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
                         name: None,
                         intent_ids: vec![intent.intent_id.clone()],
@@ -1293,7 +1460,9 @@ Return exactly one (plan ...) with these constraints.
                         policies: HashMap::new(),
                         capabilities_required: vec![],
                         annotations: HashMap::new(),
-                    })
+                    };
+                    attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
+                    Ok(plan)
                 } else {
                     Err(RuntimeError::Generic(format!(
                         "Failed to parse RTFS plan: {}",
@@ -1302,7 +1471,9 @@ Return exactly one (plan ...) with these constraints.
                 }
             } else {
                 // Fallback to JSON parsing
-                self.parse_plan_from_json(&response, &intent.intent_id)
+                let mut plan = self.parse_plan_from_json(&response, &intent.intent_id)?;
+                attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
+                Ok(plan)
             };
 
             match plan_result {
@@ -1464,7 +1635,8 @@ Only respond with valid JSON."#;
             },
         ];
 
-        let response = self.make_request(messages).await?;
+        let completion = self.make_request(messages).await?;
+        let response = completion.content;
 
         // Parse validation result
         let json_start = response.find('{').unwrap_or(0);
@@ -1498,8 +1670,8 @@ Only respond with valid JSON."#;
             role: "user".to_string(),
             content: prompt.to_string(),
         }];
-
-        self.make_request(messages).await
+        let completion = self.make_request(messages).await?;
+        Ok(completion.content)
     }
 
     fn get_info(&self) -> LlmProviderInfo {
@@ -1534,11 +1706,23 @@ struct OpenAIMessage {
 #[derive(Deserialize)]
 struct OpenAIResponse {
     choices: Vec<OpenAIChoice>,
+    #[serde(default)]
+    usage: Option<OpenAIUsage>,
 }
 
 #[derive(Deserialize)]
 struct OpenAIChoice {
     message: OpenAIMessage,
+}
+
+#[derive(Default, Deserialize)]
+struct OpenAIUsage {
+    #[serde(default)]
+    prompt_tokens: Option<u32>,
+    #[serde(default)]
+    completion_tokens: Option<u32>,
+    #[serde(default)]
+    total_tokens: Option<u32>,
 }
 
 /// Anthropic Claude provider
@@ -1580,7 +1764,10 @@ impl AnthropicLlmProvider {
         self.metrics.get_summary()
     }
 
-    async fn make_request(&self, messages: Vec<AnthropicMessage>) -> Result<String, RuntimeError> {
+    async fn make_request(
+        &self,
+        messages: Vec<AnthropicMessage>,
+    ) -> Result<LlmCompletion, RuntimeError> {
         let api_key = self.config.api_key.as_ref().ok_or_else(|| {
             RuntimeError::Generic("API key required for Anthropic provider".to_string())
         })?;
@@ -1599,34 +1786,63 @@ impl AnthropicLlmProvider {
             temperature: self.config.temperature,
         };
 
+        let payload_bytes = serde_json::to_vec(&request_body).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to serialize request body: {}", e))
+        })?;
+        let prompt_hash = sha256_hex(&payload_bytes);
+
+        let start = Instant::now();
         let response = self
             .client
             .post(&url)
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
             .header("Content-Type", "application/json")
-            .json(&request_body)
+            .body(payload_bytes)
             .send()
             .await
             .map_err(|e| RuntimeError::Generic(format!("HTTP request failed: {}", e)))?;
 
-        if !response.status().is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
+        let status = response.status();
+        let raw_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+
+        if !status.is_success() {
             return Err(RuntimeError::Generic(format!(
                 "API request failed: {}",
-                error_text
+                raw_body
             )));
         }
 
-        let response_body: AnthropicResponse = response
-            .json()
-            .await
+        let response_hash = sha256_hex(raw_body.as_bytes());
+
+        let response_body: AnthropicResponse = serde_json::from_str(&raw_body)
             .map_err(|e| RuntimeError::Generic(format!("Failed to parse response: {}", e)))?;
 
-        Ok(response_body.content[0].text.clone())
+        let content = response_body
+            .content
+            .first()
+            .map(|item| item.text.clone())
+            .ok_or_else(|| RuntimeError::Generic("LLM response missing content".to_string()))?;
+
+        let usage = response_body.usage.unwrap_or_default();
+        let total_tokens = match (usage.input_tokens, usage.output_tokens) {
+            (Some(input), Some(output)) => Some(input + output),
+            _ => None,
+        };
+        let elapsed_ms = start.elapsed().as_millis();
+
+        Ok(LlmCompletion {
+            content,
+            prompt_hash,
+            response_hash,
+            prompt_tokens: usage.input_tokens,
+            completion_tokens: usage.output_tokens,
+            total_tokens,
+            latency_ms: elapsed_ms,
+        })
     }
 
     fn parse_intent_from_json(&self, json_str: &str) -> Result<StorableIntent, RuntimeError> {
@@ -1786,17 +2002,18 @@ Only respond with valid JSON."#.to_string()
             content: format!("{}\n\n{}", system_message, user_message),
         }];
 
-        let response = self.make_request(messages).await?;
+        let completion = self.make_request(messages).await?;
 
         if show_prompts {
             println!(
                 "\n=== LLM Raw Response (Intent Generation - Anthropic) ===\n{}\n=== END RESPONSE ===\n",
-                response
+                completion.content
             );
         }
 
-        let mut intent = self.parse_intent_from_json(&response)?;
+        let mut intent = self.parse_intent_from_json(&completion.content)?;
         intent.original_request = prompt.to_string();
+        attach_completion_metadata_to_intent(&mut intent, &self.config, &completion);
 
         Ok(intent)
     }
@@ -1835,8 +2052,10 @@ Only respond with valid JSON."#;
             content: format!("{}\n\n{}", system_message, user_message),
         }];
 
-        let response = self.make_request(messages).await?;
-        self.parse_plan_from_json(&response, &intent.intent_id)
+    let completion = self.make_request(messages).await?;
+    let mut plan = self.parse_plan_from_json(&completion.content, &intent.intent_id)?;
+    attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
+    Ok(plan)
     }
 
     async fn validate_plan(&self, plan_content: &str) -> Result<ValidationResult, RuntimeError> {
@@ -1860,7 +2079,8 @@ Only respond with valid JSON."#;
             content: format!("{}\n\n{}", system_message, user_message),
         }];
 
-        let response = self.make_request(messages).await?;
+    let completion = self.make_request(messages).await?;
+    let response = completion.content;
 
         // Try to extract JSON from the response
         let json_start = response.find('{').unwrap_or(0);
@@ -1877,7 +2097,8 @@ Only respond with valid JSON."#;
             content: prompt.to_string(),
         }];
 
-        self.make_request(messages).await
+    let completion = self.make_request(messages).await?;
+    Ok(completion.content)
     }
 
     fn get_info(&self) -> LlmProviderInfo {
@@ -1912,11 +2133,21 @@ struct AnthropicMessage {
 #[derive(Deserialize)]
 struct AnthropicResponse {
     content: Vec<AnthropicContent>,
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
 }
 
 #[derive(Deserialize)]
 struct AnthropicContent {
     text: String,
+}
+
+#[derive(Default, Deserialize)]
+struct AnthropicUsage {
+    #[serde(default)]
+    input_tokens: Option<u32>,
+    #[serde(default)]
+    output_tokens: Option<u32>,
 }
 
 /// Stub LLM provider for testing and development
@@ -2126,7 +2357,20 @@ impl LlmProvider for StubLlmProvider {
 
         // For stub provider, we'll use a simple pattern matching approach
         // In a real implementation, this would parse the prompt and context
-        let intent = self.generate_stub_intent(prompt);
+        let mut intent = self.generate_stub_intent(prompt);
+
+        let response_text = format!("Stub intent synthesized for request: {}", prompt);
+        let completion = LlmCompletion {
+            content: response_text.clone(),
+            prompt_hash: sha256_hex(prompt.as_bytes()),
+            response_hash: sha256_hex(response_text.as_bytes()),
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+            latency_ms: 0,
+        };
+
+        attach_completion_metadata_to_intent(&mut intent, &self.config, &completion);
 
         if show_prompts {
             println!(
@@ -2160,7 +2404,24 @@ impl LlmProvider for StubLlmProvider {
             );
         }
 
-        let plan = self.generate_stub_plan(intent);
+        let mut plan = self.generate_stub_plan(intent);
+
+        let synthetic_prompt = format!("Stub plan synthesis for intent: {}", intent.intent_id);
+        let plan_body_text = match &plan.body {
+            PlanBody::Rtfs(body) => body.clone(),
+            PlanBody::Wasm(_) => "(wasm plan body)".to_string(),
+        };
+        let completion = LlmCompletion {
+            content: plan_body_text.clone(),
+            prompt_hash: sha256_hex(synthetic_prompt.as_bytes()),
+            response_hash: sha256_hex(plan_body_text.as_bytes()),
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+            latency_ms: 0,
+        };
+
+        attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
 
         if show_prompts {
             if let PlanBody::Rtfs(ref body) = plan.body {
@@ -2517,6 +2778,105 @@ mod tests {
         assert!(validation.is_valid);
         assert!(validation.confidence > 0.9);
         assert!(!validation.reasoning.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_stub_provider_intent_metadata() {
+        let config = LlmProviderConfig {
+            provider_type: LlmProviderType::Stub,
+            model: "stub-metadata-model".to_string(),
+            api_key: None,
+            base_url: None,
+            max_tokens: None,
+            temperature: None,
+            timeout_seconds: None,
+            retry_config: crate::ccos::arbiter::arbiter_config::RetryConfig::default(),
+        };
+
+        let model = config.model.clone();
+        let provider = StubLlmProvider::new(config);
+        let prompt = "Plan a trip to Paris";
+        let intent = provider.generate_intent(prompt, None).await.unwrap();
+
+        assert_eq!(intent.metadata.get("llm.model"), Some(&model));
+        assert_eq!(
+            intent.metadata.get("llm.provider"),
+            Some(&format!("{:?}", LlmProviderType::Stub)),
+        );
+        assert_eq!(intent.metadata.get("llm.latency_ms"), Some(&"0".to_string()));
+
+        let expected_prompt_hash = sha256_hex(prompt.as_bytes());
+        assert_eq!(
+            intent.metadata.get("llm.prompt_hash"),
+            Some(&expected_prompt_hash),
+        );
+
+        let response_text = format!("Stub intent synthesized for request: {}", prompt);
+        let expected_response_hash = sha256_hex(response_text.as_bytes());
+        assert_eq!(
+            intent.metadata.get("llm.response_hash"),
+            Some(&expected_response_hash),
+        );
+
+        assert!(intent.metadata.get("llm.total_tokens").is_none());
+        assert!(intent.metadata.get("llm.prompt_tokens").is_none());
+        assert!(intent.metadata.get("llm.completion_tokens").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_stub_provider_plan_metadata() {
+        let config = LlmProviderConfig {
+            provider_type: LlmProviderType::Stub,
+            model: "stub-plan-model".to_string(),
+            api_key: None,
+            base_url: None,
+            max_tokens: None,
+            temperature: None,
+            timeout_seconds: None,
+            retry_config: crate::ccos::arbiter::arbiter_config::RetryConfig::default(),
+        };
+
+        let model = config.model.clone();
+        let provider = StubLlmProvider::new(config);
+        let intent = provider
+            .generate_intent("optimize performance", None)
+            .await
+            .unwrap();
+        let plan = provider.generate_plan(&intent, None).await.unwrap();
+
+        let expected_prompt = format!("Stub plan synthesis for intent: {}", intent.intent_id);
+        let expected_prompt_hash = sha256_hex(expected_prompt.as_bytes());
+
+        let plan_body_text = match &plan.body {
+            PlanBody::Rtfs(body) => body.clone(),
+            PlanBody::Wasm(_) => "(wasm plan body)".to_string(),
+        };
+        let expected_response_hash = sha256_hex(plan_body_text.as_bytes());
+
+        assert_eq!(
+            plan.metadata.get("llm.model"),
+            Some(&Value::String(model.clone())),
+        );
+        assert_eq!(
+            plan.metadata.get("llm.provider"),
+            Some(&Value::String(format!("{:?}", LlmProviderType::Stub))),
+        );
+        assert_eq!(
+            plan.metadata.get("llm.latency_ms"),
+            Some(&Value::Integer(0)),
+        );
+        assert_eq!(
+            plan.metadata.get("llm.prompt_hash"),
+            Some(&Value::String(expected_prompt_hash)),
+        );
+        assert_eq!(
+            plan.metadata.get("llm.response_hash"),
+            Some(&Value::String(expected_response_hash)),
+        );
+
+        assert!(plan.metadata.get("llm.total_tokens").is_none());
+        assert!(plan.metadata.get("llm.prompt_tokens").is_none());
+        assert!(plan.metadata.get("llm.completion_tokens").is_none());
     }
 
     #[tokio::test]

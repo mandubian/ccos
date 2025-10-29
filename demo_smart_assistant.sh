@@ -73,30 +73,25 @@ fi
 cd rtfs_compiler
 
 # Parse command line arguments
-MODE="full"
 PROFILE=""
-DEBUG=""
-TOPIC=""
+DEBUG_PROMPTS=0
+GOAL=""
 
 print_usage() {
-    echo "Usage: $0 [OPTIONS] [MODE]"
-    echo ""
-    echo "Modes:"
-    echo "  learn    - Show initial learning phase only"
-    echo "  apply    - Apply learned capability (requires prior learning)"
-    echo "  full     - Complete learning loop (default) ⭐"
+    echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
+    echo "  --goal \"TEXT\"       Natural-language goal (otherwise prompts interactively)"
     echo "  --profile PROFILE    LLM profile to use (from config/agent_config.toml)"
     echo "  --debug              Show detailed prompts and responses"
-    echo "  --topic \"TOPIC\"      Custom research topic"
+    echo "  --topic \"TEXT\"      Backwards-compatible alias for --goal"
     echo "  --help               Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0 full"
-    echo "  $0 --profile claude-fast full"
-    echo "  $0 --topic \"neural architecture search\" full"
-    echo "  $0 --debug learn"
+    echo "  $0"
+    echo "  $0 --goal \"plan a weekend trip to Paris\""
+    echo "  $0 --profile openrouter_free:fast"
+    echo "  $0 --debug --goal \"research retrieval augmented generation\""
     echo ""
 }
 
@@ -112,16 +107,16 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --debug)
-            DEBUG="--debug-prompts"
+            DEBUG_PROMPTS=1
             shift
             ;;
-        --topic)
-            TOPIC="$2"
+        --goal)
+            GOAL="$2"
             shift 2
             ;;
-        learn|apply|full)
-            MODE="$1"
-            shift
+        --topic)
+            GOAL="$2"
+            shift 2
             ;;
         -*)
             error "Unknown option: $1"
@@ -129,7 +124,13 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
         *)
-            MODE="$1"
+            if [ -z "$GOAL" ]; then
+                GOAL="$1"
+            else
+                error "Unrecognized argument: $1"
+                print_usage
+                exit 1
+            fi
             shift
             ;;
     esac
@@ -155,99 +156,69 @@ else
     info "Using default profile from config"
 fi
 
-# Display topic if custom
-if [ -n "$TOPIC" ]; then
-    highlight "Custom research topic: \"$TOPIC\""
-    export RESEARCH_TOPIC="$TOPIC"
+# Display goal configuration
+if [ -n "$GOAL" ]; then
+    highlight "Goal override: \"$GOAL\""
+else
+    info "Goal: will prompt interactively"
 fi
 
-# Display mode
-info "Mode: ${BOLD}$MODE${NC}"
-
-if [ -n "$DEBUG" ]; then
-    highlight "Debug mode enabled"
+# Display debug flag if requested
+if [ "$DEBUG_PROMPTS" -eq 1 ]; then
+    highlight "Debug prompts enabled"
 fi
 
-# Build command
-CMD="cargo run --release --example user_interaction_smart_assistant -- \
-    --config config/agent_config.toml \
-    --mode $MODE"
+# Build command (use array to preserve spacing)
+CMD=(cargo run --release --example smart_assistant_demo --
+    --config config/agent_config.toml)
 
 if [ -n "$PROFILE" ]; then
-    CMD="$CMD --profile $PROFILE"
+    CMD+=(--profile "$PROFILE")
 fi
 
-if [ -n "$DEBUG" ]; then
-    CMD="$CMD $DEBUG"
+if [ -n "$GOAL" ]; then
+    CMD+=(--goal "$GOAL")
+fi
+
+if [ "$DEBUG_PROMPTS" -eq 1 ]; then
+    CMD+=(--debug-prompts)
 fi
 
 # Show what we're about to run
 print_section "Executing Demo"
 
-case "$MODE" in
-    "learn")
-        info "Phase 1: System learns from initial interaction"
-        info "Phase 2: Capability synthesis and registration"
-        info ""
-        info "Expected: Multi-turn conversation → Synthesized capability"
-        ;;
-    "apply")
-        info "Phase: Apply previously learned capability"
-        info ""
-        info "Expected: Direct capability invocation (no repeated questions)"
-        highlight "Note: Requires prior 'learn' or 'full' run"
-        ;;
-    "full")
-        info "Phase 1: Learn from interaction"
-        info "Phase 2: Synthesize capability"
-        info "Phase 3: Apply learned capability"
-        info "Phase 4: Compare efficiency metrics"
-        info ""
-        success "This demonstrates the complete learning loop! ${ROCKET}"
-        ;;
-esac
+info "Phase 1: Delegating arbiter captures intent and clarifications"
+info "Phase 2: LLM drafts plan skeleton with metadata instrumentation"
+info "Phase 3: Stub capabilities register so the plan can execute end-to-end"
+info ""
+success "Expect synthesized artifacts under capabilities/generated/ ${ROCKET}"
 
 echo ""
-echo -e "${DIM}Running: $CMD${NC}"
+CMD_STR=$(printf "%q " "${CMD[@]}")
+echo -e "${DIM}Running: ${CMD_STR}${NC}"
 echo ""
 
 # Add a small delay for dramatic effect
 sleep 1
 
 # Run the demo
-if eval "$CMD"; then
+if "${CMD[@]}"; then
     echo ""
     print_section "Demo Completed Successfully! ${STAR}"
     
-    # Show next steps based on mode
-    case "$MODE" in
-        "learn"|"full")
-            echo ""
-            success "Synthesized capability saved!"
-            info "Check: ${BOLD}capabilities/generated/research.smart-assistant.v1.rtfs${NC}"
-            echo ""
-            highlight "What you can do next:"
-            info "1. Run 'apply' mode to test the learned capability"
-            info "2. Import the capability into your own RTFS programs"
-            info "3. Try a different topic to see the capability generalize"
-            info "4. Examine the generated RTFS code structure"
-            echo ""
-            info "Example:"
-            echo -e "  ${DIM}./demo_smart_assistant.sh --topic \"distributed systems consensus\" full${NC}"
-            ;;
-        "apply")
-            echo ""
-            success "Capability application demonstrated!"
-            echo ""
-            highlight "Key observation:"
-            info "No repeated questions - the system remembered your workflow!"
-            echo ""
-            ;;
-    esac
+    highlight "Artifacts to inspect:"
+    info "1. capabilities/generated/ for synthesized capabilities and plans"
+    info "2. demo logs for LLM metadata in the intent graph"
+    info "3. config/agent_config.toml to adjust model routing"
+    echo ""
+    highlight "What you can try next:"
+    info "1. Pass --goal to script to skip interactive prompt"
+    info "2. Switch --profile to explore other OpenRouter models"
+    info "3. Re-run with --debug to inspect raw prompts"
     
     echo ""
     info "Read ${BOLD}SELF_LEARNING_DEMO.md${NC} for detailed explanation"
-    info "Explore ${BOLD}rtfs_compiler/examples/user_interaction_smart_assistant.rs${NC} for implementation"
+    info "Explore ${BOLD}rtfs_compiler/examples/smart_assistant_demo.rs${NC} for implementation"
     echo ""
     
 else

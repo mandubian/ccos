@@ -37,6 +37,7 @@ A deep, actionable plan to evolve the smart assistant demo to fully leverage dyn
 - 🧪 Latest validation: `cargo test --example smart_assistant_demo` (all six tests pass).
 - 🔄 Next immediate action: rerun the demo with the real `openrouter_free:balanced` profile to confirm fenced-plan handling end-to-end.
 - 🔄 Next implementation focus: wire dynamic capability discovery + partial outcome loop per Sections 3, 6, and 7.
+- 🚧 DelegatingArbiter still calls a stubbed planner; replace with live LLM invocation (`openrouter_free:balanced`) via the RTFS mediator and capture prompt/response artifacts in the ledger.
 
 ---
 
@@ -210,6 +211,11 @@ Merge strategy:
   - ✅ Added Markdown fence stripping + unit tests for plan-step parser (Section 3).
   - 🔄 Pending rerun against live profile to validate fenced-plan parsing.
 
+- Phase 0: Live LLM wiring
+  - Replace stubbed clarifier/planner responses with DelegatingArbiter calls to the configured OpenRouter profile using RTFS request payloads.
+  - Establish prompt scaffolding (system + few-shot exemplar) and persist it alongside capability metadata for audit.
+  - Acceptance: demo run executes end-to-end on live LLM without panics; ledger stores prompt/response digests; failure modes surface actionable errors instead of silent fallbacks.
+
 - Phase 1: Foundations upgrade
   - Wire MCP/OpenAPI discovery into capability marketplace with ranking.
   - Integrate PartialExecutionOutcome in orchestrator loop.
@@ -307,3 +313,14 @@ Merge strategy:
 - Continuous resolution: prioritize metadata needs; then call-site scan; convert preflight/governance failures into needs.
 - DelegatingArbiter: drive questions from `required_inputs` minus known intent/clarifications.
 - Add an integration test demonstrating: plan with needs → resolver binds one need via stub → collector asks only missing inputs → execution pauses/resumes correctly.
+
+---
+
+## 20) Live LLM Delegation Implementation Guide
+
+- **Configuration**: point `openrouter_minimal.toml` (or environment override) at the `openrouter_free:balanced` profile and set CCOS runtime to load it under `:delegating-arbiter/profile-id` so requests stay governed.
+- **Prompt contract**: compose the DelegatingArbiter request as RTFS data (`{:intent intent-map :coverage coverage-map :needs needs-capabilities}`) and wrap it with a system scaffold that enumerates governance rules, turn limits, and the expected response schema.
+- **Invocation path**: issue `(:call :ccos.delegating-arbiter.invoke-llm {:profile profile-id :payload arbiter-input})` from the arbiter module, capture the LLM response as structured RTFS, and validate it against the clarifier schema before progressing.
+- **Ledger & observability**: hash prompts/responses, record token usage, provider latency, and any redactions in the causal chain for audit without leaking raw content.
+- **Fallbacks**: on schema violations or provider errors, emit a PartialExecutionOutcome with `:status :blocked`, enqueue a governance alert, and surface a clear remediation path (retry with adjusted prompt, switch provider, or ask the user for confirmation).
+- **Testing loop**: add a recorded run (with redacted prompt bodies) under `tests/replays/` to guard against regressions; exercise both success and schema-failure branches using the live profile when tokens are available and stub fixtures when offline.
