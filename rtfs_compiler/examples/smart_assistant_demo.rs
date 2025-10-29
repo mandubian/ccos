@@ -221,6 +221,10 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     let resolved_steps = resolve_and_stub_capabilities(&ccos, &plan_steps, &matches).await?;
     let orchestrator_rtfs = generate_orchestrator_capability(&goal, &resolved_steps)?;
     
+    // Register the orchestrator as a reusable capability in the marketplace
+    let planner_capability_id = format!("synth.plan.orchestrator.{}", chrono::Utc::now().timestamp());
+    register_orchestrator_in_marketplace(&ccos, &planner_capability_id, &orchestrator_rtfs).await?;
+    
     let mut plan = Plan::new_rtfs(orchestrator_rtfs, vec![]);
     plan.metadata
         .insert("needs_capabilities".to_string(), needs_value.clone());
@@ -232,11 +236,15 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         "resolved_steps".to_string(),
         build_resolved_steps_metadata(&resolved_steps),
     );
+    plan.metadata.insert(
+        "orchestrator_capability_id".to_string(),
+        Value::String(planner_capability_id),
+    );
 
     print_plan_draft(&plan_steps, &matches, &plan);
     println!(
         "\n{}",
-        "✅ Orchestrator generated and ready for execution".bold().green()
+        "✅ Orchestrator generated and registered in marketplace".bold().green()
     );
 
     Ok(())
@@ -1644,42 +1652,84 @@ async fn register_stub_capability(
     Ok(())
 }
 
+/// Register the orchestrator capability in the marketplace so it can be discovered and reused
+async fn register_orchestrator_in_marketplace(
+    ccos: &Arc<CCOS>,
+    capability_id: &str,
+    orchestrator_rtfs: &str,
+) -> DemoResult<()> {
+    let marketplace = ccos.get_capability_marketplace();
+    let rtfs_code = orchestrator_rtfs.to_string();
+
+    // Create a handler that returns the RTFS plan code when invoked
+    let handler = Arc::new(move |_inputs: &Value| {
+        let mut out_map = HashMap::new();
+        out_map.insert(
+            MapKey::String("plan".into()),
+            Value::String(rtfs_code.clone()),
+        );
+        out_map.insert(
+            MapKey::String("status".into()),
+            Value::String("ready".into()),
+        );
+        Ok(Value::Map(out_map))
+    });
+
+    let _registration_result = marketplace
+        .register_local_capability(
+            capability_id.to_string(),
+            "Synthesized Plan Orchestrator".to_string(),
+            "Auto-generated capability that orchestrates multiple steps into a coordinated plan".to_string(),
+            handler,
+        )
+        .await;
+
+    println!(
+        "  📦 Registered as capability: {}",
+        capability_id.cyan()
+    );
+
+    Ok(())
+}
+
 /// Generate an RTFS orchestrator capability that chains all resolved steps.
 fn generate_orchestrator_capability(
     goal: &str,
     resolved_steps: &[ResolvedStep],
 ) -> DemoResult<String> {
     let mut rtfs_code = String::new();
-    rtfs_code.push_str("(do\n");
+    
+    // Build a proper RTFS plan structure
+    rtfs_code.push_str("(plan\n");
+    rtfs_code.push_str(&format!("  :name \"synth.plan.orchestrator.v1\"\n"));
+    rtfs_code.push_str(&format!("  :language rtfs20\n"));
     rtfs_code.push_str(&format!(
-        "  ;; Orchestrator generated for goal: {}\n",
-        goal.replace("\"", "\\\"")
+        "  :annotations {{:goal \"{}\" :step_count {}}}\n",
+        goal.replace("\"", "\\\""),
+        resolved_steps.len()
     ));
-    rtfs_code.push_str("  ;; This capability chains multiple steps and manages data flow.\n");
+    rtfs_code.push_str("  :body (do\n");
 
     if resolved_steps.is_empty() {
-        rtfs_code.push_str("  nil ;; No steps to execute\n");
+        rtfs_code.push_str("    (step \"No Steps\" nil)\n");
     } else {
-        rtfs_code.push_str("  (let [\n");
-        
-        // Build sequential let bindings for each step
+        // Build sequential steps using proper RTFS syntax
         for (idx, resolved) in resolved_steps.iter().enumerate() {
-            let step_var = format!("step_{}", idx);
+            let step_desc = &resolved.original.name;
+            let step_inputs = build_step_call_args(&resolved.original, resolved_steps, idx)?;
+            
             rtfs_code.push_str(&format!(
-                "    {} (({} {}))\n",
-                step_var,
+                "    (step \"{}\" (call :{} {}))\n",
+                step_desc.replace("\"", "\\\""),
                 resolved.capability_id,
-                build_step_call_args(&resolved.original, resolved_steps, idx)?
+                step_inputs
             ));
         }
-        
-        rtfs_code.push_str("    ]\n");
-        rtfs_code.push_str(&format!("    ;; Aggregate and return all step results\n"));
-        rtfs_code.push_str(&build_final_output(resolved_steps)?);
-        rtfs_code.push_str("\n  )\n");
     }
     
+    rtfs_code.push_str("  )\n");
     rtfs_code.push_str(")\n");
+    
     Ok(rtfs_code)
 }
 
