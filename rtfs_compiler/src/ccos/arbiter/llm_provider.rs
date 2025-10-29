@@ -2185,6 +2185,45 @@ impl LlmProvider for StubLlmProvider {
     async fn generate_text(&self, prompt: &str) -> Result<String, RuntimeError> {
         // Check if this is a delegation analysis prompt
         let lower_prompt = prompt.to_lowercase();
+        // Optional gate for demo-specific RTFS hint handling; default enabled, can disable with 0/false/off
+        let demo_hints_enabled = std::env::var("CCOS_STUB_DEMO_HINTS")
+            .map(|v| {
+                let v = v.to_lowercase();
+                !(v == "0" || v == "false" || v == "off")
+            })
+            .unwrap_or(true);
+
+        // Handle demo prompt hints for strict RTFS vector/map outputs used by examples
+        // 1) RTFS vector of clarifying questions
+        if demo_hints_enabled
+            && (lower_prompt.contains("rtfs vector of strings")
+                || (lower_prompt.contains("rtfs vector") && lower_prompt.contains("questions"))
+                || lower_prompt.contains("respond only with an rtfs vector"))
+        {
+            // Return 4-5 generic but sensible questions tailored for planning demos
+            return Ok(
+                "[\"What is your budget or cost sensitivity?\" \"What timeframe or deadline should we target?\" \"What specific subdomains or interests matter most?\" \"Any constraints on data sources or tools to use/avoid?\" \"What output format do you prefer (summary, report, code)?\"]"
+                    .to_string(),
+            );
+        }
+        // 2) RTFS map-only structured preferences extraction
+        if demo_hints_enabled
+            && (lower_prompt.contains("output only a single rtfs map")
+                || lower_prompt.contains("strict rtfs format"))
+        {
+            // Try to extract a goal from the prompt for nicer output; fallback if not found
+            let goal = prompt
+                .splitn(2, ":goal \"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .unwrap_or("User goal");
+            // Produce a minimal, well-formed RTFS map with a few parameters inferred from typical Q/A
+            let rtfs = format!(
+                "{{\n  :goal \"{}\"\n  :parameters {{\n    :budget {{:type :string :value \"medium\" :question \"What is your budget or cost sensitivity?\"}}\n    :duration {{:type :duration :value \"7 days\" :question \"What timeframe or deadline should we target?\"}}\n    :interests {{:type :list :value \"sightseeing, food, culture\" :question \"What specific subdomains or interests matter most?\"}}\n  }}\n}}",
+                goal.replace('"', "\\\"")
+            );
+            return Ok(rtfs);
+        }
         // Shortcut: detect arbiter graph-generation marker and return RTFS (do ...) intent graph
         if lower_prompt.contains("generate_intent_graph") || lower_prompt.contains("intent graph") {
             return Ok(r#"(do

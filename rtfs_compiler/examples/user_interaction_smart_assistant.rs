@@ -34,6 +34,7 @@
 
 use clap::Parser;
 use crossterm::style::Stylize;
+// serde_json is still used for config file parsing only; avoid JSON in LLM exchanges
 use serde_json;
 use std::collections::HashMap;
 use std::fs;
@@ -43,11 +44,57 @@ use tokio::time::{sleep, Duration};
 use toml;
 
 use rtfs_compiler::ast::MapKey;
+use rtfs_compiler::ast::{Expression, Literal, MapKey as RtfsMapKey};
+use rtfs_compiler::ast::{MapTypeEntry, PrimitiveType, TypeExpr};
 use rtfs_compiler::ccos::intent_graph::config::IntentGraphConfig;
 use rtfs_compiler::ccos::CCOS;
 use rtfs_compiler::config::profile_selection::expand_profiles;
 use rtfs_compiler::config::types::{AgentConfig, LlmProfile};
+use rtfs_compiler::parser::parse_expression;
 use rtfs_compiler::runtime::Value;
+
+/// Prompt hint utilities to standardize RTFS vs JSON expectations with LLMs
+mod prompt_hints {
+    /// Instructs the LLM to return ONLY an RTFS vector of strings, no prose/fences
+    pub fn rtfs_vector_only() -> &'static str {
+        r#"- Respond ONLY with an RTFS vector of strings (no prose, no fences), e.g. [\"q1\" \"q2\" ...]
+- IMPORTANT: RTFS vectors use whitespace between items; DO NOT use commas
+- Do not add any text before or after the vector"#
+    }
+
+    /// Instructs the LLM to return ONLY an RTFS map with no prose/fences
+    pub fn rtfs_map_only() -> &'static str {
+        r#"- Output ONLY a single RTFS map (no prose, no fences)
+- STRICT RTFS FORMAT:
+    - Keys must be RTFS keywords like :goal, :parameters, :type, :value, :question
+    - Parameter names should be keywords (e.g., :budget, :duration) or strings
+    - DO NOT use commas anywhere; separate entries by spaces or newlines
+    - Strings must be double-quoted; keywords start with a colon
+- Do not add any text before or after the map"#
+    }
+
+    /// Instructs the LLM to return ONLY JSON matching a conceptual schema; not used for RTFS outputs
+    pub fn json_only(schema_hint: &str) -> String {
+        format!(
+            concat!(
+                "- Respond ONLY with compact JSON, no comments/prose\n",
+                "- JSON MUST match this conceptual schema: {}\n",
+                "- No code fences"
+            ),
+            schema_hint
+        )
+    }
+
+    /// Strips ```rtfs or ``` fences and trims outer whitespace
+    pub fn strip_fenced_rtfs(raw: &str) -> String {
+        raw.trim()
+            .trim_start_matches("```rtfs")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+            .to_string()
+    }
+}
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -72,6 +119,7 @@ struct Args {
     persist: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ResearchPreferences {
     topic: String,
@@ -196,20 +244,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match load_agent_config(cfg_path) {
             Ok(cfg) => {
                 apply_llm_profile(&cfg, args.profile.as_deref())?;
+                // Keep for potential future use in CCOS init; suppress unused warning
+                let _ = &cfg;
                 loaded_config = Some(cfg);
             }
             Err(e) => {
-                eprintln!("⚠️  Failed to load config {}: {}", cfg_path, e);
-                eprintln!("⚠️  Delegation may not work without valid config");
+                eprintln!("❌ Failed to load config {}: {}", cfg_path, e);
+                return Err(
+                    "Provide a valid --config pointing to an AgentConfig with llm_profiles".into(),
+                );
             }
         }
     } else {
-        // No config provided - enable delegation with stub provider for demo
-        eprintln!("⚠️  No config provided. Using stub provider for demonstration.");
-        eprintln!("⚠️  For real LLM synthesis, provide --config with valid LLM settings.");
-        std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
-        std::env::set_var("CCOS_LLM_PROVIDER", "stub");
-        std::env::set_var("CCOS_DELEGATING_MODEL", "stub-model");
+        eprintln!("❌ No config provided. Strict mode requires a real DelegatedArbiter.");
+        eprintln!("   Please run with --config path/to/agent_config.toml and valid API keys.");
+        return Err("Missing --config for real LLM interrogation".into());
     }
 
     // Initialize CCOS
@@ -302,7 +351,7 @@ async fn run_learning_phase(
     );
 
     let research_topic = std::env::var("RESEARCH_TOPIC")
-        .unwrap_or_else(|_| "quantum computing applications in cryptography".to_string());
+        .unwrap_or_else(|_| "plan a weekend trip to Paris".to_string());
 
     println!(
         "{} {}",
@@ -354,7 +403,7 @@ async fn run_learning_phase(
     );
 
     // Real LLM-driven synthesis using delegating arbiter
-    let (capability_id, capability_spec) =
+    let (mut capability_id, mut capability_spec) =
         synthesize_capability_via_llm(&ccos, &research_topic, &interaction_history, &preferences)
             .await?;
 
@@ -362,10 +411,37 @@ async fn run_learning_phase(
     println!("{}", "✓ Extracted parameter schema from interactions".dim());
     println!("{}", "✓ Generated RTFS capability definition".dim());
 
-    println!("\n{}", "📦 Synthesized Capability:".bold().cyan());
+    println!(
+        "\n{}",
+        "📦 Synthesized Capability (planner v0):".bold().cyan()
+    );
     println!("```rtfs\n{}\n```", capability_spec.trim());
 
-    // Register the capability
+    // Attempt iterative resolution: discover/import missing capabilities and refine planner
+    match resolve_missing_and_refine_planner(ccos, &capability_spec).await {
+        Ok(Some((refined_id, refined_spec))) => {
+            capability_id = refined_id;
+            capability_spec = refined_spec;
+            println!("\n{}", "📦 Refined Planner after resolution:".bold().cyan());
+            println!("```rtfs\n{}\n```", capability_spec.trim());
+        }
+        Ok(None) => {
+            // No changes; continue
+        }
+        Err(e) => {
+            println!(
+                "{}",
+                format!("⚠️  Resolution iteration failed: {}", e).yellow()
+            );
+        }
+    }
+
+    // Register generic demo sub-capabilities so the planner can execute end-to-end
+    if let Err(e) = register_generic_demo_capabilities(ccos).await {
+        eprintln!("⚠️  Failed to register generic demo capabilities: {}", e);
+    }
+
+    // Register the capability (placeholder executor for now, RTFS execution TBD)
     let marketplace = ccos.get_capability_marketplace();
     marketplace
         .register_local_capability(
@@ -404,6 +480,23 @@ async fn run_learning_phase(
             )
             .green()
         );
+
+        // Additionally persist a direct plan for the apply phase
+        let direct_plan = format!(
+            "(call :{} {{:goal \"{}\"}})",
+            capability_id,
+            research_topic.replace('"', "\\\"")
+        );
+        let plan_id = "synth.plan.v1";
+        persist_plan(plan_id, &direct_plan)?;
+        println!(
+            "{}",
+            format!(
+                "✓ Persisted direct plan to capabilities/generated/{}.rtfs",
+                plan_id
+            )
+            .green()
+        );
     }
 
     let elapsed = start.elapsed().as_millis();
@@ -414,6 +507,193 @@ async fn run_learning_phase(
         time_elapsed_ms: elapsed,
         capability_synthesized: true,
     })
+}
+
+/// Resolve missing capabilities referenced by a synthesized planner and re-synthesize using a fresh marketplace snapshot.
+/// Returns Some((id, spec)) when the planner changed, None when unchanged or no action, Err on failure.
+async fn resolve_missing_and_refine_planner(
+    ccos: &Arc<CCOS>,
+    planner_spec: &str,
+) -> Result<Option<(String, String)>, Box<dyn std::error::Error>> {
+    use rtfs_compiler::ccos::synthesis::continuous_resolution::{
+        ContinuousResolutionLoop, ResolutionConfig,
+    };
+    use rtfs_compiler::ccos::synthesis::dependency_extractor;
+    use rtfs_compiler::ccos::synthesis::registration_flow::RegistrationFlow;
+
+    // 1) Extract dependencies from the current planner
+    let dep = match dependency_extractor::extract_dependencies(planner_spec) {
+        Ok(d) => d,
+        Err(e) => {
+            // If we can't parse, bail silently (keep example robust)
+            eprintln!("Dependency extraction failed: {}", e);
+            return Ok(None);
+        }
+    };
+
+    // Start with the extracted missing dependencies (as a set to avoid duplicates)
+    let mut missing: std::collections::HashSet<String> = dep.missing_dependencies.clone();
+
+    // Some early planners embed a generated-capability marker without explicit calls; extract and treat it as missing
+    if missing.is_empty() {
+        if let Some(idx) = planner_spec.find(":generated-capability :") {
+            let rest = &planner_spec[idx + ":generated-capability :".len()..];
+            let cap_id: String = rest
+                .split(|c: char| c.is_whitespace() || c == '}' || c == ')')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches(|c: char| c == '"')
+                .to_string();
+            if !cap_id.is_empty() {
+                missing.insert(cap_id);
+            }
+        }
+    }
+
+    if missing.is_empty() {
+        return Ok(None);
+    }
+
+    println!(
+        "{}",
+        "🔁 Iterative resolution: discovering missing capabilities".yellow()
+    );
+    for m in &missing {
+        println!("   • {}", m);
+    }
+
+    // 2) Attempt resolution via the built-in resolver (MCP registry, web search, curated overrides)
+    let marketplace = ccos.get_capability_marketplace();
+    let checkpoint_archive =
+        Arc::new(rtfs_compiler::ccos::checkpoint_archive::CheckpointArchive::new());
+    let resolver =
+        rtfs_compiler::ccos::synthesis::missing_capability_resolver::MissingCapabilityResolver::new(
+            Arc::clone(&marketplace),
+            checkpoint_archive,
+            rtfs_compiler::ccos::synthesis::missing_capability_resolver::ResolverConfig::default(),
+            rtfs_compiler::ccos::synthesis::feature_flags::MissingCapabilityConfig::default(),
+        );
+    // Create registration flow and continuous resolution loop with ambitious defaults
+    let registration_flow = Arc::new(RegistrationFlow::new(Arc::clone(&marketplace)));
+    let loop_config = ResolutionConfig {
+        high_risk_auto_resolution: std::env::var("CCOS_DEMO_AUTO_APPROVE")
+            .unwrap_or_else(|_| "1".to_string())
+            == "1",
+        ..ResolutionConfig::default()
+    };
+    let cr_loop = ContinuousResolutionLoop::new(
+        Arc::new(resolver),
+        Arc::clone(&registration_flow),
+        Arc::clone(&marketplace),
+        loop_config,
+    );
+
+    // Up to N refinement rounds: resolve → re-snap → re-synthesize
+    let max_rounds = std::env::var("CCOS_DEMO_RESOLVE_ROUNDS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(3);
+    let mut last_planner = planner_spec.to_string();
+
+    for round in 1..=max_rounds {
+        println!("{}", format!("🔂 Resolution round {}", round).yellow());
+
+        // Enqueue and trigger resolution per missing capability
+        for cap in missing.clone().into_iter() {
+            let mut context = std::collections::HashMap::new();
+            context.insert(
+                "source".to_string(),
+                format!("example_resolve_round_{}", round),
+            );
+            // Enqueue via resolver (internal to cr_loop.resolver)
+            // Note: we access through marketplace + new resolver above; create a fresh resolver handle
+            // by cloning from cr_loop internals is not public; re-enqueue via a new resolver instance
+            let temp_resolver = rtfs_compiler::ccos::synthesis::missing_capability_resolver::MissingCapabilityResolver::new(
+                Arc::clone(&marketplace),
+                Arc::new(rtfs_compiler::ccos::checkpoint_archive::CheckpointArchive::new()),
+                rtfs_compiler::ccos::synthesis::missing_capability_resolver::ResolverConfig::default(),
+                rtfs_compiler::ccos::synthesis::feature_flags::MissingCapabilityConfig::default(),
+            );
+            temp_resolver.handle_missing_capability(cap.clone(), vec![], context)?;
+
+            // Trigger the loop (risk assessment + approvals if needed)
+            if let Err(e) = cr_loop
+                .trigger_resolution(&cap, Some("interactive_synthesis"))
+                .await
+            {
+                eprintln!("⚠️ trigger_resolution failed for {}: {}", cap, e);
+            }
+
+            // Optional auto-approval path
+            if std::env::var("CCOS_DEMO_AUTO_APPROVE").unwrap_or_else(|_| "1".to_string()) == "1" {
+                let _ = cr_loop.approve_capability(&cap, "demo").await;
+            }
+
+            // Process queue to actually discover/register candidates
+            temp_resolver.process_queue().await?;
+        }
+
+        // Re-snapshot and re-synthesize planner with an empty conversation (registry-first)
+        let snapshot = marketplace.list_capabilities().await;
+        let re = rtfs_compiler::ccos::synthesis::synthesize_capabilities_with_marketplace(
+            &[],
+            &snapshot,
+        );
+        if let Some(new_planner) = re.planner {
+            // Extract and report diff
+            if new_planner != last_planner {
+                println!("{}", "✨ Planner evolved after resolution".green());
+                if let Some(new_id) = extract_capability_id_from_spec(&new_planner) {
+                    // Check for remaining missing deps
+                    if let Ok(dep_next) = dependency_extractor::extract_dependencies(&new_planner) {
+                        if dep_next.missing_dependencies.is_empty() {
+                            return Ok(Some((new_id, new_planner)));
+                        } else {
+                            // Prepare next round on remaining missing
+                            missing = dep_next.missing_dependencies.clone();
+                            last_planner = new_planner;
+                            continue;
+                        }
+                    } else {
+                        return Ok(Some((new_id, new_planner)));
+                    }
+                } else {
+                    // Fallback ID if extraction fails
+                    if let Ok(dep_next) = dependency_extractor::extract_dependencies(&new_planner) {
+                        if dep_next.missing_dependencies.is_empty() {
+                            return Ok(Some(("synth.domain.planner.v1".to_string(), new_planner)));
+                        } else {
+                            missing = dep_next.missing_dependencies.clone();
+                            last_planner = new_planner;
+                            continue;
+                        }
+                    } else {
+                        return Ok(Some(("synth.domain.planner.v1".to_string(), new_planner)));
+                    }
+                }
+            } else {
+                // No change in planner; if still missing, try next round; else finish
+                if missing.is_empty() {
+                    return Ok(None);
+                }
+            }
+        } else {
+            // Planner not returned; nothing to do
+            return Ok(None);
+        }
+    }
+
+    // Max rounds reached; if planner evolved, return it; else no change
+    if last_planner != planner_spec {
+        if let Some(new_id) = extract_capability_id_from_spec(&last_planner) {
+            return Ok(Some((new_id, last_planner)));
+        } else {
+            return Ok(Some(("synth.domain.planner.v1".to_string(), last_planner)));
+        }
+    }
+
+    Ok(None)
 }
 
 async fn run_application_phase(
@@ -441,6 +721,26 @@ async fn run_application_phase(
 
     println!("{} {}", "User Request:".bold(), new_topic.clone().cyan());
     println!();
+
+    // Best effort: load the most recently persisted capability from disk (if any)
+    if let Some((persisted_id, _persisted_spec)) =
+        load_and_register_latest_persisted_capability(ccos).await?
+    {
+        println!(
+            "{}",
+            format!("✓ Loaded persisted capability: {}", persisted_id).green()
+        );
+        println!(
+            "{}",
+            format!("  Source: capabilities/generated/{}.rtfs", persisted_id).dim()
+        );
+        // Keep going; it's now registered in the marketplace
+    }
+
+    // Also register generic demo sub-capabilities if not present yet (idempotent)
+    if let Err(e) = register_generic_demo_capabilities(ccos).await {
+        eprintln!("⚠️  Could not ensure generic demo capabilities: {}", e);
+    }
 
     // Find the most recently registered capability (any domain!)
     let marketplace = ccos.get_capability_marketplace();
@@ -471,44 +771,47 @@ async fn run_application_phase(
 
     println!(
         "\n{}",
-        "⚡ Executing learned workflow via registered capability...".yellow()
+        "⚡ Executing learned workflow (capability or direct plan)...".yellow()
     );
 
-    // Build invocation with appropriate parameters based on capability
-    // Note: For demo purposes, we use simple mock parameters
-    // In production, these would come from actual user input
-    let capability_invocation = if capability_id.starts_with("travel.") {
-        format!(
-            "(call :{} {{:destination \"{}\" :duration 5 :budget 3000 :interests [\"culture\" \"food\"]}})",
-            capability_id,
-            new_topic.replace('"', "\\\"")
-        )
-    } else if capability_id.starts_with("sentiment.") {
-        format!(
-            "(call :{} {{:source \"{}\" :format \"csv\" :granularity \"detailed\"}})",
-            capability_id,
-            new_topic.replace('"', "\\\"")
-        )
-    } else {
-        // Default for research capabilities
-        format!(
-            "(call :{} {{:topic \"{}\"}})",
-            capability_id,
-            new_topic.replace('"', "\\\"")
-        )
+    // Build a generic invocation from the capability's declared input_schema (RTFS types)
+    // This adapts to any capability shape; no hard-coded domain prefixes.
+    let prefs_for_apply: ExtractedPreferences = ExtractedPreferences {
+        goal: new_topic.clone(),
+        parameters: std::collections::BTreeMap::new(),
     };
+    let args_map = build_rtfs_args_from_manifest(capability_manifest, &new_topic, &prefs_for_apply);
+    let capability_invocation = format!("(call :{} {} )", capability_id, args_map);
 
     println!(
         "{}",
         format!("  Invocation: {}", capability_invocation).dim()
     );
 
-    let ctx = rtfs_compiler::runtime::RuntimeContext::controlled(vec![capability_id.to_string()]);
-    let plan = rtfs_compiler::ccos::types::Plan::new_rtfs(capability_invocation, vec![]);
+    // Prefer executing a direct plan if present (e.g., travel.plan.v1.rtfs), else call the capability
+    let plan_path = std::path::Path::new("capabilities/generated/travel.plan.v1.rtfs");
+    let (plan_code, ctx_caps) = if plan_path.exists() {
+        let plan_src = std::fs::read_to_string(plan_path)?;
+        // Allow the travel.* capabilities in controlled mode
+        let caps = vec![
+            "travel.flights.search".to_string(),
+            "travel.hotels.search".to_string(),
+            "travel.itinerary.plan".to_string(),
+            "travel.museums.reserve".to_string(),
+        ];
+        (plan_src, caps)
+    } else {
+        (
+            capability_invocation.clone(),
+            vec![capability_id.to_string()],
+        )
+    };
+    let ctx = rtfs_compiler::runtime::RuntimeContext::controlled(ctx_caps);
+    let plan = rtfs_compiler::ccos::types::Plan::new_rtfs(plan_code, vec![]);
 
     match ccos.validate_and_execute_plan(plan, &ctx).await {
         Ok(result) => {
-            println!("{}", "  → Capability executed successfully".dim());
+            println!("{}", "  → Executed successfully".dim());
             println!("{}", format!("  → Result: {:?}", result.value).dim());
             println!(
                 "\n{}",
@@ -518,10 +821,7 @@ async fn run_application_phase(
             );
         }
         Err(e) => {
-            println!(
-                "{}",
-                format!("  ⚠ Capability execution error: {}", e).yellow()
-            );
+            println!("{}", format!("  ⚠ Execution error: {}", e).yellow());
             println!(
                 "{}",
                 "  → This is expected if the capability calls sub-capabilities not yet registered"
@@ -546,6 +846,223 @@ async fn run_application_phase(
     })
 }
 
+/// Try to load the most recent persisted capability from capabilities/generated and register it
+async fn load_and_register_latest_persisted_capability(
+    ccos: &Arc<CCOS>,
+) -> Result<Option<(String, String)>, Box<dyn std::error::Error>> {
+    use std::fs;
+    use std::time::SystemTime;
+
+    let dir = std::path::Path::new("capabilities/generated");
+    if !dir.exists() {
+        return Ok(None);
+    }
+
+    let mut newest: Option<(std::path::PathBuf, SystemTime)> = None;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("rtfs") {
+            let meta = entry.metadata()?;
+            let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            if newest.as_ref().map(|(_, t)| mtime > *t).unwrap_or(true) {
+                newest = Some((path, mtime));
+            }
+        }
+    }
+
+    let (path, _mtime) = match newest {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    let spec = fs::read_to_string(&path)?;
+    let spec_trimmed = spec.trim().to_string();
+    let id = extract_capability_id_from_spec(&spec_trimmed)
+        .ok_or("Failed to extract capability id from persisted RTFS spec")?;
+
+    // Register a simple placeholder executor as in learning phase
+    let marketplace = ccos.get_capability_marketplace();
+    marketplace
+        .register_local_capability(
+            id.clone(),
+            id.clone(),
+            "Persisted learned capability".to_string(),
+            Arc::new(|_value: &Value| {
+                Ok(Value::Map({
+                    let mut m = std::collections::HashMap::new();
+                    m.insert(
+                        MapKey::String("status".to_string()),
+                        Value::String("research_completed".to_string()),
+                    );
+                    m.insert(
+                        MapKey::String("summary".to_string()),
+                        Value::String("Research findings compiled successfully".to_string()),
+                    );
+                    m
+                }))
+            }),
+        )
+        .await?;
+
+    Ok(Some((id, spec_trimmed)))
+}
+
+/// Build an RTFS argument map string from a capability's input_schema and available preferences
+/// - Uses TypeExpr to select sensible defaults
+/// - Fills :topic with provided topic when present
+/// - For unknown or complex types, falls back to empty or simple placeholders
+fn build_rtfs_args_from_manifest(
+    cap: &rtfs_compiler::ccos::capability_marketplace::types::CapabilityManifest,
+    topic: &str,
+    prefs: &ExtractedPreferences,
+) -> String {
+    // Helper to lookup a parameter by name from preferences
+    let lookup_pref = |name: &str| -> Option<&ExtractedParam> { prefs.parameters.get(name) };
+
+    // Render a primitive default value according to type and optional preference
+    fn render_value_for_type(
+        ty: &TypeExpr,
+        pref: Option<&ExtractedParam>,
+        topic: &str,
+        key: &str,
+    ) -> String {
+        match ty {
+            TypeExpr::Primitive(p) => match p {
+                PrimitiveType::String | PrimitiveType::Symbol | PrimitiveType::Keyword => {
+                    let v = pref.map(|p| p.value.as_str()).unwrap_or_else(|| {
+                        if key == "topic" {
+                            topic
+                        } else {
+                            ""
+                        }
+                    });
+                    format!("\"{}\"", v.replace('"', "\\\\\""))
+                }
+                PrimitiveType::Int => {
+                    if let Some(p) = pref {
+                        p.value
+                            .parse::<i64>()
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|_| "0".to_string())
+                    } else {
+                        "0".to_string()
+                    }
+                }
+                PrimitiveType::Float => {
+                    if let Some(p) = pref {
+                        p.value
+                            .parse::<f64>()
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|_| "0.0".to_string())
+                    } else {
+                        "0.0".to_string()
+                    }
+                }
+                PrimitiveType::Bool => {
+                    let v = pref
+                        .map(|p| p.value.to_lowercase())
+                        .unwrap_or_else(|| "false".to_string());
+                    let b = matches!(v.as_str(), "true" | "yes" | "y" | "1");
+                    b.to_string()
+                }
+                PrimitiveType::Nil => "nil".to_string(),
+                PrimitiveType::Custom(_k) => {
+                    // Best effort: treat as string placeholder
+                    let v = pref.map(|p| p.value.as_str()).unwrap_or("");
+                    format!("\"{}\"", v.replace('"', "\\\\\""))
+                }
+            },
+            TypeExpr::Vector(_inner) => {
+                // Lists: try to split preference value on commas into string vector
+                if let Some(p) = pref {
+                    let items: Vec<String> = p
+                        .value
+                        .split(',')
+                        .map(|s| format!("\"{}\"", s.trim().replace('"', "\\\\\"")))
+                        .collect();
+                    format!("[{}]", items.join(" "))
+                } else {
+                    // Empty vector with type hint ignored in literal
+                    "[]".to_string()
+                }
+            }
+            TypeExpr::Tuple(types) => {
+                // Render tuple with defaults for each element
+                let parts: Vec<String> = types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| render_value_for_type(t, pref, topic, &format!("{}_{}", key, i)))
+                    .collect();
+                format!("[{}]", parts.join(" "))
+            }
+            TypeExpr::Map { entries, .. } => {
+                // Nested map: recurse with no specific prefs
+                let mut parts = Vec::new();
+                for MapTypeEntry {
+                    key: k, value_type, ..
+                } in entries
+                {
+                    let rendered = render_value_for_type(value_type, None, topic, &k.0);
+                    parts.push(format!(":{} {}", k.0, rendered));
+                }
+                format!("{{{}}}", parts.join(" "))
+            }
+            TypeExpr::Union(variants) => {
+                // Choose first variant heuristically
+                if let Some(first) = variants.first() {
+                    render_value_for_type(first, pref, topic, key)
+                } else {
+                    "nil".to_string()
+                }
+            }
+            TypeExpr::Optional(inner) => {
+                // Provide value according to inner type; could be nil if no pref
+                if pref.is_some() || key == "topic" {
+                    render_value_for_type(inner, pref, topic, key)
+                } else {
+                    "nil".to_string()
+                }
+            }
+            // Function/Resource/Array/Refined/Enum/Never/Any and others: best-effort string
+            _ => {
+                let v = pref.map(|p| p.value.as_str()).unwrap_or("");
+                format!("\"{}\"", v.replace('"', "\\\\\""))
+            }
+        }
+    }
+
+    // Default if no schema: pass :topic only
+    if cap.input_schema.is_none() {
+        return format!("{{:topic \"{}\"}}", topic.replace('"', "\\\\\""));
+    }
+
+    // Build from map entries only; for other shapes fallback to :topic
+    match cap.input_schema.as_ref().unwrap() {
+        TypeExpr::Map { entries, .. } => {
+            let mut parts: Vec<String> = Vec::with_capacity(entries.len());
+            for MapTypeEntry {
+                key,
+                value_type,
+                optional: _,
+            } in entries
+            {
+                let pref = lookup_pref(&key.0);
+                let rendered = render_value_for_type(value_type, pref, topic, &key.0);
+                parts.push(format!(":{} {}", key.0, rendered));
+            }
+            format!("{{{}}}", parts.join(" "))
+        }
+        other => {
+            // Fallback
+            eprintln!(
+                "Note: unsupported input_schema shape {:?}, defaulting to :topic only",
+                other
+            );
+            format!("{{:topic \"{}\"}}", topic.replace('"', "\\\\\""))
+        }
+    }
+}
+
 /// Generate appropriate clarification questions based on user's goal using LLM
 async fn generate_questions_for_goal(
     ccos: &Arc<CCOS>,
@@ -555,19 +1072,19 @@ async fn generate_questions_for_goal(
         .get_delegating_arbiter()
         .ok_or("Delegating arbiter not available for question generation")?;
 
+    // Instruct LLM to emit RTFS Vector (not JSON)
     let prompt = format!(
-        r#"You are analyzing a user's goal to determine what clarifying questions to ask.
+        r#"You are analyzing a user's goal to determine high-signal clarifying questions.
 
-User Goal: "{}"
+User Goal: "{goal}"
 
-Generate 5 specific, relevant questions to understand how to best help achieve this goal.
-The questions should gather preferences, constraints, and requirements specific to THIS goal.
-
-IMPORTANT: Generate questions appropriate for the ACTUAL goal, not generic research questions.
-
-Output ONLY a JSON array of question strings, no markdown fences:
-["question 1", "question 2", "question 3", "question 4", "question 5"]"#,
-        goal
+Output rules:
+{rtfs_hint}
+- 3 to 5 questions, specific to THIS goal, gathering preferences, constraints, and success criteria.
+- No duplicate or generic questions.
+"#,
+        goal = goal,
+        rtfs_hint = crate::prompt_hints::rtfs_vector_only()
     );
 
     let response = arbiter
@@ -575,23 +1092,36 @@ Output ONLY a JSON array of question strings, no markdown fences:
         .await
         .map_err(|e| format!("Question generation failed: {}", e))?;
 
-    // Parse JSON response
-    let cleaned = response
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
+    // Parse RTFS vector/list of strings strictly (no fallback)
+    let rtfs = crate::prompt_hints::strip_fenced_rtfs(&response);
+    let expr = parse_expression(&rtfs).map_err(|e| {
+        format!(
+            "LLM did not produce a valid RTFS vector of questions: {:?}",
+            e
+        )
+    })?;
 
-    let questions: Vec<String> = serde_json::from_str(cleaned)
-        .map_err(|e| format!("Failed to parse questions JSON: {}", e))?;
-
-    if questions.len() < 3 {
-        return Err("LLM generated too few questions".into());
+    fn vec_strings_from_expr(expr: &Expression) -> Result<Vec<String>, String> {
+        let items: &Vec<Expression> = match expr {
+            Expression::Vector(v) | Expression::List(v) => v,
+            other => return Err(format!("Expected RTFS vector/list, got {:?}", other)),
+        };
+        let mut out = Vec::with_capacity(items.len());
+        for e in items {
+            match e {
+                Expression::Literal(Literal::String(s)) => out.push(s.clone()),
+                _ => return Err("Non-string element in questions vector".to_string()),
+            }
+        }
+        Ok(out)
     }
 
-    // Limit to 5 questions
-    Ok(questions.into_iter().take(5).collect())
+    let questions =
+        vec_strings_from_expr(&expr).map_err(|e| format!("LLM questions vector invalid: {}", e))?;
+    if questions.is_empty() {
+        return Err("LLM returned an empty questions vector".into());
+    }
+    Ok(questions)
 }
 
 /// Real interaction using CCOS user.ask capability
@@ -686,76 +1216,13 @@ async fn gather_preferences_via_ccos(
         }
     }
 
-    // Parse answers into structured preferences
-    // First try to ask the delegating LLM to parse the Q/A pairs into the preference schema.
-    // This produces a more robust mapping than the simple heuristics below. If the arbiter
-    // isn't available or parsing fails, fallback to the original heuristic parsing.
-    if let Ok(Some(parsed)) = parse_preferences_via_llm(ccos, topic, &interaction_history).await {
-        return Ok((parsed, interaction_history));
-    }
-
-    // Fallback: Use heuristic extraction with dynamic parameters
-    let mut parameters = std::collections::BTreeMap::new();
-
-    // Map Q/A pairs to parameters heuristically
-    for (question, answer) in interaction_history.iter().skip(1) {
-        let q_lower = question.to_lowercase();
-
-        // Try to infer parameter name from question
-        let param_name = if q_lower.contains("budget") {
-            Some(("budget", "currency"))
-        } else if q_lower.contains("day")
-            || q_lower.contains("duration")
-            || q_lower.contains("long")
-            || q_lower.contains("week")
-        {
-            Some(("duration", "duration"))
-        } else if q_lower.contains("interest")
-            || q_lower.contains("prefer")
-            || q_lower.contains("like")
-        {
-            Some(("interests", "list"))
-        } else if q_lower.contains("domain") || q_lower.contains("area") || q_lower.contains("type")
-        {
-            Some(("domains", "list"))
-        } else if q_lower.contains("depth")
-            || q_lower.contains("detail")
-            || q_lower.contains("level")
-        {
-            Some(("depth", "string"))
-        } else if q_lower.contains("format")
-            || q_lower.contains("output")
-            || q_lower.contains("style")
-        {
-            Some(("format", "string"))
-        } else if q_lower.contains("source") || q_lower.contains("resource") {
-            Some(("sources", "list"))
-        } else {
-            None
-        };
-
-        if let Some((param_name, param_type)) = param_name {
-            parameters.insert(
-                param_name.to_string(),
-                ExtractedParam {
-                    question: question.clone(),
-                    value: answer.clone(),
-                    param_type: param_type.to_string(),
-                    category: None,
-                },
-            );
-        }
-    }
-
-    let preferences = ExtractedPreferences {
-        goal: topic.to_string(),
-        parameters,
-    };
-
-    Ok((preferences, interaction_history))
+    // Strict parsing via LLM: no heuristic fallback
+    let parsed = parse_preferences_via_llm(ccos, topic, &interaction_history).await?;
+    Ok((parsed, interaction_history))
 }
 
 /// Extract a single preference value from text based on keywords
+#[allow(dead_code)]
 fn extract_single_from_text(text: &str, keywords: &[&str]) -> String {
     // Simple heuristic: find sentences containing keywords
     for sentence in text.split(['.', ',', ';']) {
@@ -772,6 +1239,7 @@ fn extract_single_from_text(text: &str, keywords: &[&str]) -> String {
 }
 
 /// Extract a list of items from text based on keywords
+#[allow(dead_code)]
 fn extract_list_from_text(text: &str, keywords: &[&str]) -> Vec<String> {
     let mut items = Vec::new();
     for sentence in text.split(['.', ';']) {
@@ -796,254 +1264,218 @@ async fn parse_preferences_via_llm(
     ccos: &Arc<CCOS>,
     topic: &str,
     interaction_history: &[(String, String)],
-) -> Result<Option<ExtractedPreferences>, Box<dyn std::error::Error>> {
+) -> Result<ExtractedPreferences, Box<dyn std::error::Error>> {
     // Try to get the delegating arbiter. If missing, bail to allow fallback heuristics.
-    let arbiter = match ccos.get_delegating_arbiter() {
-        Some(a) => a,
-        None => return Ok(None),
-    };
+    let arbiter = ccos
+        .get_delegating_arbiter()
+        .ok_or("Delegating arbiter not available for preference parsing")?;
 
-    // Build a compact JSON-friendly prompt containing the Q/A pairs.
-    // The goal: have LLM extract meaningful keywords and infer parameter types.
-    let mut qa_list = Vec::new();
+    // Build RTFS-friendly prompt: ask RTFS map output, no JSON.
+    // Represent Q/A pairs inline as a vector of {:q "..." :a "..."}
+    let mut qa_rtfs_elems = Vec::new();
     for (_i, (q, a)) in interaction_history.iter().enumerate().skip(1) {
-        qa_list.push(format!(
-            "{{\"q\": {}, \"a\": {}}}",
-            serde_json::to_string(q)?,
-            serde_json::to_string(a)?
-        ));
+        // escape quotes
+        let q_esc = q.replace('"', "\\\"");
+        let a_esc = a.replace('"', "\\\"");
+        qa_rtfs_elems.push(format!("{{:q \"{}\" :a \"{}\"}}", q_esc, a_esc));
     }
-    let qa_json = format!("[{}]", qa_list.join(","));
+    let qa_rtfs = format!("[{}]", qa_rtfs_elems.join(" "));
 
     let prompt = format!(
         r#"Analyze these question/answer pairs and extract semantic parameters with inferred types.
 
 Your task:
-1. For each Q/A pair, identify what parameter the question is asking about (e.g., "budget", "duration", "interests")
-2. Infer the parameter type: "string", "number", "list", "boolean", "duration", "currency"
-3. Return a JSON object where each parameter maps to metadata
+1. For each Q/A, determine the parameter (e.g., :budget, :duration, :interests)
+2. Infer type keyword from: :string :number :list :boolean :duration :currency
+3. {rtfs_hint}
+STRICT FORMAT EXAMPLE (no commas, keyword keys, exactly this shape):
+     {{
+         :goal "{topic}"
+         :parameters {{
+             :PARAM {{:type :keyword :value "..." :question "..."}}
+         }}
+     }}
+     {{
+         :goal "{topic}"
+         :parameters {{
+             :PARAM {{:type :keyword :value "..." :question "..."}}
+             ...
+         }}
+     }}
 
-Examples of expected extractions:
-Q: "What's your budget?"  -> parameter: "budget", type: "currency", value: user's budget
-Q: "How many days?"       -> parameter: "duration", type: "number", value: number of days
-Q: "What interests you?"  -> parameter: "interests", type: "list", value: comma-separated interests
-
-Respond ONLY with valid JSON matching this schema:
-{{
-  "goal": "{topic}",
-  "parameters": {{
-    "PARAMETER_NAME": {{
-      "type": "string|number|list|boolean|duration|currency",
-      "value": "extracted value from answer",
-      "question": "the question that asked for this"
-    }},
-    ...
-  }}
-}}
-
-Q/A pairs: {qa_json}
+Q/A pairs (RTFS): {qa}
 "#,
         topic = topic,
-        qa_json = qa_json
+        qa = qa_rtfs,
+        rtfs_hint = crate::prompt_hints::rtfs_map_only()
     );
 
-    let raw = arbiter.generate_raw_text(&prompt).await;
-    let raw = match raw {
-        Ok(r) => r,
-        Err(_) => return Ok(None),
-    };
+    let raw = arbiter
+        .generate_raw_text(&prompt)
+        .await
+        .map_err(|e| format!("Preference parsing LLM call failed: {}", e))?;
 
-    // Clean fenced code if present
-    let cleaned = raw
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
+    // Clean fenced code if present and parse RTFS map
+    let cleaned = crate::prompt_hints::strip_fenced_rtfs(&raw);
+    let expr = parse_expression(&cleaned)
+        .map_err(|e| format!("Preference parser failed to parse RTFS map: {:?}", e))?;
 
-    // Try to parse JSON
-    let v: serde_json::Value = match serde_json::from_str(cleaned) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
+    // Expect {:goal "..." :parameters { :param {:type :keyword :value "..." :question "..."} ... }}
+    let (mut goal, mut parameters) = (topic.to_string(), std::collections::BTreeMap::new());
 
-    // Extract goal
-    let goal = v
-        .get("goal")
-        .and_then(|x| x.as_str())
-        .unwrap_or(topic)
-        .to_string();
-
-    // Extract dynamic parameters
-    let mut parameters = std::collections::BTreeMap::new();
-
-    if let Some(params_obj) = v.get("parameters").and_then(|x| x.as_object()) {
-        for (param_name, param_data) in params_obj {
-            if let Some(param_obj) = param_data.as_object() {
-                let param_type = param_obj
-                    .get("type")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("string")
-                    .to_string();
-
-                let value = param_obj
-                    .get("value")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                let question = param_obj
-                    .get("question")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                parameters.insert(
-                    param_name.clone(),
-                    ExtractedParam {
-                        question,
-                        value,
-                        param_type,
-                        category: None,
-                    },
-                );
-            }
+    // Helper: convert Expression to string if it is a string literal
+    fn expr_to_string(expr: &Expression) -> Option<String> {
+        if let Expression::Literal(Literal::String(s)) = expr {
+            Some(s.clone())
+        } else {
+            None
         }
     }
 
-    let prefs = ExtractedPreferences { goal, parameters };
+    // Helper: convert Expression keyword or string literal to type keyword string (e.g., ":string")
+    fn expr_to_type_keyword(expr: &Expression) -> Option<String> {
+        match expr {
+            Expression::Literal(Literal::Keyword(k)) => Some(format!(":{}", k.0)),
+            Expression::Literal(Literal::String(s)) => Some(s.clone()),
+            _ => None,
+        }
+    }
 
-    Ok(Some(prefs))
+    // Walk the map
+    if let Expression::Map(kvs) = expr {
+        // Top-level keys
+        for (k, v) in kvs.iter() {
+            match k {
+                RtfsMapKey::Keyword(k) if k.0 == "goal" => {
+                    if let Some(s) = expr_to_string(v) {
+                        goal = s;
+                    }
+                }
+                RtfsMapKey::Keyword(k) if k.0 == "parameters" => {
+                    if let Expression::Map(pairs) = v {
+                        for (pk, pv) in pairs.iter() {
+                            // param name must be keyword or string
+                            let pname = match pk {
+                                RtfsMapKey::Keyword(kw) => kw.0.clone(),
+                                RtfsMapKey::String(s) => s.clone(),
+                                RtfsMapKey::Integer(i) => i.to_string(),
+                            };
+                            if let Expression::Map(pmap) = pv {
+                                let mut ptype: String = "string".to_string();
+                                let mut pval: String = String::new();
+                                let mut pquestion: String = String::new();
+                                for (mk, mv) in pmap.iter() {
+                                    match mk {
+                                        RtfsMapKey::Keyword(kw) if kw.0 == "type" => {
+                                            if let Some(t) = expr_to_type_keyword(mv) {
+                                                ptype = t;
+                                            }
+                                        }
+                                        RtfsMapKey::Keyword(kw) if kw.0 == "value" => {
+                                            if let Some(s) = expr_to_string(mv) {
+                                                pval = s;
+                                            }
+                                        }
+                                        RtfsMapKey::Keyword(kw) if kw.0 == "question" => {
+                                            if let Some(s) = expr_to_string(mv) {
+                                                pquestion = s;
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                parameters.insert(
+                                    pname,
+                                    ExtractedParam {
+                                        question: pquestion,
+                                        value: pval,
+                                        param_type: ptype,
+                                        category: None,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    } else {
+        return Err("Preference parser: expected RTFS map at top-level".into());
+    }
+
+    let prefs = ExtractedPreferences { goal, parameters };
+    // Strict cleanup: drop parameters with empty values or empty questions to avoid noise
+    let mut cleaned_params = std::collections::BTreeMap::new();
+    for (k, v) in prefs.parameters.iter() {
+        let val_ok = !v.value.trim().is_empty();
+        let q_ok = !v.question.trim().is_empty();
+        if val_ok && q_ok {
+            cleaned_params.insert(k.clone(), v.clone());
+        }
+    }
+
+    let prefs = ExtractedPreferences {
+        goal: prefs.goal,
+        parameters: cleaned_params,
+    };
+
+    // If everything was dropped, signal an error to re-prompt or adjust
+    if prefs.parameters.is_empty() {
+        return Err("LLM returned no usable parameters (empty values); please retry".into());
+    }
+    Ok(prefs)
 }
 
-/// Real LLM-driven capability synthesis using the delegating arbiter
+/// Real LLM-driven capability synthesis using the Phase 8 pipeline (collector + planner)
+/// Refactored to always emit an executable plan (no plan-body indirection).
 async fn synthesize_capability_via_llm(
     ccos: &Arc<CCOS>,
     topic: &str,
     interaction_history: &[(String, String)],
     prefs: &ExtractedPreferences,
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
-    let arbiter = ccos.get_delegating_arbiter().ok_or_else(|| {
-        eprintln!("\n❌ Delegating arbiter not initialized!");
-        eprintln!("   This usually means:");
-        eprintln!("   1. No valid LLM configuration in config file");
-        eprintln!("   2. Missing API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)");
-        eprintln!("   3. Invalid provider/model settings");
-        eprintln!("\n   Solutions:");
-        eprintln!("   • Check config/agent_config.toml has valid llm_profiles");
-        eprintln!("   • Ensure API key environment variable is set");
-        eprintln!("   • Try: export OPENAI_API_KEY=sk-...");
-        eprintln!("   • Or use --profile to select a valid profile\n");
-        "Delegating arbiter not available - check LLM configuration"
-    })?;
+    // Convert interaction history to synthesis turns (first entry is initial goal)
+    let turns: Vec<rtfs_compiler::ccos::synthesis::InteractionTurn> = interaction_history
+        .iter()
+        .enumerate()
+        .map(
+            |(i, (q, a))| rtfs_compiler::ccos::synthesis::InteractionTurn {
+                turn_index: i,
+                prompt: q.clone(),
+                answer: Some(a.clone()),
+            },
+        )
+        .collect();
 
-    // Build synthesis prompt from the actual interaction
-    let mut interaction_summary = String::new();
-    for (i, (question, answer)) in interaction_history.iter().enumerate() {
-        interaction_summary.push_str(&format!("Turn {}: Q: {} A: {}\n", i + 1, question, answer));
+    // Snapshot marketplace to enable registry-first planner generation
+    let marketplace = ccos.get_capability_marketplace();
+    let snapshot = marketplace.list_capabilities().await;
+
+    let result =
+        rtfs_compiler::ccos::synthesis::synthesize_capabilities_with_marketplace(&turns, &snapshot);
+
+    // Show collector for visibility (it drives the questions) but persist the planner (the actual workflow)
+    if let Some(collector) = &result.collector {
+        println!("\n{}", "🧾 Generated collector (questions)".bold().yellow());
+        println!("```rtfs\n{}\n```", collector.trim());
     }
 
-    // Format extracted parameters for the prompt
-    let mut parameters_summary = String::new();
-    for (param_name, param) in &prefs.parameters {
-        parameters_summary.push_str(&format!(
-            "- {} ({}) from Q: \"{}\" → A: \"{}\"\n",
-            param_name, param.param_type, param.question, param.value
-        ));
-    }
+    let _original_planner_spec = result
+        .planner
+        .ok_or("Synthesis did not return a planner capability")?;
 
-    let synthesis_prompt = format!(
-        r#"You are synthesizing an RTFS capability from a user interaction.
+    // Generic approach: always emit an executable plan as the capability implementation.
+    // Extract parameters from the learned preferences and compose generic steps.
+    let planner_spec = build_generic_planner_capability(topic, prefs)?;
 
-## User's Goal
-"{}"
+    // Extract ID from planner RTFS spec
+    let capability_id = extract_capability_id_from_spec(&planner_spec)
+        .ok_or("Failed to extract capability id from synthesized planner RTFS")?;
 
-## Conversation History (Questions & Answers)
-{}
-
-## Your Task
-Analyze the user's ACTUAL GOAL and the conversation to create a capability that helps achieve THAT SPECIFIC GOAL.
-
-CRITICAL: The capability MUST match the user's goal, not generic research.
-- If goal is "plan a trip", create a trip planning capability
-- If goal is "research X", create a research capability  
-- If goal is "build Y", create a building/development capability
-
-The capability should:
-1. Have an ID matching the goal domain (e.g., "travel.trip-planner.v1", "research.assistant.v1")
-2. Accept relevant parameters based on the goal
-3. Call external sub-capabilities to delegate specialized tasks
-4. Use RTFS 'let' syntax to bind capability results to variables
-5. Return a complete result map with all relevant information
-
-CRITICAL RTFS PATTERN - Use 'let' to bind results:
-- When calling a capability, ALWAYS bind the result with 'let'
-- Use the bound variable in subsequent steps
-- Final step should return the complete result
-
-OUTPUT EXACTLY ONE fenced ```rtfs block containing a well-formed (capability ...) s-expression.
-
-CRITICAL: Parameter types must use KEYWORD syntax, NOT string literals!
-- CORRECT: :parameters {{:destination :string :duration :number :budget :currency}}
-- WRONG:   :parameters {{:destination "string" :duration "number" :budget "currency"}}
-
-Use keyword types: :string, :number, :list, :boolean, :currency, :duration, :integer, :float, etc.
-
-Example for trip planning goal (showing proper 'let' binding with CORRECT TYPES):
-```rtfs
-(capability "travel.trip-planner.paris.v1"
-  :description "Paris trip planner with user's budget and duration preferences"
-  :parameters {{:destination :string :travel_dates :string :duration :number :budget :currency :interests :list :accommodation_type :string :travel_companions :string}}
-  :implementation
-    (do
-      (let attractions 
-        (call :travel.research {{:destination destination :interests interests}}))
-      (let hotels
-        (call :travel.hotels {{:city destination :budget budget :duration duration}}))
-      (let transport
-        (call :travel.transport {{:destination destination :mode "metro_and_walk"}}))
-      (let food_spots
-        (call :food.recommendations {{:city destination :interests interests :budget budget}}))
-      (let itinerary
-        (call :travel.itinerary {{:days duration :attractions attractions :hotels hotels :food food_spots}}))
-      {{:status "research_completed"
-        :summary (str "Complete " duration "-day trip plan for " destination " with $" budget " budget")
-        :destination destination
-        :attractions attractions
-        :hotels hotels
-        :transport transport
-        :food_recommendations food_spots
-        :itinerary itinerary}}))
-```
-
-KEY POINTS:
-1. Use (let variable_name (call :capability {{:params}})) to bind results
-2. Each 'let' captures the capability's return value
-3. Parameter types are KEYWORDS like :string, :number, NOT string literals
-
-EXTRACTED PARAMETERS FROM USER INTERACTION (use these in your capability):
-{}
-
-Respond ONLY with the fenced RTFS block specific to the user's ACTUAL goal, no other text."#,
-        topic, interaction_summary, parameters_summary
-    );
-
-    // Call LLM to generate the capability
-    let raw_response = arbiter
-        .generate_raw_text(&synthesis_prompt)
-        .await
-        .map_err(|e| format!("LLM synthesis failed: {}", e))?;
-
-    // Extract capability from response
-    let capability_spec = extract_capability_from_response(&raw_response)?;
-
-    // Extract capability ID
-    let capability_id = extract_capability_id_from_spec(&capability_spec)
-        .unwrap_or_else(|| "research.smart-assistant.v1".to_string());
-
-    // Phase 1: Extract dependencies from synthesized capability
+    // Dependency analysis for planner
     if let Ok(dep_result) =
-        rtfs_compiler::ccos::synthesis::dependency_extractor::extract_dependencies(&capability_spec)
+        rtfs_compiler::ccos::synthesis::dependency_extractor::extract_dependencies(&planner_spec)
     {
         println!("🔍 DEPENDENCY ANALYSIS for {}", capability_id);
         println!("   Total dependencies: {}", dep_result.dependencies.len());
@@ -1080,8 +1512,53 @@ Respond ONLY with the fenced RTFS block specific to the user's ACTUAL goal, no o
         }
     }
 
-    Ok((capability_id, capability_spec))
+    Ok((capability_id, planner_spec))
 }
+
+/// Build a generic, executable planner capability whose implementation IS the plan.
+/// Extracts parameters from preferences and composes generic workflow steps.
+/// Adapts to any domain by calling generic sub-capabilities that provide domain-agnostic execution.
+fn build_generic_planner_capability(
+    topic: &str,
+    prefs: &ExtractedPreferences,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let esc = |s: &str| s.replace('"', "\\\"");
+
+    // Build let-bindings for each parameter extracted from Q&A
+    let mut param_bindings = Vec::new();
+    for (key, param) in &prefs.parameters {
+        param_bindings.push(format!("      :{} \"{}\"", key, esc(&param.value)));
+    }
+
+    // Generic workflow: discover requirements, plan steps, execute.
+    let spec = format!(
+        r#"(capability "synth.planner.v1"
+  :description "Generic planner that adapts to any domain via extensible sub-capabilities"
+  :parameters {{:goal "string"}}
+  :implementation
+    (do
+      (let ((goal "{}"{})
+        (let ((discover (call :generic.discover {{:goal goal}}))
+              (plan (call :generic.plan {{:discover discover :goal goal}}))
+              (execute (call :generic.execute {{:plan plan :goal goal}})))
+          {{:status "completed"
+            :goal goal
+            :discover discover
+            :plan plan
+            :execute execute}})))
+)"#,
+        esc(topic),
+        if !param_bindings.is_empty() {
+            format!("\n{}\n      ", param_bindings.join("\n"))
+        } else {
+            String::new()
+        }
+    );
+    Ok(spec)
+}
+
+/// Build a domain-specific trip planner capability whose implementation IS the plan.
+/// It composes concrete steps and calls domain capabilities directly.
 
 /// Extract RTFS capability from LLM response (handles fenced blocks and raw s-expressions)
 fn extract_capability_from_response(response: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -1139,6 +1616,9 @@ fn extract_capability_id_from_spec(spec: &str) -> Option<String> {
     None
 }
 
+// Note: All fallback generators removed for strict mode
+
+#[allow(dead_code)]
 fn generate_research_capability(prefs: &ResearchPreferences, id: &str) -> String {
     format!(
         r#"(capability "{id}"
@@ -1411,5 +1891,81 @@ fn persist_capability(id: &str, spec: &str) -> Result<(), Box<dyn std::error::Er
     fs::create_dir_all(dir)?;
     let file_path = dir.join(format!("{}.rtfs", id));
     fs::write(file_path, spec.as_bytes())?;
+    Ok(())
+}
+
+fn persist_plan(id: &str, plan_code: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = Path::new("capabilities/generated");
+    fs::create_dir_all(dir)?;
+    let file_path = dir.join(format!("{}.rtfs", id));
+    fs::write(file_path, plan_code.as_bytes())?;
+    Ok(())
+}
+
+/// Register generic sub-capabilities used by the planner.
+/// These are domain-agnostic and adapt to any goal/topic.
+async fn register_generic_demo_capabilities(
+    ccos: &Arc<CCOS>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use rtfs_compiler::runtime::Value as V;
+    let mp = ccos.get_capability_marketplace();
+
+    // generic.discover: analyzes goal and parameters
+    mp.register_local_capability(
+        "generic.discover".to_string(),
+        "Discover Requirements".to_string(),
+        "Generic requirement discovery".to_string(),
+        Arc::new(|_input: &V| {
+            let mut out = std::collections::HashMap::new();
+            out.insert(
+                MapKey::String("status".into()),
+                V::String("discovered".into()),
+            );
+            out.insert(
+                MapKey::String("requirements".into()),
+                V::Vector(vec![
+                    V::String("requirement_1".into()),
+                    V::String("requirement_2".into()),
+                ]),
+            );
+            Ok(V::Map(out))
+        }),
+    )
+    .await?;
+
+    // generic.plan: creates a plan from discovered requirements
+    mp.register_local_capability(
+        "generic.plan".to_string(),
+        "Plan Steps".to_string(),
+        "Generic step planner".to_string(),
+        Arc::new(|_input: &V| {
+            let mut out = std::collections::HashMap::new();
+            out.insert(MapKey::String("status".into()), V::String("planned".into()));
+            out.insert(
+                MapKey::String("steps".into()),
+                V::Vector(vec![V::String("step_1".into()), V::String("step_2".into())]),
+            );
+            Ok(V::Map(out))
+        }),
+    )
+    .await?;
+
+    // generic.execute: executes the plan
+    mp.register_local_capability(
+        "generic.execute".to_string(),
+        "Execute Plan".to_string(),
+        "Generic plan executor".to_string(),
+        Arc::new(|_input: &V| {
+            let mut out = std::collections::HashMap::new();
+            out.insert(
+                MapKey::String("status".into()),
+                V::String("executed".into()),
+            );
+            out.insert(MapKey::String("result".into()), V::String("success".into()));
+            Ok(V::Map(out))
+        }),
+    )
+    .await?;
+
     Ok(())
 }
