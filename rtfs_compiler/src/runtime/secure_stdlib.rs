@@ -778,6 +778,36 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::numbers),
             })),
         );
+
+        // Assoc: associate key/value pairs into a new map or set vector index
+        env.define(
+            &Symbol("assoc".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "assoc".to_string(),
+                arity: Arity::Variadic(3),
+                func: Arc::new(Self::assoc),
+            })),
+        );
+
+        // Dissoc: remove keys from a map (pure)
+        env.define(
+            &Symbol("dissoc".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "dissoc".to_string(),
+                arity: Arity::Variadic(2),
+                func: Arc::new(Self::dissoc),
+            })),
+        );
+
+        // Conj: add elements to a collection (append for vectors)
+        env.define(
+            &Symbol("conj".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "conj".to_string(),
+                arity: Arity::Variadic(2),
+                func: Arc::new(Self::conj),
+            })),
+        );
     }
 
     pub(crate) fn load_type_predicate_functions(env: &mut Environment) {
@@ -1228,8 +1258,8 @@ impl SecureStandardLibrary {
                 return Ok(arg.clone());
             }
         }
-        // If all arguments are falsy or no arguments, return the last argument or Nil
-        Ok(args.last().cloned().unwrap_or(Value::Nil))
+        // If all arguments are falsy or no arguments, return the last argument or Boolean(false)
+        Ok(args.last().cloned().unwrap_or(Value::Boolean(false)))
     }
 
     fn not(args: Vec<Value>) -> RuntimeResult<Value> {
@@ -2444,6 +2474,126 @@ impl SecureStandardLibrary {
                 expected: "string, keyword, or integer".to_string(),
                 actual: value.type_name().to_string(),
                 operation: "map key".to_string(),
+            }),
+        }
+    }
+
+    // (assoc coll k v & more) =>
+    //  - If coll is a map: return new map with k/v pairs associated
+    //  - If coll is a vector: set index k to v (no resize), error if out of bounds
+    fn assoc(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() < 3 || args.len() % 2 == 0 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "assoc".to_string(),
+                expected: "odd number of args: (assoc coll k v [k v]...)".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let coll = &args[0];
+        let pairs = &args[1..];
+
+        match coll {
+            Value::Map(m) => {
+                let mut out = m.clone();
+                for chunk in pairs.chunks(2) {
+                    let key = Self::value_to_map_key(&chunk[0])?;
+                    let val = chunk[1].clone();
+                    out.insert(key, val);
+                }
+                Ok(Value::Map(out))
+            }
+            Value::Vector(v) => {
+                let mut out = v.clone();
+                for chunk in pairs.chunks(2) {
+                    let idx = match &chunk[0] {
+                        Value::Integer(i) => *i as usize,
+                        other => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "integer index for vector".to_string(),
+                                actual: other.type_name().to_string(),
+                                operation: "assoc".to_string(),
+                            })
+                        }
+                    };
+                    if idx >= out.len() {
+                        return Err(RuntimeError::IndexOutOfBounds {
+                            index: idx as i64,
+                            length: out.len(),
+                        });
+                    }
+                    out[idx] = chunk[1].clone();
+                }
+                Ok(Value::Vector(out))
+            }
+            other => Err(RuntimeError::TypeError {
+                expected: "map or vector".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "assoc".to_string(),
+            }),
+        }
+    }
+
+    // (dissoc map k1 k2 ...) -> new map without the given keys
+    fn dissoc(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() < 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "dissoc".to_string(),
+                expected: "at least 2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let map_val = &args[0];
+        let keys = &args[1..];
+
+        let mut out = match map_val {
+            Value::Map(m) => m.clone(),
+            other => {
+                return Err(RuntimeError::TypeError {
+                    expected: "map".to_string(),
+                    actual: other.type_name().to_string(),
+                    operation: "dissoc".to_string(),
+                })
+            }
+        };
+
+        for k in keys {
+            if let Ok(mk) = Self::value_to_map_key(k) {
+                out.remove(&mk);
+            } else {
+                // ignore non-convertible keys
+            }
+        }
+
+        Ok(Value::Map(out))
+    }
+
+    // (conj coll x1 x2 ...) ->
+    //  - For vectors: append to the end
+    //  - For lists: prepend to the front (if implemented); here we support vectors
+    fn conj(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() < 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "conj".to_string(),
+                expected: "at least 2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let coll = &args[0];
+        let items = &args[1..];
+
+        match coll {
+            Value::Vector(v) => {
+                let mut out = v.clone();
+                out.extend_from_slice(items);
+                Ok(Value::Vector(out))
+            }
+            other => Err(RuntimeError::TypeError {
+                expected: "vector".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "conj".to_string(),
             }),
         }
     }
