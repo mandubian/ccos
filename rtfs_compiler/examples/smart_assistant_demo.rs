@@ -1699,10 +1699,33 @@ fn generate_orchestrator_capability(
 ) -> DemoResult<String> {
     let mut rtfs_code = String::new();
     
-    // Build a proper RTFS plan structure
+    // Collect all unique input variables from all steps
+    let mut all_inputs = std::collections::HashSet::new();
+    for step in resolved_steps {
+        for input in &step.original.required_inputs {
+            all_inputs.insert(input.clone());
+        }
+    }
+    
+    // Build input-schema map with :any type as default
+    let input_schema = if all_inputs.is_empty() {
+        "{}".to_string()
+    } else {
+        let mut schema_parts = Vec::new();
+        let mut sorted_inputs: Vec<_> = all_inputs.iter().collect();
+        sorted_inputs.sort();
+        for input in sorted_inputs {
+            schema_parts.push(format!("    :{} :any", input));
+        }
+        format!("{{\n{}\n  }}", schema_parts.join("\n"))
+    };
+    
+    // Build a proper RTFS 2.0 plan structure with input/output schemas
     rtfs_code.push_str("(plan\n");
     rtfs_code.push_str(&format!("  :name \"synth.plan.orchestrator.v1\"\n"));
     rtfs_code.push_str(&format!("  :language rtfs20\n"));
+    rtfs_code.push_str(&format!("  :input-schema {}\n", input_schema));
+    rtfs_code.push_str(&format!("  :output-schema {{\n    :result :any\n  }}\n"));
     rtfs_code.push_str(&format!(
         "  :annotations {{:goal \"{}\" :step_count {}}}\n",
         goal.replace("\"", "\\\""),
@@ -1711,18 +1734,18 @@ fn generate_orchestrator_capability(
     rtfs_code.push_str("  :body (do\n");
 
     if resolved_steps.is_empty() {
-        rtfs_code.push_str("    (step \"No Steps\" nil)\n");
+        rtfs_code.push_str("    (step \"No Steps\" {})\n");
     } else {
-        // Build sequential steps using proper RTFS syntax
-        for (idx, resolved) in resolved_steps.iter().enumerate() {
+        // Build sequential steps using proper RTFS syntax without $ prefix
+        for resolved in resolved_steps.iter() {
             let step_desc = &resolved.original.name;
-            let step_inputs = build_step_call_args(&resolved.original, resolved_steps, idx)?;
+            let step_args = build_step_call_args(&resolved.original)?;
             
             rtfs_code.push_str(&format!(
                 "    (step \"{}\" (call :{} {}))\n",
                 step_desc.replace("\"", "\\\""),
                 resolved.capability_id,
-                step_inputs
+                step_args
             ));
         }
     }
@@ -1735,17 +1758,22 @@ fn generate_orchestrator_capability(
 
 fn build_step_call_args(
     step: &ProposedStep,
-    _resolved_steps: &[ResolvedStep],
-    _idx: usize,
 ) -> DemoResult<String> {
-    // For now, build simple call with just the required inputs as keyword args
-    let args: Vec<String> = step
-        .required_inputs
-        .iter()
-        .map(|input| format!(":${}", input))
-        .collect();
-
-    Ok(args.join(" "))
+    // Build map-based arguments without $ prefix: {:key1 val1 :key2 val2}
+    if step.required_inputs.is_empty() {
+        return Ok("{}".to_string());
+    }
+    
+    let mut args_parts = vec!["{".to_string()];
+    for (i, input) in step.required_inputs.iter().enumerate() {
+        args_parts.push(format!("    :{} {}", input, input));
+        if i < step.required_inputs.len() - 1 {
+            args_parts.push("\n".to_string());
+        }
+    }
+    args_parts.push("\n  }".to_string());
+    
+    Ok(args_parts.join(""))
 }
 
 #[allow(dead_code)]
