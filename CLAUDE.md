@@ -67,6 +67,9 @@ cargo test --test integration_tests -- --nocapture --test-threads 1
 
 # Performance analysis
 cargo run --bin rtfs-compiler -- --input file.rtfs --execute --show-timing --show-stats
+
+# For examples requiring an agent config, DO NOT USE config_minimal but this one
+cargo run --example EXAMPLE -- --config ../config/agent_config.toml
 ```
 
 ## Codebase Structure
