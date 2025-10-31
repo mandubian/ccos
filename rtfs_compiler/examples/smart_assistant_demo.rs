@@ -502,10 +502,11 @@ fn extract_question_items(value: &Value) -> Option<Vec<Value>> {
 
 fn parse_clarifying_response(response: &str) -> Result<Value, RuntimeError> {
     let sanitized = strip_code_fences(response);
-    let normalized = strip_commas_outside_strings(&sanitized);
-    match parse_expression(&normalized) {
+    // Use comma-stripped form only for RTFS parsing; preserve original for JSON
+    let normalized_for_rtfs = strip_commas_outside_strings(&sanitized);
+    match parse_expression(&normalized_for_rtfs) {
         Ok(expr) => Ok(expression_to_value(&expr)),
-        Err(rtfs_err) => match serde_json::from_str::<serde_json::Value>(&normalized) {
+        Err(rtfs_err) => match serde_json::from_str::<serde_json::Value>(&sanitized) {
             Ok(json) => Ok(json_to_demo_value(&json)),
             Err(json_err) => Err(RuntimeError::Generic(format!(
                 "Failed to parse clarifying questions via RTFS ({:?}) or JSON ({}).",
@@ -666,6 +667,127 @@ mod tests {
         let raw = "```clojure\n[:step]\n```";
         let stripped = strip_code_fences(raw);
         assert_eq!(stripped, "[:step]");
+    }
+
+    #[test]
+    fn generates_rtfs_with_schemas_and_no_dollar_vars() {
+        // Build two dummy steps
+        let step1 = ResolvedStep {
+            original: ProposedStep {
+                id: "s1".to_string(),
+                name: "Search flights".to_string(),
+                capability_class: "travel.flights.search".to_string(),
+                candidate_capabilities: vec![],
+                required_inputs: vec!["origin".into(), "destination".into(), "dates".into()],
+                expected_outputs: vec!["flight_options".into()],
+                description: None,
+            },
+            capability_id: "travel.flights.search".to_string(),
+            resolution_strategy: ResolutionStrategy::Found,
+        };
+
+        let step2 = ResolvedStep {
+            original: ProposedStep {
+                id: "s2".to_string(),
+                name: "Reserve lodging".to_string(),
+                capability_class: "travel.lodging.reserve".to_string(),
+                candidate_capabilities: vec![],
+                required_inputs: vec!["destination".into(), "dates".into(), "budget".into()],
+                expected_outputs: vec!["reservation".into()],
+                description: None,
+            },
+            capability_id: "travel.lodging.reserve".to_string(),
+            resolution_strategy: ResolutionStrategy::Found,
+        };
+
+        let rtfs = generate_orchestrator_capability(
+            "Book trip",
+            &[step1, step2],
+        )
+        .expect("rtfs generation");
+
+    // Must contain schemas
+        assert!(rtfs.contains(":input-schema"), "missing input-schema: {}", rtfs);
+        assert!(rtfs.contains(":output-schema"), "missing output-schema: {}", rtfs);
+
+        // No legacy $ prefix
+        assert!(
+            !rtfs.contains(":$"),
+            "contains legacy $ variable syntax: {}",
+            rtfs
+        );
+
+        // Capabilities required vector present with both caps
+        assert!(
+            rtfs.contains(":capabilities-required [\"travel.flights.search\" \"travel.lodging.reserve\"]")
+                || rtfs.contains(":capabilities-required [\"travel.lodging.reserve\" \"travel.flights.search\"]"),
+            "capabilities-required vector missing or incomplete: {}",
+            rtfs
+        );
+
+        // Arguments passed as map
+        assert!(rtfs.contains("(call :travel.flights.search {"));
+        assert!(rtfs.contains(":origin origin"));
+        assert!(rtfs.contains(":destination destination"));
+        assert!(rtfs.contains(":dates dates"));
+
+        // Output schema should reflect union of all step outputs
+        assert!(rtfs.contains(":flight_options :any"), "output-schema missing flight_options: {}", rtfs);
+        assert!(rtfs.contains(":reservation :any"), "output-schema missing reservation: {}", rtfs);
+
+        // Body should bind steps and compose final map using get
+        assert!(rtfs.contains("(let ["), "plan should bind step results with let: {}", rtfs);
+        assert!(rtfs.contains("(get step_1 :reservation"), "final composition should reference step outputs: {}", rtfs);
+    }
+
+    #[test]
+    fn wires_inputs_from_previous_step_outputs() {
+        // Step 1 produces :prefs
+        let s1 = ResolvedStep {
+            original: ProposedStep {
+                id: "s1".into(),
+                name: "Aggregate preferences".into(),
+                capability_class: "planning.preferences.aggregate".into(),
+                candidate_capabilities: vec![],
+                required_inputs: vec!["goal".into()],
+                expected_outputs: vec!["prefs".into()],
+                description: None,
+            },
+            capability_id: "planning.preferences.aggregate".into(),
+            resolution_strategy: ResolutionStrategy::Found,
+        };
+
+        // Step 2 requires :prefs as input
+        let s2 = ResolvedStep {
+            original: ProposedStep {
+                id: "s2".into(),
+                name: "Plan activities".into(),
+                capability_class: "travel.activities.plan".into(),
+                candidate_capabilities: vec![],
+                required_inputs: vec!["prefs".into(), "destination".into()],
+                expected_outputs: vec!["activity_plan".into()],
+                description: None,
+            },
+            capability_id: "travel.activities.plan".into(),
+            resolution_strategy: ResolutionStrategy::Found,
+        };
+
+    let rtfs = generate_orchestrator_capability("Trip", &[s1, s2]).expect("generate");
+
+        // Step 2 should wire :prefs from step_0 output; destination remains a free input
+        assert!(rtfs.contains(":prefs (get step_0 :prefs)"), "prefs should be wired from previous step: {}", rtfs);
+        assert!(rtfs.contains(":destination destination"), "destination should remain a free symbol input: {}", rtfs);
+
+        // Input schema should not require internal-only keys like :prefs (produced by step_0)
+        assert!(rtfs.contains(":input-schema"));
+        let input_idx = rtfs.find(":input-schema").unwrap();
+        let output_idx = rtfs.find(":output-schema").unwrap_or(rtfs.len());
+        let input_block = &rtfs[input_idx..output_idx];
+        assert!(
+            !input_block.contains(":prefs :any"),
+            "input-schema should not include internal output keys: {}",
+            rtfs
+        );
     }
 }
 
@@ -893,10 +1015,10 @@ async fn propose_plan_steps(
 
 fn parse_plan_steps_response(response: &str) -> Result<Value, RuntimeError> {
     let sanitized = strip_code_fences(response);
-    let normalized = strip_commas_outside_strings(&sanitized);
-    match parse_expression(&normalized) {
+    let normalized_for_rtfs = strip_commas_outside_strings(&sanitized);
+    match parse_expression(&normalized_for_rtfs) {
         Ok(expr) => Ok(expression_to_value(&expr)),
-        Err(rtfs_err) => match serde_json::from_str::<serde_json::Value>(&normalized) {
+        Err(rtfs_err) => match serde_json::from_str::<serde_json::Value>(&sanitized) {
             Ok(json) => Ok(json_to_demo_value(&json)),
             Err(json_err) => Err(RuntimeError::Generic(format!(
                 "Failed to parse plan steps via RTFS ({:?}) or JSON ({}).",
@@ -1684,12 +1806,188 @@ async fn register_orchestrator_in_marketplace(
         )
         .await;
 
+    // Persist the orchestrator RTFS code to disk so it can be executed later by id
+    {
+        let dir = Path::new("capabilities/generated");
+        let persist_result: Result<(), Box<dyn std::error::Error>> = (|| {
+            fs::create_dir_all(dir)?;
+            let file_path = dir.join(format!("{}.rtfs", capability_id));
+            fs::write(file_path, orchestrator_rtfs.as_bytes())?;
+            Ok(())
+        })();
+        if let Err(e) = persist_result {
+            eprintln!(
+                "⚠️  Failed to persist orchestrator RTFS for {}: {}",
+                capability_id, e
+            );
+        } else {
+            println!(
+                "  💾 Saved orchestrator RTFS to capabilities/generated/{}.rtfs",
+                capability_id
+            );
+        }
+    }
+
+    // Also convert the plan into a first-class Capability and persist under capabilities/generated/<id>/capability.rtfs
+    {
+        let persist_cap_result: Result<(), Box<dyn std::error::Error>> = (|| {
+            let capability_rtfs = convert_plan_to_capability_rtfs(capability_id, orchestrator_rtfs)?;
+            let cap_dir = Path::new("capabilities/generated").join(capability_id);
+            fs::create_dir_all(&cap_dir)?;
+            let cap_file = cap_dir.join("capability.rtfs");
+            fs::write(cap_file, capability_rtfs.as_bytes())?;
+            Ok(())
+        })();
+        if let Err(e) = persist_cap_result {
+            eprintln!(
+                "⚠️  Failed to persist generated capability for {}: {}",
+                capability_id, e
+            );
+        } else {
+            println!(
+                "  💾 Saved generated capability to capabilities/generated/{}/capability.rtfs",
+                capability_id
+            );
+        }
+    }
+
     println!(
         "  📦 Registered as capability: {}",
         capability_id.cyan()
     );
 
     Ok(())
+}
+
+/// Convert a consolidated RTFS (plan ...) into a Capability RTFS with :implementation holding the plan :body
+fn convert_plan_to_capability_rtfs(capability_id: &str, plan_rtfs: &str) -> DemoResult<String> {
+    use chrono::Utc;
+    let created_at = Utc::now().to_rfc3339();
+
+    // Extract fields from plan
+    let body_do = extract_s_expr_after_key(plan_rtfs, ":body")
+        .or_else(|| extract_do_block(plan_rtfs))
+        .ok_or_else(|| runtime_error(RuntimeError::Generic("Could not extract :body from plan".to_string())))?;
+    let input_schema = extract_block_after_key(plan_rtfs, ":input-schema", '{', '}')
+        .unwrap_or_else(|| "{}".to_string());
+    let output_schema = extract_block_after_key(plan_rtfs, ":output-schema", '{', '}')
+        .unwrap_or_else(|| "{}".to_string());
+    let caps_required = extract_block_after_key(plan_rtfs, ":capabilities-required", '[', ']')
+        .unwrap_or_else(|| "[]".to_string());
+
+    // Assemble capability
+    let mut out = String::new();
+    out.push_str(&format!("(capability \"{}\"\n", capability_id));
+    out.push_str("  :name \"Synthesized Plan Orchestrator\"\n");
+    out.push_str("  :version \"1.0.0\"\n");
+    out.push_str("  :description \"Auto-generated orchestrator capability from smart_assistant plan\"\n");
+    out.push_str("  :source_url \"ccos://generated\"\n");
+    out.push_str("  :discovery_method \"smart_assistant\"\n");
+    out.push_str(&format!("  :created_at \"{}\"\n", created_at));
+    out.push_str("  :capability_type \"orchestrator\"\n");
+    out.push_str("  :permissions []\n");
+    out.push_str("  :effects []\n");
+    out.push_str(&format!("  :capabilities-required {}\n", caps_required));
+    out.push_str(&format!("  :input-schema {}\n", input_schema));
+    out.push_str(&format!("  :output-schema {}\n", output_schema));
+    out.push_str("  :implementation\n");
+    out.push_str("    ");
+    out.push_str(&body_do);
+    out.push_str("\n)\n");
+    Ok(out)
+}
+
+/// Extracts the first top-level (do ...) s-expression from a text blob.
+fn extract_do_block(text: &str) -> Option<String> { extract_block_with_head(text, "do") }
+
+/// Extracts the first top-level s-expression immediately following a given keyword key.
+fn extract_s_expr_after_key(text: &str, key: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    let mut in_string = false;
+    while i + key.len() <= bytes.len() {
+        let c = bytes[i] as char;
+        if c == '"' { in_string = !in_string; i += 1; continue; }
+        if !in_string && &text[i..i + key.len()] == key {
+            // Move to next '('
+            let mut j = i + key.len();
+            while j < bytes.len() {
+                let cj = bytes[j] as char;
+                if cj == '"' { in_string = !in_string; j += 1; continue; }
+                if !in_string && cj == '(' {
+                    return extract_balanced_from(text, j, '(', ')');
+                }
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Extract a balanced block (like {...} or [...] or (...)) that follows a key.
+fn extract_block_after_key(text: &str, key: &str, open: char, close: char) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    let mut in_string = false;
+    while i + key.len() <= bytes.len() {
+        let c = bytes[i] as char;
+        if c == '"' { in_string = !in_string; i += 1; continue; }
+        if !in_string && &text[i..i + key.len()] == key {
+            // Move to next opening delimiter
+            let mut j = i + key.len();
+            while j < bytes.len() {
+                let cj = bytes[j] as char;
+                if cj == '"' { in_string = !in_string; j += 1; continue; }
+                if !in_string && cj == open {
+                    return extract_balanced_from(text, j, open, close);
+                }
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Extract the first top-level s-expression whose head matches `head`.
+fn extract_block_with_head(text: &str, head: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    let mut in_string = false;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '"' { in_string = !in_string; i += 1; continue; }
+        if !in_string && c == '(' {
+            // Check head
+            let mut j = i + 1;
+            while j < bytes.len() && (bytes[j] as char).is_whitespace() { j += 1; }
+            if j + head.len() <= bytes.len() && &text[j..j + head.len()] == head {
+                return extract_balanced_from(text, i, '(', ')');
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Helper to extract a balanced region starting at index `start` where `text[start] == open`.
+fn extract_balanced_from(text: &str, start: usize, open: char, close: char) -> Option<String> {
+    let bytes = text.as_bytes();
+    if start >= bytes.len() || (bytes[start] as char) != open { return None; }
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut i = start;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '"' { in_string = !in_string; i += 1; continue; }
+        if !in_string {
+            if c == open { depth += 1; }
+            else if c == close { depth -= 1; if depth == 0 { return Some(text[start..=i].to_string()); } }
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Generate an RTFS orchestrator capability that chains all resolved steps.
@@ -1699,23 +1997,46 @@ fn generate_orchestrator_capability(
 ) -> DemoResult<String> {
     let mut rtfs_code = String::new();
     
-    // Collect all unique input variables from all steps
-    let mut all_inputs = std::collections::HashSet::new();
+    // Compute true external inputs by walking steps and excluding inputs produced by prior steps
+    let mut produced: HashSet<String> = HashSet::new();
+    let mut external_inputs: HashSet<String> = HashSet::new();
     for step in resolved_steps {
         for input in &step.original.required_inputs {
-            all_inputs.insert(input.clone());
+            if !produced.contains(input) {
+                external_inputs.insert(input.clone());
+            }
+        }
+        for out in &step.original.expected_outputs {
+            produced.insert(out.clone());
         }
     }
+    // Collect unique capability ids (capabilities-required)
+    let mut cap_ids_set = std::collections::HashSet::new();
+    for step in resolved_steps {
+        cap_ids_set.insert(step.capability_id.clone());
+    }
+    let mut cap_ids: Vec<_> = cap_ids_set.into_iter().collect();
+    cap_ids.sort();
+    // Collect union of all expected outputs across steps and remember producing step index
+    let mut output_to_idx: HashMap<String, usize> = HashMap::new();
+    for (idx, step) in resolved_steps.iter().enumerate() {
+        for out in &step.original.expected_outputs {
+            output_to_idx.insert(out.clone(), idx);
+        }
+    }
+    let mut all_outputs: Vec<_> = output_to_idx.keys().cloned().collect();
+    all_outputs.sort();
     
     // Build input-schema map with :any type as default
-    let input_schema = if all_inputs.is_empty() {
+    let input_schema = if external_inputs.is_empty() {
         "{}".to_string()
     } else {
         let mut schema_parts = Vec::new();
-        let mut sorted_inputs: Vec<_> = all_inputs.iter().collect();
+        let mut sorted_inputs: Vec<_> = external_inputs.iter().collect();
         sorted_inputs.sort();
         for input in sorted_inputs {
-            schema_parts.push(format!("    :{} :any", input));
+            let ty = infer_input_type(input);
+            schema_parts.push(format!("    :{} :{}", input, ty));
         }
         format!("{{\n{}\n  }}", schema_parts.join("\n"))
     };
@@ -1724,8 +2045,28 @@ fn generate_orchestrator_capability(
     rtfs_code.push_str("(plan\n");
     rtfs_code.push_str(&format!("  :name \"synth.plan.orchestrator.v1\"\n"));
     rtfs_code.push_str(&format!("  :language rtfs20\n"));
+    if !cap_ids.is_empty() {
+        let caps_vec = cap_ids
+            .iter()
+            .map(|id| format!("\"{}\"", id))
+            .collect::<Vec<_>>()
+            .join(" ");
+        rtfs_code.push_str(&format!("  :capabilities-required [{}]\n", caps_vec));
+    }
     rtfs_code.push_str(&format!("  :input-schema {}\n", input_schema));
-    rtfs_code.push_str(&format!("  :output-schema {{\n    :result :any\n  }}\n"));
+    // Build output-schema from the union of all steps' expected outputs; fallback to :result
+    if !all_outputs.is_empty() {
+        let mut parts = Vec::new();
+        for key in &all_outputs {
+            parts.push(format!("    :{} :any", key));
+        }
+        rtfs_code.push_str(&format!(
+            "  :output-schema {{\n{}\n  }}\n",
+            parts.join("\n")
+        ));
+    } else {
+        rtfs_code.push_str(&format!("  :output-schema {{\n    :result :any\n  }}\n"));
+    }
     rtfs_code.push_str(&format!(
         "  :annotations {{:goal \"{}\" :step_count {}}}\n",
         goal.replace("\"", "\\\""),
@@ -1736,18 +2077,41 @@ fn generate_orchestrator_capability(
     if resolved_steps.is_empty() {
         rtfs_code.push_str("    (step \"No Steps\" {})\n");
     } else {
-        // Build sequential steps using proper RTFS syntax without $ prefix
-        for resolved in resolved_steps.iter() {
+        // Build a let-binding that captures each step's result, then compose a final map from outputs
+        rtfs_code.push_str("    (let [\n");
+        for (idx, resolved) in resolved_steps.iter().enumerate() {
             let step_desc = &resolved.original.name;
-            let step_args = build_step_call_args(&resolved.original)?;
-            
+            // For wiring, compute a map of available outputs from previous steps
+            let mut prior_outputs: HashMap<String, usize> = HashMap::new();
+            for (pidx, prev) in resolved_steps.iter().enumerate() {
+                if pidx >= idx { break; }
+                for out in &prev.original.expected_outputs {
+                    prior_outputs.insert(out.clone(), pidx);
+                }
+            }
+            let step_args = build_step_call_args(&resolved.original, &prior_outputs)?;
             rtfs_code.push_str(&format!(
-                "    (step \"{}\" (call :{} {}))\n",
+                "      step_{} (step \"{}\" (call :{} {}))\n",
+                idx,
                 step_desc.replace("\"", "\\\""),
                 resolved.capability_id,
                 step_args
             ));
         }
+        rtfs_code.push_str("    ]\n");
+        // Compose final output map pulling keys from the step that produced them
+        rtfs_code.push_str("      {\n");
+        for (i, key) in all_outputs.iter().enumerate() {
+            let src_idx = output_to_idx.get(key).cloned().unwrap_or(0);
+            rtfs_code.push_str(&format!(
+                "        :{} (get step_{} :{})",
+                key, src_idx, key
+            ));
+            if i < all_outputs.len() - 1 {
+                rtfs_code.push_str("\n");
+            }
+        }
+        rtfs_code.push_str("\n      })\n");
     }
     
     rtfs_code.push_str("  )\n");
@@ -1758,6 +2122,7 @@ fn generate_orchestrator_capability(
 
 fn build_step_call_args(
     step: &ProposedStep,
+    prior_outputs: &HashMap<String, usize>,
 ) -> DemoResult<String> {
     // Build map-based arguments without $ prefix: {:key1 val1 :key2 val2}
     if step.required_inputs.is_empty() {
@@ -1766,7 +2131,11 @@ fn build_step_call_args(
     
     let mut args_parts = vec!["{".to_string()];
     for (i, input) in step.required_inputs.iter().enumerate() {
-        args_parts.push(format!("    :{} {}", input, input));
+        if let Some(pidx) = prior_outputs.get(input) {
+            args_parts.push(format!("    :{} (get step_{} :{})", input, pidx, input));
+        } else {
+            args_parts.push(format!("    :{} {}", input, input));
+        }
         if i < step.required_inputs.len() - 1 {
             args_parts.push("\n".to_string());
         }
@@ -1774,6 +2143,25 @@ fn build_step_call_args(
     args_parts.push("\n  }".to_string());
     
     Ok(args_parts.join(""))
+}
+
+/// Heuristic input type inference from common parameter names.
+fn infer_input_type(name: &str) -> &'static str {
+    let n = name.trim().to_ascii_lowercase();
+    match n.as_str() {
+        // Strings
+        "goal" | "origin" | "destination" | "dates" | "lodging_style" | "risk_profile" | "date_range" => "string",
+        // Integers
+        "party_size" | "n" | "count" => "integer",
+        // Numbers (floats/ints)
+        "budget" | "amount" | "price" | "cost" => "number",
+        // Lists
+        "interests" | "preferred_assets" | "sources" | "tags" => "list",
+        // Booleans
+        "confirm" | "dry_run" | "dryrun" => "boolean",
+        // Default
+        _ => "any",
+    }
 }
 
 #[allow(dead_code)]
