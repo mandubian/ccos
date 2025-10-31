@@ -70,3 +70,29 @@ Add new tests in `tests/` mirroring existing style; use env flags for delegation
 8. Causal Chain: `rtfs_compiler/src/ccos/causal_chain.rs`
 9. Intent Graph: `rtfs_compiler/src/ccos/intent_graph.rs`
 10. Agent Registry: `rtfs_compiler/src/ccos/agent_registry.rs`
+
+---
+## 7. Development Commands
+
+All development happens in the `rtfs_compiler/` directory:
+
+```bash
+# Build and test
+cargo build --release
+cargo test
+
+# Interactive development
+cargo run --bin rtfs-repl
+
+# Run production compiler 
+cargo run --bin rtfs-compiler -- --input file.rtfs --execute
+
+# Specific test execution
+cargo test --test integration_tests -- --nocapture --test-threads 1
+
+# Performance analysis
+cargo run --bin rtfs-compiler -- --input file.rtfs --execute --show-timing --show-stats
+
+# For examples requiring an agent config, DO NOT USE config_minimal but this one
+cargo run --example EXAMPLE -- --config ../config/agent_config.toml
+```
