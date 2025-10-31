@@ -318,7 +318,7 @@ Merge strategy:
 
 ## 20) Live LLM Delegation Implementation Guide
 
-- **Configuration**: point `openrouter_minimal.toml` (or environment override) at the `openrouter_free:balanced` profile and set CCOS runtime to load it under `:delegating-arbiter/profile-id` so requests stay governed.
+- **Configuration**: use `config/agent_config.toml` (or environment override) with a profile targeting `openrouter_free:balanced`, and set the CCOS runtime to load it under `:delegating-arbiter/profile-id` so requests stay governed.
 - **Prompt contract**: compose the DelegatingArbiter request as RTFS data (`{:intent intent-map :coverage coverage-map :needs needs-capabilities}`) and wrap it with a system scaffold that enumerates governance rules, turn limits, and the expected response schema.
 - **Invocation path**: issue `(:call :ccos.delegating-arbiter.invoke-llm {:profile profile-id :payload arbiter-input})` from the arbiter module, capture the LLM response as structured RTFS, and validate it against the clarifier schema before progressing.
 - **Ledger & observability**: hash prompts/responses, record token usage, provider latency, and any redactions in the causal chain for audit without leaking raw content.
