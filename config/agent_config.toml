@@ -1,0 +1,55 @@
+# RTFS Agent Configuration (strict runner)
+version = "0.1"
+agent_id = "demo.agent"
+profile = "minimal"
+
+[orchestrator.isolation]
+mode = "wasm"
+
+[orchestrator.isolation.fs]
+ephemeral = false
+mounts = {}
+
+[orchestrator.dlp]
+enabled = false
+policy = "lenient"
+
+[network]
+enabled = false
+
+[network.egress]
+via = "none"
+allow_domains = []
+mtls = false
+# if needed later: tls_pins = []
+
+[capabilities.http]
+enabled = false
+
+[capabilities.http.egress]
+allow_domains = []
+mtls = false
+
+[capabilities.fs]
+enabled = false
+
+[capabilities.llm]
+enabled = false
+
+[governance.policies]
+# Required minimal policy entry
+"default" = { risk_tier = "low", requires_approvals = 0, budgets = { max_cost_usd = 0.0, token_budget = 0.0 } }
+
+[governance.keys]
+verify = ""
+
+[causal_chain.storage]
+mode = "in_memory"
+buffer_local = false
+
+[causal_chain.anchor]
+enabled = false
+
+[marketplace]
+registry_paths = []
+readonly = true
