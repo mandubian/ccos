@@ -1,0 +1,265 @@
+use rtfs::ast::{Expression, Keyword, Literal, MapKey, Symbol};
+use crate::capability_marketplace::CapabilityMarketplace;
+use rtfs::runtime::error::RuntimeResult;
+use crate::streaming::{StreamConfig, StreamHandle, StreamType, StreamingCapability};
+use rtfs::runtime::values::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use uuid::Uuid;
+
+/// Minimal local streaming provider for tests
+pub struct LocalStreamingProvider;
+
+#[async_trait::async_trait]
+impl StreamingCapability for LocalStreamingProvider {
+    fn start_stream(&self, _params: &Value) -> RuntimeResult<StreamHandle> {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<()>(1);
+        Ok(StreamHandle {
+            stream_id: Uuid::new_v4().to_string(),
+            stop_tx: tx,
+        })
+    }
+    fn stop_stream(&self, _handle: &StreamHandle) -> RuntimeResult<()> {
+        // Signal shutdown if needed; ignore errors in tests
+        let _ = _handle.stop_tx.clone().try_send(());
+        Ok(())
+    }
+    async fn start_stream_with_config(
+        &self,
+        _params: &Value,
+        _config: &StreamConfig,
+    ) -> RuntimeResult<StreamHandle> {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<()>(1);
+        Ok(StreamHandle {
+            stream_id: Uuid::new_v4().to_string(),
+            stop_tx: tx,
+        })
+    }
+    async fn send_to_stream(&self, _handle: &StreamHandle, _data: &Value) -> RuntimeResult<()> {
+        Ok(())
+    }
+    fn start_bidirectional_stream(&self, _params: &Value) -> RuntimeResult<StreamHandle> {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<()>(1);
+        Ok(StreamHandle {
+            stream_id: Uuid::new_v4().to_string(),
+            stop_tx: tx,
+        })
+    }
+    async fn start_bidirectional_stream_with_config(
+        &self,
+        _params: &Value,
+        _config: &StreamConfig,
+    ) -> RuntimeResult<StreamHandle> {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<()>(1);
+        Ok(StreamHandle {
+            stream_id: Uuid::new_v4().to_string(),
+            stop_tx: tx,
+        })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Minimal macro lowering for (mcp-stream <endpoint> <processor-fn> <initial-state?>)
+// Produces: (call :mcp.stream.start { :endpoint "..." :processor "..." :initial-state <value> })
+// This is an initial ergonomic helper; in future we may move macro expansion earlier in parse.
+
+/// Attempt to detect and lower the simple (mcp-stream ...) surface form into the canonical
+/// capability call expression expected by the runtime. This keeps RTFS programs concise while
+/// reusing the existing `(call :mcp.stream.start {...})` pathway described in the spec.
+pub fn maybe_lower_mcp_stream_macro(expr: &Expression) -> Expression {
+    // Internal helper to extract symbol name
+    fn symbol_name(e: &Expression) -> Option<String> {
+        if let Expression::Symbol(Symbol(s)) = e {
+            Some(s.clone())
+        } else {
+            None
+        }
+    }
+    // List structure is raw Vec<Expression>
+    if let Expression::List(items) = expr {
+        if items.is_empty() {
+            return expr.clone();
+        }
+        if let Some(head) = items.get(0) {
+            if let Some(sym) = symbol_name(head) {
+                if sym == "mcp-stream" {
+                    // Need at least endpoint and processor
+                    if items.len() < 3 {
+                        return expr.clone();
+                    }
+                    // Endpoint literal (symbol or string literal currently represented as Literal::String)
+                    let endpoint = match &items[1] {
+                        Expression::Literal(Literal::String(s)) => s.clone(),
+                        Expression::Symbol(Symbol(s)) => s.clone(),
+                        _ => return expr.clone(),
+                    };
+                    let processor = match &items[2] {
+                        Expression::Symbol(Symbol(s)) => s.clone(),
+                        Expression::Literal(Literal::String(s)) => s.clone(),
+                        _ => return expr.clone(),
+                    };
+                    let initial_state = if items.len() > 3 {
+                        items[3].clone()
+                    } else {
+                        Expression::Map(std::collections::HashMap::new())
+                    };
+
+                    // Build map with keyword keys (without leading ':') because MapKey::Keyword wraps raw value
+                    let mut m = std::collections::HashMap::new();
+                    m.insert(
+                        MapKey::Keyword(Keyword("endpoint".to_string())),
+                        Expression::Literal(Literal::String(endpoint)),
+                    );
+                    m.insert(
+                        MapKey::Keyword(Keyword("processor".to_string())),
+                        Expression::Literal(Literal::String(processor)),
+                    );
+                    m.insert(
+                        MapKey::Keyword(Keyword("initial-state".to_string())),
+                        initial_state,
+                    );
+                    let map_expr = Expression::Map(m);
+
+                    // Form: (call :mcp.stream.start { ... })
+                    let call_sym = Expression::Symbol(Symbol("call".to_string()));
+                    let capability_kw = Expression::Literal(Literal::Keyword(Keyword(
+                        "mcp.stream.start".to_string(),
+                    )));
+                    return Expression::List(vec![call_sym, capability_kw, map_expr]);
+                }
+            }
+        }
+    }
+    expr.clone()
+}
+/// Minimal MCP-focused streaming executor
+pub struct RtfsStreamingSyntaxExecutor {
+    marketplace: Arc<CapabilityMarketplace>,
+}
+
+impl RtfsStreamingSyntaxExecutor {
+    pub fn new(marketplace: Arc<CapabilityMarketplace>) -> Self {
+        Self { marketplace }
+    }
+
+    pub async fn register_mcp_stream(
+        &self,
+        capability_id: String,
+        provider: Arc<dyn StreamingCapability + Send + Sync>,
+        metadata: HashMap<String, String>,
+    ) -> Result<(), rtfs::runtime::error::RuntimeError> {
+        let name = metadata
+            .get("name")
+            .cloned()
+            .unwrap_or_else(|| capability_id.clone());
+        let description = metadata
+            .get("description")
+            .cloned()
+            .unwrap_or_else(|| format!("MCP streaming capability {}", capability_id));
+
+        let effects = Self::derive_effects(&metadata);
+
+        self.marketplace
+            .register_streaming_capability(
+                capability_id,
+                name,
+                description,
+                StreamType::Unidirectional,
+                provider,
+                None,
+                None,
+                effects,
+            )
+            .await
+            .map_err(|e| rtfs::runtime::error::RuntimeError::Generic(e.to_string()))
+    }
+
+    pub async fn start_mcp_stream(
+        &self,
+        capability_id: &str,
+        params: Value,
+        config: Option<StreamConfig>,
+    ) -> Result<StreamHandle, rtfs::runtime::error::RuntimeError> {
+        let final_config = config.unwrap_or(StreamConfig {
+            callbacks: None,
+            auto_reconnect: false,
+            max_retries: 0,
+        });
+
+        let handle = self
+            .marketplace
+            .start_stream_with_config(capability_id, &params, &final_config)
+            .await
+            .map_err(|e| rtfs::runtime::error::RuntimeError::Generic(e.to_string()))?;
+
+        let (stop_tx, _stop_rx) = mpsc::channel(1);
+        Ok(StreamHandle {
+            stream_id: handle.stream_id,
+            stop_tx,
+        })
+    }
+
+    pub async fn stop_stream(
+        &self,
+        handle: StreamHandle,
+    ) -> Result<(), rtfs::runtime::error::RuntimeError> {
+        let stop_tx = handle.stop_tx;
+        stop_tx.send(()).await.map_err(|e| {
+            rtfs::runtime::error::RuntimeError::Generic(format!("failed to signal stop: {}", e))
+        })
+    }
+}
+
+impl RtfsStreamingSyntaxExecutor {
+    fn derive_effects(metadata: &HashMap<String, String>) -> Vec<String> {
+        let raw = metadata
+            .get("effects")
+            .or_else(|| metadata.get("effect"))
+            .map(|value| value.trim());
+
+        let Some(raw) = raw else {
+            return vec![":network".to_string()];
+        };
+
+        if raw.is_empty() {
+            return vec![":network".to_string()];
+        }
+
+        if let Ok(json_vec) = serde_json::from_str::<Vec<String>>(raw) {
+            let parsed: Vec<String> = json_vec
+                .into_iter()
+                .filter_map(|item| Self::normalize_effect_label(&item))
+                .collect();
+            if !parsed.is_empty() {
+                return parsed;
+            }
+        }
+
+        let parsed: Vec<String> = raw
+            .split(',')
+            .filter_map(Self::normalize_effect_label)
+            .collect();
+        if parsed.is_empty() {
+            vec![":network".to_string()]
+        } else {
+            parsed
+        }
+    }
+
+    fn normalize_effect_label(raw: &str) -> Option<String> {
+        let trimmed = raw.trim().trim_matches(|c| c == '\"' || c == '\'');
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(if trimmed.starts_with(':') {
+            trimmed.to_string()
+        } else {
+            format!(":{}", trimmed)
+        })
+    }
+}

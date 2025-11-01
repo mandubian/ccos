@@ -1,6 +1,17 @@
-# RTFS Documentation
+# CCOS + RTFS Documentation
 
-This directory contains all documentation for the RTFS (Rust Task Flow Specification) project.
+This directory contains all documentation for the CCOS (Cognitive Computing Operating System) and RTFS (Runtime for Trustworthy Systems) project.
+
+## 📚 Essential Reading
+
+### RTFS Type System & Tools (NEW)
+- **[Type System Formal Specification](./rtfs-2.0/specs/13-type-system.md)** (903 lines) - Complete theoretical foundation with soundness proofs, subtyping rules, and formal semantics
+- **[Type Checking Quick Guide](./rtfs-2.0/guides/type-checking-guide.md)** (523 lines) - Practical guide for developers with examples and best practices
+- **[REPL Interactive Guide](./rtfs-2.0/guides/repl-guide.md)** (664 lines) - User-friendly REPL with visual feedback, plain-language explanations, and instant type/security analysis
+
+### Core Documentation
+- **[RTFS 2.0 Specifications](./rtfs-2.0/specs/)** - Language specifications
+- **[CCOS Specifications](./ccos/specs/)** - CCOS architecture and design
 
 ## Directory Structure
 
