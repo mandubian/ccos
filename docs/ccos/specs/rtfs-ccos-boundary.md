@@ -21,7 +21,7 @@ This document specifies the separation of concerns between RTFS (runtime + langu
 ## Capability-backed helpers (non-exhaustive)
 - Logging/output: `tool/log`, `tool.log`, `log` → `ccos.io.log`; `println` → `ccos.io.println`; `step` → `ccos.io.println`
 - Time/env: `tool/time-ms`, `tool.time-ms`, `current-time-millis` → `ccos.system.current-timestamp-ms`; `get-env` → `ccos.system.get-env`
-- File I/O: `file-exists?` → `ccos.io.file-exists`; `tool/open-file` → `ccos.io.open-file`
+- File I/O: `file-exists?` → `ccos.io.file-exists`; `read-file` → `ccos.io.read-file`; `write-file` → `ccos.io.write-file`; `delete-file` → `ccos.io.delete-file`; streaming helpers continue to map to `ccos.io.open-file`
 - Network: `tool/http-fetch`, `http-fetch` → `ccos.network.http-fetch`
 - Threading: `thread/sleep` → `ccos.system.sleep-ms`
 - KV helpers: `kv/assoc!`, `kv/dissoc!`, `kv/conj!` implemented as host `get` → pure transform → host `put`
