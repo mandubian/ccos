@@ -1,0 +1,115 @@
+[package]
+name = "ccos"
+version.workspace = true
+edition.workspace = true
+authors = ["Your Name <you@example.com>"]
+description = "CCOS - Cognitive Computing Operating System"
+license.workspace = true
+repository = "https://github.com/yourusername/rtfs-compiler"
+
+[dependencies]
+# Core RTFS dependency
+rtfs = { path = "../rtfs", features = ["pest", "regex"] }
+
+# Shared dependencies from workspace
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+itertools = { workspace = true }
+lazy_static = { workspace = true }
+chrono = { workspace = true }
+ordered-float = { workspace = true }
+validator = { workspace = true }
+schemars = { workspace = true }
+toml = { workspace = true }
+jsonschema = { workspace = true }
+sha2 = { workspace = true }
+wasmtime = { workspace = true }
+flate2 = { workspace = true }
+bincode = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# CCOS-specific dependencies
+rusqlite = { version = "0.29", features = ["bundled"] }
+log = "0.4"
+regex = "1.10"
+
+# Networking/API
+reqwest = { version = "0.11", features = ["json", "blocking", "cookies"] }
+urlencoding = "2.1"
+tokio = { version = "1.0", features = ["full"] }
+tokio-stream = "0.1"
+uuid = { version = "1.0", features = ["v4"] }
+url = "2.5"
+atty = "0.2"
+
+# MCP (Model Context Protocol) dependencies
+reqwest-eventsource = "0.5"
+eventsource-stream = "0.2"
+
+# REPL dependencies
+clap = { version = "4.0", features = ["derive"] }
+rustyline = { version = "13.0", optional = true }
+
+# Utilities
+indexmap = "2.0"
+llama_cpp = { version = "0.3.2", optional = true }
+num_cpus = "1.17.0"
+yansi = "1.0"
+
+# Caching dependencies
+rand = "0.8"
+dashmap = "5.5"
+
+# TUI Visualization
+ratatui = { version = "0.26" }
+crossterm = { version = "0.27" }
+
+# Web server and websockets
+axum = { version = "0.7", features = ["ws"] }
+tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
+tower-http = { version = "0.5", features = ["fs"] }
+
+[features]
+default = ["repl"]
+repl = ["dep:rustyline", "rtfs/repl"]
+
+[[bin]]
+name = "rtfs-ccos-repl"
+path = "src/bin/rtfs_ccos_repl.rs"
+required-features = ["repl"]
+
+[[bin]]
+name = "github_issue_manager"
+path = "src/bin/github_issue_manager.rs"
+
+[[bin]]
+name = "ccos-viewer"
+path = "src/bin/ccos-viewer.rs"
+
+[[bin]]
+name = "diagnose_storage"
+path = "src/bin/diagnose_storage.rs"
+
+[[bin]]
+name = "mcp-local-server"
+path = "src/bin/mcp_local_server.rs"
+
+[[bin]]
+name = "resolve-deps"
+path = "src/bin/resolve_deps.rs"
+
+[[bin]]
+name = "test-multi-capability-synthesis"
+path = "src/bin/test_multi_capability_synthesis.rs"
+
+[dev-dependencies]
+pretty_assertions = "1.4.0"
+tempfile = "3.8"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[build-dependencies]
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+

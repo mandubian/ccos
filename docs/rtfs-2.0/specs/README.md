@@ -54,8 +54,13 @@ Complete syntax reference, grammar rules, and language constructs.
 ### 02-evaluation-and-runtime.md
 Evaluation model, scoping rules, and runtime architecture.
 
-### 03-type-system.md
-Structural type system with refinement types and runtime validation.
+### 13-type-system.md (UPDATED - Formal Specification)
+**Complete formal type system** with subtyping, bidirectional type checking, soundness proofs, and theoretical foundations. Includes:
+- Formal type grammar and inference rules
+- Subtyping relation with 12 axioms
+- Progress and Preservation theorems
+- Algorithmic type checking specification
+- References to Pierce, Cardelli, Davies & Pfenning
 
 ### 04-host-boundary-and-capabilities.md
 Host interaction mechanisms, capability system, and security model.
@@ -147,15 +152,17 @@ The architecture analysis identifies areas for improvement:
 
 For new readers:
 1. Start with **00-philosophy.md** for conceptual foundation
-2. Read **01-syntax-and-grammar.md** for language basics
-3. Study **02-evaluation-and-runtime.md** for execution model
-4. Explore **04-host-boundary-and-capabilities.md** for CCOS integration
-5. Review **07-architecture-analysis.md** for LLM-driven development insights
+2. Read **01-language-overview.md** for language basics
+3. Study **04-evaluation-and-runtime.md** for execution model
+4. Read **13-type-system.md** for the formal type system specification
+5. Explore **07-host-boundary-and-capabilities.md** for CCOS integration
+6. Review **11-architecture-analysis.md** for LLM-driven development insights
 
 For LLM developers:
-- Focus on **01-syntax-and-grammar.md** for generation patterns
-- Study **04-host-boundary-and-capabilities.md** for task execution
-- Review **06-standard-library.md** for available operations
+- Focus on **02-syntax-and-grammar.md** for generation patterns
+- Study **07-host-boundary-and-capabilities.md** for task execution
+- Review **10-standard-library.md** for available operations
+- See **[Type Checking Guide](../guides/type-checking-guide.md)** for practical type usage
 
 ## Contributing
 

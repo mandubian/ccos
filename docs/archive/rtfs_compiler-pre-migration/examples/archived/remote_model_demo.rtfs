@@ -1,0 +1,120 @@
+;; Remote Model Demo Script
+;; This script demonstrates how to use different remote LLM providers
+;; for various types of tasks using RTFS delegation.
+
+;; Define a function that analyzes text using different providers
+(defn analyze-text [text provider]
+  (delegate-to provider
+    (str "Analyze the following text and provide insights about its tone, sentiment, and key themes:\n\n" text)))
+
+;; Define a function for creative writing tasks
+(defn creative-write [prompt provider]
+  (delegate-to provider
+    (str "Write a creative piece based on this prompt. Be imaginative and engaging:\n\n" prompt)))
+
+;; Define a function for code generation
+(defn generate-code [description language provider]
+  (delegate-to provider
+    (str "Generate " language " code for the following description. Provide clean, well-commented code:\n\n" description)))
+
+;; Define a function for data analysis
+(defn analyze-data [data-description provider]
+  (delegate-to provider
+    (str "Analyze this data and provide insights, patterns, and recommendations:\n\n" data-description)))
+
+;; Example usage with different providers
+(let [sample-text "The rapid advancement of artificial intelligence has transformed how we approach problem-solving. From healthcare to finance, AI systems are becoming increasingly sophisticated, raising both excitement and concerns about the future of human work and decision-making."
+      
+      creative-prompt "A world where books come alive and characters can step out of their pages"
+      
+      code-description "A function that takes a list of numbers and returns the sum of all even numbers multiplied by 2"
+      
+      data-description "Sales data showing monthly revenue for the past 12 months: Jan: 10000, Feb: 12000, Mar: 11000, Apr: 15000, May: 14000, Jun: 16000, Jul: 18000, Aug: 17000, Sep: 20000, Oct: 19000, Nov: 22000, Dec: 25000"]
+
+  ;; Test text analysis with different providers
+  (println "=== Text Analysis ===")
+  (println "Using OpenAI:")
+  (analyze-text sample-text "openai")
+  
+  (println "\nUsing Gemini:")
+  (analyze-text sample-text "gemini")
+  
+  (println "\nUsing Claude:")
+  (analyze-text sample-text "claude")
+  
+  ;; Test creative writing
+  (println "\n=== Creative Writing ===")
+  (println "Using OpenAI for creative writing:")
+  (creative-write creative-prompt "openai")
+  
+  ;; Test code generation
+  (println "\n=== Code Generation ===")
+  (println "Using Claude for code generation:")
+  (generate-code code-description "Python" "claude")
+  
+  ;; Test data analysis
+  (println "\n=== Data Analysis ===")
+  (println "Using Gemini for data analysis:")
+  (analyze-data data-description "gemini"))
+
+;; Define a function that compares responses from multiple providers
+(defn compare-providers [prompt providers]
+  (let [responses (map (fn [provider] 
+                         (let [response (delegate-to provider prompt)]
+                           {:provider provider :response response}))
+                       providers)]
+    (println "=== Provider Comparison ===")
+    (println "Prompt:" prompt)
+    (println)
+    (map (fn [result]
+           (println "Provider:" (:provider result))
+           (println "Response:" (:response result))
+           (println "---"))
+         responses)))
+
+;; Test provider comparison
+(compare-providers 
+  "Explain the concept of recursion in programming in 2-3 sentences."
+  ["openai" "gemini" "claude"])
+
+;; Define a function for cost-optimized model selection
+(defn smart-delegate [task-complexity prompt]
+  (let [provider (if (< task-complexity 0.3)
+                   "openrouter/cheap"  ; Use cheaper models for simple tasks
+                   (if (< task-complexity 0.7)
+                     "openrouter/medium"  ; Use medium-cost models
+                     "openrouter/expensive"))]  ; Use expensive models for complex tasks
+    (println "Task complexity:" task-complexity)
+    (println "Selected provider:" provider)
+    (delegate-to provider prompt)))
+
+;; Test smart delegation
+(println "\n=== Smart Delegation ===")
+(smart-delegate 0.2 "What is 2+2?")
+(smart-delegate 0.5 "Explain the basics of machine learning")
+(smart-delegate 0.9 "Write a comprehensive analysis of the impact of AI on society")
+
+;; Define a function for batch processing with different providers
+(defn batch-process [tasks]
+  (let [providers ["openai" "gemini" "claude"]
+        results (map (fn [task]
+                       (let [provider (nth providers (mod (hash task) (count providers)))]
+                         {:task task 
+                          :provider provider
+                          :result (delegate-to provider task)}))
+                     tasks)]
+    (println "=== Batch Processing Results ===")
+    (map (fn [result]
+           (println "Task:" (:task result))
+           (println "Provider:" (:provider result))
+           (println "Result:" (:result result))
+           (println "---"))
+         results)))
+
+;; Test batch processing
+(batch-process [
+  "Summarize the benefits of exercise"
+  "Explain quantum computing"
+  "Write a haiku about programming"
+  "List 5 tips for better productivity"
+]) 

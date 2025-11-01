@@ -1,0 +1,66 @@
+;; Weather MCP Capability Demo
+;; This plan demonstrates how to use the Weather MCP capability
+;; which implements the Model Context Protocol for weather information
+
+(plan weather-demo
+  :version "1.0"
+  :description "Demonstrate Weather MCP capability integration"
+  
+  ;; Define the capability we need
+  (capability weather-mcp
+    :provider "weather_mcp"
+    :description "Weather information via MCP protocol"
+    :security-requirements {
+      :permissions ["weather.query"]
+      :network-access "controlled"
+    })
+  
+  ;; Main intent to get weather information
+  (intent get-weather-info
+    :description "Get current weather and forecast for a city"
+    :capabilities [weather-mcp]
+    
+    ;; Get current weather
+    (let ((current-weather 
+           (call-capability weather-mcp
+             :tool "get_current_weather"
+             :arguments {
+               "city" "London"
+               "units" "metric"
+             })))
+      
+      ;; Get forecast
+      (let ((forecast
+             (call-capability weather-mcp
+               :tool "get_weather_forecast"
+               :arguments {
+                 "city" "London"
+                 "days" 3
+               })))
+        
+        ;; Return combined weather information
+        {
+          :current current-weather
+          :forecast forecast
+          :status "success"
+        })))
+  
+  ;; Alternative intent for multiple cities
+  (intent multi-city-weather
+    :description "Get weather for multiple cities"
+    :capabilities [weather-mcp]
+    
+    (let ((cities ["London" "Paris" "Tokyo"]))
+      (parallel
+        (for city in cities
+          (call-capability weather-mcp
+            :tool "get_current_weather"
+            :arguments {
+              "city" city
+              "units" "metric"
+            })))))
+  
+  ;; Main action to execute
+  (action main
+    :intent get-weather-info
+    :description "Execute weather demo"))
