@@ -6,12 +6,12 @@ This guide shows how CCOS loads a host-owned prelude that provides ergonomic wra
 The prelude registers functions like:
 - `log`, `tool/log`, `tool.log`, `println`, `step`
 - `tool/time-ms`, `tool.time-ms`, `current-time-millis`, `thread/sleep`
-- `get-env`, `file-exists?`, `tool/open-file`
+- `get-env`, `file-exists?`, `read-file`, `write-file`, `delete-file`, `tool/open-file`
 - `http-fetch`, `tool/http-fetch`
 - `kv/assoc!`, `kv/dissoc!`, `kv/conj!` (implemented via host get/put)
 
 All of these call CCOS capabilities under the hood:
-- IO: `ccos.io.log`, `ccos.io.println`, `ccos.io.file-exists`, `ccos.io.open-file`
+- IO: `ccos.io.log`, `ccos.io.println`, `ccos.io.file-exists`, `ccos.io.read-file`, `ccos.io.write-file`, `ccos.io.delete-file`, `ccos.io.open-file`
 - System: `ccos.system.current-timestamp-ms`, `ccos.system.sleep-ms`, `ccos.system.get-env`
 - Network: `ccos.network.http-fetch`
 - State: `ccos.state.kv.get`, `ccos.state.kv.put`
@@ -29,6 +29,9 @@ In RTFS code running under CCOS, you can simply call:
 (current-time-millis)
 (thread/sleep 50)
 (file-exists? "/etc/hosts")
+(read-file "/etc/hosts")
+(write-file "/tmp/demo.txt" "hello")
+(delete-file "/tmp/demo.txt")
 (http-fetch {:url "https://example.com"})
 ```
 

@@ -139,7 +139,10 @@ For data structure mutations, use CCOS capabilities like `(call :ccos.state.kv/p
 | Operation | Capability Call | Description |
 |---|---|---|
 | File I/O | `(call :ccos.io.file-exists "path")` | Check if file exists |
-| | `(call :ccos.io.open-file "path")` | Open file for reading |
+| | `(call :ccos.io.read-file "path")` | Read entire file contents |
+| | `(call :ccos.io.write-file "path" "content")` | Write string to file |
+| | `(call :ccos.io.delete-file "path")` | Delete file |
+| | `(call :ccos.io.open-file "path")` | Open file for streaming |
 | | `(call :ccos.io.read-line file-handle)` | Read line from file |
 | | `(call :ccos.io.write-line file-handle "content")` | Write line to file |
 | | `(call :ccos.io.close-file file-handle)` | Close file |
@@ -150,8 +153,11 @@ For data structure mutations, use CCOS capabilities like `(call :ccos.state.kv/p
 | System Info | `(call :ccos.system.get-env "VAR")` | Get environment variable |
 | | `(call :ccos.system.current-time)` | Get current time |
 | | `(call :ccos.system.current-timestamp-ms)` | Get current timestamp |
-| Data Serialization | `(call :ccos.data.parse-json "json-string")` | Parse JSON string |
-| | `(call :ccos.data.serialize-json value)` | Serialize to JSON |
+| Data Serialization | `(call :ccos.json.parse "json-string")` | Parse JSON string |
+| | `(call :ccos.json.stringify value)` | Serialize to JSON |
+| | `(call :ccos.json.stringify-pretty value)` | Serialize to pretty JSON |
+| | `(call :ccos.data.parse-json "json-string")` | Legacy alias for JSON parse |
+| | `(call :ccos.data.serialize-json value)` | Legacy alias for JSON stringify |
 | State Management | `(call :ccos.state.kv/get "key")` | Get value from key-value store |
 | | `(call :ccos.state.kv/put "key" value)` | Put value in key-value store |
 | | `(call :ccos.state.counter/inc "counter")` | Increment counter |
@@ -197,8 +203,8 @@ The only way to perform effectful operations in RTFS is through the `call` funct
 (call :ccos.agent.ask-human "Please confirm the operation")
 
 ;; Data operations
-(call :ccos.data.parse-json json-string)
-(call :ccos.data.serialize-json data)
+(call :ccos.json.parse json-string)
+(call :ccos.json.stringify data)
 ```
 
 ### Capability Execution Flow

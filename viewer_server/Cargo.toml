@@ -17,8 +17,8 @@ chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 futures-util = "0.3"
 
-# CCOS integration
-rtfs_compiler = { path = "../rtfs_compiler" }
+# CCOS integration - TODO: Update to use rtfs + ccos crates
+# rtfs_compiler = { path = "../rtfs_compiler" }
 
 # Use axum's server runtime; avoid pulling hyper directly to prevent
 # multiple hyper versions and trait mismatches in the dependency graph.
