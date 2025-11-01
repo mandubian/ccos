@@ -1,6 +1,5 @@
 # Rust build artifacts
 /target/
-rtfs_compiler/target/
 
 # If you are building a library, ignore Cargo.lock
 # Uncomment the next line if this is a library, not a binary
@@ -50,8 +49,8 @@ demo_storage/
 generated_capabilities/
 
 # Nested build artifacts (accidental duplicates)
-rtfs_compiler/rtfs_compiler/
-rtfs_compiler/capabilities/
+rtfs/rtfs/
+rtfs/capabilities/
 
-rtfs_compiler/.rtfs_repl_history
-rtfs_compiler/.rtfs_ccos_repl_historyrtfs_compiler/src/bin/demo_introspected_with_mock_key.rs
+rtfs/.rtfs_repl_history
+rtfs/.rtfs_ccos_repl_history
