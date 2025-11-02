@@ -79,15 +79,171 @@ impl CapabilityNeedExtractor {
             }
         }
         
+        // If no metadata found, try extracting from RTFS plan body
+        if needs.is_empty() {
+            if let crate::types::PlanBody::Rtfs(rtfs) = &plan.body {
+                needs = Self::extract_from_orchestrator(rtfs);
+            }
+        }
+        
         needs
     }
     
     /// Extract needs from RTFS orchestrator code
+    /// Parses RTFS to find `(call :capability.id {...})` patterns
     pub fn extract_from_orchestrator(rtfs: &str) -> Vec<CapabilityNeed> {
-        // TODO: Parse RTFS and extract capability calls
-        // For now, return empty vector
-        vec![]
+        let mut needs = Vec::new();
+        let bytes = rtfs.as_bytes();
+        let mut i = 0;
+        
+        // Find all (call :capability.id patterns
+        while i < bytes.len() {
+            // Look for "(call "
+            if i + 6 <= bytes.len() && &rtfs[i..i+6] == "(call " {
+                let mut pos = i + 6;
+                // Skip whitespace
+                while pos < bytes.len() && (bytes[pos] as char).is_whitespace() {
+                    pos += 1;
+                }
+                
+                // Check for keyword starting with :
+                if pos < bytes.len() && bytes[pos] == b':' {
+                    pos += 1;
+                    let start = pos;
+                    
+                    // Extract capability ID (alphanumeric, dots, underscores, hyphens)
+                    while pos < bytes.len() {
+                        let ch = bytes[pos] as char;
+                        if ch.is_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
+                            pos += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    if pos > start {
+                        let capability_id = rtfs[start..pos].to_string();
+                        
+                        // Find the argument map for this call
+                        if let Some(arg_map) = extract_map_from_position(rtfs, pos) {
+                            // Extract keys from the map as potential inputs
+                            let inputs = extract_map_keys(&arg_map);
+                            
+                            // Create a need
+                            needs.push(CapabilityNeed::new(
+                                capability_id.clone(),
+                                inputs,
+                                vec!["result".to_string()], // Default output
+                                format!("Extracted from RTFS call: {}", capability_id),
+                            ));
+                        } else {
+                            // No arg map found, still create a need with empty inputs
+                            needs.push(CapabilityNeed::new(
+                                capability_id.clone(),
+                                vec![],
+                                vec!["result".to_string()],
+                                format!("Extracted from RTFS call: {}", capability_id),
+                            ));
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        
+        needs
     }
+}
+
+// Helper functions for RTFS parsing
+
+/// Extract a balanced map `{ ... }` starting from a position in the string
+fn extract_map_from_position(text: &str, start_pos: usize) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut pos = start_pos;
+    
+    // Skip whitespace to find opening brace
+    while pos < bytes.len() && (bytes[pos] as char).is_whitespace() {
+        pos += 1;
+    }
+    
+    if pos >= bytes.len() || (bytes[pos] as char) != '{' {
+        return None;
+    }
+    
+    // Extract balanced braces
+    let mut depth = 0;
+    let start = pos;
+    let mut in_string = false;
+    let mut escape = false;
+    
+    while pos < bytes.len() {
+        let ch = bytes[pos] as char;
+        
+        if escape {
+            escape = false;
+            pos += 1;
+            continue;
+        }
+        
+        match ch {
+            '\\' => {
+                escape = true;
+                pos += 1;
+            }
+            '"' => {
+                in_string = !in_string;
+                pos += 1;
+            }
+            '{' if !in_string => {
+                depth += 1;
+                pos += 1;
+            }
+            '}' if !in_string => {
+                depth -= 1;
+                pos += 1;
+                if depth == 0 {
+                    return Some(text[start..pos].to_string());
+                }
+            }
+            _ => pos += 1,
+        }
+    }
+    
+    None
+}
+
+/// Extract keys from an RTFS map string like `{ :key1 val1 :key2 val2 }`
+fn extract_map_keys(map_str: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let bytes = map_str.as_bytes();
+    let mut i = 0;
+    
+    while i < bytes.len() {
+        // Look for :keyword pattern
+        if bytes[i] == b':' {
+            i += 1;
+            let start = i;
+            
+            // Extract keyword (letters, numbers, underscores, hyphens)
+            while i < bytes.len() {
+                let ch = bytes[i] as char;
+                if ch.is_alphanumeric() || ch == '_' || ch == '-' {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            
+            if i > start {
+                keys.push(map_str[start..i].to_string());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    
+    keys
 }
 
 // Helper functions to convert Value to String and Vec<String>
