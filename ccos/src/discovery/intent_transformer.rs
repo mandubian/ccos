@@ -1,7 +1,7 @@
 //! Transform capability needs into intents for recursive synthesis
 
 use crate::discovery::need_extractor::CapabilityNeed;
-use crate::types::{Intent, IntentStatus, TriggerSource, GenerationContext};
+use crate::types::{Intent, IntentStatus, GenerationContext};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -32,8 +32,9 @@ impl IntentTransformer {
         );
         
         // Create a natural language goal from the capability need
+        // Explicitly instruct the LLM to identify the required external service/API
         let goal = format!(
-            "I need to implement a capability that can {} with inputs ({}) and outputs ({})",
+            "Identify the specific external service, API, or capability needed to implement: {} (inputs: {}, outputs: {}). Then generate a plan that calls this service. IMPORTANT: Do NOT ask users questions - instead, declare the specific service capability ID you need (e.g., 'restaurant.api.search', 'hotel.booking.reserve', etc.) and use it in a (call :service.id {{...}}) form. If the service doesn't exist yet, declare what it should be called.",
             need.capability_class,
             need.required_inputs.join(", "),
             need.expected_outputs.join(", ")
@@ -41,6 +42,10 @@ impl IntentTransformer {
         
         // Build constraints from required inputs
         let mut constraints = HashMap::new();
+        constraints.insert(
+            "must_declare_service".to_string(),
+            Value::String("Plan must explicitly declare and call a specific service capability ID (e.g., restaurant.api.search), not ask user questions".to_string()),
+        );
         for input in &need.required_inputs {
             constraints.insert(
                 format!("must_accept_{}", input),

@@ -192,6 +192,45 @@ impl RecursiveSynthesizer {
         // Extract capability needs from the generated plan
         eprintln!("{}  → Extracting sub-capability needs from plan...", indent);
         let sub_needs = CapabilityNeedExtractor::extract_from_plan(&plan);
+        
+        // Validate that the plan declares a service (not just asks questions)
+        let plan_rtfs = match &plan.body {
+            crate::types::PlanBody::Rtfs(rtfs) => rtfs,
+            crate::types::PlanBody::Wasm(_) => "",
+        };
+        let has_user_ask = plan_rtfs.contains(":ccos.user.ask");
+        let has_service_call = plan_rtfs.contains("(call :") && 
+            (plan_rtfs.contains("api") || plan_rtfs.contains("service") || 
+             plan_rtfs.contains("restaurant") || plan_rtfs.contains("hotel") ||
+             plan_rtfs.contains("travel") || plan_rtfs.contains("booking"));
+        let has_user_ask_only = has_user_ask && !has_service_call;
+        
+        if sub_needs.is_empty() && has_user_ask_only {
+            eprintln!(
+                "{}  ⚠️  WARNING: Plan only asks questions but doesn't declare a service capability.",
+                indent
+            );
+            eprintln!(
+                "{}  ⚠️  Expected plan to declare and call a specific service (e.g., restaurant.api.search)",
+                indent
+            );
+        }
+        
+        // Check for self-referencing cycles: if the plan only calls itself, prevent infinite recursion
+        let mut sub_needs = sub_needs;
+        if sub_needs.len() == 1 && sub_needs[0].capability_class == need.capability_class {
+            eprintln!(
+                "{}  ⚠️  WARNING: Plan only calls itself ({}) - this would cause infinite recursion.",
+                indent, need.capability_class
+            );
+            eprintln!(
+                "{}  ⚠️  Skipping further recursion for this capability.",
+                indent
+            );
+            // Clear sub_needs to prevent recursion
+            sub_needs.clear();
+        }
+        
         eprintln!(
             "{}  ✓ Found {} sub-capability needs",
             indent, sub_needs.len()
