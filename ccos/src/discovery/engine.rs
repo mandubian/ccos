@@ -65,6 +65,16 @@ impl DiscoveryEngine {
         // TODO: Implement proper schema compatibility checking
         true
     }
+    
+    /// Get the marketplace (for cloning into recursive synthesizer)
+    pub fn get_marketplace(&self) -> Arc<CapabilityMarketplace> {
+        Arc::clone(&self.marketplace)
+    }
+    
+    /// Get the intent graph (for cloning into recursive synthesizer)
+    pub fn get_intent_graph(&self) -> Arc<Mutex<IntentGraph>> {
+        Arc::clone(&self.intent_graph)
+    }
 }
 
 /// Result of a discovery attempt
