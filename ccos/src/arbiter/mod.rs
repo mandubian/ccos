@@ -15,12 +15,12 @@
 //! ## Usage
 //!
 //! ```rust,no_run
-//! use ccos::ccos::arbiter::{
+//! use ccos::arbiter::{
 //!     ArbiterConfig,
 //!     ArbiterFactory,
 //!     ArbiterEngine,
 //! };
-//! use ccos::ccos::intent_graph::core::IntentGraph;
+//! use ccos::intent_graph::core::IntentGraph;
 //! use std::sync::{Arc, Mutex};
 //!
 //! // Create a Tokio runtime for async operations in this example
