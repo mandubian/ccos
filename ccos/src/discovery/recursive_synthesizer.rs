@@ -127,7 +127,27 @@ impl RecursiveSynthesizer {
         
         // Transform capability need into intent
         let parent_intent_id = context.visited_intents.last().map(|s| s.as_str());
-        let intent = IntentTransformer::need_to_intent(need, parent_intent_id, &related_cap_ids);
+        
+        // Try to get parent intent goal for richer context
+        let parent_goal_summary = if let Some(parent_id) = parent_intent_id {
+            // Clone the Arc first so the lock can be released
+            let intent_graph = self.discovery_engine.get_intent_graph();
+            let goal_opt = {
+                if let Ok(ig) = intent_graph.lock() {
+                    ig.get_intent(&parent_id.to_string()).map(|intent| intent.goal.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(ref goal) = goal_opt {
+                eprintln!("{}  → Retrieved parent goal: \"{}\"", indent, goal);
+            }
+            goal_opt
+        } else {
+            None
+        };
+        
+        let intent = IntentTransformer::need_to_intent(need, parent_intent_id, &related_cap_ids, parent_goal_summary.as_deref());
         
         eprintln!(
             "{}  → Created intent: {} (parent: {:?})",

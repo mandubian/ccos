@@ -19,6 +19,7 @@ impl IntentTransformer {
         need: &CapabilityNeed, 
         parent_intent_id: Option<&str>,
         related_capabilities: &[String], // Optional list of related capability IDs for examples
+        parent_goal_summary: Option<&str>, // Optional summary of parent goal for context
     ) -> Intent {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -46,12 +47,23 @@ impl IntentTransformer {
             )
         };
         
+        // Add parent goal context if available to give LLM better understanding
+        let parent_context = if let Some(parent_summary) = parent_goal_summary {
+            format!(
+                "\n\nCONTEXT: This capability is needed to fulfill the parent goal: \"{}\". Your synthesized capability should contribute to achieving this goal.",
+                parent_summary
+            )
+        } else {
+            String::new()
+        };
+        
         let goal = format!(
-            "Identify the specific external service, API, or capability needed to implement: {} (inputs: {}, outputs: {}). Then generate a plan that calls this service. IMPORTANT: Do NOT ask users questions - instead, declare the specific service capability ID you need (e.g., 'restaurant.api.search', 'hotel.booking.reserve', etc.) and use it in a (call :service.id {{...}}) form. If the service doesn't exist yet, declare what it should be called.{}",
+            "Identify the specific external service, API, or capability needed to implement: {} (inputs: {}, outputs: {}). Then generate a plan that calls this service. IMPORTANT: Do NOT ask users questions - instead, declare the specific service capability ID you need (e.g., 'restaurant.api.search', 'hotel.booking.reserve', etc.) and use it in a (call :service.id {{...}}) form. If the service doesn't exist yet, declare what it should be called.{}{}",
             need.capability_class,
             need.required_inputs.join(", "),
             need.expected_outputs.join(", "),
-            examples_section
+            examples_section,
+            parent_context
         );
         
         // Build constraints from required inputs
@@ -134,11 +146,11 @@ mod tests {
             "Need to book restaurant reservations".to_string(),
         );
         
-        let intent = IntentTransformer::need_to_intent(&need, None, &[]);
+        let intent = IntentTransformer::need_to_intent(&need, None, &[], None);
         
         assert_eq!(intent.name, Some("Synthesize restaurant.reservation.book".to_string()));
         assert!(intent.goal.contains("restaurant.reservation.book"));
-        assert_eq!(intent.constraints.len(), 3);
+        assert_eq!(intent.constraints.len(), 4); // must_declare_service + 3 inputs
         assert_eq!(intent.preferences.len(), 1);
         assert_eq!(intent.status, IntentStatus::Active);
     }
@@ -152,13 +164,34 @@ mod tests {
             "Test rationale".to_string(),
         );
         
-        let intent = IntentTransformer::need_to_intent(&need, Some("parent-123"), &[]);
+        let intent = IntentTransformer::need_to_intent(&need, Some("parent-123"), &[], None);
         
         assert!(intent.intent_id.contains("parent-123"));
         assert_eq!(
             intent.metadata.get("parent_intent_id"),
             Some(&Value::String("parent-123".to_string()))
         );
+    }
+    
+    #[test]
+    fn test_need_to_intent_with_parent_summary() {
+        let need = CapabilityNeed::new(
+            "restaurant.search".to_string(),
+            vec!["query".to_string(), "location".to_string()],
+            vec!["results".to_string()],
+            "Need to search restaurants".to_string(),
+        );
+        
+        let intent = IntentTransformer::need_to_intent(
+            &need, 
+            Some("parent-123"), 
+            &[], 
+            Some("plan a trip to Paris")
+        );
+        
+        // Should include parent goal in the generated intent
+        assert!(intent.goal.contains("plan a trip to Paris"));
+        assert!(intent.goal.contains("CONTEXT"));
     }
 }
 
