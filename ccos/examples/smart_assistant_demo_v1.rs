@@ -1,15 +1,7 @@
-// Governed smart assistant demo with recursive capability synthesis.
+// Governed smart assistant demo rebuilt for arbitrary natural-language goals.
 //
-// This demo integrates the RecursiveSynthesizer to automatically generate
-// missing capabilities and their dependencies when executing user goals.
-//
-// Key features:
-// - Natural language goal → Intent → Plan → Orchestrator RTFS
-// - Automatic capability discovery (Marketplace → MCP → OpenAPI → Recursive Synthesis)
-// - Missing capabilities trigger recursive synthesis with dependency resolution
-// - Synthesized capabilities are registered in the marketplace for reuse
-//
-// Previous version (without recursive synthesis) is saved as smart_assistant_demo_v1.rs
+// The previous implementation is retained below (commented out) while the new
+// adaptive assistant flows are authored.
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -23,7 +15,7 @@ use clap::Parser;
 use crossterm::style::Stylize;
 use rtfs::ast::{Expression, Keyword, Literal, MapKey};
 use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
-use ccos::discovery::{CapabilityNeed, DiscoveryEngine, DiscoveryResult};
+use ccos::discovery::{CapabilityNeed, DiscoveryEngine};
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::types::{Intent, Plan};
 use ccos::CCOS;
@@ -264,23 +256,6 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     );
 
     print_plan_draft(&plan_steps, &matches, &plan);
-    
-    // Print resolution summary
-    let found_count = resolved_steps.iter().filter(|s| s.resolution_strategy == ResolutionStrategy::Found).count();
-    let synthesized_count = resolved_steps.iter().filter(|s| s.resolution_strategy == ResolutionStrategy::Synthesized).count();
-    let stubbed_count = resolved_steps.iter().filter(|s| s.resolution_strategy == ResolutionStrategy::Stubbed).count();
-    
-    println!("\n{}", "📊 Capability Resolution Summary".bold());
-    println!("   • Found: {} capabilities", found_count.to_string().green());
-    if synthesized_count > 0 {
-        println!("   • {}: {} capabilities (with dependencies)", 
-                 "Synthesized".bold(), 
-                 synthesized_count.to_string().cyan().bold());
-    }
-    if stubbed_count > 0 {
-        println!("   • Stubbed: {} capabilities (awaiting implementation)", stubbed_count.to_string().yellow());
-    }
-    
     println!(
         "\n{}",
         "✅ Orchestrator generated and registered in marketplace".bold().green()
@@ -1850,23 +1825,17 @@ struct ResolvedStep {
 enum ResolutionStrategy {
     Found,
     Stubbed,
-    Synthesized,
 }
 
-/// Resolve missing capabilities by searching marketplace, synthesizing, or creating stubs.
-/// Uses recursive synthesis to automatically generate missing capabilities and their dependencies.
+/// Resolve missing capabilities by searching marketplace or creating stubs.
 async fn resolve_and_stub_capabilities(
     ccos: &Arc<CCOS>,
     steps: &[ProposedStep],
     matches: &[CapabilityMatch],
 ) -> DemoResult<Vec<ResolvedStep>> {
     let mut resolved = Vec::with_capacity(steps.len());
-    let marketplace = ccos.get_capability_marketplace();
-    let intent_graph = ccos.get_intent_graph();
-    let delegating_arbiter = ccos.get_delegating_arbiter();
 
     for step in steps {
-        // Check if already matched (found in marketplace)
         if let Some(match_record) = matches.iter().find(|m| m.step_id == step.id) {
             if let Some(cap_id) = &match_record.matched_capability {
                 resolved.push(ResolvedStep {
@@ -1878,62 +1847,7 @@ async fn resolve_and_stub_capabilities(
             }
         }
 
-        // Not found in marketplace - try recursive synthesis
-        if delegating_arbiter.is_some() {
-            println!(
-                "{} {}",
-                "🔄 Attempting recursive synthesis for:".cyan(),
-                step.capability_class.as_str().bold()
-            );
-
-            let capability_class = step.capability_class.clone();
-            let need = CapabilityNeed::new(
-                capability_class.clone(),
-                step.required_inputs.clone(),
-                step.expected_outputs.clone(),
-                format!("Need for step: {}", step.name),
-            );
-
-            let discovery_engine = DiscoveryEngine::new_with_arbiter(
-                Arc::clone(&marketplace),
-                Arc::clone(&intent_graph),
-                delegating_arbiter.clone(),
-            );
-
-            match discovery_engine.discover_capability(&need).await {
-                Ok(DiscoveryResult::Found(manifest)) => {
-                    // Successfully synthesized (or found via discovery)
-                    let cap_id = manifest.id.clone();
-                    println!(
-                        "{} {}",
-                        "✅ Synthesized capability:".green(),
-                        cap_id.as_str().cyan()
-                    );
-                    
-                    resolved.push(ResolvedStep {
-                        original: step.clone(),
-                        capability_id: cap_id.clone(),
-                        resolution_strategy: ResolutionStrategy::Synthesized,
-                    });
-                    continue;
-                }
-                Ok(DiscoveryResult::NotFound) | Err(_) => {
-                    println!(
-                        "{} {}",
-                        "⚠️  Synthesis failed, falling back to stub:".yellow(),
-                        step.capability_class
-                    );
-                }
-            }
-        } else {
-            println!(
-                "{} {}",
-                "⚠️  No delegating arbiter available for synthesis, using stub:".yellow(),
-                step.capability_class
-            );
-        }
-
-        // Fallback: create a stub capability if synthesis failed or no arbiter
+        // Not found; create a stub capability for later resolution
         let stub_id = format!("stub.{}.v1", step.capability_class);
         register_stub_capability(ccos, step, &stub_id).await?;
 
@@ -2419,7 +2333,6 @@ fn build_resolved_steps_metadata(resolved_steps: &[ResolvedStep]) -> Value {
                 Value::String(match resolved.resolution_strategy {
                     ResolutionStrategy::Found => "found",
                     ResolutionStrategy::Stubbed => "stubbed",
-                    ResolutionStrategy::Synthesized => "synthesized",
                 }
                 .to_string()),
             );
