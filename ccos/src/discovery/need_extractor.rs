@@ -115,3 +115,72 @@ fn value_to_string_vec(value: &Value) -> Option<Vec<String>> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Plan;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_extract_from_plan_with_needs() {
+        let mut plan = Plan::new_rtfs("(do)".to_string(), vec![]);
+        
+        // Create metadata with needs_capabilities
+        let mut metadata = HashMap::new();
+        let mut entry = HashMap::new();
+        entry.insert(
+            rtfs::ast::MapKey::String("class".to_string()),
+            Value::String("travel.flights.search".to_string()),
+        );
+        entry.insert(
+            rtfs::ast::MapKey::String("required_inputs".to_string()),
+            Value::Vector(vec![
+                Value::String("origin".to_string()),
+                Value::String("destination".to_string()),
+            ]),
+        );
+        entry.insert(
+            rtfs::ast::MapKey::String("expected_outputs".to_string()),
+            Value::Vector(vec![Value::String("flight_options".to_string())]),
+        );
+        metadata.insert(
+            "needs_capabilities".to_string(),
+            Value::Vector(vec![Value::Map(entry)]),
+        );
+        
+        plan.metadata = metadata;
+        
+        let needs = CapabilityNeedExtractor::extract_from_plan(&plan);
+        
+        assert_eq!(needs.len(), 1);
+        assert_eq!(needs[0].capability_class, "travel.flights.search");
+        assert_eq!(
+            needs[0].required_inputs,
+            vec!["origin", "destination"]
+        );
+        assert_eq!(needs[0].expected_outputs, vec!["flight_options"]);
+    }
+    
+    #[test]
+    fn test_extract_from_plan_empty() {
+        let plan = Plan::new_rtfs("(do)".to_string(), vec![]);
+        let needs = CapabilityNeedExtractor::extract_from_plan(&plan);
+        assert_eq!(needs.len(), 0);
+    }
+    
+    #[test]
+    fn test_capability_need_new() {
+        let need = CapabilityNeed::new(
+            "test.cap".to_string(),
+            vec!["input1".to_string()],
+            vec!["output1".to_string()],
+            "Test rationale".to_string(),
+        );
+        
+        assert_eq!(need.capability_class, "test.cap");
+        assert_eq!(need.required_inputs, vec!["input1"]);
+        assert_eq!(need.expected_outputs, vec!["output1"]);
+        assert_eq!(need.rationale, "Test rationale");
+    }
+}
+

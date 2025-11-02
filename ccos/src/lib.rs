@@ -7,6 +7,7 @@ pub mod arbiter;
 pub mod archivable_types;
 pub mod causal_chain;
 pub mod checkpoint_archive;
+pub mod discovery;
 pub mod event_sink;
 pub mod governance_kernel;
 pub mod intent_archive;
