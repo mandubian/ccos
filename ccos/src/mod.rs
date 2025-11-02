@@ -9,6 +9,7 @@ pub mod arbiter;
 pub mod archivable_types; // Serializable versions of CCOS types
 pub mod causal_chain;
 pub mod checkpoint_archive; // Checkpoint storage for execution contexts
+pub mod discovery; // Recursive capability discovery and generation
 pub mod event_sink;
 pub mod governance_kernel;
 pub mod intent_archive;
