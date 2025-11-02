@@ -3,6 +3,7 @@
 use crate::arbiter::delegating_arbiter::DelegatingArbiter;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::capability_marketplace::types::CapabilityManifest;
+use crate::discovery::introspection_cache::IntrospectionCache;
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::discovery::recursive_synthesizer::RecursiveSynthesizer;
 use crate::intent_graph::IntentGraph;
@@ -15,6 +16,8 @@ pub struct DiscoveryEngine {
     intent_graph: Arc<Mutex<IntentGraph>>,
     /// Optional delegating arbiter for recursive synthesis
     delegating_arbiter: Option<Arc<DelegatingArbiter>>,
+    /// Optional introspection cache for MCP/OpenAPI results
+    introspection_cache: Option<Arc<IntrospectionCache>>,
 }
 
 impl DiscoveryEngine {
@@ -27,6 +30,7 @@ impl DiscoveryEngine {
             marketplace,
             intent_graph,
             delegating_arbiter: None,
+            introspection_cache: None,
         }
     }
     
@@ -40,7 +44,14 @@ impl DiscoveryEngine {
             marketplace,
             intent_graph,
             delegating_arbiter,
+            introspection_cache: None,
         }
+    }
+    
+    /// Create a discovery engine with introspection cache
+    pub fn with_cache(mut self, cache: Arc<IntrospectionCache>) -> Self {
+        self.introspection_cache = Some(cache);
+        self
     }
     
     /// Attempt to find a capability using the discovery priority chain
@@ -208,8 +219,30 @@ impl DiscoveryEngine {
             if let Some(url) = server_url {
                 eprintln!("    → Introspecting MCP server: {} ({})", server.name, url);
                 
-                // Introspect the server
-                match introspector.introspect_mcp_server(&url, &server.name).await {
+                // Check cache first if available
+                let introspection_result = if let Some(ref cache) = self.introspection_cache {
+                    match cache.get_mcp(&url) {
+                        Ok(Some(cached)) => {
+                            eprintln!("    ✓ Using cached introspection result");
+                            Ok(cached)
+                        }
+                        Ok(None) | Err(_) => {
+                            // Cache miss or error - introspect the server
+                            let result = introspector.introspect_mcp_server(&url, &server.name).await;
+                            // Cache the result if successful
+                            if let Ok(ref introspection) = result {
+                                let _ = cache.put_mcp(&url, introspection);
+                            }
+                            result
+                        }
+                    }
+                } else {
+                    // No cache - just introspect
+                    introspector.introspect_mcp_server(&url, &server.name).await
+                };
+                
+                // Process the introspection result
+                match introspection_result {
                     Ok(introspection) => {
                         // Create all capabilities from this server's tools
                         match introspector.create_capabilities_from_mcp(&introspection) {
@@ -278,8 +311,30 @@ impl DiscoveryEngine {
         for base_url in common_base_urls {
             eprintln!("    → Trying OpenAPI discovery: {}", base_url);
             
-            // Try to introspect from discovery (will try common OpenAPI spec locations)
-            match introspector.introspect_from_discovery(&base_url, namespace).await {
+            // Check cache first if available
+            let introspection_result = if let Some(ref cache) = self.introspection_cache {
+                match cache.get_openapi(&base_url) {
+                    Ok(Some(cached)) => {
+                        eprintln!("    ✓ Using cached introspection result");
+                        Ok(cached)
+                    }
+                    Ok(None) | Err(_) => {
+                        // Cache miss or error - introspect from discovery
+                        let result = introspector.introspect_from_discovery(&base_url, namespace).await;
+                        // Cache the result if successful
+                        if let Ok(ref introspection) = result {
+                            let _ = cache.put_openapi(&base_url, introspection);
+                        }
+                        result
+                    }
+                }
+            } else {
+                // No cache - just introspect
+                introspector.introspect_from_discovery(&base_url, namespace).await
+            };
+            
+            // Process the introspection result
+            match introspection_result {
                 Ok(introspection) => {
                     // Create capabilities from introspection
                     match introspector.create_capabilities_from_introspection(&introspection) {
