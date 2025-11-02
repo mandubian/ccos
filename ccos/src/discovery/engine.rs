@@ -1,17 +1,20 @@
 //! Discovery engine for finding and synthesizing capabilities
 
+use crate::arbiter::delegating_arbiter::DelegatingArbiter;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::capability_marketplace::types::CapabilityManifest;
-use crate::discovery::need_extractor::{CapabilityNeed, CapabilityNeedExtractor};
+use crate::discovery::need_extractor::CapabilityNeed;
+use crate::discovery::recursive_synthesizer::RecursiveSynthesizer;
 use crate::intent_graph::IntentGraph;
-use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use rtfs::runtime::values::Value;
+use rtfs::runtime::error::RuntimeResult;
 use std::sync::{Arc, Mutex};
 
 /// Discovery engine that orchestrates the search for capabilities
 pub struct DiscoveryEngine {
     marketplace: Arc<CapabilityMarketplace>,
     intent_graph: Arc<Mutex<IntentGraph>>,
+    /// Optional delegating arbiter for recursive synthesis
+    delegating_arbiter: Option<Arc<DelegatingArbiter>>,
 }
 
 impl DiscoveryEngine {
@@ -23,6 +26,20 @@ impl DiscoveryEngine {
         Self {
             marketplace,
             intent_graph,
+            delegating_arbiter: None,
+        }
+    }
+    
+    /// Create a new discovery engine with delegating arbiter for recursive synthesis
+    pub fn new_with_arbiter(
+        marketplace: Arc<CapabilityMarketplace>,
+        intent_graph: Arc<Mutex<IntentGraph>>,
+        delegating_arbiter: Option<Arc<DelegatingArbiter>>,
+    ) -> Self {
+        Self {
+            marketplace,
+            intent_graph,
+            delegating_arbiter,
         }
     }
     
@@ -37,7 +54,31 @@ impl DiscoveryEngine {
         
         // 3. TODO: Try OpenAPI introspection
         
-        // 4. TODO: Try recursive synthesis
+        // 4. Try recursive synthesis (if delegating arbiter is available)
+        if let Some(ref arbiter) = self.delegating_arbiter {
+            let context = DiscoveryContext::new(5); // Default max depth of 5
+            let mut synthesizer = RecursiveSynthesizer::new(
+                DiscoveryEngine::new(
+                    Arc::clone(&self.marketplace),
+                    Arc::clone(&self.intent_graph),
+                ),
+                Some(Arc::clone(arbiter)),
+                5, // max depth
+            );
+            
+            match synthesizer.synthesize_as_intent(need, &context).await {
+                Ok(synthesized) => {
+                    // Register the synthesized capability in the marketplace
+                    // TODO: Actually register it properly with the orchestrator RTFS
+                    // For now, return it as found
+                    return Ok(DiscoveryResult::Found(synthesized.manifest));
+                }
+                Err(_e) => {
+                    // Synthesis failed - fall through to NotFound
+                    // TODO: Log the error for debugging
+                }
+            }
+        }
         
         // 5. Not found
         Ok(DiscoveryResult::NotFound)
@@ -60,7 +101,7 @@ impl DiscoveryEngine {
     }
     
     /// Check if a capability manifest is compatible with the need
-    fn is_compatible(&self, manifest: &CapabilityManifest, need: &CapabilityNeed) -> bool {
+    fn is_compatible(&self, _manifest: &CapabilityManifest, _need: &CapabilityNeed) -> bool {
         // For now, just check that it has inputs and outputs
         // TODO: Implement proper schema compatibility checking
         true

@@ -2350,7 +2350,13 @@ async fn match_proposed_steps(
     let intent_graph = ccos.get_intent_graph();
     
     // Create discovery engine for enhanced capability search
-    let discovery_engine = DiscoveryEngine::new(Arc::clone(&marketplace), Arc::clone(&intent_graph));
+    // Pass delegating arbiter if available for recursive synthesis
+    let delegating_arbiter = ccos.get_delegating_arbiter();
+    let discovery_engine = DiscoveryEngine::new_with_arbiter(
+        Arc::clone(&marketplace),
+        Arc::clone(&intent_graph),
+        delegating_arbiter,
+    );
     
     let manifests = marketplace.list_capabilities().await;
     let mut matches = Vec::with_capacity(steps.len());
