@@ -56,6 +56,11 @@ impl DiscoveryEngine {
         
         // 4. Try recursive synthesis (if delegating arbiter is available)
         if let Some(ref arbiter) = self.delegating_arbiter {
+            eprintln!("\n🔍 Attempting recursive synthesis for: {}", need.capability_class);
+            eprintln!("   Rationale: {}", need.rationale);
+            eprintln!("   Required inputs: {:?}", need.required_inputs);
+            eprintln!("   Expected outputs: {:?}", need.expected_outputs);
+            
             let context = DiscoveryContext::new(5); // Default max depth of 5
             let mut synthesizer = RecursiveSynthesizer::new(
                 DiscoveryEngine::new(
@@ -68,19 +73,25 @@ impl DiscoveryEngine {
             
             match synthesizer.synthesize_as_intent(need, &context).await {
                 Ok(synthesized) => {
+                    eprintln!("\n✓ Synthesis succeeded for: {}", need.capability_class);
                     // Register the synthesized capability in the marketplace
                     if let Err(e) = self.marketplace.register_capability_manifest(synthesized.manifest.clone()).await {
                         eprintln!(
-                            "Warning: Failed to register synthesized capability {}: {}",
+                            "⚠️  Warning: Failed to register synthesized capability {}: {}",
                             need.capability_class, e
                         );
+                    } else {
+                        eprintln!("  → Registered as: {}", synthesized.manifest.id);
                     }
                     // Mark as synthesized (not just found)
                     return Ok(DiscoveryResult::Found(synthesized.manifest));
                 }
-                Err(_e) => {
+                Err(e) => {
+                    eprintln!(
+                        "\n✗ Synthesis failed for {}: {}",
+                        need.capability_class, e
+                    );
                     // Synthesis failed - fall through to NotFound
-                    // TODO: Log the error for debugging
                 }
             }
         }
