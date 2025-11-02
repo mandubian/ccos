@@ -60,6 +60,14 @@ impl RecursiveSynthesizer {
         need: &CapabilityNeed,
         context: &DiscoveryContext,
     ) -> RuntimeResult<SynthesizedCapability> {
+        let depth = context.current_depth;
+        let indent = "  ".repeat(depth);
+        
+        eprintln!(
+            "{}🔄 [Depth {}] Starting synthesis for: {}",
+            indent, depth, need.capability_class
+        );
+        
         // Check cycle detection
         if self.cycle_detector.has_cycle(&need.capability_class) {
             return Err(RuntimeError::Generic(format!(
@@ -70,6 +78,10 @@ impl RecursiveSynthesizer {
         
         // Check depth limit
         if !self.cycle_detector.can_go_deeper() {
+            eprintln!(
+                "{}⚠️  [Depth {}] Max depth {} reached for {}",
+                indent, depth, self.default_max_depth, need.capability_class
+            );
             return Err(RuntimeError::Generic(format!(
                 "Maximum depth {} reached while synthesizing {}",
                 self.default_max_depth, need.capability_class
@@ -82,6 +94,11 @@ impl RecursiveSynthesizer {
         // Transform capability need into intent
         let parent_intent_id = context.visited_intents.last().map(|s| s.as_str());
         let intent = IntentTransformer::need_to_intent(need, parent_intent_id);
+        
+        eprintln!(
+            "{}  → Created intent: {} (parent: {:?})",
+            indent, intent.intent_id, parent_intent_id
+        );
         
         // Store intent in intent graph
         {
@@ -118,15 +135,19 @@ impl RecursiveSynthesizer {
         }
         
         // Generate plan using delegating arbiter if available
+        eprintln!("{}  → Generating plan via delegating arbiter...", indent);
         let plan = if let Some(ref arbiter) = self.delegating_arbiter {
             // Use arbiter to generate plan from intent
-            arbiter.intent_to_plan(&intent).await
+            let generated_plan = arbiter.intent_to_plan(&intent).await
                 .map_err(|e| RuntimeError::Generic(format!(
                     "Failed to generate plan for synthesized intent {}: {}",
                     intent.intent_id, e
-                )))?
+                )))?;
+            eprintln!("{}  ✓ Plan generated successfully", indent);
+            generated_plan
         } else {
             // No arbiter available - create minimal stub plan
+            eprintln!("{}  ⚠️  No arbiter available, creating stub plan", indent);
             Plan::new_rtfs(
                 format!("(plan \"synthesized-{}\" :body (do (log \"Stub capability: {}\") {{:status \"stub\"}}))",
                     need.capability_class, need.capability_class),
@@ -135,7 +156,18 @@ impl RecursiveSynthesizer {
         };
         
         // Extract capability needs from the generated plan
+        eprintln!("{}  → Extracting sub-capability needs from plan...", indent);
         let sub_needs = CapabilityNeedExtractor::extract_from_plan(&plan);
+        eprintln!(
+            "{}  ✓ Found {} sub-capability needs",
+            indent, sub_needs.len()
+        );
+        for sub_need in &sub_needs {
+            eprintln!(
+                "{}    • {} (inputs: {:?}, outputs: {:?})",
+                indent, sub_need.capability_class, sub_need.required_inputs, sub_need.expected_outputs
+            );
+        }
         
         // Use queue-based approach to avoid async recursion issues
         // This processes sub-capabilities iteratively instead of recursively
@@ -152,12 +184,18 @@ impl RecursiveSynthesizer {
         let marketplace = self.discovery_engine.get_marketplace();
         
         // Process queue until empty or max depth reached
+        if !processing_queue.is_empty() {
+            eprintln!("{}  → Processing {} sub-capabilities in queue...", indent, processing_queue.len());
+        }
+        
         while let Some((sub_need, depth, visited)) = processing_queue.pop() {
+            let sub_indent = "  ".repeat(depth);
+            
             // Check depth limit
             if depth > self.default_max_depth {
                 eprintln!(
-                    "Warning: Max depth reached for sub-capability {} (depth {})",
-                    sub_need.capability_class, depth
+                    "{}⚠️  [Depth {}] Max depth {} reached for {}",
+                    sub_indent, depth, self.default_max_depth, sub_need.capability_class
                 );
                 continue;
             }
@@ -168,12 +206,15 @@ impl RecursiveSynthesizer {
             // we rely on depth limits and the cycle detector in synthesize_as_intent
             
             // Try to discover the sub-capability in marketplace first
+            eprintln!("{}  → [Depth {}] Checking marketplace for: {}", sub_indent, depth, sub_need.capability_class);
             if marketplace.get_capability(&sub_need.capability_class).await.is_some() {
                 // Found in marketplace - no need to synthesize
+                eprintln!("{}    ✓ Found in marketplace, skipping synthesis", sub_indent);
                 continue;
             }
             
             // Not found - synthesize it using queue-based approach
+            eprintln!("{}    → Not found, synthesizing...", sub_indent);
             // Create a new context for this depth level
             let mut sub_context = DiscoveryContext::new(self.default_max_depth);
             sub_context.current_depth = depth;
@@ -183,14 +224,20 @@ impl RecursiveSynthesizer {
             let mut deeper_synthesizer = self.go_deeper();
             match deeper_synthesizer.synthesize_as_intent(&sub_need, &sub_context).await {
                 Ok(synthesized) => {
+                    eprintln!(
+                        "{}    ✓ [Depth {}] Successfully synthesized: {}",
+                        sub_indent, depth, synthesized.manifest.id
+                    );
                     sub_intents.push(synthesized.manifest.id.clone());
                     
                     // Register synthesized sub-capability in marketplace
                     if let Err(e) = marketplace.register_capability_manifest(synthesized.manifest.clone()).await {
                         eprintln!(
-                            "Warning: Failed to register synthesized sub-capability {}: {}",
-                            sub_need.capability_class, e
+                            "{}    ⚠️  Warning: Failed to register synthesized sub-capability {}: {}",
+                            sub_indent, sub_need.capability_class, e
                         );
+                    } else {
+                        eprintln!("{}    ✓ Registered in marketplace", sub_indent);
                     }
                     
                     // Extract sub-needs from the synthesized capability's plan and add to queue
@@ -198,21 +245,37 @@ impl RecursiveSynthesizer {
                     if let Some(ref sub_plan) = synthesized.plan {
                         let sub_sub_needs = CapabilityNeedExtractor::extract_from_plan(sub_plan);
                         
+                        if !sub_sub_needs.is_empty() {
+                            eprintln!(
+                                "{}    → Found {} sub-sub-capabilities, adding to queue...",
+                                sub_indent, sub_sub_needs.len()
+                            );
+                        }
+                        
                         // Add new sub-needs to the queue with incremented depth
                         for sub_sub_need in sub_sub_needs {
+                            let capability_class = sub_sub_need.capability_class.clone();
                             let mut new_visited = visited.clone();
                             new_visited.push(synthesized.manifest.id.clone());
                             processing_queue.push((sub_sub_need, depth + 1, new_visited));
+                            eprintln!(
+                                "{}      • Queued: {} (depth {})",
+                                sub_indent, capability_class, depth + 1
+                            );
                         }
                     }
                 }
                 Err(e) => {
                     eprintln!(
-                        "Error: Failed to synthesize sub-capability {}: {}",
-                        sub_need.capability_class, e
+                        "{}    ✗ [Depth {}] Failed to synthesize {}: {}",
+                        sub_indent, depth, sub_need.capability_class, e
                     );
                 }
             }
+        }
+        
+        if sub_intents.is_empty() && !processing_queue.is_empty() {
+            eprintln!("{}  → All sub-capabilities processed", indent);
         }
         
         // Extract RTFS orchestrator from plan
@@ -245,6 +308,11 @@ impl RecursiveSynthesizer {
                 }
             ),
             "1.0.0".to_string(),
+        );
+        
+        eprintln!(
+            "{}✓ [Depth {}] Synthesis complete for: {} (sub-capabilities: {})",
+            indent, depth, need.capability_class, sub_intents.len()
         );
         
         Ok(SynthesizedCapability {
