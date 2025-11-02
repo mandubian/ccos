@@ -69,8 +69,13 @@ impl DiscoveryEngine {
             match synthesizer.synthesize_as_intent(need, &context).await {
                 Ok(synthesized) => {
                     // Register the synthesized capability in the marketplace
-                    // TODO: Actually register it properly with the orchestrator RTFS
-                    // For now, return it as found
+                    if let Err(e) = self.marketplace.register_capability_manifest(synthesized.manifest.clone()).await {
+                        eprintln!(
+                            "Warning: Failed to register synthesized capability {}: {}",
+                            need.capability_class, e
+                        );
+                    }
+                    // Mark as synthesized (not just found)
                     return Ok(DiscoveryResult::Found(synthesized.manifest));
                 }
                 Err(_e) => {
