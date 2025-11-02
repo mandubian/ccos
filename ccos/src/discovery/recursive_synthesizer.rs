@@ -115,9 +115,19 @@ impl RecursiveSynthesizer {
         // Mark as visited (tracks capabilities currently in synthesis path)
         self.cycle_detector.visit(&need.capability_class);
         
+        // Find related capabilities in marketplace to provide as examples
+        let related_caps = self.discovery_engine.find_related_capabilities(&need.capability_class, 5).await;
+        let related_cap_ids: Vec<String> = related_caps.iter().map(|m| m.id.clone()).collect();
+        if !related_cap_ids.is_empty() {
+            eprintln!(
+                "{}  → Found {} related capabilities in marketplace for reference",
+                indent, related_cap_ids.len()
+            );
+        }
+        
         // Transform capability need into intent
         let parent_intent_id = context.visited_intents.last().map(|s| s.as_str());
-        let intent = IntentTransformer::need_to_intent(need, parent_intent_id);
+        let intent = IntentTransformer::need_to_intent(need, parent_intent_id, &related_cap_ids);
         
         eprintln!(
             "{}  → Created intent: {} (parent: {:?})",
