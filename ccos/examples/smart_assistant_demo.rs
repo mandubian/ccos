@@ -1866,13 +1866,30 @@ async fn resolve_and_stub_capabilities(
     let delegating_arbiter = ccos.get_delegating_arbiter();
 
     for step in steps {
-        // Check if already matched (found in marketplace)
+        // Check if already matched (found in marketplace or synthesized)
         if let Some(match_record) = matches.iter().find(|m| m.step_id == step.id) {
             if let Some(cap_id) = &match_record.matched_capability {
+                // Check if it was synthesized based on the note
+                let strategy = if match_record.note.as_ref()
+                    .map(|n| n.contains("Synthesized"))
+                    .unwrap_or(false) {
+                    ResolutionStrategy::Synthesized
+                } else {
+                    ResolutionStrategy::Found
+                };
+                
+                if strategy == ResolutionStrategy::Synthesized {
+                    println!(
+                        "{} {}",
+                        "✅ Synthesized capability:".green(),
+                        cap_id.as_str().cyan()
+                    );
+                }
+                
                 resolved.push(ResolvedStep {
                     original: step.clone(),
                     capability_id: cap_id.clone(),
-                    resolution_strategy: ResolutionStrategy::Found,
+                    resolution_strategy: strategy,
                 });
                 continue;
             }
@@ -2476,6 +2493,9 @@ async fn match_proposed_steps(
         }
 
         // Try discovery engine for enhanced search
+        // Check if capability existed before discovery (to detect synthesis)
+        let existed_before = marketplace.get_capability(&step.capability_class).await.is_some();
+        
         let need = CapabilityNeed::new(
             step.capability_class.clone(),
             step.required_inputs.clone(),
@@ -2485,12 +2505,17 @@ async fn match_proposed_steps(
         
         match discovery_engine.discover_capability(&need).await {
             Ok(ccos::discovery::DiscoveryResult::Found(_manifest)) => {
-                // Found via discovery - could enhance note with source
+                // Found via discovery - check if it was synthesized or already existed
+                let note = if existed_before {
+                    "Found via discovery engine".to_string()
+                } else {
+                    "Synthesized via discovery engine".to_string()
+                };
                 matches.push(CapabilityMatch {
                     step_id: step.id.clone(),
                     matched_capability: Some(step.capability_class.clone()),
                     status: MatchStatus::MatchedByClass,
-                    note: Some("Found via discovery engine".to_string()),
+                    note: Some(note),
                 });
             }
             Ok(ccos::discovery::DiscoveryResult::NotFound) | Err(_) => {
