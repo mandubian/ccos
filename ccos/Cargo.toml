@@ -28,6 +28,7 @@ wasmtime = { workspace = true }
 flate2 = { workspace = true }
 bincode = { workspace = true }
 async-trait = { workspace = true }
+async-recursion = "1.0"
 futures = { workspace = true }
 
 # CCOS-specific dependencies
