@@ -6,7 +6,7 @@ use crate::capability_marketplace::types::CapabilityManifest;
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::discovery::recursive_synthesizer::RecursiveSynthesizer;
 use crate::intent_graph::IntentGraph;
-use rtfs::runtime::error::RuntimeResult;
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::sync::{Arc, Mutex};
 
 /// Discovery engine that orchestrates the search for capabilities
@@ -50,9 +50,17 @@ impl DiscoveryEngine {
             return Ok(DiscoveryResult::Found(manifest));
         }
         
-        // 2. TODO: Try MCP registry search
+        // 2. Try MCP registry search
+        if let Some(manifest) = self.search_mcp_registry(need).await? {
+            eprintln!("  ✓ Found in MCP registry: {}", manifest.id);
+            return Ok(DiscoveryResult::Found(manifest));
+        }
         
-        // 3. TODO: Try OpenAPI introspection
+        // 3. Try OpenAPI introspection
+        if let Some(manifest) = self.search_openapi(need).await? {
+            eprintln!("  ✓ Found via OpenAPI introspection: {}", manifest.id);
+            return Ok(DiscoveryResult::Found(manifest));
+        }
         
         // 4. Try recursive synthesis (if delegating arbiter is available)
         if let Some(ref arbiter) = self.delegating_arbiter {
@@ -155,6 +163,85 @@ impl DiscoveryEngine {
             .take(max_examples)
             .collect()
     }
+    
+    /// Search MCP registry for a capability
+    pub async fn search_mcp_registry(&self, need: &CapabilityNeed) -> RuntimeResult<Option<CapabilityManifest>> {
+        eprintln!("  🔍 Searching MCP registry for: {}", need.capability_class);
+        
+        // Try using the MCP registry client if available
+        // This is a placeholder - actual implementation would use McpRegistryClient
+        // For now, return None to indicate MCP search is not implemented yet
+        // TODO: Integrate with crate::synthesis::mcp_registry_client::McpRegistryClient
+        
+        // Extract keywords from capability class for semantic search
+        let keywords = need.capability_class.split('.').collect::<Vec<_>>();
+        eprintln!("    → Keywords: {:?}", keywords);
+        
+        // TODO: Call MCP registry client to search for matching servers/tools
+        // For now, we'll mark this as TODO and return None
+        Ok(None)
+    }
+    
+    /// Search OpenAPI services for a capability
+    pub async fn search_openapi(&self, need: &CapabilityNeed) -> RuntimeResult<Option<CapabilityManifest>> {
+        eprintln!("  🔍 Searching OpenAPI services for: {}", need.capability_class);
+        
+        // Try to find OpenAPI specs that might provide this capability
+        // This is a placeholder - actual implementation would use APIIntrospector
+        // TODO: Integrate with crate::synthesis::api_introspector::APIIntrospector
+        
+        // Extract domain/namespace from capability class
+        let namespace = need.capability_class.split('.').next().unwrap_or("");
+        eprintln!("    → Domain: {}", namespace);
+        
+        // TODO: Try common OpenAPI endpoints or search OpenAPI registries
+        // For now, we'll mark this as TODO and return None
+        Ok(None)
+    }
+    
+    /// Create an incomplete capability manifest for capabilities that couldn't be found
+    pub fn create_incomplete_capability(need: &CapabilityNeed) -> CapabilityManifest {
+        use crate::capability_marketplace::types::{LocalCapability, ProviderType};
+        use std::sync::Arc;
+        
+        let capability_id = need.capability_class.clone();
+        let stub_handler: Arc<dyn Fn(&rtfs::runtime::values::Value) -> RuntimeResult<rtfs::runtime::values::Value> + Send + Sync> = 
+            Arc::new(move |_input: &rtfs::runtime::values::Value| -> RuntimeResult<rtfs::runtime::values::Value> {
+                Err(RuntimeError::Generic(
+                    format!("Capability {} is marked as incomplete/not_found and needs implementation", capability_id)
+                ))
+            });
+        
+        let mut manifest = CapabilityManifest::new(
+            need.capability_class.clone(),
+            format!("[INCOMPLETE] {}", need.capability_class),
+            format!("Capability needed but not found: {}", need.rationale),
+            ProviderType::Local(LocalCapability {
+                handler: stub_handler,
+            }),
+            "0.0.0-incomplete".to_string(),
+        );
+        
+        // Add metadata to mark it as incomplete
+        manifest.metadata.insert(
+            "status".to_string(),
+            "incomplete".to_string(),
+        );
+        manifest.metadata.insert(
+            "discovery_method".to_string(),
+            "not_found_after_all_searches".to_string(),
+        );
+        manifest.metadata.insert(
+            "required_inputs".to_string(),
+            need.required_inputs.join(","),
+        );
+        manifest.metadata.insert(
+            "expected_outputs".to_string(),
+            need.expected_outputs.join(","),
+        );
+        
+        manifest
+    }
 }
 
 /// Result of a discovery attempt
@@ -164,6 +251,8 @@ pub enum DiscoveryResult {
     Found(CapabilityManifest),
     /// Capability not found - needs synthesis or user input
     NotFound,
+    /// Capability needed but not found after all searches - marked as incomplete
+    Incomplete(CapabilityManifest), // Manifest with incomplete/not_found status
 }
 
 /// Discovery context for tracking discovery attempts

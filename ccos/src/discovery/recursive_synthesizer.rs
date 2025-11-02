@@ -170,6 +170,11 @@ impl RecursiveSynthesizer {
         
         // Generate plan using delegating arbiter if available
         eprintln!("{}  → Generating plan via delegating arbiter...", indent);
+        eprintln!("{}  📝 Intent sent to delegating arbiter:", indent);
+        eprintln!("{}    Goal: {}", indent, intent.goal);
+        eprintln!("{}    Constraints: {:?}", indent, intent.constraints.keys().collect::<Vec<_>>());
+        eprintln!("{}    Preferences: {:?}", indent, intent.preferences.keys().collect::<Vec<_>>());
+        
         let plan = if let Some(ref arbiter) = self.delegating_arbiter {
             // Use arbiter to generate plan from intent
             let generated_plan = arbiter.intent_to_plan(&intent).await
@@ -178,6 +183,7 @@ impl RecursiveSynthesizer {
                     intent.intent_id, e
                 )))?;
             eprintln!("{}  ✓ Plan generated successfully", indent);
+            eprintln!("{}  📥 Delegating arbiter response (RTFS plan):", indent);
             // Log the generated plan RTFS
             if let crate::types::PlanBody::Rtfs(rtfs) = &generated_plan.body {
                 eprintln!("{}  📄 Generated plan RTFS:", indent);
@@ -226,19 +232,83 @@ impl RecursiveSynthesizer {
             );
         }
         
-        // Check for self-referencing cycles: if the plan only calls itself, prevent infinite recursion
+        // Check for self-referencing cycles: if the plan only calls itself, search remote registries
         let mut sub_needs = sub_needs;
         if sub_needs.len() == 1 && sub_needs[0].capability_class == need.capability_class {
             eprintln!(
-                "{}  ⚠️  WARNING: Plan only calls itself ({}) - this would cause infinite recursion.",
+                "{}  ⚠️  WARNING: Plan only calls itself ({}) - searching remote registries...",
                 indent, need.capability_class
             );
+            
+            // Search MCP registry
+            eprintln!("{}  → Searching MCP registry...", indent);
+            if let Some(mcp_manifest) = self.discovery_engine.search_mcp_registry(need).await
+                .map_err(|e| RuntimeError::Generic(format!("MCP search error: {}", e)))? {
+                eprintln!("{}  ✓ Found in MCP registry: {}", indent, mcp_manifest.id);
+                // Register and return the MCP capability
+                let marketplace = self.discovery_engine.get_marketplace();
+                if let Err(e) = marketplace.register_capability_manifest(mcp_manifest.clone()).await {
+                    eprintln!("{}  ⚠️  Failed to register MCP capability: {}", indent, e);
+                }
+                return Ok(SynthesizedCapability {
+                    manifest: mcp_manifest,
+                    orchestrator_rtfs: "".to_string(),
+                    plan: Some(plan),
+                    sub_intents: vec![],
+                    depth: self.cycle_detector.current_depth(),
+                });
+            }
+            
+            // Search OpenAPI services
+            eprintln!("{}  → Searching OpenAPI services...", indent);
+            if let Some(openapi_manifest) = self.discovery_engine.search_openapi(need).await
+                .map_err(|e| RuntimeError::Generic(format!("OpenAPI search error: {}", e)))? {
+                eprintln!("{}  ✓ Found via OpenAPI: {}", indent, openapi_manifest.id);
+                // Register and return the OpenAPI capability
+                let marketplace = self.discovery_engine.get_marketplace();
+                if let Err(e) = marketplace.register_capability_manifest(openapi_manifest.clone()).await {
+                    eprintln!("{}  ⚠️  Failed to register OpenAPI capability: {}", indent, e);
+                }
+                return Ok(SynthesizedCapability {
+                    manifest: openapi_manifest,
+                    orchestrator_rtfs: "".to_string(),
+                    plan: Some(plan),
+                    sub_intents: vec![],
+                    depth: self.cycle_detector.current_depth(),
+                });
+            }
+            
+            // Not found anywhere - mark as incomplete/not_found
             eprintln!(
-                "{}  ⚠️  Skipping further recursion for this capability.",
+                "{}  ✗ Not found in MCP registry or OpenAPI - marking as incomplete/not_found",
                 indent
             );
+            let incomplete_manifest = crate::discovery::engine::DiscoveryEngine::create_incomplete_capability(need);
+            let marketplace = self.discovery_engine.get_marketplace();
+            if let Err(e) = marketplace.register_capability_manifest(incomplete_manifest.clone()).await {
+                eprintln!("{}  ⚠️  Failed to register incomplete capability: {}", indent, e);
+            } else {
+                eprintln!(
+                    "{}  ⚠️  Registered incomplete capability: {} (status: incomplete/not_found)",
+                    indent, incomplete_manifest.id
+                );
+                eprintln!(
+                    "{}  → User notification: Capability '{}' is needed but not found. It requires manual implementation or external service integration.",
+                    indent, need.capability_class
+                );
+            }
+            
             // Clear sub_needs to prevent recursion
             sub_needs.clear();
+            
+            // Return incomplete capability
+            return Ok(SynthesizedCapability {
+                manifest: incomplete_manifest,
+                orchestrator_rtfs: "".to_string(),
+                plan: Some(plan),
+                sub_intents: vec![],
+                depth: self.cycle_detector.current_depth(),
+            });
         }
         
         eprintln!(
