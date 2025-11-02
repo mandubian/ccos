@@ -168,17 +168,90 @@ impl DiscoveryEngine {
     pub async fn search_mcp_registry(&self, need: &CapabilityNeed) -> RuntimeResult<Option<CapabilityManifest>> {
         eprintln!("  🔍 Searching MCP registry for: {}", need.capability_class);
         
-        // Try using the MCP registry client if available
-        // This is a placeholder - actual implementation would use McpRegistryClient
-        // For now, return None to indicate MCP search is not implemented yet
-        // TODO: Integrate with crate::synthesis::mcp_registry_client::McpRegistryClient
+        // Use MCP registry client to search for servers
+        let registry_client = crate::synthesis::mcp_registry_client::McpRegistryClient::new();
         
-        // Extract keywords from capability class for semantic search
-        let keywords = need.capability_class.split('.').collect::<Vec<_>>();
-        eprintln!("    → Keywords: {:?}", keywords);
+        // Extract search keywords from capability class
+        // e.g., "restaurant.api.reserve" -> search for "restaurant" and "reserve"
+        let keywords: Vec<&str> = need.capability_class.split('.').collect();
+        let search_query = keywords.join(" "); // Use space-separated keywords for search
         
-        // TODO: Call MCP registry client to search for matching servers/tools
-        // For now, we'll mark this as TODO and return None
+        eprintln!("    → Search query: {}", search_query);
+        
+        // Search MCP registry for matching servers
+        let servers = match registry_client.search_servers(&search_query).await {
+            Ok(servers) => {
+                eprintln!("    → Found {} MCP servers in registry", servers.len());
+                servers
+            }
+            Err(e) => {
+                eprintln!("    ⚠️  MCP registry search failed: {}", e);
+                return Ok(None);
+            }
+        };
+        
+        // Introspect each server to find matching tools
+        let introspector = crate::synthesis::mcp_introspector::MCPIntrospector::new();
+        
+        for server in &servers {
+            // Try to get server URL from packages or remotes
+            let server_url = server.remotes.as_ref()
+                .and_then(|remotes| remotes.first())
+                .map(|remote| remote.url.clone())
+                .or_else(|| {
+                    // Try to construct URL from packages if available
+                    server.packages.as_ref()
+                        .and_then(|packages| packages.first())
+                        .and_then(|pkg| pkg.registry_base_url.clone())
+                });
+            
+            if let Some(url) = server_url {
+                eprintln!("    → Introspecting MCP server: {} ({})", server.name, url);
+                
+                // Introspect the server
+                match introspector.introspect_mcp_server(&url, &server.name).await {
+                    Ok(introspection) => {
+                        // Create all capabilities from this server's tools
+                        match introspector.create_capabilities_from_mcp(&introspection) {
+                            Ok(capabilities) => {
+                                // Find a matching capability
+                                let capability_name_parts: Vec<&str> = need.capability_class.split('.').collect();
+                                let last_part = capability_name_parts.last().unwrap_or(&"");
+                                
+                                for manifest in capabilities {
+                                    let manifest_id_lower = manifest.id.to_lowercase();
+                                    let manifest_name_lower = manifest.name.to_lowercase();
+                                    
+                                    // Check if capability ID or name matches
+                                    let capability_match = capability_name_parts.iter().any(|part| {
+                                        manifest_id_lower.contains(&part.to_lowercase()) ||
+                                        manifest_name_lower.contains(&part.to_lowercase())
+                                    }) || manifest_id_lower.contains(&last_part.to_lowercase()) ||
+                                    manifest_name_lower.contains(&last_part.to_lowercase());
+                                    
+                                    if capability_match {
+                                        eprintln!("    ✓ Found matching capability: {} ({})", manifest.id, manifest.name);
+                                        return Ok(Some(manifest));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("    ⚠️  Failed to create capabilities from server tools: {}", e);
+                                continue;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("    ⚠️  Failed to introspect server {}: {}", server.name, e);
+                        continue;
+                    }
+                }
+            } else {
+                eprintln!("    ⚠️  No server URL found for: {}", server.name);
+            }
+        }
+        
+        eprintln!("    ✗ No matching MCP tools found");
         Ok(None)
     }
     
@@ -186,16 +259,67 @@ impl DiscoveryEngine {
     pub async fn search_openapi(&self, need: &CapabilityNeed) -> RuntimeResult<Option<CapabilityManifest>> {
         eprintln!("  🔍 Searching OpenAPI services for: {}", need.capability_class);
         
-        // Try to find OpenAPI specs that might provide this capability
-        // This is a placeholder - actual implementation would use APIIntrospector
-        // TODO: Integrate with crate::synthesis::api_introspector::APIIntrospector
-        
         // Extract domain/namespace from capability class
+        // e.g., "restaurant.api.reserve" -> "restaurant"
         let namespace = need.capability_class.split('.').next().unwrap_or("");
         eprintln!("    → Domain: {}", namespace);
         
-        // TODO: Try common OpenAPI endpoints or search OpenAPI registries
-        // For now, we'll mark this as TODO and return None
+        // Try common OpenAPI base URLs based on namespace
+        // This is a heuristic - in production, you'd query an OpenAPI registry
+        let common_base_urls = vec![
+            format!("https://api.{}.com", namespace),
+            format!("https://{}.api.com", namespace),
+            format!("https://api.{}.io/v1", namespace),
+            format!("https://{}.api.io/api/v1", namespace),
+        ];
+        
+        let introspector = crate::synthesis::api_introspector::APIIntrospector::new();
+        
+        for base_url in common_base_urls {
+            eprintln!("    → Trying OpenAPI discovery: {}", base_url);
+            
+            // Try to introspect from discovery (will try common OpenAPI spec locations)
+            match introspector.introspect_from_discovery(&base_url, namespace).await {
+                Ok(introspection) => {
+                    // Create capabilities from introspection
+                    match introspector.create_capabilities_from_introspection(&introspection) {
+                        Ok(capabilities) => {
+                            // Find a matching capability
+                            let capability_name_parts: Vec<&str> = need.capability_class.split('.').collect();
+                            let last_part = capability_name_parts.last().unwrap_or(&"");
+                            
+                            for manifest in capabilities {
+                                let manifest_id_lower = manifest.id.to_lowercase();
+                                let manifest_name_lower = manifest.name.to_lowercase();
+                                
+                                // Check if capability ID or name matches
+                                let capability_match = capability_name_parts.iter().any(|part| {
+                                    manifest_id_lower.contains(&part.to_lowercase()) ||
+                                    manifest_name_lower.contains(&part.to_lowercase())
+                                }) || manifest_id_lower.contains(&last_part.to_lowercase()) ||
+                                manifest_name_lower.contains(&last_part.to_lowercase());
+                                
+                                if capability_match {
+                                    eprintln!("    ✓ Found matching OpenAPI capability: {} ({})", manifest.id, manifest.name);
+                                    return Ok(Some(manifest));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("    ⚠️  Failed to create capabilities from OpenAPI: {}", e);
+                            continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    // This URL doesn't work, try next
+                    eprintln!("    → OpenAPI discovery failed: {}", e);
+                    continue;
+                }
+            }
+        }
+        
+        eprintln!("    ✗ No matching OpenAPI capabilities found");
         Ok(None)
     }
     
