@@ -215,13 +215,13 @@ impl RecursiveSynthesizer {
             crate::types::PlanBody::Wasm(_) => "",
         };
         let has_user_ask = plan_rtfs.contains(":ccos.user.ask");
-        let has_service_call = plan_rtfs.contains("(call :") && 
-            (plan_rtfs.contains("api") || plan_rtfs.contains("service") || 
-             plan_rtfs.contains("restaurant") || plan_rtfs.contains("hotel") ||
-             plan_rtfs.contains("travel") || plan_rtfs.contains("booking"));
+        let has_service_call = plan_rtfs.contains("(call :");
         let has_user_ask_only = has_user_ask && !has_service_call;
         
-        if sub_needs.is_empty() && has_user_ask_only {
+        // More detailed validation: check if service calls exist AND are different from self
+        let self_reference_only = sub_needs.len() == 1 && sub_needs[0].capability_class == need.capability_class;
+        
+        if has_user_ask_only || (sub_needs.is_empty() && !has_service_call) {
             eprintln!(
                 "{}  ⚠️  WARNING: Plan only asks questions but doesn't declare a service capability.",
                 indent
@@ -230,6 +230,13 @@ impl RecursiveSynthesizer {
                 "{}  ⚠️  Expected plan to declare and call a specific service (e.g., restaurant.api.search)",
                 indent
             );
+        } else if self_reference_only {
+            eprintln!(
+                "{}  ⚠️  WARNING: Plan only calls itself - this indicates incomplete synthesis",
+                indent
+            );
+        } else if has_service_call && !self_reference_only {
+            eprintln!("{}  ✓ Plan validation passed: contains valid service calls", indent);
         }
         
         // Check for self-referencing cycles: if the plan only calls itself, search remote registries
