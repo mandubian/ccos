@@ -1,15 +1,15 @@
 //! Recursive synthesizer for generating missing capabilities
 
+use crate::arbiter::arbiter_engine::ArbiterEngine;
 use crate::arbiter::delegating_arbiter::DelegatingArbiter;
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::discovery::cycle_detector::CycleDetector;
-use crate::discovery::engine::{DiscoveryContext, DiscoveryEngine, DiscoveryResult};
+use crate::discovery::engine::{DiscoveryContext, DiscoveryEngine};
 use crate::discovery::intent_transformer::IntentTransformer;
-use crate::discovery::need_extractor::CapabilityNeed;
-use crate::intent_graph::IntentGraph;
-use crate::types::Intent;
+use crate::discovery::need_extractor::{CapabilityNeed, CapabilityNeedExtractor};
+use crate::types::Plan;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Result of a recursive synthesis attempt
 #[derive(Debug, Clone)]
@@ -80,18 +80,103 @@ impl RecursiveSynthesizer {
         let parent_intent_id = context.visited_intents.last().map(|s| s.as_str());
         let intent = IntentTransformer::need_to_intent(need, parent_intent_id);
         
-        // TODO: Use delegating arbiter to refine intent and generate plan
-        // For now, we'll create a placeholder capability
+        // Store intent in intent graph
+        {
+            let intent_graph = self.discovery_engine.get_intent_graph();
+            let mut ig = intent_graph.lock()
+                .map_err(|e| RuntimeError::Generic(format!("Failed to lock intent graph: {}", e)))?;
+            
+            let storable_intent = crate::types::StorableIntent {
+                intent_id: intent.intent_id.clone(),
+                name: intent.name.clone(),
+                original_request: intent.original_request.clone(),
+                rtfs_intent_source: "".to_string(),
+                goal: intent.goal.clone(),
+                constraints: intent.constraints.iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+                preferences: intent.preferences.iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+                success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
+                parent_intent: parent_intent_id.map(|s| s.to_string()),
+                child_intents: vec![],
+                triggered_by: crate::types::TriggerSource::ArbiterInference,
+                generation_context: IntentTransformer::create_synthesis_context(&need.rationale),
+                status: intent.status.clone(),
+                priority: 0,
+                created_at: intent.created_at,
+                updated_at: intent.updated_at,
+                metadata: intent.metadata.iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+            };
+            ig.store_intent(storable_intent)?;
+        }
         
-        // Create a simple stub capability
-        let orchestrator_rtfs = format!(
-            "(plan \"synthesized-{}\"\n  :body (do\n    (log \"Synthesized capability: {}\")\n    {{:status \"stub\" :capability \"{}\"}}\n  )\n)",
-            need.capability_class,
-            need.capability_class,
-            need.capability_class
-        );
+        // Generate plan using delegating arbiter if available
+        let plan = if let Some(ref arbiter) = self.delegating_arbiter {
+            // Use arbiter to generate plan from intent
+            arbiter.intent_to_plan(&intent).await
+                .map_err(|e| RuntimeError::Generic(format!(
+                    "Failed to generate plan for synthesized intent {}: {}",
+                    intent.intent_id, e
+                )))?
+        } else {
+            // No arbiter available - create minimal stub plan
+            Plan::new_rtfs(
+                format!("(plan \"synthesized-{}\" :body (do (log \"Stub capability: {}\") {{:status \"stub\"}}))",
+                    need.capability_class, need.capability_class),
+                vec![intent.intent_id.clone()],
+            )
+        };
         
-        // TODO: Generate proper RTFS orchestrator once plan generation is integrated
+        // Extract capability needs from the generated plan
+        let sub_needs = CapabilityNeedExtractor::extract_from_plan(&plan);
+        
+        // Recursively discover or synthesize sub-capabilities
+        let sub_intents = Vec::new();
+        let mut deeper_context = context.go_deeper();
+        deeper_context.visited_intents.push(intent.intent_id.clone());
+        
+        for sub_need in &sub_needs {
+            // Check if we can go deeper
+            if !deeper_context.can_go_deeper() {
+                // Max depth reached - mark as incomplete
+                break;
+            }
+            
+            // Try to discover the sub-capability in marketplace first
+            let marketplace = self.discovery_engine.get_marketplace();
+            if marketplace.get_capability(&sub_need.capability_class).await.is_some() {
+                // Found in marketplace - no need to synthesize
+                continue;
+            }
+            
+            // Not found - recursively synthesize
+            // TODO: Implement proper async recursion - currently limited by Send trait constraints
+            // For now, we mark as needing synthesis but don't recursively call
+            // This will be enhanced in a future iteration with async_recursion or loop-based approach
+            eprintln!(
+                "Warning: Sub-capability {} needs synthesis but recursive synthesis is not yet fully implemented",
+                sub_need.capability_class
+            );
+            // Note: In a full implementation, we would:
+            // 1. Create deeper synthesizer with go_deeper()
+            // 2. Recursively call synthesize_as_intent
+            // 3. Register the synthesized sub-capability
+            // This requires resolving Send/Sync trait bounds for IntentEventSink
+        }
+        
+        // Extract RTFS orchestrator from plan
+        let orchestrator_rtfs = match &plan.body {
+            crate::types::PlanBody::Rtfs(rtfs) => rtfs.clone(),
+            crate::types::PlanBody::Wasm(_) => {
+                // Fallback for WASM plans
+                format!("(plan \"synthesized-{}\" :body (do (log \"WASM plan not yet supported\")))",
+                    need.capability_class)
+            }
+        };
         
         // Create a minimal manifest using the constructor
         // Use a stub handler - the actual implementation will be registered later
@@ -118,7 +203,7 @@ impl RecursiveSynthesizer {
         Ok(SynthesizedCapability {
             manifest,
             orchestrator_rtfs,
-            sub_intents: vec![], // TODO: Populate with actual sub-intent IDs
+            sub_intents,
             depth: self.cycle_detector.current_depth(),
         })
     }
