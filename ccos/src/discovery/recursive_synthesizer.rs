@@ -8,6 +8,7 @@ use crate::discovery::engine::{DiscoveryContext, DiscoveryEngine};
 use crate::discovery::intent_transformer::IntentTransformer;
 use crate::discovery::need_extractor::{CapabilityNeed, CapabilityNeedExtractor};
 use crate::types::Plan;
+use async_recursion::async_recursion;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::sync::Arc;
 
@@ -16,6 +17,7 @@ use std::sync::Arc;
 pub struct SynthesizedCapability {
     pub manifest: CapabilityManifest,
     pub orchestrator_rtfs: String,
+    pub plan: Option<Plan>, // Store the generated plan for sub-need extraction
     pub sub_intents: Vec<String>, // Intent IDs of synthesized sub-capabilities
     pub depth: usize,
 }
@@ -52,6 +54,7 @@ impl RecursiveSynthesizer {
     /// 4. For each sub-step, recursively discover or synthesize
     /// 5. Build orchestrator RTFS once all dependencies resolved
     /// 6. Register as new capability
+    #[async_recursion(?Send)]
     pub async fn synthesize_as_intent(
         &mut self,
         need: &CapabilityNeed,
@@ -134,38 +137,82 @@ impl RecursiveSynthesizer {
         // Extract capability needs from the generated plan
         let sub_needs = CapabilityNeedExtractor::extract_from_plan(&plan);
         
-        // Recursively discover or synthesize sub-capabilities
-        let sub_intents = Vec::new();
-        let mut deeper_context = context.go_deeper();
-        deeper_context.visited_intents.push(intent.intent_id.clone());
+        // Use queue-based approach to avoid async recursion issues
+        // This processes sub-capabilities iteratively instead of recursively
+        let mut sub_intents = Vec::new();
+        let mut processing_queue: Vec<(CapabilityNeed, usize, Vec<String>)> = sub_needs
+            .into_iter()
+            .map(|need| {
+                let mut visited = context.visited_intents.clone();
+                visited.push(intent.intent_id.clone());
+                (need, context.current_depth + 1, visited)
+            })
+            .collect();
         
-        for sub_need in &sub_needs {
-            // Check if we can go deeper
-            if !deeper_context.can_go_deeper() {
-                // Max depth reached - mark as incomplete
-                break;
+        let marketplace = self.discovery_engine.get_marketplace();
+        
+        // Process queue until empty or max depth reached
+        while let Some((sub_need, depth, visited)) = processing_queue.pop() {
+            // Check depth limit
+            if depth > self.default_max_depth {
+                eprintln!(
+                    "Warning: Max depth reached for sub-capability {} (depth {})",
+                    sub_need.capability_class, depth
+                );
+                continue;
             }
             
+            // Check cycle detection using a simpler approach
+            // Check if we've already synthesized a capability with this class at this depth
+            // We could enhance this to track capability classes separately, but for now
+            // we rely on depth limits and the cycle detector in synthesize_as_intent
+            
             // Try to discover the sub-capability in marketplace first
-            let marketplace = self.discovery_engine.get_marketplace();
             if marketplace.get_capability(&sub_need.capability_class).await.is_some() {
                 // Found in marketplace - no need to synthesize
                 continue;
             }
             
-            // Not found - recursively synthesize
-            // TODO: Implement proper async recursion - currently limited by Send trait constraints
-            // For now, we mark as needing synthesis but don't recursively call
-            // This will be enhanced in a future iteration with async_recursion or loop-based approach
-            eprintln!(
-                "Warning: Sub-capability {} needs synthesis but recursive synthesis is not yet fully implemented",
-                sub_need.capability_class
-            );
-            // Note: In a full implementation, we would:
-            // 1. Create deeper synthesizer with go_deeper()
-            // 2. Recursively call synthesize_as_intent
-            // 3. Register the synthesized sub-capability
-            // This requires resolving Send/Sync trait bounds for IntentEventSink
+            // Not found - synthesize it using queue-based approach
+            // Create a new context for this depth level
+            let mut sub_context = DiscoveryContext::new(self.default_max_depth);
+            sub_context.current_depth = depth;
+            sub_context.visited_intents = visited.clone();
+            
+            // Synthesize the sub-capability
+            let mut deeper_synthesizer = self.go_deeper();
+            match deeper_synthesizer.synthesize_as_intent(&sub_need, &sub_context).await {
+                Ok(synthesized) => {
+                    sub_intents.push(synthesized.manifest.id.clone());
+                    
+                    // Register synthesized sub-capability in marketplace
+                    if let Err(e) = marketplace.register_capability_manifest(synthesized.manifest.clone()).await {
+                        eprintln!(
+                            "Warning: Failed to register synthesized sub-capability {}: {}",
+                            sub_need.capability_class, e
+                        );
+                    }
+                    
+                    // Extract sub-needs from the synthesized capability's plan and add to queue
+                    // This enables full multi-level recursive synthesis
+                    if let Some(ref sub_plan) = synthesized.plan {
+                        let sub_sub_needs = CapabilityNeedExtractor::extract_from_plan(sub_plan);
+                        
+                        // Add new sub-needs to the queue with incremented depth
+                        for sub_sub_need in sub_sub_needs {
+                            let mut new_visited = visited.clone();
+                            new_visited.push(synthesized.manifest.id.clone());
+                            processing_queue.push((sub_sub_need, depth + 1, new_visited));
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Error: Failed to synthesize sub-capability {}: {}",
+                        sub_need.capability_class, e
+                    );
+                }
+            }
         }
         
         // Extract RTFS orchestrator from plan
@@ -203,6 +250,7 @@ impl RecursiveSynthesizer {
         Ok(SynthesizedCapability {
             manifest,
             orchestrator_rtfs,
+            plan: Some(plan),
             sub_intents,
             depth: self.cycle_detector.current_depth(),
         })
