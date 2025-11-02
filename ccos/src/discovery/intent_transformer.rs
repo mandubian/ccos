@@ -15,7 +15,11 @@ impl IntentTransformer {
     /// The capability need represents a missing capability that needs to be synthesized.
     /// This method transforms it into an Intent that can then go through the normal
     /// refinement and decomposition process (clarifying questions, plan generation, etc.)
-    pub fn need_to_intent(need: &CapabilityNeed, parent_intent_id: Option<&str>) -> Intent {
+    pub fn need_to_intent(
+        need: &CapabilityNeed, 
+        parent_intent_id: Option<&str>,
+        related_capabilities: &[String], // Optional list of related capability IDs for examples
+    ) -> Intent {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -33,11 +37,21 @@ impl IntentTransformer {
         
         // Create a natural language goal from the capability need
         // Explicitly instruct the LLM to identify the required external service/API
+        let examples_section = if related_capabilities.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\nRelated capabilities already in marketplace (for reference): {}",
+                related_capabilities.join(", ")
+            )
+        };
+        
         let goal = format!(
-            "Identify the specific external service, API, or capability needed to implement: {} (inputs: {}, outputs: {}). Then generate a plan that calls this service. IMPORTANT: Do NOT ask users questions - instead, declare the specific service capability ID you need (e.g., 'restaurant.api.search', 'hotel.booking.reserve', etc.) and use it in a (call :service.id {{...}}) form. If the service doesn't exist yet, declare what it should be called.",
+            "Identify the specific external service, API, or capability needed to implement: {} (inputs: {}, outputs: {}). Then generate a plan that calls this service. IMPORTANT: Do NOT ask users questions - instead, declare the specific service capability ID you need (e.g., 'restaurant.api.search', 'hotel.booking.reserve', etc.) and use it in a (call :service.id {{...}}) form. If the service doesn't exist yet, declare what it should be called.{}",
             need.capability_class,
             need.required_inputs.join(", "),
-            need.expected_outputs.join(", ")
+            need.expected_outputs.join(", "),
+            examples_section
         );
         
         // Build constraints from required inputs
@@ -120,7 +134,7 @@ mod tests {
             "Need to book restaurant reservations".to_string(),
         );
         
-        let intent = IntentTransformer::need_to_intent(&need, None);
+        let intent = IntentTransformer::need_to_intent(&need, None, &[]);
         
         assert_eq!(intent.name, Some("Synthesize restaurant.reservation.book".to_string()));
         assert!(intent.goal.contains("restaurant.reservation.book"));
@@ -138,7 +152,7 @@ mod tests {
             "Test rationale".to_string(),
         );
         
-        let intent = IntentTransformer::need_to_intent(&need, Some("parent-123"));
+        let intent = IntentTransformer::need_to_intent(&need, Some("parent-123"), &[]);
         
         assert!(intent.intent_id.contains("parent-123"));
         assert_eq!(

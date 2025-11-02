@@ -132,6 +132,29 @@ impl DiscoveryEngine {
     pub fn get_intent_graph(&self) -> Arc<Mutex<IntentGraph>> {
         Arc::clone(&self.intent_graph)
     }
+    
+    /// Find related capabilities in marketplace by namespace/pattern to provide as examples
+    /// Returns up to `max_examples` capabilities that share the namespace or related keywords
+    pub async fn find_related_capabilities(
+        &self,
+        capability_class: &str,
+        max_examples: usize,
+    ) -> Vec<CapabilityManifest> {
+        // Extract namespace from capability class (e.g., "restaurant.api.search" -> "restaurant")
+        let namespace = capability_class.split('.').next().unwrap_or("");
+        
+        if namespace.is_empty() {
+            return vec![];
+        }
+        
+        // Search for capabilities with the same namespace prefix using glob pattern
+        // e.g., "restaurant.*" matches "restaurant.api.search", "restaurant.booking.reserve", etc.
+        let pattern = format!("{}.*", namespace);
+        self.marketplace.search_by_id(&pattern).await
+            .into_iter()
+            .take(max_examples)
+            .collect()
+    }
 }
 
 /// Result of a discovery attempt
