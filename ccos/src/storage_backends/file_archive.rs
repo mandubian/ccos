@@ -474,14 +474,12 @@ mod tests {
         // Create a stale lock file with old modified time
         std::fs::write(&lock_path, b"stale").unwrap();
         // Set modified time to far in the past (best-effort)
-        // Note: filetime crate not available, skipping mtime modification for this test
-        // This is acceptable - the test still validates stale lock cleanup behavior
-        #[cfg(unix)]
+        // Set the mtime to the distant past so the lock is considered stale deterministically
+        // Use the filetime crate (added as dev-dependency) to avoid platform-specific shell calls
         {
-            // TODO: Add filetime crate dependency if needed for this test
-            // use filetime::FileTime;
-            // let ft = FileTime::from_unix_time(0, 0);
-            // filetime::set_file_mtime(&lock_path, ft).unwrap();
+            use filetime::FileTime;
+            let ft = FileTime::from_unix_time(0, 0);
+            filetime::set_file_mtime(&lock_path, ft).unwrap();
         }
         // Now attempt to acquire lock; function should remove stale lock and succeed
         let guard = archive
