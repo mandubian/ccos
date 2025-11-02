@@ -23,6 +23,7 @@ use clap::Parser;
 use crossterm::style::Stylize;
 use rtfs::ast::{Expression, Keyword, Literal, MapKey};
 use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
+use ccos::capability_marketplace::types::CapabilityManifest;
 use ccos::discovery::{CapabilityNeed, DiscoveryEngine, DiscoveryResult};
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::types::{Intent, Plan};
@@ -240,7 +241,7 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     let needs_value = build_needs_capabilities(&plan_steps);
     
     // Resolve missing capabilities and build orchestrating agent
-    let resolved_steps = resolve_and_stub_capabilities(&ccos, &plan_steps, &matches).await?;
+    let resolved_steps = resolve_and_stub_capabilities(&ccos, &plan_steps, &matches, args.interactive).await?;
     let orchestrator_rtfs = generate_orchestrator_capability(&goal, &resolved_steps)?;
     
     // Register the orchestrator as a reusable capability in the marketplace
@@ -1859,6 +1860,7 @@ async fn resolve_and_stub_capabilities(
     ccos: &Arc<CCOS>,
     steps: &[ProposedStep],
     matches: &[CapabilityMatch],
+    interactive: bool,
 ) -> DemoResult<Vec<ResolvedStep>> {
     let mut resolved = Vec::with_capacity(steps.len());
     let marketplace = ccos.get_capability_marketplace();
@@ -1947,6 +1949,24 @@ async fn resolve_and_stub_capabilities(
                         "Capability not found in MCP registry or OpenAPI - requires manual implementation".dim()
                     );
                     
+                    // Interactive mode: ask user for guidance
+                    let user_provided_url = if interactive {
+                        prompt_for_capability_url(&step.capability_class, &manifest)
+                    } else {
+                        None
+                    };
+                    
+                    // If user provided a URL, we could potentially use it
+                    // For now, just log it and treat as incomplete
+                    if let Some(ref url) = user_provided_url {
+                        println!(
+                            "   {} {}",
+                            "→ User provided URL:".dim(),
+                            url.as_str().cyan()
+                        );
+                        // TODO: Use this URL to attempt introspection
+                    }
+                    
                     resolved.push(ResolvedStep {
                         original: step.clone(),
                         capability_id: cap_id,
@@ -2018,6 +2038,37 @@ async fn register_stub_capability(
         .await;
 
     Ok(())
+}
+
+/// Prompt user for guidance when a capability is incomplete
+fn prompt_for_capability_url(
+    capability_class: &str,
+    _manifest: &CapabilityManifest,
+) -> Option<String> {
+    println!("\n{}", "💬 User input needed".bold().cyan());
+    println!(
+        "   The capability '{}' could not be found in any available source.",
+        capability_class.bold()
+    );
+    println!("   Options:");
+    println!("   • Press ENTER to continue with incomplete capability");
+    println!("   • Provide an API documentation URL (OpenAPI/MCP)");
+    println!("   • Provide the name of a known API service\n");
+    
+    print!("   Your input (or press ENTER to skip): ");
+    io::stdout().flush().ok();
+    
+    let mut input = String::new();
+    if io::stdin().read_line(&mut input).is_ok() {
+        let trimmed = input.trim();
+        if !trimmed.is_empty() {
+            Some(trimmed.to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 /// Register the orchestrator capability in the marketplace so it can be discovered and reused
