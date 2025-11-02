@@ -68,15 +68,7 @@ impl RecursiveSynthesizer {
             indent, depth, need.capability_class
         );
         
-        // Check cycle detection
-        if self.cycle_detector.has_cycle(&need.capability_class) {
-            return Err(RuntimeError::Generic(format!(
-                "Cycle detected: capability {} already being synthesized",
-                need.capability_class
-            )));
-        }
-        
-        // Check depth limit
+        // Check depth limit first
         if !self.cycle_detector.can_go_deeper() {
             eprintln!(
                 "{}⚠️  [Depth {}] Max depth {} reached for {}",
@@ -88,7 +80,39 @@ impl RecursiveSynthesizer {
             )));
         }
         
-        // Mark as visited
+        // Check if capability already exists in marketplace (parent may have already synthesized it)
+        // This prevents re-synthesizing capabilities that were already created at a parent level
+        let marketplace = self.discovery_engine.get_marketplace();
+        if let Some(manifest) = marketplace.get_capability(&need.capability_class).await {
+            eprintln!(
+                "{}  → Capability already exists in marketplace: {}",
+                indent, manifest.id
+            );
+            eprintln!("{}  ✓ Using existing capability (no re-synthesis needed)", indent);
+            // Return the existing capability (we'll create a SynthesizedCapability wrapper)
+            return Ok(SynthesizedCapability {
+                manifest: manifest.clone(),
+                orchestrator_rtfs: "".to_string(), // Not available for existing capabilities
+                plan: None,
+                sub_intents: vec![],
+                depth: self.cycle_detector.current_depth(),
+            });
+        }
+        
+        // Check cycle detection (only if not already in marketplace)
+        // This prevents infinite loops when a capability needs itself
+        if self.cycle_detector.has_cycle(&need.capability_class) {
+            eprintln!(
+                "{}  ✗ Cycle detected: {} is already being synthesized in this path",
+                indent, need.capability_class
+            );
+            return Err(RuntimeError::Generic(format!(
+                "Cycle detected: capability {} already being synthesized",
+                need.capability_class
+            )));
+        }
+        
+        // Mark as visited (tracks capabilities currently in synthesis path)
         self.cycle_detector.visit(&need.capability_class);
         
         // Transform capability need into intent
@@ -144,6 +168,16 @@ impl RecursiveSynthesizer {
                     intent.intent_id, e
                 )))?;
             eprintln!("{}  ✓ Plan generated successfully", indent);
+            // Log the generated plan RTFS
+            if let crate::types::PlanBody::Rtfs(rtfs) = &generated_plan.body {
+                eprintln!("{}  📄 Generated plan RTFS:", indent);
+                for line in rtfs.lines().take(20) { // Show first 20 lines
+                    eprintln!("{}    {}", indent, line);
+                }
+                if rtfs.lines().count() > 20 {
+                    eprintln!("{}    ... ({} more lines)", indent, rtfs.lines().count() - 20);
+                }
+            }
             generated_plan
         } else {
             // No arbiter available - create minimal stub plan
@@ -210,6 +244,22 @@ impl RecursiveSynthesizer {
             if marketplace.get_capability(&sub_need.capability_class).await.is_some() {
                 // Found in marketplace - no need to synthesize
                 eprintln!("{}    ✓ Found in marketplace, skipping synthesis", sub_indent);
+                continue;
+            }
+            
+            // Check if this capability is currently being synthesized by a parent
+            // by checking the cycle detector (which tracks visited capabilities in this synthesis tree)
+            // If so, it's a true cycle (capability needs itself) - skip it gracefully
+            // Note: go_deeper() clones the visited set, so we can check what would be in the deeper detector
+            if self.cycle_detector.has_cycle(&sub_need.capability_class) {
+                eprintln!(
+                    "{}    ⚠️  Skipping: {} is already being synthesized in this path",
+                    sub_indent, sub_need.capability_class
+                );
+                eprintln!(
+                    "{}      (Cycle detected - capability would depend on itself)",
+                    sub_indent
+                );
                 continue;
             }
             
