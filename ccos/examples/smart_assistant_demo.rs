@@ -15,6 +15,7 @@ use clap::Parser;
 use crossterm::style::Stylize;
 use rtfs::ast::{Expression, Keyword, Literal, MapKey};
 use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
+use ccos::discovery::{CapabilityNeed, DiscoveryEngine};
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::types::{Intent, Plan};
 use ccos::CCOS;
@@ -48,6 +49,10 @@ struct Args {
     /// Dump prompts and raw LLM responses for debugging
     #[arg(long, default_value_t = false)]
     debug_prompts: bool,
+
+    /// Interactive mode: prompt user for clarifying question answers (default: auto-answer with LLM)
+    #[arg(long, default_value_t = false)]
+    interactive: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -185,8 +190,17 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let answers =
-        conduct_interview(&ccos, &questions, &mut seeded_answers, args.debug_prompts).await?;
+    let answers = conduct_interview(
+        &ccos,
+        &delegating,
+        &goal,
+        &intent,
+        &questions,
+        &mut seeded_answers,
+        args.debug_prompts,
+        args.interactive,
+    )
+    .await?;
 
     let mut plan_steps = match propose_plan_steps(
         &delegating,
@@ -830,11 +844,110 @@ fn seed_answers_from_intent(intent: &Intent) -> HashMap<String, AnswerRecord> {
     seeds
 }
 
+async fn auto_answer_with_llm(
+    delegating: &DelegatingArbiter,
+    goal: &str,
+    intent: &Intent,
+    collected_answers: &[AnswerRecord],
+    question: &ClarifyingQuestion,
+    debug: bool,
+) -> DemoResult<AnswerRecord> {
+    let mut prompt = String::new();
+    prompt.push_str("You are answering clarifying questions for a smart assistant based on a user's goal.\n");
+    prompt.push_str("Respond with ONLY the answer value, no explanation or context.\n");
+    prompt.push_str("Do NOT use code fences, quotes, or any special formatting.\n");
+    prompt.push_str("\nGoal: ");
+    prompt.push_str(goal);
+    
+    if !intent.constraints.is_empty() {
+        prompt.push_str("\n\nKnown constraints:");
+        for (k, v) in &intent.constraints {
+            prompt.push_str(&format!("\n  {} = {}", k, format_value(v)));
+        }
+    }
+    
+    if !intent.preferences.is_empty() {
+        prompt.push_str("\n\nKnown preferences:");
+        for (k, v) in &intent.preferences {
+            prompt.push_str(&format!("\n  {} = {}", k, format_value(v)));
+        }
+    }
+    
+    if !collected_answers.is_empty() {
+        prompt.push_str("\n\nPreviously answered questions:");
+        for answer in collected_answers {
+            prompt.push_str(&format!("\n  {} = {}", answer.key, answer.text));
+        }
+    }
+    
+    prompt.push_str("\n\nCurrent question: ");
+    prompt.push_str(&question.prompt);
+    prompt.push_str("\nRationale: ");
+    prompt.push_str(&question.rationale);
+    prompt.push_str("\nAnswer kind: ");
+    prompt.push_str(match question.answer_kind {
+        AnswerKind::Text => "text",
+        AnswerKind::List => "list",
+        AnswerKind::Number => "number",
+        AnswerKind::Boolean => "boolean",
+    });
+    if let Some(default) = &question.default_answer {
+        prompt.push_str(&format!("\nDefault value: {}", default));
+    }
+    prompt.push_str("\n\nAnswer: ");
+
+    let response = delegating
+        .generate_raw_text(&prompt)
+        .await
+        .map_err(runtime_error)?;
+
+    if debug {
+        println!(
+            "{}\n{}\n{}",
+            "┌─ Auto-answer response ──────────────────────".dim(),
+            response,
+            "└─────────────────────────────────────────────".dim()
+        );
+    }
+
+    // Strip any code fences or extra formatting
+    let cleaned = response
+        .lines()
+        .filter(|line| !line.trim().starts_with("```"))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string();
+
+    let answer_text = if cleaned.is_empty() {
+        question
+            .default_answer
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string())
+    } else {
+        cleaned
+    };
+
+    println!("   → {}", answer_text.as_str().green());
+
+    let answer_value = parse_answer_value(question.answer_kind, &answer_text);
+    Ok(AnswerRecord {
+        key: question.key.clone(),
+        text: answer_text.clone(),
+        value: answer_value,
+        source: AnswerSource::DelegatingAsk,
+    })
+}
+
 async fn conduct_interview(
     _ccos: &Arc<CCOS>,
+    delegating: &DelegatingArbiter,
+    goal: &str,
+    intent: &Intent,
     questions: &[ClarifyingQuestion],
     seeded_answers: &mut HashMap<String, AnswerRecord>,
-    _debug: bool,
+    debug: bool,
+    interactive: bool,
 ) -> DemoResult<Vec<AnswerRecord>> {
     let mut collected = Vec::with_capacity(questions.len());
 
@@ -857,6 +970,16 @@ async fn conduct_interview(
                 });
                 continue;
             }
+        }
+
+        // Auto-answer with LLM if not in interactive mode
+        if !interactive {
+            println!("\n{}", "❓ Auto-answering clarifying question".bold());
+            println!("{}", question.prompt.as_str().cyan());
+            
+            let answer = auto_answer_with_llm(delegating, goal, intent, &collected, question, debug).await?;
+            collected.push(answer);
+            continue;
         }
 
         println!("\n{}", "❓ Clarifying question".bold());
@@ -2224,6 +2347,11 @@ async fn match_proposed_steps(
     steps: &[ProposedStep],
 ) -> DemoResult<Vec<CapabilityMatch>> {
     let marketplace = ccos.get_capability_marketplace();
+    let intent_graph = ccos.get_intent_graph();
+    
+    // Create discovery engine for enhanced capability search
+    let discovery_engine = DiscoveryEngine::new(Arc::clone(&marketplace), Arc::clone(&intent_graph));
+    
     let manifests = marketplace.list_capabilities().await;
     let mut matches = Vec::with_capacity(steps.len());
 
@@ -2254,12 +2382,33 @@ async fn match_proposed_steps(
             continue;
         }
 
-        matches.push(CapabilityMatch {
-            step_id: step.id.clone(),
-            matched_capability: None,
-            status: MatchStatus::Missing,
-            note: Some("No matching capability registered".to_string()),
-        });
+        // Try discovery engine for enhanced search
+        let need = CapabilityNeed::new(
+            step.capability_class.clone(),
+            step.required_inputs.clone(),
+            step.expected_outputs.clone(),
+            format!("Need for step: {}", step.name),
+        );
+        
+        match discovery_engine.discover_capability(&need).await {
+            Ok(ccos::discovery::DiscoveryResult::Found(_manifest)) => {
+                // Found via discovery - could enhance note with source
+                matches.push(CapabilityMatch {
+                    step_id: step.id.clone(),
+                    matched_capability: Some(step.capability_class.clone()),
+                    status: MatchStatus::MatchedByClass,
+                    note: Some("Found via discovery engine".to_string()),
+                });
+            }
+            Ok(ccos::discovery::DiscoveryResult::NotFound) | Err(_) => {
+                matches.push(CapabilityMatch {
+                    step_id: step.id.clone(),
+                    matched_capability: None,
+                    status: MatchStatus::Missing,
+                    note: Some("No matching capability registered".to_string()),
+                });
+            }
+        }
     }
 
     Ok(matches)
