@@ -1934,6 +1934,26 @@ async fn resolve_and_stub_capabilities(
                     });
                     continue;
                 }
+                Ok(DiscoveryResult::Incomplete(manifest)) => {
+                    // Capability marked as incomplete/not_found
+                    let cap_id = manifest.id.clone();
+                    println!(
+                        "{} {}",
+                        "⚠️  Incomplete capability:".yellow().bold(),
+                        cap_id.as_str().cyan()
+                    );
+                    println!(
+                        "   {}",
+                        "Capability not found in MCP registry or OpenAPI - requires manual implementation".dim()
+                    );
+                    
+                    resolved.push(ResolvedStep {
+                        original: step.clone(),
+                        capability_id: cap_id,
+                        resolution_strategy: ResolutionStrategy::Synthesized, // Treat as synthesized for now
+                    });
+                    continue;
+                }
                 Ok(DiscoveryResult::NotFound) | Err(_) => {
                     println!(
                         "{} {}",
@@ -2516,6 +2536,15 @@ async fn match_proposed_steps(
                     matched_capability: Some(step.capability_class.clone()),
                     status: MatchStatus::MatchedByClass,
                     note: Some(note),
+                });
+            }
+            Ok(ccos::discovery::DiscoveryResult::Incomplete(_manifest)) => {
+                // Capability marked as incomplete/not_found
+                matches.push(CapabilityMatch {
+                    step_id: step.id.clone(),
+                    matched_capability: Some(step.capability_class.clone()),
+                    status: MatchStatus::Missing,
+                    note: Some("Incomplete/not_found - requires manual implementation".to_string()),
                 });
             }
             Ok(ccos::discovery::DiscoveryResult::NotFound) | Err(_) => {
