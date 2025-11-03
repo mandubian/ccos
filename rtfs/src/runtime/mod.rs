@@ -134,7 +134,7 @@ impl Runtime {
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-        let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
+    let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!(
@@ -154,8 +154,8 @@ impl Runtime {
             Ok(p) => p,
             Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {}", e))),
         };
-        let mut module_registry = ModuleRegistry::new();
-        crate::runtime::stdlib::load_stdlib(&mut module_registry)?;
+    let module_registry = ModuleRegistry::new();
+        crate::runtime::stdlib::load_stdlib(&module_registry)?;
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 

@@ -268,31 +268,43 @@ impl Function {
     pub fn new_closure(
         params: Vec<Symbol>,
         param_patterns: Vec<crate::ast::Pattern>,
+        param_type_annotations: Vec<Option<crate::ast::TypeExpr>>,
         variadic_param: Option<Symbol>,
+        variadic_param_type: Option<crate::ast::TypeExpr>,
         body: Box<Expression>,
         env: Arc<Environment>,
         delegation_hint: Option<crate::ast::DelegationHint>,
+        return_type: Option<crate::ast::TypeExpr>,
     ) -> Function {
         Function::Closure(Arc::new(Closure {
             params,
             param_patterns,
+            param_type_annotations,
             variadic_param,
+            variadic_param_type,
             body,
             env,
             delegation_hint,
+            return_type,
         }))
     }
 
     pub fn new_ir_lambda(
         params: Vec<IrNode>,
+        param_type_annotations: Vec<Option<crate::ir::core::IrType>>,
         variadic_param: Option<Box<IrNode>>,
+        variadic_param_type: Option<crate::ir::core::IrType>,
         body: Vec<IrNode>,
+        return_type: Option<crate::ir::core::IrType>,
         closure_env: Box<IrEnvironment>,
     ) -> Function {
         Function::Ir(Arc::new(IrLambda {
             params,
+            param_type_annotations,
             variadic_param,
+            variadic_param_type,
             body,
+            return_type,
             closure_env,
         }))
     }
@@ -374,18 +386,27 @@ pub struct Closure {
     pub params: Vec<Symbol>,
     // Full parameter patterns to support destructuring during invocation
     pub param_patterns: Vec<crate::ast::Pattern>,
+    // Optional type annotations for each parameter (aligned with param_patterns)
+    pub param_type_annotations: Vec<Option<crate::ast::TypeExpr>>,
     // Variadic parameter symbol for functions like [& rest]
     pub variadic_param: Option<Symbol>,
+    // Optional type annotation for the variadic parameter
+    pub variadic_param_type: Option<crate::ast::TypeExpr>,
     pub body: Box<Expression>,
     pub env: Arc<Environment>,
     pub delegation_hint: Option<crate::ast::DelegationHint>,
+    // Optional return type annotation for the function
+    pub return_type: Option<crate::ast::TypeExpr>,
 }
 
 #[derive(Clone, Debug)]
 pub struct IrLambda {
     pub params: Vec<IrNode>,
+    pub param_type_annotations: Vec<Option<crate::ir::core::IrType>>, 
     pub variadic_param: Option<Box<IrNode>>,
+    pub variadic_param_type: Option<crate::ir::core::IrType>,
     pub body: Vec<IrNode>,
+    pub return_type: Option<crate::ir::core::IrType>,
     pub closure_env: Box<IrEnvironment>,
 }
 

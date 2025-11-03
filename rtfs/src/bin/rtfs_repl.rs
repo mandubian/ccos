@@ -62,10 +62,9 @@ fn main() {
     }
 
     // Initialize runtime components
-    let mut module_registry = ModuleRegistry::new();
+    let module_registry = ModuleRegistry::new();
     
-    // Load standard library
-    if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&mut module_registry) {
+    if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
         eprintln!("Warning: Failed to load standard library: {:?}", e);
     }
     

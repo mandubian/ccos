@@ -153,9 +153,9 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
     fn from(runtime_type: RuntimeType) -> Self {
         match runtime_type {
             RuntimeType::Ast => {
-                let mut module_registry = ModuleRegistry::new();
+                let module_registry = ModuleRegistry::new();
                 // Load standard library
-                if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&mut module_registry) {
+                    if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
                     eprintln!("Warning: Failed to load standard library: {:?}", e);
                 }
                 // Use pure host for standalone RTFS compilation (no CCOS dependencies)
@@ -168,9 +168,9 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                 Box::new(rtfs::runtime::TreeWalkingStrategy::new(evaluator))
             }
             RuntimeType::Ir => {
-                let mut module_registry = ModuleRegistry::new();
+                let module_registry = ModuleRegistry::new();
                 // Load standard library
-                if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&mut module_registry) {
+                    if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
                     eprintln!("Warning: Failed to load standard library: {:?}", e);
                 }
                 Box::new(rtfs::runtime::ir_runtime::IrStrategy::new(
@@ -178,9 +178,9 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                 ))
             }
             RuntimeType::Fallback => {
-                let mut module_registry = ModuleRegistry::new();
+                let module_registry = ModuleRegistry::new();
                 // Load standard library
-                if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&mut module_registry) {
+                    if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
                     eprintln!("Warning: Failed to load standard library: {:?}", e);
                 }
                 Box::new(rtfs::runtime::IrWithFallbackStrategy::new(
@@ -355,8 +355,8 @@ fn main() {
                 if let TopLevel::Expression(expr) = item {
                     // Convert to IR for dumping
                     let ir_start = Instant::now();
-                    let mut module_registry = ModuleRegistry::new();
-                    if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&mut module_registry) {
+                    let module_registry = ModuleRegistry::new();
+                        if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
                         eprintln!("Warning: Failed to load standard library for IR conversion: {:?}", e);
                     }
                     

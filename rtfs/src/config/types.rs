@@ -182,10 +182,12 @@ pub struct EgressConfig {
     /// Egress method (proxy, direct, none)
     pub via: String,
     /// Allowed domains
+    #[serde(default)]
     pub allow_domains: Vec<String>,
     /// Whether mTLS is enabled
     pub mtls: bool,
     /// TLS certificate pins
+    #[serde(default)]
     pub tls_pins: Vec<String>,
 }
 

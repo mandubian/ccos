@@ -56,29 +56,46 @@ impl DiscoveryEngine {
     
     /// Attempt to find a capability using the discovery priority chain
     pub async fn discover_capability(&self, need: &CapabilityNeed) -> RuntimeResult<DiscoveryResult> {
+        // Print capability section header
+        eprintln!("\n{}", "═".repeat(80));
+        eprintln!("🔍 DISCOVERY: {}", need.capability_class);
+        eprintln!("{}", "─".repeat(80));
+        eprintln!("  Rationale: {}", need.rationale);
+        eprintln!("  Inputs: {:?}", need.required_inputs);
+        eprintln!("  Outputs: {:?}", need.expected_outputs);
+        eprintln!("{}", "─".repeat(80));
+        
         // 1. Try local marketplace search first
+        eprintln!("  [1/4] Searching local marketplace...");
         if let Some(manifest) = self.search_marketplace(need).await? {
+            eprintln!("  ✓ Found: {}", manifest.id);
+            eprintln!("{}", "═".repeat(80));
             return Ok(DiscoveryResult::Found(manifest));
         }
+        eprintln!("  ✗ Not found");
         
         // 2. Try MCP registry search
+        eprintln!("  [2/4] Searching MCP registry...");
         if let Some(manifest) = self.search_mcp_registry(need).await? {
-            eprintln!("  ✓ Found in MCP registry: {}", manifest.id);
+            eprintln!("  ✓ Found: {}", manifest.id);
+            eprintln!("{}", "═".repeat(80));
             return Ok(DiscoveryResult::Found(manifest));
         }
+        eprintln!("  ✗ Not found");
         
         // 3. Try OpenAPI introspection
+        eprintln!("  [3/4] Searching OpenAPI services...");
         if let Some(manifest) = self.search_openapi(need).await? {
-            eprintln!("  ✓ Found via OpenAPI introspection: {}", manifest.id);
+            eprintln!("  ✓ Found: {}", manifest.id);
+            eprintln!("{}", "═".repeat(80));
             return Ok(DiscoveryResult::Found(manifest));
         }
+        eprintln!("  ✗ Not found");
         
         // 4. Try recursive synthesis (if delegating arbiter is available)
+        eprintln!("  [4/4] Attempting recursive synthesis...");
         if let Some(ref arbiter) = self.delegating_arbiter {
-            eprintln!("\n🔍 Attempting recursive synthesis for: {}", need.capability_class);
-            eprintln!("   Rationale: {}", need.rationale);
-            eprintln!("   Required inputs: {:?}", need.required_inputs);
-            eprintln!("   Expected outputs: {:?}", need.expected_outputs);
+            eprintln!("       Synthesizing capability: {}", need.capability_class);
             
             let context = DiscoveryContext::new(5); // Default max depth of 5
             let mut synthesizer = RecursiveSynthesizer::new(
@@ -92,28 +109,28 @@ impl DiscoveryEngine {
             
             match synthesizer.synthesize_as_intent(need, &context).await {
                 Ok(synthesized) => {
-                    eprintln!("\n✓ Synthesis succeeded for: {}", need.capability_class);
+                    eprintln!("  ✓ Synthesized: {}", synthesized.manifest.id);
                     // Register the synthesized capability in the marketplace
                     if let Err(e) = self.marketplace.register_capability_manifest(synthesized.manifest.clone()).await {
-                        eprintln!(
-                            "⚠️  Warning: Failed to register synthesized capability {}: {}",
-                            need.capability_class, e
-                        );
+                        eprintln!("  ⚠  Warning: Failed to register: {}", e);
                     } else {
-                        eprintln!("  → Registered as: {}", synthesized.manifest.id);
+                        eprintln!("       Registered as: {}", synthesized.manifest.id);
                     }
+                    eprintln!("{}", "═".repeat(80));
                     // Mark as synthesized (not just found)
                     return Ok(DiscoveryResult::Found(synthesized.manifest));
                 }
                 Err(e) => {
-                    eprintln!(
-                        "\n✗ Synthesis failed for {}: {}",
-                        need.capability_class, e
-                    );
-                    // Synthesis failed - fall through to NotFound
+                    eprintln!("  ✗ Synthesis failed: {}", e);
                 }
             }
+        } else {
+            eprintln!("  ⚠  No arbiter available");
         }
+        
+        eprintln!("{}", "═".repeat(80));
+        eprintln!("  ✗ Discovery failed for: {}", need.capability_class);
+        eprintln!("{}", "═".repeat(80));
         
         // 5. Not found
         Ok(DiscoveryResult::NotFound)
@@ -177,8 +194,6 @@ impl DiscoveryEngine {
     
     /// Search MCP registry for a capability
     pub async fn search_mcp_registry(&self, need: &CapabilityNeed) -> RuntimeResult<Option<CapabilityManifest>> {
-        eprintln!("  🔍 Searching MCP registry for: {}", need.capability_class);
-        
         // Use MCP registry client to search for servers
         let registry_client = crate::synthesis::mcp_registry_client::McpRegistryClient::new();
         
@@ -187,16 +202,10 @@ impl DiscoveryEngine {
         let keywords: Vec<&str> = need.capability_class.split('.').collect();
         let search_query = keywords.join(" "); // Use space-separated keywords for search
         
-        eprintln!("    → Search query: {}", search_query);
-        
         // Search MCP registry for matching servers
         let servers = match registry_client.search_servers(&search_query).await {
-            Ok(servers) => {
-                eprintln!("    → Found {} MCP servers in registry", servers.len());
-                servers
-            }
-            Err(e) => {
-                eprintln!("    ⚠️  MCP registry search failed: {}", e);
+            Ok(servers) => servers,
+            Err(_) => {
                 return Ok(None);
             }
         };
@@ -217,15 +226,10 @@ impl DiscoveryEngine {
                 });
             
             if let Some(url) = server_url {
-                eprintln!("    → Introspecting MCP server: {} ({})", server.name, url);
-                
                 // Check cache first if available
                 let introspection_result = if let Some(ref cache) = self.introspection_cache {
                     match cache.get_mcp(&url) {
-                        Ok(Some(cached)) => {
-                            eprintln!("    ✓ Using cached introspection result");
-                            Ok(cached)
-                        }
+                        Ok(Some(cached)) => Ok(cached),
                         Ok(None) | Err(_) => {
                             // Cache miss or error - introspect the server
                             let result = introspector.introspect_mcp_server(&url, &server.name).await;
@@ -263,74 +267,66 @@ impl DiscoveryEngine {
                                     manifest_name_lower.contains(&last_part.to_lowercase());
                                     
                                     if capability_match {
-                                        eprintln!("    ✓ Found matching capability: {} ({})", manifest.id, manifest.name);
                                         return Ok(Some(manifest));
                                     }
                                 }
                             }
-                            Err(e) => {
-                                eprintln!("    ⚠️  Failed to create capabilities from server tools: {}", e);
+                            Err(_) => {
                                 continue;
                             }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("    ⚠️  Failed to introspect server {}: {}", server.name, e);
+                    Err(_) => {
                         continue;
                     }
                 }
-            } else {
-                eprintln!("    ⚠️  No server URL found for: {}", server.name);
             }
         }
         
-        eprintln!("    ✗ No matching MCP tools found");
         Ok(None)
     }
     
-    /// Search OpenAPI services for a capability
+    /// Search OpenAPI services for a capability using web search
     pub async fn search_openapi(&self, need: &CapabilityNeed) -> RuntimeResult<Option<CapabilityManifest>> {
-        eprintln!("  🔍 Searching OpenAPI services for: {}", need.capability_class);
+        // Use web search to find actual OpenAPI specs online
+        let mut web_searcher = crate::synthesis::web_search_discovery::WebSearchDiscovery::new("auto".to_string());
         
-        // Extract domain/namespace from capability class
-        // e.g., "restaurant.api.reserve" -> "restaurant"
-        let namespace = need.capability_class.split('.').next().unwrap_or("");
-        eprintln!("    → Domain: {}", namespace);
+        // Search for the capability
+        let search_results = match web_searcher.search_for_api_specs(&need.capability_class).await {
+            Ok(results) => results,
+            Err(_) => {
+                return Ok(None);
+            }
+        };
         
-        // Try common OpenAPI base URLs based on namespace
-        // This is a heuristic - in production, you'd query an OpenAPI registry
-        let common_base_urls = vec![
-            format!("https://api.{}.com", namespace),
-            format!("https://{}.api.com", namespace),
-            format!("https://api.{}.io/v1", namespace),
-            format!("https://{}.api.io/api/v1", namespace),
-        ];
+        if search_results.is_empty() {
+            return Ok(None);
+        }
         
+        // Try to introspect from the top results
         let introspector = crate::synthesis::api_introspector::APIIntrospector::new();
         
-        for base_url in common_base_urls {
-            eprintln!("    → Trying OpenAPI discovery: {}", base_url);
+        for result in search_results.iter().take(5) { // Limit to top 5 results
+            // Extract base URL from the result URL
+            let base_url = self.extract_base_url_from_result(&result.url);
             
             // Check cache first if available
             let introspection_result = if let Some(ref cache) = self.introspection_cache {
                 match cache.get_openapi(&base_url) {
-                    Ok(Some(cached)) => {
-                        eprintln!("    ✓ Using cached introspection result");
-                        Ok(cached)
-                    }
+                    Ok(Some(cached)) => Ok(cached),
                     Ok(None) | Err(_) => {
                         // Cache miss or error - introspect from discovery
-                        let result = introspector.introspect_from_discovery(&base_url, namespace).await;
+                        let result_introspection = introspector.introspect_from_discovery(&base_url, &need.capability_class).await;
                         // Cache the result if successful
-                        if let Ok(ref introspection) = result {
+                        if let Ok(ref introspection) = result_introspection {
                             let _ = cache.put_openapi(&base_url, introspection);
                         }
-                        result
+                        result_introspection
                     }
                 }
             } else {
                 // No cache - just introspect
-                introspector.introspect_from_discovery(&base_url, namespace).await
+                introspector.introspect_from_discovery(&base_url, &need.capability_class).await
             };
             
             // Process the introspection result
@@ -355,27 +351,45 @@ impl DiscoveryEngine {
                                 manifest_name_lower.contains(&last_part.to_lowercase());
                                 
                                 if capability_match {
-                                    eprintln!("    ✓ Found matching OpenAPI capability: {} ({})", manifest.id, manifest.name);
                                     return Ok(Some(manifest));
                                 }
                             }
                         }
-                        Err(e) => {
-                            eprintln!("    ⚠️  Failed to create capabilities from OpenAPI: {}", e);
+                        Err(_) => {
                             continue;
                         }
                     }
                 }
-                Err(e) => {
-                    // This URL doesn't work, try next
-                    eprintln!("    → OpenAPI discovery failed: {}", e);
+                Err(_) => {
                     continue;
                 }
             }
         }
         
-        eprintln!("    ✗ No matching OpenAPI capabilities found");
         Ok(None)
+    }
+    
+    /// Extract base URL from a web search result URL
+    fn extract_base_url_from_result(&self, url: &str) -> String {
+        // Parse URL to extract base URL
+        if let Ok(parsed_url) = url::Url::parse(url) {
+            // For OpenAPI spec URLs, try to find the base URL
+            // Common patterns: /swagger.json, /openapi.json, /api-docs, etc.
+            let path = parsed_url.path();
+            if path.ends_with("/swagger.json") || path.ends_with("/openapi.json") {
+                // Remove the spec file path to get base URL
+                if let Some(base_path) = path.strip_suffix("/swagger.json") {
+                    return format!("{}://{}{}", parsed_url.scheme(), parsed_url.host_str().unwrap_or(""), base_path);
+                } else if let Some(base_path) = path.strip_suffix("/openapi.json") {
+                    return format!("{}://{}{}", parsed_url.scheme(), parsed_url.host_str().unwrap_or(""), base_path);
+                }
+            }
+            // For other paths, use the origin
+            format!("{}://{}", parsed_url.scheme(), parsed_url.host_str().unwrap_or(""))
+        } else {
+            // Fallback: try to extract a sensible base URL
+            url.to_string()
+        }
     }
     
     /// Create an incomplete capability manifest for capabilities that couldn't be found
