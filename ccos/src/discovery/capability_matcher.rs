@@ -261,6 +261,7 @@ async fn calculate_embedding_similarity(
 /// Returns a score from 0.0 to 1.0, where 1.0 is a perfect match
 /// 
 /// This version matches on capability class name (for backward compatibility)
+/// Improved to better match action words (e.g., "list" in "github.issues.list" should match "list_issues" better than "list_issue_types")
 pub fn calculate_semantic_match_score(
     need_class: &str,
     manifest_id: &str,
@@ -279,6 +280,15 @@ pub fn calculate_semantic_match_score(
         .into_iter()
         .chain(manifest_name_keywords.into_iter())
         .collect();
+    
+    // Extract action word (typically the last keyword in need_class)
+    // e.g., "github.issues.list" -> action = "list"
+    let action_word = need_keywords.last().cloned().unwrap_or_default();
+    
+    // Find the action word in manifest (if present)
+    // This helps prioritize "list_issues" over "list_issue_types" when searching for "list"
+    let action_match_in_manifest = all_manifest_keywords.iter()
+        .any(|mk| mk == &action_word || mk.starts_with(&action_word) || action_word.starts_with(mk));
     
     // Count matching keywords
     let mut matches = 0;
@@ -308,13 +318,28 @@ pub fn calculate_semantic_match_score(
     }
     
     // Penalize if there are significant keywords in manifest that don't match need
-    // (e.g., "pulls" vs "issues" - both should match to be a good match)
+    // (e.g., "types" in "list_issue_types" when searching for "list_issues")
     let unmatched_manifest_kws: Vec<&String> = all_manifest_keywords
         .iter()
         .filter(|mk| !matched_manifest_kws.contains(mk))
         .collect();
     
-    let mismatch_penalty = if mismatches > 0 || (!unmatched_manifest_kws.is_empty() && need_keywords.len() > 2) {
+    // Stronger penalty for unmatched keywords, especially if action word matches
+    // This helps prioritize "list_issues" (no unmatched keywords) over "list_issue_types" (has unmatched "types")
+    let extra_keyword_penalty = if !unmatched_manifest_kws.is_empty() {
+        // If action word matches, we want exact action matches (e.g., "list_issues" not "list_issue_types")
+        if action_match_in_manifest {
+            // Heavy penalty for extra keywords when action matches - we want exact action
+            0.4 * (unmatched_manifest_kws.len() as f64 / all_manifest_keywords.len() as f64)
+        } else {
+            // Normal penalty otherwise
+            0.2 * (unmatched_manifest_kws.len() as f64 / all_manifest_keywords.len() as f64)
+        }
+    } else {
+        0.0
+    };
+    
+    let mismatch_penalty = if mismatches > 0 {
         // If there are clear mismatches, penalize more
         0.3 * (mismatches as f64 / need_keywords.len() as f64)
     } else {
@@ -328,6 +353,18 @@ pub fn calculate_semantic_match_score(
         matches as f64 / need_keywords.len() as f64
     };
     
+    // Bonus for action word matching (helps prioritize correct actions)
+    // e.g., "list" in need should match "list_issues" better than "list_issue_types"
+    let action_bonus = if action_match_in_manifest && unmatched_manifest_kws.is_empty() {
+        // Perfect action match with no extra keywords
+        0.2
+    } else if action_match_in_manifest {
+        // Action matches but has extra keywords (smaller bonus)
+        0.1
+    } else {
+        0.0
+    };
+    
     // Check if keywords appear in order (allowing for word order variations)
     let need_text = need_keywords.join("");
     let manifest_text: String = all_manifest_keywords.join("");
@@ -336,7 +373,13 @@ pub fn calculate_semantic_match_score(
     });
     
     // Bonus for ordered match (all keywords present)
-    let ordered_bonus = if ordered_match && mismatches == 0 { 0.3 } else { 0.0 };
+    let ordered_bonus = if ordered_match && mismatches == 0 && unmatched_manifest_kws.is_empty() {
+        0.3
+    } else if ordered_match && mismatches == 0 {
+        0.15  // Reduced bonus if there are extra keywords
+    } else {
+        0.0
+    };
     
     // Bonus for exact substring match
     let substring_bonus = if manifest_text.contains(need_text.as_str()) || need_text.contains(manifest_text.as_str()) {
@@ -345,8 +388,10 @@ pub fn calculate_semantic_match_score(
         0.0
     };
     
-    // Combined score with penalty (capped at 1.0, floor at 0.0)
-    ((keyword_score + ordered_bonus + substring_bonus - mismatch_penalty).max(0.0)).min(1.0)
+    // Combined score with bonuses and penalties (capped at 1.0, floor at 0.0)
+    let total_penalty = mismatch_penalty + extra_keyword_penalty;
+    let total_bonus = ordered_bonus + substring_bonus + action_bonus;
+    ((keyword_score + total_bonus - total_penalty).max(0.0)).min(1.0)
 }
 
 /// Check if a capability need semantically matches a manifest

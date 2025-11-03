@@ -458,6 +458,25 @@ cargo run --example smart_assistant_demo -- \
 - Enhance `CapabilityNeedExtractor` to generate richer rationales from plan context
 - Consider asking LLM to generate rationale descriptions explicitly during plan generation
 
+### Enhancement 2: Action Word Prioritization ✅ COMPLETED (2025-01-03)
+
+**Problem**: When searching for `github.issues.list`, the system sometimes matched `list_issue_types` instead of `list_issues` or `search_issues` because both contain "list" and "issues" keywords.
+
+**Solution**: Enhanced `calculate_semantic_match_score` to prioritize action words (typically the last keyword in the capability class).
+
+**Improvements**:
+1. **Action Word Extraction**: Identifies the action word from the need_class (e.g., "list" from "github.issues.list")
+2. **Action Word Matching**: Checks if the action word appears in the manifest keywords
+3. **Extra Keyword Penalty**: Heavily penalizes (0.4x) unmatched keywords when action matches to prefer exact matches like `list_issues` over `list_issue_types`
+4. **Action Bonus**: Gives +0.2 bonus for perfect action matches (no extra keywords), +0.1 for partial matches
+5. **Reduced Ordered Bonus**: Reduces ordered match bonus (0.15 vs 0.3) when extra keywords are present
+
+**Example**:
+- `github.issues.list` → `list_issues`: High score (action matches, no extra keywords, gets action bonus)
+- `github.issues.list` → `list_issue_types`: Lower score (action matches but extra "types" keyword penalized)
+
+**Impact**: More accurate capability matching, especially for capabilities with similar names but different purposes.
+
 ---
 
 ## 🎯 Next Steps (Priority Order)
@@ -475,7 +494,13 @@ cargo run --example smart_assistant_demo -- \
    - ✅ In-memory caching for performance
    - ✅ Documentation and test examples created
 
-3. **Live LLM Wiring** (Medium priority) ✅ COMPLETED (2025-01-03)
+3. **Action Word Prioritization** (High priority) ✅ COMPLETED (2025-01-03)
+   - ✅ Enhanced semantic matching to prioritize action words (e.g., "list" in "github.issues.list")
+   - ✅ Added penalties for extra unmatched keywords to prefer exact matches
+   - ✅ Action word bonuses for perfect matches
+   - ✅ Better handling of similar capability names (e.g., `list_issues` vs `list_issue_types`)
+
+4. **Live LLM Wiring** (Medium priority) ✅ COMPLETED (2025-01-03)
    - ✅ Replaced StubLlmProvider with real LLM providers (OpenAI, OpenRouter, Anthropic)
    - ✅ Factory-level protection prevents stub usage in production
    - ✅ Default configuration uses real providers (openrouter_free:balanced)
