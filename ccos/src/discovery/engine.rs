@@ -82,16 +82,31 @@ impl DiscoveryEngine {
         // 1. Try local marketplace search first
         eprintln!("  [1/4] Searching local marketplace...");
         if let Some(manifest) = self.search_marketplace(need).await? {
-            eprintln!("  ✓ Found: {}", manifest.id);
-            eprintln!("{}", "═".repeat(80));
-            return Ok(DiscoveryResult::Found(manifest));
+            // Check if the capability is incomplete
+            let is_incomplete = manifest.metadata.get("status")
+                .map(|s| s == "incomplete")
+                .unwrap_or(false);
+            
+            if is_incomplete {
+                eprintln!("  ⚠️  Found incomplete capability: {}", manifest.id);
+                eprintln!("{}", "═".repeat(80));
+                return Ok(DiscoveryResult::Incomplete(manifest));
+            } else {
+                eprintln!("  ✓ Found: {}", manifest.id);
+                eprintln!("{}", "═".repeat(80));
+                return Ok(DiscoveryResult::Found(manifest));
+            }
         }
         eprintln!("  ✗ Not found");
         
         // 2. Try MCP registry search
         eprintln!("  [2/4] Searching MCP registry...");
         if let Some(manifest) = self.search_mcp_registry(need).await? {
-            eprintln!("  ✓ Found: {}", manifest.id);
+            // Check if the capability is incomplete (shouldn't happen for MCP, but check anyway)
+            let is_incomplete = manifest.metadata.get("status")
+                .map(|s| s == "incomplete")
+                .unwrap_or(false);
+            
             // Register the discovered MCP capability in marketplace for future searches
             if let Err(e) = self.marketplace.register_capability_manifest(manifest.clone()).await {
                 eprintln!("  ⚠  Warning: Failed to register MCP capability: {}", e);
@@ -99,7 +114,14 @@ impl DiscoveryEngine {
                 eprintln!("       Registered MCP capability in marketplace");
             }
             eprintln!("{}", "═".repeat(80));
-            return Ok(DiscoveryResult::Found(manifest));
+            
+            if is_incomplete {
+                eprintln!("  ⚠️  Found incomplete MCP capability: {}", manifest.id);
+                return Ok(DiscoveryResult::Incomplete(manifest));
+            } else {
+                eprintln!("  ✓ Found: {}", manifest.id);
+                return Ok(DiscoveryResult::Found(manifest));
+            }
         }
         eprintln!("  ✗ Not found");
         
@@ -129,16 +151,33 @@ impl DiscoveryEngine {
             
             match synthesizer.synthesize_as_intent(need, &context).await {
                 Ok(synthesized) => {
-                    eprintln!("  ✓ Synthesized: {}", synthesized.manifest.id);
-                    // Register the synthesized capability in the marketplace
-                    if let Err(e) = self.marketplace.register_capability_manifest(synthesized.manifest.clone()).await {
-                        eprintln!("  ⚠  Warning: Failed to register: {}", e);
+                    // Check if the synthesized capability is incomplete
+                    let is_incomplete = synthesized.manifest.metadata.get("status")
+                        .map(|s| s == "incomplete")
+                        .unwrap_or(false);
+                    
+                    if is_incomplete {
+                        eprintln!("  ⚠️  Synthesized incomplete capability: {}", synthesized.manifest.id);
+                        // Register the incomplete capability in the marketplace
+                        if let Err(e) = self.marketplace.register_capability_manifest(synthesized.manifest.clone()).await {
+                            eprintln!("  ⚠  Warning: Failed to register: {}", e);
+                        } else {
+                            eprintln!("       Registered as incomplete: {}", synthesized.manifest.id);
+                        }
+                        eprintln!("{}", "═".repeat(80));
+                        return Ok(DiscoveryResult::Incomplete(synthesized.manifest));
                     } else {
-                        eprintln!("       Registered as: {}", synthesized.manifest.id);
+                        eprintln!("  ✓ Synthesized: {}", synthesized.manifest.id);
+                        // Register the synthesized capability in the marketplace
+                        if let Err(e) = self.marketplace.register_capability_manifest(synthesized.manifest.clone()).await {
+                            eprintln!("  ⚠  Warning: Failed to register: {}", e);
+                        } else {
+                            eprintln!("       Registered as: {}", synthesized.manifest.id);
+                        }
+                        eprintln!("{}", "═".repeat(80));
+                        // Mark as synthesized (not just found)
+                        return Ok(DiscoveryResult::Found(synthesized.manifest));
                     }
-                    eprintln!("{}", "═".repeat(80));
-                    // Mark as synthesized (not just found)
-                    return Ok(DiscoveryResult::Found(synthesized.manifest));
                 }
                 Err(e) => {
                     eprintln!("  ✗ Synthesis failed: {}", e);
@@ -932,6 +971,234 @@ impl DiscoveryEngine {
         }
         text.contains(pattern)
     }
+    
+    /// Collect discovery hints for all capabilities in a plan
+    /// Returns hints about found capabilities, missing capabilities, and suggestions
+    pub async fn collect_discovery_hints(
+        &self,
+        capability_ids: &[String],
+    ) -> RuntimeResult<DiscoveryHints> {
+        let mut found = Vec::new();
+        let mut missing = Vec::new();
+        let mut suggestions = Vec::new();
+        
+        for cap_id in capability_ids {
+            // Create a minimal CapabilityNeed for this capability ID
+            let need = CapabilityNeed::new(
+                cap_id.clone(),
+                Vec::new(), // Don't know inputs yet
+                Vec::new(), // Don't know outputs yet
+                format!("Need for capability: {}", cap_id),
+            );
+            
+            match self.discover_capability(&need).await? {
+                DiscoveryResult::Found(manifest) => {
+                    // Extract hints from manifest
+                    let hints = self.extract_capability_hints(&manifest);
+                    let parameters = self.extract_parameters_from_manifest(&manifest);
+                    
+                    found.push(FoundCapability {
+                        id: manifest.id.clone(),
+                        name: manifest.name.clone(),
+                        description: manifest.description.clone(),
+                        provider: self.format_provider(&manifest.provider),
+                        parameters,
+                        hints,
+                    });
+                }
+                DiscoveryResult::Incomplete(_) | DiscoveryResult::NotFound => {
+                    missing.push(cap_id.clone());
+                    
+                    // Check if there's a related capability that could work
+                    if let Some(related) = self.find_related_capability(cap_id).await? {
+                        suggestions.push(format!(
+                            "{} not found, but {} might work: {}",
+                            cap_id, related.id, related.description
+                        ));
+                    }
+                }
+            }
+        }
+        
+        // Generate suggestions based on found capabilities
+        for found_cap in &found {
+            // Check if any found capability might help with missing ones
+            for missing_id in &missing {
+                // Simple heuristic: if capability names share keywords, suggest it
+                let found_keywords: Vec<&str> = found_cap.id.split(&['.', '_'][..]).collect();
+                let missing_keywords: Vec<&str> = missing_id.split(&['.', '_'][..]).collect();
+                
+                let common_keywords: Vec<&str> = found_keywords.iter()
+                    .filter(|k| missing_keywords.contains(k) && k.len() > 2)
+                    .copied()
+                    .collect();
+                
+                if !common_keywords.is_empty() && !found_cap.hints.is_empty() {
+                    suggestions.push(format!(
+                        "{} not found, but {} (found) might help: {}",
+                        missing_id,
+                        found_cap.id,
+                        found_cap.hints[0]
+                    ));
+                }
+            }
+        }
+        
+        Ok(DiscoveryHints {
+            found_capabilities: found,
+            missing_capabilities: missing,
+            suggestions,
+        })
+    }
+    
+    /// Extract hints from a capability manifest
+    /// Generic implementation that extracts information from metadata and schemas
+    fn extract_capability_hints(&self, manifest: &CapabilityManifest) -> Vec<String> {
+        let mut hints = Vec::new();
+        
+        // Extract provider-specific information
+        match &manifest.provider {
+            crate::capability_marketplace::types::ProviderType::MCP(mcp) => {
+                hints.push(format!("MCP tool: {}", mcp.tool_name));
+                if let Some(url) = manifest.metadata.get("mcp_server_url") {
+                    hints.push(format!("Server: {}", url));
+                }
+            }
+            crate::capability_marketplace::types::ProviderType::OpenApi(openapi) => {
+                hints.push(format!("OpenAPI endpoint: {}", openapi.base_url));
+                if let Some(spec_url) = &openapi.spec_url {
+                    hints.push(format!("Spec: {}", spec_url));
+                }
+            }
+            _ => {}
+        }
+        
+        // Extract any parameter hints from metadata
+        if let Some(hint) = manifest.metadata.get("parameter_hints") {
+            hints.push(hint.clone());
+        }
+        
+        // Extract usage hints from metadata
+        if let Some(hint) = manifest.metadata.get("usage_hints") {
+            hints.push(hint.clone());
+        }
+        
+        // Extract from description field in metadata (if different from main description)
+        if let Some(desc) = manifest.metadata.get("mcp_tool_description") {
+            if desc != &manifest.description {
+                hints.push(desc.clone());
+            }
+        }
+        
+        hints
+    }
+    
+    /// Extract parameter names from a capability manifest
+    fn extract_parameters_from_manifest(&self, manifest: &CapabilityManifest) -> Vec<String> {
+        let mut parameters = Vec::new();
+        
+        // Try to extract from input schema if available
+        if let Some(ref schema) = manifest.input_schema {
+            parameters.extend(self.extract_params_from_type_expr(schema));
+        }
+        
+        // Also check metadata for parameter hints
+        if let Some(params_str) = manifest.metadata.get("parameters") {
+            parameters.extend(
+                params_str.split(',')
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+            );
+        }
+        
+        // For MCP capabilities, check tool description in metadata
+        if let Some(tool_desc) = manifest.metadata.get("mcp_tool_description") {
+            // Try to extract parameter names from description
+            // Common patterns: "state (open|closed|all)", "labels: array", etc.
+            // This is a simple heuristic - could be improved
+        }
+        
+        // Remove duplicates while preserving order
+        let mut seen = std::collections::HashSet::new();
+        parameters.retain(|p| seen.insert(p.clone()));
+        
+        parameters
+    }
+    
+    /// Extract parameter names from a TypeExpr (simple implementation)
+    fn extract_params_from_type_expr(&self, expr: &rtfs::ast::TypeExpr) -> Vec<String> {
+        let mut params = Vec::new();
+        
+        match expr {
+            rtfs::ast::TypeExpr::Map { entries, .. } => {
+                for entry in entries {
+                    // Extract keyword name (remove the ':' prefix if present)
+                    let param_name = entry.key.0.clone();
+                    params.push(param_name);
+                }
+            }
+            _ => {
+                // For other types, we can't easily extract parameter names
+                // This is a limitation - we'd need more schema information
+            }
+        }
+        
+        params
+    }
+    
+    /// Find a related capability that might work for the given capability ID
+    async fn find_related_capability(
+        &self,
+        capability_id: &str,
+    ) -> RuntimeResult<Option<CapabilityManifest>> {
+        // Try to find a capability in the marketplace with similar keywords
+        let keywords: Vec<&str> = capability_id.split(&['.', '_'][..])
+            .filter(|k| k.len() > 2)
+            .collect();
+        
+        if keywords.is_empty() {
+            return Ok(None);
+        }
+        
+        let all_capabilities = self.marketplace.list_capabilities().await;
+        
+        // Search for capabilities with overlapping keywords
+        let mut best_match: Option<(CapabilityManifest, usize)> = None;
+        for manifest in all_capabilities {
+            let manifest_keywords: Vec<&str> = manifest.id.split(&['.', '_'][..])
+                .filter(|k| k.len() > 2)
+                .collect();
+            
+            let overlap = keywords.iter()
+                .filter(|k| manifest_keywords.contains(k))
+                .count();
+            
+            if overlap > 0 {
+                match best_match {
+                    Some((_, best_overlap)) if overlap > best_overlap => {
+                        best_match = Some((manifest, overlap));
+                    }
+                    None => {
+                        best_match = Some((manifest, overlap));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        Ok(best_match.map(|(manifest, _)| manifest))
+    }
+    
+    /// Format provider type as string for hints
+    fn format_provider(&self, provider: &crate::capability_marketplace::types::ProviderType) -> String {
+        match provider {
+            crate::capability_marketplace::types::ProviderType::MCP(_) => "MCP".to_string(),
+            crate::capability_marketplace::types::ProviderType::OpenApi(_) => "OpenAPI".to_string(),
+            crate::capability_marketplace::types::ProviderType::Local(_) => "Local".to_string(),
+            crate::capability_marketplace::types::ProviderType::Http(_) => "HTTP".to_string(),
+            _ => "Unknown".to_string(),
+        }
+    }
 }
 
 /// Result of a discovery attempt
@@ -943,6 +1210,25 @@ pub enum DiscoveryResult {
     NotFound,
     /// Capability needed but not found after all searches - marked as incomplete
     Incomplete(CapabilityManifest), // Manifest with incomplete/not_found status
+}
+
+/// Discovery hints for re-planning when capabilities are missing
+#[derive(Debug, Clone)]
+pub struct DiscoveryHints {
+    pub found_capabilities: Vec<FoundCapability>,
+    pub missing_capabilities: Vec<String>,
+    pub suggestions: Vec<String>,
+}
+
+/// Information about a found capability for re-planning hints
+#[derive(Debug, Clone)]
+pub struct FoundCapability {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub provider: String, // "MCP", "OpenAPI", "Local", etc.
+    pub parameters: Vec<String>, // Available parameters
+    pub hints: Vec<String>, // Usage hints
 }
 
 /// Discovery context for tracking discovery attempts
