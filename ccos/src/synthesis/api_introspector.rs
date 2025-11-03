@@ -689,8 +689,10 @@ impl APIIntrospector {
         api_domain: &str,
     ) -> RuntimeResult<APIIntrospectionResult> {
         // This would implement API discovery by making actual HTTP calls
-        // For now, return a mock result
-        self.introspect_mock_api(api_domain)
+        // Return error - discovery by calls not yet implemented
+        Err(RuntimeError::Generic(
+            format!("API discovery by HTTP calls not implemented for domain: {}", api_domain)
+        ))
     }
 
     /// Mock API introspection for testing

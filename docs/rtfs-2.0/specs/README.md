@@ -180,5 +180,207 @@ RTFS 2.0 represents a significant evolution:
 - **Security**: Mandatory governance for all external operations
 - **Simplicity**: Reduced core language with host extensibility
 
-Migration tools and compatibility layers should be developed to ease transition.</content>
+Migration tools and compatibility layers should be developed to ease transition.
+
+## RTFS 2.0 architecture (precise view)
+
+This section gives a precise, implementation-grounded view of RTFS 2.0, focusing on runtime architecture, purity, and the Host interaction that mediates all effects and mutations.
+
+### Core components
+
+- Parser and Grammar
+	- Grammar: `rtfs_compiler/src/rtfs.pest`
+	- Produces a well-typed AST for S-expressions, symbols, literals, lists, maps, lambdas, application, conditionals, and capability calls.
+- AST and Values
+	- AST: canonical representation of parsed RTFS forms
+	- Values: runtime representation (`rtfs::runtime::values::Value`) for numbers, strings, lists, maps, closures, and typed records
+- Type System (optional, structural)
+	- Type expressions (`rtfs::ast::TypeExpr`) annotate inputs/outputs (capabilities, plans)
+	- Bidirectional checking; runtime guards for safety when annotations are present
+- Evaluator
+	- Pure evaluator that reduces expressions to values
+	- Does not perform side effects; yields to Host via control values
+- Environment/Scopes
+	- Lexically scoped frames for symbol resolution
+	- Immutable-by-default evaluation; definitions introduce bindings without mutating external systems
+- Standard Libraries
+	- Secure stdlib: pure, deterministic functions (math, logic, data)
+	- Insecure/effectful ops are not executed by the evaluator directly; they route through Host
+- Host Boundary
+	- A strict interface that performs all effects on behalf of RTFS (I/O, network, filesystem, capability calls, state)
+	- Gatekept by Governance + Marketplace
+
+### Runtime component diagram
+
+```mermaid
+flowchart LR
+		subgraph RTFS_Runtime[RTFS Runtime]
+			Parser[Parser] --> AST[AST]
+			AST --> Evaluator[Evaluator]
+			Evaluator --> Env[Environment/Scopes]
+			Evaluator --> PureStdlib[Pure Stdlib]
+			Evaluator -->|yields| Outcome{ExecutionOutcome}
+		end
+
+		Outcome -- RequiresHost(call) --> Host[Host Interface]
+		Host --> Governance[Governance Kernel]
+		Governance --> Marketplace[Capability Marketplace]
+		Marketplace --> Providers[Providers:<br/>OpenAPI, MCP, Local, Stream]
+		Providers --> External[External Systems]
+		External --> Providers
+		Providers --> Host
+		Host --> Evaluator
+```
+
+Key property: the evaluator is pure. Any effectful intent (HTTP call, file write, model inference, tool use, long-running stream) is represented as an explicit Host request. The Host performs the action under policy and feeds results back into evaluation.
+
+### Execution flow (sequence)
+
+```mermaid
+sequenceDiagram
+		autonumber
+		actor Dev as RTFS Program/Plan
+		participant Eval as Evaluator
+		participant Host as Host Interface
+		participant Gov as Governance Kernel
+		participant Mkt as Capability Marketplace
+		participant Prov as Provider (OpenAPI/MCP/Local)
+		participant Ext as External System
+
+		Dev->>Eval: Evaluate expression
+		Eval-->>Eval: Reduce pure subexpressions
+		Eval->>Host: RequiresHost(CapabilityCall, RuntimeContext)
+		Host->>Gov: Authorize(RuntimeContext, Capability, Inputs)
+		Gov-->>Host: Permit/Deny (+ policy rewrites)
+		alt permitted
+			Host->>Mkt: Resolve(capability_id)
+			Mkt-->>Host: Executor + IO schema
+			Host->>Prov: Execute(inputs, context)
+			Prov->>Ext: Perform side effect
+			Ext-->>Prov: Result/Stream events
+			Prov-->>Host: Value or Stream handle
+			Host-->>Eval: ExecutionOutcome::Complete(Value)
+			Eval-->>Dev: Continue reduction with returned Value
+		else denied
+			Host-->>Eval: Error(RuntimeError::Security/Governance)
+			Eval-->>Dev: Propagate error
+		end
+```
+
+### Effect and mutation discipline
+
+- Purity
+	- RTFS evaluation is referentially transparent: given the same inputs, pure computation yields the same outputs.
+	- No hidden I/O or mutation; effects are first-class requests to the Host.
+- Mutations
+	- Language-level mutations (e.g., updating a map, building a new list) create new values; original values remain unchanged (persistent data structures).
+	- External mutations (filesystem, network, databases, agent state) are performed only by the Host after governance approval.
+- State
+	- Long-lived or cross-invocation state is hosted by capabilities (e.g., a stateful agent or session) and accessed through governed Host calls.
+	- The evaluator itself holds only ephemeral evaluation state (environments/frames).
+
+### Contracts: input/output schemas
+
+- Capabilities and plans may declare `input_schema`/`output_schema` using `TypeExpr`.
+- At runtime, the Host and/or executor can validate inputs/outputs, providing strong contracts for tool use and safety.
+
+### Streaming, progress, cancellation
+
+- RTFS supports streaming capabilities via the marketplace (duplex/bidirectional configs).
+- The Host mediates:
+	- Progress events: surfaced to the orchestrator/UI
+	- Cancellation: propagated to providers safely
+	- Backpressure and resource limits
+
+### Error semantics (concise)
+
+- Categories
+	- Parse/Type errors (compile-time)
+	- Runtime errors (arith, arity, unknown symbol)
+	- Governance denials (policy/security)
+	- Provider errors (network, protocol)
+- Behavior
+	- Errors are values that short-circuit to the caller unless captured
+	- Host returns structured errors; evaluator preserves purity by not partially applying effects
+
+### Minimal examples
+
+Pure computation:
+
+```clojure
+;; Add two numbers
+(+ 1 2) ;=> 3
+```
+
+Capability definition (conceptual RTFS form):
+
+```clojure
+(defcap http/example.get
+	:name "Example GET"
+	:input {:url :string}
+	:output {:status :int :body :string}
+	:implementation
+	(host/call :http.get {:url (. input :url)}))
+```
+
+Invocation:
+
+```clojure
+(http/example.get {:url "https://example.com"})
+; Evaluator yields RequiresHost(capability_call)
+; Host authorizes and calls provider; returns {:status 200 :body "..."}
+```
+
+Plan-as-capability (using `:implementation` plan body):
+
+```clojure
+(defcap demo/pipeline
+	:name "Demo pipeline"
+	:input {:x :int}
+	:output :int
+	:implementation
+	(let [a (+ (. input :x) 1)
+				b (* a 2)]
+		b))
+```
+
+This registers a local capability whose handler evaluates the pure RTFS plan body with an `input` binding; any effects inside would route through the Host.
+
+### Security and governance
+
+- Every Host call is accompanied by a `RuntimeContext` (agent identity, intent, plan, permissions, provenance) used by the Governance Kernel.
+- Policies can:
+	- Allow/deny
+	- Require human approval (interactive)
+	- Rewrite/limit inputs (rate limits, redactions)
+	- Elevate only under attestation
+- The Causal Chain records capability calls/results for audit.
+
+### Practical implications
+
+- Deterministic core enables reliable testing and replay of LLM-generated programs.
+- Capability contracts (schemas) and governance policies form strong guardrails for autonomous workflows.
+- The Host boundary creates a clean seam to integrate new providers (OpenAPI, MCP, A2A, streaming) without changing the language core.
+
+### Performance trade-offs and mitigations
+
+Introducing the Host boundary adds deliberate indirections (value marshaling, authorization checks, marketplace resolution, provider dispatch, and often an external network hop). This increases latency compared to calling an effect directly from the evaluator. We accept this overhead to prioritize auditability, security, reproducibility, and centralized policy control. The result is a runtime where every effect is observable, governable, and attributable in the Causal Chain.
+
+Mitigations (when performance matters):
+- Reduce crossings: fuse pure logic on the evaluator side; group related effects into a single capability; prefer bulk endpoints.
+- Stream instead of polling: use streaming providers to reduce round-trips and enable backpressure-aware progress.
+- Cache smartly: cache capability discovery and policy decisions with short TTLs; reuse authenticated sessions/clients.
+- Co-locate components: run Host and providers in-process for low-latency paths; minimize (de)serialization where safe.
+- Push down filters: move filtering/aggregation to providers when permissible to shrink payloads.
+- Asynchrony and batching: pipeline independent host calls; batch small calls into a single governed action.
+
+---
+
+If you want deeper internals, see also:
+- `rtfs_compiler/src/runtime/secure_stdlib.rs` (pure functions)
+- `rtfs_compiler/src/runtime/stdlib.rs` (extended library)
+- `rtfs_compiler/src/runtime/security.rs` (RuntimeContext)
+- `ccos/src/capability_marketplace/types.rs` (providers, streaming)
+- `ccos/src/environment.rs` (plan-to-capability registration and Host wiring)
+</content>
 <parameter name="filePath">/home/mandubian/workspaces/mandubian/ccos/docs/rtfs-2.0/specs-new/README.md

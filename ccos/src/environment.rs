@@ -697,17 +697,20 @@ impl CCOSEnvironment {
                                         }
                                     }).collect(),
                                     defn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
+                                    defn_expr.params.iter().map(|p| p.type_annotation.clone()).collect(),
                                     defn_expr.variadic_param.as_ref().map(|p| {
                                         match &p.pattern {
                                             rtfs::ast::Pattern::Symbol(s) => s.clone(),
                                             _ => panic!("Expected symbol pattern in defn variadic parameter"),
                                         }
                                     }),
+                                    defn_expr.variadic_param.as_ref().and_then(|p| p.type_annotation.clone()),
                                     Box::new(Expression::Do(DoExpr {
                                         expressions: defn_expr.body.clone(),
                                     })),
                                     Arc::new(evaluator.env.clone()),
                                     defn_expr.delegation_hint.clone(),
+                                    defn_expr.return_type.clone(),
                                 ));
                                 evaluator.env.define(&defn_expr.name, function);
                             }
@@ -1268,17 +1271,23 @@ impl CCOSEnvironment {
                                     })
                                     .collect(),
                                 defn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
+                                defn_expr.params.iter().map(|p| p.type_annotation.clone()).collect(),
                                 defn_expr.variadic_param.as_ref().map(|p| match &p.pattern {
                                     rtfs::ast::Pattern::Symbol(s) => s.clone(),
                                     _ => {
                                         panic!("Expected symbol pattern in defn variadic parameter")
                                     }
                                 }),
+                                defn_expr
+                                    .variadic_param
+                                    .as_ref()
+                                    .and_then(|p| p.type_annotation.clone()),
                                 Box::new(rtfs::ast::Expression::Do(rtfs::ast::DoExpr {
                                     expressions: defn_expr.body.clone(),
                                 })),
                                 Arc::new(module_env.clone()),
                                 defn_expr.delegation_hint.clone(),
+                                defn_expr.return_type.clone(),
                             ),
                         );
                         module_env.define(&defn_expr.name, function);

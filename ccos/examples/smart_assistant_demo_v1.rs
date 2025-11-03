@@ -2406,7 +2406,25 @@ async fn match_proposed_steps(
                     note: Some("Found via discovery engine".to_string()),
                 });
             }
-            Ok(ccos::discovery::DiscoveryResult::NotFound) | Err(_) => {
+            Ok(ccos::discovery::DiscoveryResult::NotFound) => {
+                matches.push(CapabilityMatch {
+                    step_id: step.id.clone(),
+                    matched_capability: None,
+                    status: MatchStatus::Missing,
+                    note: Some("No matching capability registered".to_string()),
+                });
+            }
+            Ok(ccos::discovery::DiscoveryResult::Incomplete(_)) => {
+                // Discovery returned an incomplete result (e.g., partial matches or pending lookups).
+                // Treat as missing for now but record the state in the note for debugging.
+                matches.push(CapabilityMatch {
+                    step_id: step.id.clone(),
+                    matched_capability: None,
+                    status: MatchStatus::Missing,
+                    note: Some("Discovery returned incomplete result".to_string()),
+                });
+            }
+            Err(_) => {
                 matches.push(CapabilityMatch {
                     step_id: step.id.clone(),
                     matched_capability: None,

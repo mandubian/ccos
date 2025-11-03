@@ -10,6 +10,20 @@ use crate::intent_graph::IntentGraph;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::sync::{Arc, Mutex};
 
+/// Statistics for MCP discovery summary
+#[derive(Debug, Default)]
+struct MCPDiscoveryStats {
+    total_servers: usize,
+    skipped_no_url: usize,
+    skipped_websocket: usize,
+    skipped_invalid: usize,
+    introspected: usize,
+    cached: usize,
+    failed: usize,
+    tools_found: usize,
+    matched_servers: Vec<String>, // Server names that had matches
+}
+
 /// Discovery engine that orchestrates the search for capabilities
 pub struct DiscoveryEngine {
     marketplace: Arc<CapabilityMarketplace>,
@@ -78,6 +92,12 @@ impl DiscoveryEngine {
         eprintln!("  [2/4] Searching MCP registry...");
         if let Some(manifest) = self.search_mcp_registry(need).await? {
             eprintln!("  ✓ Found: {}", manifest.id);
+            // Register the discovered MCP capability in marketplace for future searches
+            if let Err(e) = self.marketplace.register_capability_manifest(manifest.clone()).await {
+                eprintln!("  ⚠  Warning: Failed to register MCP capability: {}", e);
+            } else {
+                eprintln!("       Registered MCP capability in marketplace");
+            }
             eprintln!("{}", "═".repeat(80));
             return Ok(DiscoveryResult::Found(manifest));
         }
@@ -137,6 +157,7 @@ impl DiscoveryEngine {
     }
     
     /// Search the local marketplace for a matching capability
+    /// Uses hybrid matching: description-first (what it does), then name-based
     async fn search_marketplace(&self, need: &CapabilityNeed) -> RuntimeResult<Option<CapabilityManifest>> {
         // First, try exact class match
         if let Some(manifest) = self.marketplace.get_capability(&need.capability_class).await {
@@ -146,8 +167,65 @@ impl DiscoveryEngine {
             }
         }
         
-        // TODO: Implement semantic search for approximate matches
-        // For now, just return None if exact match not found
+        // Semantic search for approximate matches using description/rationale
+        let all_capabilities = self.marketplace.list_capabilities().await;
+        let mut best_match: Option<(CapabilityManifest, f64, String)> = None; // (manifest, score, match_type)
+        let threshold = 0.5;
+        
+        // First pass: description-based matching (what the capability does)
+        for manifest in &all_capabilities {
+            let desc_score = crate::discovery::capability_matcher::calculate_description_match_score(
+                &need.rationale,
+                &manifest.description,
+                &manifest.name,
+            );
+            
+            // Debug logging for top candidates
+            if desc_score >= 0.3 || manifest.id.contains("github") || manifest.description.contains("issue") {
+                eprintln!("  [DEBUG] Description match: {} → {} (score: {:.3})", 
+                    need.rationale, manifest.id, desc_score);
+                eprintln!("         Need rationale: {}", need.rationale);
+                eprintln!("         Manifest desc: {}", manifest.description);
+            }
+            
+            if desc_score >= threshold {
+                match &best_match {
+                    Some((_, best_score, _)) if desc_score > *best_score => {
+                        best_match = Some((manifest.clone(), desc_score, "description".to_string()));
+                    }
+                    None => {
+                        best_match = Some((manifest.clone(), desc_score, "description".to_string()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        // Second pass: name-based matching (for cases where description is vague)
+        for manifest in &all_capabilities {
+            let name_score = crate::discovery::capability_matcher::calculate_semantic_match_score(
+                &need.capability_class,
+                &manifest.id,
+                &manifest.name,
+            );
+            
+            if name_score >= threshold {
+                match &best_match {
+                    Some((_, best_score, _)) if name_score > *best_score => {
+                        best_match = Some((manifest.clone(), name_score, "name".to_string()));
+                    }
+                    None => {
+                        best_match = Some((manifest.clone(), name_score, "name".to_string()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        if let Some((manifest, score, match_type)) = best_match {
+            eprintln!("  ✓ Marketplace semantic match ({}): {} (score: {:.2})", match_type, manifest.id, score);
+            return Ok(Some(manifest));
+        }
         
         Ok(None)
     }
@@ -202,47 +280,269 @@ impl DiscoveryEngine {
         let keywords: Vec<&str> = need.capability_class.split('.').collect();
         let search_query = keywords.join(" "); // Use space-separated keywords for search
         
-        // Search MCP registry for matching servers
-        let servers = match registry_client.search_servers(&search_query).await {
-            Ok(servers) => servers,
-            Err(_) => {
-                return Ok(None);
+        eprintln!("  → MCP registry search query: '{}'", search_query);
+        
+        // First, check curated overrides (capabilities/mcp/overrides.json)
+        let curated_servers = self.load_curated_overrides_for(&need.capability_class)?;
+        let mut servers = if !curated_servers.is_empty() {
+            eprintln!("  → Found {} curated override(s) for '{}'", curated_servers.len(), need.capability_class);
+            curated_servers
+        } else {
+            Vec::new()
+        };
+        
+        // Then search MCP registry for matching servers
+        let registry_servers = match registry_client.search_servers(&search_query).await {
+            Ok(registry_servers) => {
+                eprintln!("  → Found {} MCP server(s) from registry for '{}'", registry_servers.len(), search_query);
+                registry_servers
+            },
+            Err(e) => {
+                eprintln!("  → MCP registry search failed: {}", e);
+                eprintln!("     ⚠️  Could not connect to MCP registry or search failed");
+                Vec::new()
             }
         };
+        
+        // Merge curated (prioritized) with registry results, avoiding duplicates
+        let mut seen_names = std::collections::HashSet::new();
+        for server in &servers {
+            seen_names.insert(server.name.clone());
+        }
+        for server in registry_servers {
+            if !seen_names.contains(&server.name) {
+                servers.push(server);
+            }
+        }
+        
+        // If no servers found with full query, try searching with just the first keyword
+        // e.g., if "github issues list" finds nothing, try just "github"
+        if servers.is_empty() && !keywords.is_empty() {
+            let first_keyword = keywords[0];
+            eprintln!("  → No servers found, trying simpler query: '{}'", first_keyword);
+            let fallback_servers = match registry_client.search_servers(first_keyword).await {
+                Ok(fallback_servers) => {
+                    eprintln!("  → Found {} MCP server(s) for '{}'", fallback_servers.len(), first_keyword);
+                    fallback_servers
+                },
+                Err(_) => Vec::new(),
+            };
+            servers.extend(fallback_servers);
+        }
+        
+        if servers.is_empty() {
+            eprintln!("     ⚠️  No MCP servers found in registry");
+            eprintln!("     💡 The MCP registry may not have GitHub servers configured");
+            eprintln!("     💡 Alternative: Use known MCP server URLs directly");
+            return Ok(None);
+        }
         
         // Introspect each server to find matching tools
         let introspector = crate::synthesis::mcp_introspector::MCPIntrospector::new();
         
-        for server in &servers {
-            // Try to get server URL from packages or remotes
-            let server_url = server.remotes.as_ref()
+        // Statistics for summary
+        let mut stats = MCPDiscoveryStats {
+            total_servers: servers.len(),
+            skipped_no_url: 0,
+            skipped_websocket: 0,
+            skipped_invalid: 0,
+            introspected: 0,
+            cached: 0,
+            failed: 0,
+            tools_found: 0,
+            matched_servers: Vec::new(),
+        };
+        
+        if servers.len() > 1 {
+            eprintln!("  → Searching {} MCP server(s)...", servers.len());
+        }
+        
+        for server in servers.iter() {
+            
+            // Try to get server URL from remotes first, then check for environment variable overrides
+            let mut server_url = server.remotes.as_ref()
                 .and_then(|remotes| remotes.first())
-                .map(|remote| remote.url.clone())
-                .or_else(|| {
-                    // Try to construct URL from packages if available
-                    server.packages.as_ref()
-                        .and_then(|packages| packages.first())
-                        .and_then(|pkg| pkg.registry_base_url.clone())
-                });
+                .map(|remote| remote.url.clone());
+            
+            // For servers without remotes (stdio-based), check for environment variable overrides
+            // e.g., GITHUB_MCP_URL for GitHub MCP server
+            if server_url.is_none() {
+                // Derive a simpler env var name from server name
+                // "github/github-mcp" -> "GITHUB_MCP_URL"
+                // "github/github-mcp" -> extract namespace: "github" -> "GITHUB_MCP_URL"
+                let env_var_name = if let Some(slash_pos) = server.name.find('/') {
+                    // Extract namespace part (before first slash)
+                    let namespace = &server.name[..slash_pos];
+                    format!("{}_MCP_URL", namespace.replace("-", "_").to_uppercase())
+                } else {
+                    // No slash, use full name
+                    format!("{}_MCP_URL", 
+                        server.name
+                            .replace("-", "_")
+                            .to_uppercase()
+                    )
+                };
+                
+                // Also check generic MCP_SERVER_URL and alternative formats
+                let env_vars_to_check = vec![
+                    env_var_name.clone(),
+                    "MCP_SERVER_URL".to_string(),
+                    format!("{}_URL", server.name.replace("/", "_").replace("-", "_").to_uppercase()),
+                ];
+                
+                for env_var in env_vars_to_check {
+                    if let Ok(url) = std::env::var(&env_var) {
+                        if !url.is_empty() {
+                            eprintln!("     → Found server URL from environment: {} = {}", env_var, url);
+                            server_url = Some(url);
+                            break;
+                        }
+                    }
+                }
+                
+                // If still no URL, this is a stdio-based server that requires local setup
+                if server_url.is_none() {
+                    stats.skipped_no_url += 1;
+                    // Only log details for single server searches
+                    if servers.len() == 1 {
+                        eprintln!("     ⚠️  No remote URL found (stdio-based server, requires local npm package)");
+                        if let Some(ref packages) = server.packages {
+                            if let Some(pkg) = packages.first() {
+                                eprintln!("     → Package: {}@{} (registry: {})", 
+                                    pkg.identifier,
+                                    pkg.version.as_ref().unwrap_or(&"latest".to_string()),
+                                    pkg.registry_base_url.as_ref().unwrap_or(&"unknown".to_string())
+                                );
+                                let suggested_env_var = if let Some(slash_pos) = server.name.find('/') {
+                                    let namespace = &server.name[..slash_pos];
+                                    format!("{}_MCP_URL", namespace.replace("-", "_").to_uppercase())
+                                } else {
+                                    format!("{}_MCP_URL", 
+                                        server.name.replace("-", "_").to_uppercase()
+                                    )
+                                };
+                                eprintln!("     💡 Set {} environment variable to point to a remote MCP endpoint", suggested_env_var);
+                                eprintln!("     💡 Or add a 'remotes' entry to overrides.json with an HTTP/HTTPS URL");
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
             
             if let Some(url) = server_url {
+                // Validate URL is a valid MCP endpoint
+                // Skip WebSocket URLs (wss:///ws://) - they require different connection method
+                if url.starts_with("ws://") || url.starts_with("wss://") {
+                    stats.skipped_websocket += 1;
+                    if servers.len() == 1 {
+                        eprintln!("     ⚠️  Skipping: WebSocket URLs not supported for HTTP-based introspection");
+                        eprintln!("     → URL: {}", url);
+                    }
+                    continue;
+                }
+                
+                // Only support HTTP/HTTPS for introspection (mcp:// is also valid but less common)
+                if !url.starts_with("http://") 
+                    && !url.starts_with("https://")
+                    && !url.starts_with("mcp://") {
+                    stats.skipped_invalid += 1;
+                    if servers.len() == 1 {
+                        eprintln!("     ⚠️  Skipping: Invalid URL scheme (expected http/https): {}", url);
+                    }
+                    continue;
+                }
+                
+                // Filter out common repository URLs that aren't MCP endpoints
+                if url.contains("github.com/") && !url.contains("/api/") && !url.contains("mcp") {
+                    stats.skipped_invalid += 1;
+                    if servers.len() == 1 {
+                        eprintln!("     ⚠️  Skipping: Appears to be a repository URL, not an MCP endpoint");
+                        eprintln!("     → URL: {}", url);
+                    }
+                    continue;
+                }
+                
+                // Only show detailed URL for single server
+                if servers.len() == 1 {
+                    eprintln!("     → Server: {} ({})", server.name, url);
+                }
+                
+                // Build auth headers from environment (if available)
+                let mut auth_headers = std::collections::HashMap::new();
+                if let Ok(token) = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("MCP_AUTH_TOKEN")) {
+                    auth_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+                }
+                
                 // Check cache first if available
                 let introspection_result = if let Some(ref cache) = self.introspection_cache {
                     match cache.get_mcp(&url) {
-                        Ok(Some(cached)) => Ok(cached),
+                        Ok(Some(cached)) => {
+                            stats.cached += 1;
+                            stats.tools_found += cached.tools.len();
+                            if servers.len() == 1 {
+                                eprintln!("     ✓ Using cached introspection ({} tools)", cached.tools.len());
+                            }
+                            Ok(cached)
+                        },
                         Ok(None) | Err(_) => {
-                            // Cache miss or error - introspect the server
-                            let result = introspector.introspect_mcp_server(&url, &server.name).await;
+                            // Cache miss - introspect the server with auth
+                            let result = if auth_headers.is_empty() {
+                                introspector.introspect_mcp_server(&url, &server.name).await
+                            } else {
+                                introspector.introspect_mcp_server_with_auth(
+                                    &url,
+                                    &server.name,
+                                    Some(auth_headers.clone()),
+                                ).await
+                            };
                             // Cache the result if successful
-                            if let Ok(ref introspection) = result {
-                                let _ = cache.put_mcp(&url, introspection);
+                            match &result {
+                                Ok(introspection) => {
+                                    stats.introspected += 1;
+                                    stats.tools_found += introspection.tools.len();
+                                    if servers.len() == 1 {
+                                        eprintln!("     ✓ Introspected successfully ({} tools)", introspection.tools.len());
+                                    }
+                                    let _ = cache.put_mcp(&url, introspection);
+                                }
+                                Err(_) => {
+                                    stats.failed += 1;
+                                    if servers.len() == 1 {
+                                        eprintln!("     ✗ Introspection failed");
+                                    }
+                                }
                             }
                             result
                         }
                     }
                 } else {
-                    // No cache - just introspect
-                    introspector.introspect_mcp_server(&url, &server.name).await
+                    // No cache - just introspect with auth if available
+                    let result = if auth_headers.is_empty() {
+                        introspector.introspect_mcp_server(&url, &server.name).await
+                    } else {
+                        introspector.introspect_mcp_server_with_auth(
+                            &url,
+                            &server.name,
+                            Some(auth_headers.clone()),
+                        ).await
+                    };
+                    match &result {
+                        Ok(introspection) => {
+                            stats.introspected += 1;
+                            stats.tools_found += introspection.tools.len();
+                            if servers.len() == 1 {
+                                eprintln!("     ✓ Introspected successfully ({} tools)", introspection.tools.len());
+                            }
+                        }
+                        Err(_) => {
+                            stats.failed += 1;
+                            if servers.len() == 1 {
+                                eprintln!("     ✗ Introspection failed");
+                            }
+                        }
+                    }
+                    result
                 };
                 
                 // Process the introspection result
@@ -251,11 +551,81 @@ impl DiscoveryEngine {
                         // Create all capabilities from this server's tools
                         match introspector.create_capabilities_from_mcp(&introspection) {
                             Ok(capabilities) => {
-                                // Find a matching capability
+                                // Use hybrid semantic matching: description-first, then name-based
+                                let mut best_match: Option<(CapabilityManifest, f64, String)> = None; // (manifest, score, match_type)
+                                let threshold = 0.5; // Minimum score to consider a match
+                                
+                                // First pass: description-based semantic matching (what the capability does)
+                                // This is better because LLM generates rationale/description, not exact names
+                                // Try embedding-based matching if available, fallback to keyword-based
+                                let mut embedding_service = crate::discovery::embedding_service::EmbeddingService::from_env();
+                                
+                                for manifest in &capabilities {
+                                    let desc_score = if let Some(ref mut emb_svc) = embedding_service {
+                                        // Use embedding-based matching (more accurate)
+                                        crate::discovery::capability_matcher::calculate_description_match_score_with_embedding_async(
+                                            &need.rationale,
+                                            &manifest.description,
+                                            &manifest.name,
+                                            Some(emb_svc),
+                                        ).await
+                                    } else {
+                                        // Fallback to keyword-based matching
+                                        crate::discovery::capability_matcher::calculate_description_match_score(
+                                            &need.rationale,
+                                            &manifest.description,
+                                            &manifest.name,
+                                        )
+                                    };
+                                    
+                                    if desc_score >= threshold {
+                                        match &best_match {
+                                            Some((_, best_score, _)) if desc_score > *best_score => {
+                                                best_match = Some((manifest.clone(), desc_score, "description".to_string()));
+                                            }
+                                            None => {
+                                                best_match = Some((manifest.clone(), desc_score, "description".to_string()));
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                
+                                // Second pass: name-based semantic matching (for cases where description is vague)
+                                for manifest in &capabilities {
+                                    let name_score = crate::discovery::capability_matcher::calculate_semantic_match_score(
+                                        &need.capability_class,
+                                        &manifest.id,
+                                        &manifest.name,
+                                    );
+                                    
+                                    if name_score >= threshold {
+                                        match &best_match {
+                                            Some((_, best_score, _)) if name_score > *best_score => {
+                                                best_match = Some((manifest.clone(), name_score, "name".to_string()));
+                                            }
+                                            None => {
+                                                best_match = Some((manifest.clone(), name_score, "name".to_string()));
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                
+                                // Return the best match if found
+                                if let Some((manifest, score, match_type)) = best_match {
+                                    stats.matched_servers.push(server.name.clone());
+                                    if servers.len() == 1 {
+                                        eprintln!("  ✓ Semantic match found ({}): {} (score: {:.2})", match_type, manifest.id, score);
+                                    }
+                                    return Ok(Some(manifest));
+                                }
+                                
+                                // Fallback to simple substring matching for compatibility
                                 let capability_name_parts: Vec<&str> = need.capability_class.split('.').collect();
                                 let last_part = capability_name_parts.last().unwrap_or(&"");
                                 
-                                for manifest in capabilities {
+                                for manifest in &capabilities {
                                     let manifest_id_lower = manifest.id.to_lowercase();
                                     let manifest_name_lower = manifest.name.to_lowercase();
                                     
@@ -267,20 +637,58 @@ impl DiscoveryEngine {
                                     manifest_name_lower.contains(&last_part.to_lowercase());
                                     
                                     if capability_match {
-                                        return Ok(Some(manifest));
+                                        stats.matched_servers.push(server.name.clone());
+                                        if servers.len() == 1 {
+                                            eprintln!("  ✓ Substring match found: {}", manifest.id);
+                                        }
+                                        return Ok(Some(manifest.clone()));
                                     }
                                 }
                             }
-                            Err(_) => {
-                                continue;
+                            Err(e) => {
+                                if servers.len() == 1 {
+                                    eprintln!("     ✗ Failed to create capabilities from MCP: {}", e);
+                                }
                             }
                         }
                     }
-                    Err(_) => {
-                        continue;
+                    Err(e) => {
+                        if servers.len() == 1 {
+                            eprintln!("     ✗ Server introspection failed: {}", e);
+                        }
                     }
                 }
             }
+        }
+        
+        // Print summary for multiple servers
+        if stats.total_servers > 1 {
+            eprintln!("  → Summary: {} server(s) searched", stats.total_servers);
+            if stats.introspected > 0 {
+                eprintln!("     • {} introspected successfully ({} tools)", stats.introspected, stats.tools_found);
+            }
+            if stats.cached > 0 {
+                eprintln!("     • {} from cache", stats.cached);
+            }
+            if stats.failed > 0 {
+                eprintln!("     • {} failed", stats.failed);
+            }
+            if stats.skipped_no_url > 0 {
+                eprintln!("     • {} skipped (no remote URL)", stats.skipped_no_url);
+            }
+            if stats.skipped_websocket > 0 {
+                eprintln!("     • {} skipped (WebSocket not supported)", stats.skipped_websocket);
+            }
+            if stats.skipped_invalid > 0 {
+                eprintln!("     • {} skipped (invalid URL)", stats.skipped_invalid);
+            }
+            if !stats.matched_servers.is_empty() {
+                eprintln!("     • Matched: {}", stats.matched_servers.join(", "));
+            } else {
+                eprintln!("     ✗ No match found");
+            }
+        } else if stats.total_servers == 1 {
+            eprintln!("  → No match found");
         }
         
         Ok(None)
@@ -434,6 +842,95 @@ impl DiscoveryEngine {
         );
         
         manifest
+    }
+    
+    /// Load curated MCP server overrides from a local JSON file and select those matching the capability id
+    fn load_curated_overrides_for(
+        &self,
+        capability_id: &str,
+    ) -> RuntimeResult<Vec<crate::synthesis::mcp_registry_client::McpServer>> {
+        use std::fs;
+        use std::path::Path;
+        
+        // Define the override file structure
+        #[derive(serde::Deserialize)]
+        struct CuratedOverrides {
+            pub entries: Vec<CuratedEntry>,
+        }
+        
+        #[derive(serde::Deserialize)]
+        struct CuratedEntry {
+            pub matches: Vec<String>,
+            pub server: crate::synthesis::mcp_registry_client::McpServer,
+        }
+        
+        let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        // Try workspace root 'capabilities/mcp/overrides.json'. If we are inside rtfs_compiler, go up one level
+        let overrides_path = if root.ends_with("rtfs_compiler") {
+            root.parent()
+                .unwrap_or(&root)
+                .join("capabilities/mcp/overrides.json")
+        } else {
+            root.join("capabilities/mcp/overrides.json")
+        };
+        
+        if !Path::new(&overrides_path).exists() {
+            return Ok(Vec::new());
+        }
+        
+        let content = fs::read_to_string(&overrides_path).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to read curated overrides file '{}': {}",
+                overrides_path.display(),
+                e
+            ))
+        })?;
+        
+        let parsed: CuratedOverrides = serde_json::from_str(&content).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to parse curated overrides JSON '{}': {}",
+                overrides_path.display(),
+                e
+            ))
+        })?;
+        
+        let mut matched = Vec::new();
+        for entry in parsed.entries.iter() {
+            if entry
+                .matches
+                .iter()
+                .any(|pat| Self::pattern_match(pat, capability_id))
+            {
+                matched.push(entry.server.clone());
+            }
+        }
+        
+        Ok(matched)
+    }
+    
+    /// Simple wildcard pattern matching supporting:
+    /// - exact match
+    /// - suffix '*' (prefix match)
+    /// - '*' anywhere (contains match)
+    fn pattern_match(pattern: &str, text: &str) -> bool {
+        if pattern == text {
+            return true;
+        }
+        if pattern.ends_with('*') {
+            let prefix = &pattern[..pattern.len() - 1];
+            return text.starts_with(prefix);
+        }
+        if pattern.starts_with('*') {
+            let suffix = &pattern[1..];
+            return text.ends_with(suffix);
+        }
+        if pattern.contains('*') {
+            let parts: Vec<&str> = pattern.split('*').collect();
+            if parts.len() == 2 {
+                return text.starts_with(parts[0]) && text.ends_with(parts[1]);
+            }
+        }
+        text.contains(pattern)
     }
 }
 

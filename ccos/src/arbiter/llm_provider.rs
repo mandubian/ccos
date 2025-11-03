@@ -2675,7 +2675,23 @@ impl LlmProviderFactory {
         config: LlmProviderConfig,
     ) -> Result<Box<dyn LlmProvider>, RuntimeError> {
         match config.provider_type {
-            LlmProviderType::Stub => Ok(Box::new(StubLlmProvider::new(config))),
+            LlmProviderType::Stub => {
+                // Only allow Stub provider in test mode or when explicitly enabled
+                let allow_stub = std::env::var("CCOS_ALLOW_STUB_PROVIDER")
+                    .map(|v| v == "1" || v == "true")
+                    .unwrap_or(false)
+                    || cfg!(test);
+                
+                if !allow_stub {
+                    return Err(RuntimeError::Generic(
+                        "Stub LLM provider is not allowed in production. Set CCOS_ALLOW_STUB_PROVIDER=1 to enable (for testing only), or use a real provider (openai, anthropic, openrouter).".to_string()
+                    ));
+                }
+                
+                eprintln!("⚠️  WARNING: Using Stub LLM Provider (testing only - not realistic)");
+                eprintln!("   Set CCOS_LLM_PROVIDER=openai or CCOS_LLM_PROVIDER=anthropic for real LLM calls");
+                Ok(Box::new(StubLlmProvider::new(config)))
+            }
             LlmProviderType::OpenAI => {
                 let provider = OpenAILlmProvider::new(config)?;
                 Ok(Box::new(provider))

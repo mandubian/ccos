@@ -448,11 +448,23 @@ impl ArbiterConfig {
 
             let llm_config = LlmConfig {
                 provider_type: match provider.as_str() {
-                    "openai" => LlmProviderType::OpenAI,
+                    "openai" | "openrouter" => {
+                        // OpenRouter uses OpenAI-compatible API with different base URL
+                        // Set base URL if not already set and provider is openrouter
+                        if provider == "openrouter" && std::env::var("CCOS_LLM_BASE_URL").is_err() {
+                            std::env::set_var("CCOS_LLM_BASE_URL", "https://openrouter.ai/api/v1");
+                        }
+                        LlmProviderType::OpenAI
+                    },
                     "anthropic" => LlmProviderType::Anthropic,
-                    "stub" => LlmProviderType::Stub,
+                    "stub" => {
+                        // Warn about stub usage
+                        eprintln!("⚠️  WARNING: Using stub LLM provider (testing only)");
+                        eprintln!("   For production, use: CCOS_LLM_PROVIDER=openai or CCOS_LLM_PROVIDER=anthropic");
+                        LlmProviderType::Stub
+                    },
                     "local" => LlmProviderType::Local,
-                    _ => return Err("Invalid LLM provider".into()),
+                    _ => return Err("Invalid LLM provider. Use: openai, openrouter, anthropic, or stub (testing only)".into()),
                 },
                 model: std::env::var("CCOS_LLM_MODEL").unwrap_or_else(|_| "stub-model".to_string()),
                 api_key: std::env::var("CCOS_LLM_API_KEY").ok(),

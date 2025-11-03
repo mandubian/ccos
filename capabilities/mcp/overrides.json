@@ -9,7 +9,7 @@
       "server": {
         "$schema": null,
         "name": "github/github-mcp",
-        "description": "Official GitHub MCP Server",
+        "description": "Official GitHub MCP Server (requires local npm installation - stdio transport)",
         "version": "1.0.0",
         "repository": {
           "url": "https://github.com/github/github-mcp",
@@ -39,41 +39,17 @@
         ],
         "remotes": [
           {
-            "type": "websocket",
-            "url": "wss://mcp.github.com",
+            "type": "http",
+            "url": "https://api.githubcopilot.com/mcp/",
             "headers": [
               {
                 "name": "Authorization",
-                "description": null,
+                "description": "GitHub Personal Access Token for MCP authentication",
                 "value": null,
                 "isSecret": true,
-                "isRequired": false
+                "isRequired": true
               }
             ]
-          }
-        ]
-      }
-    },
-    {
-      "matches": [
-        "github.search_code",
-        "github.*"
-      ],
-      "server": {
-        "$schema": null,
-        "name": "github/git-mcp-test",
-        "description": "User-added MCP server for github.search_code",
-        "version": "1.0.0",
-        "repository": {
-          "url": "https://github.com/github/github-mcp",
-          "source": "github"
-        },
-        "packages": null,
-        "remotes": [
-          {
-            "type": "http",
-            "url": "https://github.com/github/github-mcp",
-            "headers": null
           }
         ]
       }

@@ -1,3 +1,4 @@
+# RTFS Agent Configuration (strict runner)
 version = "1"
 agent_id = "demo-agent"
 profile = "default"
@@ -17,7 +18,6 @@ enabled = true
 via = "direct"
 allow_domains = []
 mtls = false
-tls_pins = []
 
 [capabilities.http]
 enabled = false
@@ -39,9 +39,9 @@ verify = "dummy-verify"
 risk_tier = "low"
 requires_approvals = 0
 
-  [governance.policies.default.budgets]
-  max_cost_usd = 1.0
-  token_budget = 5000
+[governance.policies.default.budgets]
+max_cost_usd = 1.0
+token_budget = 5000
 
 [causal_chain.storage]
 mode = "in_memory" # or "append_file" | "sqlite" | "vsock_stream"
@@ -61,10 +61,14 @@ print_extracted_plan = true
 [llm_profiles]
 default = "openrouter_free:balanced"
 
+# Stub profile - ONLY for testing (not realistic)
+# To use: explicitly pass --profile stub/dev
 [[llm_profiles.profiles]]
 name = "stub/dev"
 provider = "stub"
 model = "stub-mini"
+# Note: This profile should only be used for basic tests
+# For realistic behavior, use openrouter_free:balanced (default) or openrouter_free:fast
 
 
 # New: grouped model set

@@ -352,6 +352,7 @@ impl RecursiveSynthesizer {
         // Use queue-based approach to avoid async recursion issues
         // This processes sub-capabilities iteratively instead of recursively
         let mut sub_intents = Vec::new();
+        let mut skipped_capabilities = Vec::new();
         let mut processing_queue: Vec<(CapabilityNeed, usize, Vec<String>)> = sub_needs
             .into_iter()
             .map(|need| {
@@ -377,6 +378,7 @@ impl RecursiveSynthesizer {
                     "{}⚠️  [Depth {}] Max depth {} reached for {}",
                     sub_indent, depth, self.default_max_depth, sub_need.capability_class
                 );
+                skipped_capabilities.push((sub_need.capability_class.clone(), "max depth".to_string()));
                 continue;
             }
             
@@ -406,6 +408,7 @@ impl RecursiveSynthesizer {
                     "{}      (Cycle detected - capability would depend on itself)",
                     sub_indent
                 );
+                skipped_capabilities.push((sub_need.capability_class.clone(), "cycle detected".to_string()));
                 continue;
             }
             
@@ -420,19 +423,33 @@ impl RecursiveSynthesizer {
             let mut deeper_synthesizer = self.go_deeper();
             match deeper_synthesizer.synthesize_as_intent(&sub_need, &sub_context).await {
                 Ok(synthesized) => {
-                    eprintln!(
-                        "{}    ✓ [Depth {}] Successfully synthesized: {}",
-                        sub_indent, depth, synthesized.manifest.id
-                    );
-                    sub_intents.push(synthesized.manifest.id.clone());
+                    // Check if this is an incomplete capability
+                    let is_incomplete = synthesized.manifest.metadata.get("status")
+                        .map(|s| s == "incomplete")
+                        .unwrap_or(false);
                     
-                    // Register synthesized sub-capability in marketplace
+                    if is_incomplete {
+                        eprintln!(
+                            "{}    ⚠️  [Depth {}] Synthesized incomplete capability: {}",
+                            sub_indent, depth, synthesized.manifest.id
+                        );
+                        eprintln!("{}      → Parent capability will be marked incomplete", sub_indent);
+                        skipped_capabilities.push((sub_need.capability_class.clone(), "sub-capability incomplete".to_string()));
+                    } else {
+                        eprintln!(
+                            "{}    ✓ [Depth {}] Successfully synthesized: {}",
+                            sub_indent, depth, synthesized.manifest.id
+                        );
+                        sub_intents.push(synthesized.manifest.id.clone());
+                    }
+                    
+                    // Register synthesized sub-capability in marketplace (even if incomplete)
                     if let Err(e) = marketplace.register_capability_manifest(synthesized.manifest.clone()).await {
                         eprintln!(
                             "{}    ⚠️  Warning: Failed to register synthesized sub-capability {}: {}",
                             sub_indent, sub_need.capability_class, e
                         );
-                    } else {
+                    } else if !is_incomplete {
                         eprintln!("{}    ✓ Registered in marketplace", sub_indent);
                     }
                     
@@ -494,22 +511,56 @@ impl RecursiveSynthesizer {
                 ))
             });
         
-        let manifest = CapabilityManifest::new(
+        // Check if any sub-capability was skipped because it was incomplete
+        let has_incomplete_sub_capability = skipped_capabilities.iter()
+            .any(|(_, reason)| reason == "sub-capability incomplete");
+        
+        let mut manifest = CapabilityManifest::new(
             need.capability_class.clone(),
-            format!("Synthesized {}", need.capability_class),
-            format!("Recursively synthesized capability: {}", need.rationale),
+            if has_incomplete_sub_capability {
+                format!("[INCOMPLETE] {}", need.capability_class)
+            } else {
+                format!("Synthesized {}", need.capability_class)
+            },
+            if has_incomplete_sub_capability {
+                format!("Capability incomplete: sub-capability dependencies not found - {}", need.rationale)
+            } else {
+                format!("Recursively synthesized capability: {}", need.rationale)
+            },
             crate::capability_marketplace::types::ProviderType::Local(
                 crate::capability_marketplace::types::LocalCapability {
                     handler: stub_handler,
                 }
             ),
-            "1.0.0".to_string(),
+            if has_incomplete_sub_capability {
+                "0.0.0-incomplete".to_string()
+            } else {
+                "1.0.0".to_string()
+            },
         );
         
+        // Add metadata if incomplete
+        if has_incomplete_sub_capability {
+            manifest.metadata.insert(
+                "status".to_string(),
+                "incomplete".to_string(),
+            );
+            manifest.metadata.insert(
+                "discovery_method".to_string(),
+                "sub_capability_incomplete".to_string(),
+            );
+        }
+        
         eprintln!(
-            "{}✓ [Depth {}] Synthesis complete for: {} (sub-capabilities: {})",
-            indent, depth, need.capability_class, sub_intents.len()
+            "{}✓ [Depth {}] Synthesis complete for: {} (sub-capabilities: {}, skipped: {}){}",
+            indent, depth, need.capability_class, sub_intents.len(), skipped_capabilities.len(),
+            if has_incomplete_sub_capability { " → INCOMPLETE" } else { "" }
         );
+        if !skipped_capabilities.is_empty() {
+            for (cap, reason) in &skipped_capabilities {
+                eprintln!("{}  ⚠️  Skipped: {} ({})", indent, cap, reason);
+            }
+        }
         
         Ok(SynthesizedCapability {
             manifest,
