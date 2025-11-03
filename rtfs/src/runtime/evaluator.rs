@@ -1859,6 +1859,23 @@ impl Evaluator {
                         });
                     }
 
+                    // Validate required parameters against annotations if present
+                    if closure.param_type_annotations.len() == closure.param_patterns.len() {
+                        for i in 0..required_param_count {
+                            if let Some(t) = closure.param_type_annotations[i].clone() {
+                                self
+                                    .type_validator
+                                    .validate_with_config(
+                                        &args[i],
+                                        &t,
+                                        &self.type_config,
+                                        &VerificationContext::default(),
+                                    )
+                                    .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))?;
+                            }
+                        }
+                    }
+
                     // Bind required parameters normally
                     for (i, pat) in closure.param_patterns.iter().enumerate() {
                         self.bind_pattern(pat, &args[i], &mut func_env)?;
@@ -1870,6 +1887,23 @@ impl Evaluator {
                     } else {
                         Vec::new()
                     };
+                    // Validate variadic items against their annotation if present
+                    if let Some(var_type) = &closure.variadic_param_type {
+                        for (j, a) in rest_args.iter().enumerate() {
+                            self
+                                .type_validator
+                                .validate_with_config(
+                                    a,
+                                    var_type,
+                                    &self.type_config,
+                                    &VerificationContext::default(),
+                                )
+                                .map_err(|e| RuntimeError::TypeValidationError(format!(
+                                    "variadic argument {}: {}",
+                                    j, e
+                                )))?;
+                        }
+                    }
                     func_env.define(variadic_symbol, Value::List(rest_args));
                 } else if !closure.param_patterns.is_empty() {
                     // Normal parameter binding for non-variadic functions
@@ -1880,7 +1914,22 @@ impl Evaluator {
                             actual: args.len(),
                         });
                     }
-
+                    // Validate parameters against annotations if present
+                    if closure.param_type_annotations.len() == closure.param_patterns.len() {
+                        for (i, arg) in args.iter().enumerate() {
+                            if let Some(t) = closure.param_type_annotations[i].clone() {
+                                self
+                                    .type_validator
+                                    .validate_with_config(
+                                        arg,
+                                        &t,
+                                        &self.type_config,
+                                        &VerificationContext::default(),
+                                    )
+                                    .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))?;
+                            }
+                        }
+                    }
                     for (pat, arg) in closure.param_patterns.iter().zip(args.iter()) {
                         self.bind_pattern(pat, arg, &mut func_env)?;
                     }
@@ -1890,7 +1939,21 @@ impl Evaluator {
                 let mut deeper_evaluator = self.clone();
                 deeper_evaluator.recursion_depth += 1;
                 match deeper_evaluator.eval_expr(&closure.body, &mut func_env)? {
-                    ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
+                    ExecutionOutcome::Complete(v) => {
+                        // Enforce return type if declared
+                        if let Some(ret_t) = &closure.return_type {
+                            self
+                                .type_validator
+                                .validate_with_config(
+                                    &v,
+                                    ret_t,
+                                    &self.type_config,
+                                    &VerificationContext::default(),
+                                )
+                                .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))?;
+                        }
+                        Ok(ExecutionOutcome::Complete(v))
+                    }
                     ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
                     #[cfg(feature = "effect-boundary")]
                     ExecutionOutcome::RequiresHost(host_call) => {
@@ -2447,22 +2510,30 @@ impl Evaluator {
             .as_ref()
             .map(|p| self.extract_param_symbol(&p.pattern));
 
-        Ok(ExecutionOutcome::Complete(Value::Function(
-            Function::new_closure(
-                fn_expr
-                    .params
-                    .iter()
-                    .map(|p| self.extract_param_symbol(&p.pattern))
-                    .collect(),
-                fn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
-                variadic_param,
-                Box::new(Expression::Do(DoExpr {
-                    expressions: fn_expr.body.clone(),
-                })),
-                Arc::new(env.clone()),
-                fn_expr.delegation_hint.clone(),
-            ),
-        )))
+        Ok(ExecutionOutcome::Complete(Value::Function(Function::new_closure(
+            fn_expr
+                .params
+                .iter()
+                .map(|p| self.extract_param_symbol(&p.pattern))
+                .collect(),
+            fn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
+            fn_expr
+                .params
+                .iter()
+                .map(|p| p.type_annotation.clone())
+                .collect(),
+            variadic_param,
+            fn_expr
+                .variadic_param
+                .as_ref()
+                .and_then(|p| p.type_annotation.clone()),
+            Box::new(Expression::Do(DoExpr {
+                expressions: fn_expr.body.clone(),
+            })),
+            Arc::new(env.clone()),
+            fn_expr.delegation_hint.clone(),
+            fn_expr.return_type.clone(),
+        ))))
     }
 
     fn eval_with_resource(
@@ -2557,12 +2628,22 @@ impl Evaluator {
                 .map(|p| self.extract_param_symbol(&p.pattern))
                 .collect(),
             defn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
+            defn_expr
+                .params
+                .iter()
+                .map(|p| p.type_annotation.clone())
+                .collect(),
             variadic_param,
+            defn_expr
+                .variadic_param
+                .as_ref()
+                .and_then(|p| p.type_annotation.clone()),
             Box::new(Expression::Do(DoExpr {
                 expressions: defn_expr.body.clone(),
             })),
             Arc::new(env.clone()),
             defn_expr.delegation_hint.clone(),
+            defn_expr.return_type.clone(),
         ));
         env.define(&defn_expr.name, function.clone());
         Ok(ExecutionOutcome::Complete(function))

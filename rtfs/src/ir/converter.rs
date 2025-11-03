@@ -1868,23 +1868,66 @@ impl<'a> IrConverter<'a> {
                             }
                         }
                     }
-                    let variadic_param = None; // TODO: handle variadic
+                    // Handle variadic parameter if present (only simple symbol pattern is supported)
+                    let variadic_param = if let Some(variadic_param_def) = fn_expr.variadic_param {
+                        if let Pattern::Symbol(s) = variadic_param_def.pattern {
+                            let var_param_id = self.next_id();
+                            let var_param_type = self
+                                .convert_type_annotation_option(variadic_param_def.type_annotation.clone())?;
+
+                            // Define the variadic binding in current scope
+                            let binding_info = BindingInfo {
+                                name: s.0.clone(),
+                                binding_id: var_param_id,
+                                ir_type: var_param_type.clone().unwrap_or(IrType::Any),
+                                kind: BindingKind::Parameter,
+                            };
+                            self.define_binding(s.0.clone(), binding_info);
+
+                            Some(Box::new(IrNode::Param {
+                                id: var_param_id,
+                                binding: Box::new(IrNode::VariableBinding {
+                                    id: var_param_id,
+                                    name: s.0,
+                                    ir_type: var_param_type.clone().unwrap_or(IrType::Any),
+                                    source_location: None,
+                                }),
+                                type_annotation: var_param_type.clone(),
+                                ir_type: var_param_type.clone().unwrap_or(IrType::Any),
+                                source_location: None,
+                            }))
+                        } else {
+                            None // Destructuring for variadic params not supported yet
+                        }
+                    } else {
+                        None
+                    };
                     let mut body = Vec::new();
                     // Insert param destructuring before body
                     body.extend(param_destructure_prologue.into_iter());
                     for expr in fn_expr.body {
                         body.push(self.convert_expression(expr)?);
                     }
-                    let return_type = body
-                        .last()
-                        .and_then(|n| n.ir_type())
-                        .cloned()
-                        .unwrap_or(IrType::Any);
+                    // Determine return type: prefer explicit annotation if provided, otherwise infer from last body expr
+                    let return_type = if let Some(ret_annot) = fn_expr.return_type {
+                        self.convert_type_annotation(ret_annot)?
+                    } else {
+                        body
+                            .last()
+                            .and_then(|n| n.ir_type())
+                            .cloned()
+                            .unwrap_or(IrType::Any)
+                    };
                     let param_types: Vec<IrType> =
                         params.iter().filter_map(|p| p.ir_type()).cloned().collect();
+                    // Variadic param type annotation (if present)
+                    let variadic_param_type = variadic_param
+                        .as_ref()
+                        .and_then(|p| p.ir_type().cloned())
+                        .map(|t| Box::new(t));
                     let function_type = IrType::Function {
                         param_types,
-                        variadic_param_type: None,
+                        variadic_param_type,
                         return_type: Box::new(return_type),
                     };
                     IrNode::Lambda {
@@ -3228,7 +3271,7 @@ impl<'a> IrConverter<'a> {
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// [1 2 3]           → Vector(Int)
 /// [1 2.5 3]         → Vector(Number)  where Number = Int | Float
 /// [1 "text" true]   → Vector(Int | String | Bool)

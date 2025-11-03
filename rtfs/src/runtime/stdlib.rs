@@ -2636,7 +2636,7 @@ pub async fn register_default_capabilities(
 
 /// Load the standard library into a module registry
 /// This creates a "stdlib" module containing all built-in functions
-pub fn load_stdlib(module_registry: &mut ModuleRegistry) -> RuntimeResult<()> {
+pub fn load_stdlib(module_registry: &ModuleRegistry) -> RuntimeResult<()> {
     // Create the standard library environment to get all functions
     let env = StandardLibrary::create_global_environment();
 

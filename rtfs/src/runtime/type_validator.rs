@@ -228,6 +228,34 @@ impl TypeValidator {
         validator
     }
 
+    /// Resolve common alias names (e.g., `Int`, `String`) to primitive types.
+    /// Accepts both capitalized and lowercase forms for convenience.
+    fn resolve_primitive_alias(alias: &crate::ast::Symbol) -> Option<TypeExpr> {
+        match alias.0.as_str() {
+            // Capitalized
+            "Int" => Some(TypeExpr::Primitive(PrimitiveType::Int)),
+            "Float" => Some(TypeExpr::Primitive(PrimitiveType::Float)),
+            "String" => Some(TypeExpr::Primitive(PrimitiveType::String)),
+            "Bool" => Some(TypeExpr::Primitive(PrimitiveType::Bool)),
+            "Nil" => Some(TypeExpr::Primitive(PrimitiveType::Nil)),
+            "Keyword" => Some(TypeExpr::Primitive(PrimitiveType::Keyword)),
+            "Symbol" => Some(TypeExpr::Primitive(PrimitiveType::Symbol)),
+            "Any" => Some(TypeExpr::Any),
+            "Never" => Some(TypeExpr::Never),
+            // Lowercase (defensive)
+            "int" => Some(TypeExpr::Primitive(PrimitiveType::Int)),
+            "float" => Some(TypeExpr::Primitive(PrimitiveType::Float)),
+            "string" => Some(TypeExpr::Primitive(PrimitiveType::String)),
+            "bool" => Some(TypeExpr::Primitive(PrimitiveType::Bool)),
+            "nil" => Some(TypeExpr::Primitive(PrimitiveType::Nil)),
+            "keyword" => Some(TypeExpr::Primitive(PrimitiveType::Keyword)),
+            "symbol" => Some(TypeExpr::Primitive(PrimitiveType::Symbol)),
+            "any" => Some(TypeExpr::Any),
+            "never" => Some(TypeExpr::Never),
+            _ => None,
+        }
+    }
+
     /// Register built-in standard library predicates
     fn register_stdlib_predicates(&mut self) {
         // URL validation predicate
@@ -389,6 +417,18 @@ impl TypeValidator {
         path: &str,
     ) -> ValidationResult<()> {
         match (value, rtfs_type) {
+            // Resolve common alias names to primitive types for convenience (e.g., Int)
+            (val, TypeExpr::Alias(alias_sym)) => {
+                if let Some(resolved) = Self::resolve_primitive_alias(alias_sym) {
+                    return self.validate_value_at_path(val, &resolved, path);
+                }
+                // Unknown alias → type mismatch (could be extended to support user-defined types)
+                Err(ValidationError::TypeMismatch {
+                    expected: rtfs_type.clone(),
+                    actual: value.type_name().to_string(),
+                    path: path.to_string(),
+                })
+            }
             // Primitive types
             (Value::Integer(_), TypeExpr::Primitive(PrimitiveType::Int)) => Ok(()),
             (Value::Float(_), TypeExpr::Primitive(PrimitiveType::Float)) => Ok(()),
