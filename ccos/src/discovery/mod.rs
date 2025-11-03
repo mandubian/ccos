@@ -10,6 +10,8 @@ pub mod cycle_detector;
 pub mod intent_transformer;
 pub mod recursive_synthesizer;
 pub mod introspection_cache;
+pub mod capability_matcher;
+pub mod embedding_service;
 
 pub use need_extractor::*;
 pub use engine::*;
@@ -17,4 +19,6 @@ pub use cycle_detector::*;
 pub use intent_transformer::*;
 pub use recursive_synthesizer::*;
 pub use introspection_cache::*;
+pub use capability_matcher::*;
+pub use embedding_service::*;
 

@@ -68,11 +68,15 @@ impl CapabilityNeedExtractor {
                         .unwrap_or_default();
                     
                     if !capability_class.is_empty() && !required_inputs.is_empty() {
+                        // Try to extract a better rationale from plan metadata
+                        let rationale = Self::extract_rationale_from_plan_metadata(&map, &capability_class)
+                            .unwrap_or_else(|| format!("Capability needed: {}", capability_class));
+                        
                         needs.push(CapabilityNeed::new(
                             capability_class,
                             required_inputs,
                             expected_outputs,
-                            format!("Extracted from plan {}", plan.plan_id),
+                            rationale,
                         ));
                     }
                 }
@@ -130,19 +134,25 @@ impl CapabilityNeedExtractor {
                             let inputs = extract_map_keys(&arg_map);
                             
                             // Create a need
+                            // Generate a functional rationale from capability ID
+                            let rationale = Self::capability_id_to_functional_description(&capability_id);
+                            
                             needs.push(CapabilityNeed::new(
                                 capability_id.clone(),
                                 inputs,
                                 vec!["result".to_string()], // Default output
-                                format!("Extracted from RTFS call: {}", capability_id),
+                                rationale,
                             ));
                         } else {
                             // No arg map found, still create a need with empty inputs
+                            // Generate a functional rationale from capability ID
+                            let rationale = Self::capability_id_to_functional_description(&capability_id);
+                            
                             needs.push(CapabilityNeed::new(
                                 capability_id.clone(),
                                 vec![],
                                 vec!["result".to_string()],
-                                format!("Extracted from RTFS call: {}", capability_id),
+                                rationale,
                             ));
                         }
                     }
@@ -153,6 +163,79 @@ impl CapabilityNeedExtractor {
         
         needs
     }
+    
+    /// Extract a rationale from plan metadata if available
+    fn extract_rationale_from_plan_metadata(
+        map: &std::collections::HashMap<rtfs::ast::MapKey, Value>,
+        capability_class: &str,
+    ) -> Option<String> {
+        // Try to find description or name fields
+        if let Some(Value::String(desc)) = map_get(map, "description") {
+            return Some(desc.clone());
+        }
+        if let Some(Value::String(name)) = map_get(map, "name") {
+            // Convert step name to functional description
+            return Some(Self::capability_id_to_functional_description(name));
+        }
+        None
+    }
+    
+    /// Convert a capability ID or name to a functional description for better semantic matching
+    fn capability_id_to_functional_description(capability_id: &str) -> String {
+        // If it's already functional (contains verbs), return as-is or enhance
+        let lower = capability_id.to_lowercase();
+        let functional_verbs = ["list", "get", "retrieve", "fetch", "search", "find", "create", "update", "delete"];
+        
+        // Handle common patterns
+        if lower.contains("list") && lower.contains("issue") {
+            if lower.contains("github") {
+                return "List issues in a GitHub repository".to_string();
+            }
+            return "List issues".to_string();
+        }
+        
+        if lower.contains("list") && lower.contains("pull") {
+            if lower.contains("github") {
+                return "List pull requests in a GitHub repository".to_string();
+            }
+            return "List pull requests".to_string();
+        }
+        
+        // Parse capability ID parts (e.g., "github.issues.list" -> "List issues in a GitHub repository")
+        let parts: Vec<&str> = capability_id.split('.').collect();
+        if parts.len() >= 2 {
+            if let Some(action) = parts.last() {
+                match *action {
+                    "list" if parts.len() >= 3 => {
+                        let domain = parts[0];
+                        let resource = parts[parts.len() - 2];
+                        return format!("List {} in a {} repository", resource, domain);
+                    }
+                    "get" | "retrieve" => {
+                        return format!("Retrieve {}", capability_id);
+                    }
+                    "search" => {
+                        return format!("Search for {}", capability_id);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        // Fallback: construct a functional description from the ID
+        if functional_verbs.iter().any(|verb| lower.contains(verb)) {
+            capability_id.to_string()
+        } else {
+            format!("Execute capability: {}", capability_id)
+        }
+    }
+}
+
+/// Helper function to get a value from a map (handles both string and keyword keys)
+fn map_get<'a>(map: &'a std::collections::HashMap<rtfs::ast::MapKey, Value>, key: &str) -> Option<&'a Value> {
+    use rtfs::ast::{MapKey, Keyword};
+    map.get(&MapKey::String(key.to_string()))
+        .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string()))))
 }
 
 // Helper functions for RTFS parsing

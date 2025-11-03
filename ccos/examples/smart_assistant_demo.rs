@@ -282,6 +282,9 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         println!("   • Stubbed: {} capabilities (awaiting implementation)", stubbed_count.to_string().yellow());
     }
     
+    // Display execution graph visualization
+    print_execution_graph(&resolved_steps, &intent);
+    
     println!(
         "\n{}",
         "✅ Orchestrator generated and registered in marketplace".bold().green()
@@ -385,9 +388,20 @@ fn apply_profile_env(profile: &LlmProfile) {
     match profile.provider.as_str() {
         "openai" => std::env::set_var("CCOS_LLM_PROVIDER", "openai"),
         "claude" | "anthropic" => std::env::set_var("CCOS_LLM_PROVIDER", "anthropic"),
-        "openrouter" => std::env::set_var("CCOS_LLM_PROVIDER", "openrouter"),
+        "openrouter" => {
+            std::env::set_var("CCOS_LLM_PROVIDER", "openrouter");
+            // Ensure base URL is set for OpenRouter
+            if std::env::var("CCOS_LLM_BASE_URL").is_err() {
+                std::env::set_var("CCOS_LLM_BASE_URL", "https://openrouter.ai/api/v1");
+            }
+        },
         "local" => std::env::set_var("CCOS_LLM_PROVIDER", "local"),
-        "stub" => std::env::set_var("CCOS_LLM_PROVIDER", "stub"),
+        "stub" => {
+            eprintln!("⚠️  WARNING: Using stub LLM provider (testing only - not realistic)");
+            eprintln!("   Set a real provider in agent_config.toml or use --profile with a real provider");
+            std::env::set_var("CCOS_LLM_PROVIDER", "stub");
+            std::env::set_var("CCOS_ALLOW_STUB_PROVIDER", "1"); // Allow stub if explicitly requested
+        },
         other => std::env::set_var("CCOS_LLM_PROVIDER", other),
     }
 }
@@ -1748,6 +1762,76 @@ fn stub_capability_specs() -> Vec<StubCapabilitySpec> {
     ]
 }
 
+/// Convert a step name to a more functional description for better semantic matching
+/// Examples:
+///   "List GitHub Repository Issues" -> "List issues in a GitHub repository"
+///   "Search Flights" -> "Search for flights"
+///   "Retrieve Repository Issues" -> "Retrieve issues from a repository"
+fn step_name_to_functional_description(step_name: &str, capability_class: &str) -> String {
+    // If step name already looks functional (contains verbs like "list", "get", "retrieve"), use it
+    let lower = step_name.to_lowercase();
+    let functional_verbs = ["list", "get", "retrieve", "fetch", "search", "find", "create", "update", "delete", "format", "process", "analyze"];
+    
+    if functional_verbs.iter().any(|verb| lower.contains(verb)) {
+        // Step name already has functional language, enhance it slightly
+        // Extract key terms from capability class to add context
+        let parts: Vec<&str> = capability_class.split('.').collect();
+        if parts.len() >= 2 {
+            let domain = parts[parts.len() - 2]; // e.g., "github" from "github.issues.list"
+            let action = parts.last().unwrap_or(&""); // e.g., "list"
+            
+            // Try to make it more natural
+            if lower.contains("github") || domain == "github" {
+                if *action == "list" && lower.contains("issue") {
+                    return "List issues in a GitHub repository".to_string();
+                }
+                if *action == "list" && lower.contains("pull") {
+                    return "List pull requests in a GitHub repository".to_string();
+                }
+            }
+            
+            // Generic enhancement: "List X" -> "List X in/from repository/service"
+            if let Some(verb_pos) = functional_verbs.iter()
+                .position(|verb| lower.starts_with(&format!("{} ", verb))) {
+                let verb = functional_verbs[verb_pos];
+                let rest = step_name[verb.len()..].trim();
+                return format!("{} {}", verb, rest);
+            }
+        }
+        
+        // Return as-is if it already looks functional
+        step_name.to_string()
+    } else {
+        // Step name is more like a title, convert to functional form
+        // "GitHub Repository Issues" -> "List issues in a GitHub repository"
+        let enhanced = if lower.contains("issue") {
+            if lower.contains("github") || capability_class.contains("github") {
+                "List issues in a GitHub repository".to_string()
+            } else {
+                format!("List {}", step_name)
+            }
+        } else if lower.contains("search") || lower.contains("find") {
+            format!("Search for {}", step_name)
+        } else {
+            // Default: use capability class parts to infer action
+            let parts: Vec<&str> = capability_class.split('.').collect();
+            if let Some(action) = parts.last() {
+                match *action {
+                    "list" => format!("List {}", step_name),
+                    "get" | "retrieve" => format!("Retrieve {}", step_name),
+                    "create" => format!("Create {}", step_name),
+                    "search" => format!("Search for {}", step_name),
+                    _ => format!("Perform action: {}", step_name),
+                }
+            } else {
+                format!("Execute: {}", step_name)
+            }
+        };
+        
+        enhanced
+    }
+}
+
 fn fallback_steps() -> Vec<ProposedStep> {
     vec![
         ProposedStep {
@@ -1906,11 +1990,25 @@ async fn resolve_and_stub_capabilities(
             );
 
             let capability_class = step.capability_class.clone();
+            
+            // Generate a more descriptive rationale that will match better with capability descriptions
+            // Use step name, description, or construct a functional description from the step
+            let rationale = if let Some(ref desc) = step.description {
+                // If we have a description, use it (it's already functional)
+                desc.clone()
+            } else {
+                // Otherwise, convert step name to a functional description
+                // e.g., "List GitHub Repository Issues" -> "List issues in a GitHub repository"
+                // This works better for semantic matching than "Need for step: X"
+                let functional_desc = step_name_to_functional_description(&step.name, &capability_class);
+                functional_desc
+            };
+            
             let need = CapabilityNeed::new(
                 capability_class.clone(),
                 step.required_inputs.clone(),
                 step.expected_outputs.clone(),
-                format!("Need for step: {}", step.name),
+                rationale,
             );
 
             let discovery_engine = DiscoveryEngine::new_with_arbiter(
@@ -2038,6 +2136,86 @@ async fn register_stub_capability(
         .await;
 
     Ok(())
+}
+
+/// Print execution graph visualization as a tree structure
+fn print_execution_graph(resolved_steps: &[ResolvedStep], intent: &Intent) {
+    println!("\n{}", "🌳 Execution Graph".bold());
+    println!("{}", "─".repeat(80).dim());
+    
+    // Print root intent
+    println!("{} {}", "🎯 ROOT:".bold().cyan(), intent.goal.as_str().bold());
+    
+    // Print dependencies as a tree
+    for (idx, step) in resolved_steps.iter().enumerate() {
+        let is_last = idx == resolved_steps.len() - 1;
+        let connector = if is_last { "└─ " } else { "├─ " };
+        let indent = "   ";
+        
+        // Determine status icon and color
+        let icon = match step.resolution_strategy {
+            ResolutionStrategy::Found => "✅",
+            ResolutionStrategy::Synthesized => "🔄",
+            ResolutionStrategy::Stubbed => "⚠️ ",
+        };
+        
+        // Print capability info with appropriate color
+        match step.resolution_strategy {
+            ResolutionStrategy::Found => {
+                println!("{} {} {}", connector, icon, step.capability_id.as_str().green());
+            }
+            ResolutionStrategy::Synthesized => {
+                println!("{} {} {}", connector, icon, step.capability_id.as_str().cyan());
+            }
+            ResolutionStrategy::Stubbed => {
+                println!("{} {} {}", connector, icon, step.capability_id.as_str().yellow());
+            }
+        }
+        
+        // Print step details
+        if !is_last {
+            println!("{}{}   {} {}", 
+                indent, 
+                "│".dim(), 
+                "Name:".dim(), 
+                step.original.name.as_str()
+            );
+        } else {
+            println!("{}{}   {} {}", 
+                indent, 
+                " ".dim(), 
+                "Name:".dim(), 
+                step.original.name.as_str()
+            );
+        }
+        
+        // Show inputs/outputs briefly if available
+        if !step.original.required_inputs.is_empty() || !step.original.expected_outputs.is_empty() {
+            let mut io_summary = Vec::new();
+            if !step.original.required_inputs.is_empty() {
+                io_summary.push(format!("inputs: {}", step.original.required_inputs.len()));
+            }
+            if !step.original.expected_outputs.is_empty() {
+                io_summary.push(format!("outputs: {}", step.original.expected_outputs.len()));
+            }
+            
+       let indent_char = if is_last { " " } else { "│" };
+       let io_text = io_summary.join(", ");
+       println!("{}", format!("{}{}   {}", 
+           indent, 
+           indent_char, 
+           io_text
+       ).dim());
+        }
+    }
+    
+    println!("{}", "─".repeat(80).dim());
+    
+    // Add legend
+    println!("\n{}", "Legend:".dim());
+    println!("   ✅ {}  {}", "Found".green(), "- Capability exists in marketplace".dim());
+    println!("   🔄 {}  {}", "Synthesized".cyan(), "- Capability generated recursively".dim());
+    println!("   ⚠️  {}  {}", "Stubbed".yellow(), "- Placeholder for future implementation".dim());
 }
 
 /// Prompt user for guidance when a capability is incomplete
