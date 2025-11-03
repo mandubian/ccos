@@ -24,7 +24,7 @@ use crossterm::style::Stylize;
 use rtfs::ast::{Expression, Keyword, Literal, MapKey};
 use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
 use ccos::capability_marketplace::types::CapabilityManifest;
-use ccos::discovery::{CapabilityNeed, DiscoveryEngine, DiscoveryResult};
+use ccos::discovery::{CapabilityNeed, DiscoveryEngine, DiscoveryResult, DiscoveryHints, FoundCapability};
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::types::{Intent, Plan};
 use ccos::CCOS;
@@ -211,6 +211,8 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
+    println!("\n{}", "📋 Generating initial plan from intent...".bold().cyan());
+    
     let mut plan_steps = match propose_plan_steps(
         &delegating,
         &goal,
@@ -221,7 +223,10 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     )
     .await
     {
-        Ok(steps) if !steps.is_empty() => steps,
+        Ok(steps) if !steps.is_empty() => {
+            println!("  {} Generated {} plan step(s)", "✓".green(), steps.len());
+            steps
+        }
         Ok(_) => {
             println!(
                 "{}",
@@ -237,6 +242,163 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
 
     let matches = match_proposed_steps(&ccos, &plan_steps).await?;
     annotate_steps_with_matches(&mut plan_steps, &matches);
+
+    // Check for missing capabilities and trigger re-planning if needed
+    let missing_count = matches.iter().filter(|m| m.status == MatchStatus::Missing).count();
+    if missing_count > 0 && ccos.get_delegating_arbiter().is_some() {
+        println!(
+            "\n{} {} {}",
+            "🔄".yellow().bold(),
+            "Some capabilities not found:".yellow(),
+            format!("({} missing)", missing_count).yellow()
+        );
+        
+        // Collect discovery hints for all capabilities in the plan
+        let capability_ids: Vec<String> = plan_steps.iter()
+            .map(|s| s.capability_class.clone())
+            .collect();
+        
+        let discovery_engine = DiscoveryEngine::new_with_arbiter(
+            Arc::clone(&ccos.get_capability_marketplace()),
+            Arc::clone(&ccos.get_intent_graph()),
+            ccos.get_delegating_arbiter(),
+        );
+        
+        let hints = discovery_engine.collect_discovery_hints(&capability_ids).await
+            .map_err(|e| Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to collect discovery hints: {}", e)
+            )))?;
+        
+        if !hints.missing_capabilities.is_empty() {
+            println!("  Missing: {}", hints.missing_capabilities.join(", ").yellow());
+            println!("  Found: {} capabilities", hints.found_capabilities.len().to_string().green());
+            
+            // Show suggestions if available
+            if !hints.suggestions.is_empty() {
+                println!("\n  Suggestions:");
+                for suggestion in &hints.suggestions {
+                    println!("    • {}", suggestion.as_str().cyan());
+                }
+            }
+            
+            println!("\n{}", "Asking LLM to replan with available capabilities...".cyan());
+            
+            // Build re-plan prompt
+            let replan_prompt = build_replan_prompt(&goal, &intent, &hints);
+            
+            if args.debug_prompts {
+                println!(
+                    "{}\n{}\n{}",
+                    "┌─ Re-plan prompt ──────────────────────────".dim(),
+                    replan_prompt,
+                    "└────────────────────────────────────────────".dim()
+                );
+            }
+            
+            // Get new plan steps from LLM
+            let response = delegating
+                .generate_raw_text(&replan_prompt)
+                .await
+                .map_err(runtime_error)?;
+            
+            if args.debug_prompts {
+                println!(
+                    "{}\n{}\n{}",
+                    "┌─ Re-plan response ────────────────────────".dim(),
+                    response,
+                    "└────────────────────────────────────────────".dim()
+                );
+            }
+            
+            // Parse the new plan steps
+            let mut parsed_value = parse_plan_steps_response(&response).map_err(runtime_error)?;
+            if let Value::Map(map) = &parsed_value {
+                if let Some(Value::Vector(steps)) = map_get(map, "steps") {
+                    parsed_value = Value::Vector(steps.clone());
+                }
+            }
+            
+            if let Value::Vector(items) = parsed_value {
+                let mut new_steps = Vec::new();
+                for (idx, item) in items.iter().enumerate() {
+                    if let Some(step) = value_to_step(item) {
+                        new_steps.push(step);
+                    } else if let Some(step) = step_from_free_form(item, idx) {
+                        new_steps.push(step);
+                    }
+                }
+                
+                if !new_steps.is_empty() {
+                    println!("  {} New plan generated with {} steps", "✓".green(), new_steps.len().to_string().green());
+                    plan_steps = new_steps;
+                    
+                    // Re-match with new plan
+                    let new_matches = match_proposed_steps(&ccos, &plan_steps).await?;
+                    annotate_steps_with_matches(&mut plan_steps, &new_matches);
+                    
+                    // Update matches for resolution
+                    let matches = new_matches;
+                    
+                    let needs_value = build_needs_capabilities(&plan_steps);
+                    
+                    // Resolve missing capabilities and build orchestrating agent
+                    let resolved_steps = resolve_and_stub_capabilities(&ccos, &plan_steps, &matches, args.interactive).await?;
+                    let orchestrator_rtfs = generate_orchestrator_capability(&goal, &resolved_steps)?;
+                    
+                    // Register the orchestrator as a reusable capability in the marketplace
+                    let planner_capability_id = format!("synth.plan.orchestrator.{}", chrono::Utc::now().timestamp());
+                    register_orchestrator_in_marketplace(&ccos, &planner_capability_id, &orchestrator_rtfs).await?;
+                    
+                    let mut plan = Plan::new_rtfs(orchestrator_rtfs, vec![]);
+                    plan.metadata
+                        .insert("needs_capabilities".to_string(), needs_value.clone());
+                    plan.metadata.insert(
+                        "generated_at".to_string(),
+                        Value::String(Utc::now().to_rfc3339()),
+                    );
+                    plan.metadata.insert(
+                        "resolved_steps".to_string(),
+                        build_resolved_steps_metadata(&resolved_steps),
+                    );
+                    plan.metadata.insert(
+                        "orchestrator_capability_id".to_string(),
+                        Value::String(planner_capability_id),
+                    );
+                    
+                    print_plan_draft(&plan_steps, &matches, &plan);
+                    
+                    // Print resolution summary
+                    let found_count = resolved_steps.iter().filter(|s| s.resolution_strategy == ResolutionStrategy::Found).count();
+                    let synthesized_count = resolved_steps.iter().filter(|s| s.resolution_strategy == ResolutionStrategy::Synthesized).count();
+                    let stubbed_count = resolved_steps.iter().filter(|s| s.resolution_strategy == ResolutionStrategy::Stubbed).count();
+                    
+                    println!("\n{}", "📊 Capability Resolution Summary".bold());
+                    println!("   • Found: {} capabilities", found_count.to_string().green());
+                    if synthesized_count > 0 {
+                        println!("   • {}: {} capabilities (with dependencies)", 
+                                 "Synthesized".bold(), 
+                                 synthesized_count.to_string().cyan().bold());
+                    }
+                    if stubbed_count > 0 {
+                        println!("   • Stubbed: {} capabilities (awaiting implementation)", stubbed_count.to_string().yellow());
+                    }
+                    
+                    // Display execution graph visualization
+                    print_execution_graph(&resolved_steps, &intent);
+                    
+                    println!(
+                        "\n{}",
+                        "✅ Orchestrator generated and registered in marketplace".bold().green()
+                    );
+                    
+                    return Ok(());
+                } else {
+                    println!("  {} Re-plan failed to generate valid steps, proceeding with original plan", "⚠️".yellow());
+                }
+            }
+        }
+    }
 
     let needs_value = build_needs_capabilities(&plan_steps);
     
@@ -1129,17 +1291,52 @@ async fn propose_plan_steps(
     }
     prompt.push_str("----------------\nRespond only with the RTFS vector of step maps.");
 
+    if debug {
+        println!(
+            "\n{}\n{}\n{}",
+            "┌─ Plan generation prompt ───────────────────".dim(),
+            prompt,
+            "└────────────────────────────────────────────".dim()
+        );
+    } else {
+        // Show a summary even if debug is off
+        println!("  📝 Sending plan generation request to LLM...");
+        let prompt_lines: Vec<&str> = prompt.lines().collect();
+        if prompt_lines.len() > 10 {
+            println!("    Prompt length: {} lines", prompt_lines.len());
+            println!("    Goal: {}", goal);
+            if !intent.constraints.is_empty() {
+                println!("    Constraints: {}", intent.constraints.len());
+            }
+            if !answers.is_empty() {
+                println!("    Clarified answers: {}", answers.len());
+            }
+        }
+    }
+
     let response = delegating
         .generate_raw_text(&prompt)
         .await
         .map_err(runtime_error)?;
+    
     if debug {
         println!(
-            "{}\n{}\n{}",
-            "┌─ Proposed steps response ──────────────────".dim(),
+            "\n{}\n{}\n{}",
+            "┌─ LLM plan generation response ─────────────".dim(),
             response,
             "└────────────────────────────────────────────".dim()
         );
+    } else {
+        // Show a summary of the response
+        let response_preview = if response.len() > 200 {
+            format!("{}...", &response[..200])
+        } else {
+            response.clone()
+        };
+        println!("  📨 LLM response received ({} chars)", response.len());
+        if response_preview.len() < response.len() {
+            println!("    Preview: {}", response_preview.replace('\n', " "));
+        }
     }
 
     let mut parsed_value = parse_plan_steps_response(&response).map_err(runtime_error)?;
@@ -1165,6 +1362,12 @@ async fn propose_plan_steps(
                         .into(),
                 )
             } else {
+                if !debug {
+                    println!("  🔍 Parsed {} plan step(s) from LLM response:", steps.len());
+                    for (i, step) in steps.iter().enumerate() {
+                        println!("    {}. {} ({})", i + 1, step.name, step.capability_class);
+                    }
+                }
                 Ok(steps)
             }
         }
@@ -1763,72 +1966,32 @@ fn stub_capability_specs() -> Vec<StubCapabilitySpec> {
 }
 
 /// Convert a step name to a more functional description for better semantic matching
-/// Examples:
-///   "List GitHub Repository Issues" -> "List issues in a GitHub repository"
-///   "Search Flights" -> "Search for flights"
-///   "Retrieve Repository Issues" -> "Retrieve issues from a repository"
+/// Generic implementation that works for any capability type
 fn step_name_to_functional_description(step_name: &str, capability_class: &str) -> String {
-    // If step name already looks functional (contains verbs like "list", "get", "retrieve"), use it
     let lower = step_name.to_lowercase();
     let functional_verbs = ["list", "get", "retrieve", "fetch", "search", "find", "create", "update", "delete", "format", "process", "analyze"];
     
+    // If step name already contains functional verbs, return as-is
     if functional_verbs.iter().any(|verb| lower.contains(verb)) {
-        // Step name already has functional language, enhance it slightly
-        // Extract key terms from capability class to add context
-        let parts: Vec<&str> = capability_class.split('.').collect();
-        if parts.len() >= 2 {
-            let domain = parts[parts.len() - 2]; // e.g., "github" from "github.issues.list"
-            let action = parts.last().unwrap_or(&""); // e.g., "list"
-            
-            // Try to make it more natural
-            if lower.contains("github") || domain == "github" {
-                if *action == "list" && lower.contains("issue") {
-                    return "List issues in a GitHub repository".to_string();
-                }
-                if *action == "list" && lower.contains("pull") {
-                    return "List pull requests in a GitHub repository".to_string();
-                }
-            }
-            
-            // Generic enhancement: "List X" -> "List X in/from repository/service"
-            if let Some(verb_pos) = functional_verbs.iter()
-                .position(|verb| lower.starts_with(&format!("{} ", verb))) {
-                let verb = functional_verbs[verb_pos];
-                let rest = step_name[verb.len()..].trim();
-                return format!("{} {}", verb, rest);
-            }
+        return step_name.to_string();
+    }
+    
+    // Step name is more like a title, convert to functional form using capability class
+    // Extract action from capability class (last segment)
+    let parts: Vec<&str> = capability_class.split('.').collect();
+    if let Some(action) = parts.last() {
+        match *action {
+            "list" => format!("List {}", step_name),
+            "get" | "retrieve" => format!("Retrieve {}", step_name),
+            "create" => format!("Create {}", step_name),
+            "update" | "modify" => format!("Update {}", step_name),
+            "delete" | "remove" => format!("Delete {}", step_name),
+            "search" | "find" => format!("Search for {}", step_name),
+            "filter" => format!("Filter {}", step_name),
+            _ => format!("{} {}", action, step_name),
         }
-        
-        // Return as-is if it already looks functional
-        step_name.to_string()
     } else {
-        // Step name is more like a title, convert to functional form
-        // "GitHub Repository Issues" -> "List issues in a GitHub repository"
-        let enhanced = if lower.contains("issue") {
-            if lower.contains("github") || capability_class.contains("github") {
-                "List issues in a GitHub repository".to_string()
-            } else {
-                format!("List {}", step_name)
-            }
-        } else if lower.contains("search") || lower.contains("find") {
-            format!("Search for {}", step_name)
-        } else {
-            // Default: use capability class parts to infer action
-            let parts: Vec<&str> = capability_class.split('.').collect();
-            if let Some(action) = parts.last() {
-                match *action {
-                    "list" => format!("List {}", step_name),
-                    "get" | "retrieve" => format!("Retrieve {}", step_name),
-                    "create" => format!("Create {}", step_name),
-                    "search" => format!("Search for {}", step_name),
-                    _ => format!("Perform action: {}", step_name),
-                }
-            } else {
-                format!("Execute: {}", step_name)
-            }
-        };
-        
-        enhanced
+        format!("Execute: {}", step_name)
     }
 }
 
@@ -1936,6 +2099,86 @@ enum ResolutionStrategy {
     Found,
     Stubbed,
     Synthesized,
+}
+
+/// Build a re-plan prompt with discovery hints
+fn build_replan_prompt(
+    goal: &str,
+    intent: &Intent,
+    hints: &DiscoveryHints,
+) -> String {
+    let mut prompt = String::new();
+    prompt.push_str("You are the delegating arbiter drafting an RTFS plan skeleton.\n");
+    prompt.push_str("The previous plan requested capabilities that don't exist. Please replan using only available capabilities.\n\n");
+    prompt.push_str(&format!("Goal: {}\n\n", goal));
+    
+    if !intent.constraints.is_empty() {
+        prompt.push_str("Constraints:\n");
+        for (k, v) in &intent.constraints {
+            prompt.push_str(&format!("  {} = {}\n", k, format_value(v)));
+        }
+        prompt.push_str("\n");
+    }
+    
+    prompt.push_str("Available Capabilities:\n");
+    for found_cap in &hints.found_capabilities {
+        prompt.push_str(&format!(
+            "  * {} ({}) - {}\n",
+            found_cap.id, found_cap.provider, found_cap.description
+        ));
+        if !found_cap.parameters.is_empty() {
+            prompt.push_str(&format!(
+                "    - Parameters: {}\n",
+                found_cap.parameters.join(", ")
+            ));
+        }
+        if !found_cap.hints.is_empty() {
+            for hint in &found_cap.hints {
+                prompt.push_str(&format!("    - Hint: {}\n", hint));
+            }
+        }
+    }
+    
+    if !hints.missing_capabilities.is_empty() {
+        prompt.push_str("\nMissing Capabilities (not found):\n");
+        for missing in &hints.missing_capabilities {
+            prompt.push_str(&format!("  * {}\n", missing));
+        }
+    }
+    
+    if !hints.suggestions.is_empty() {
+        prompt.push_str("\nSuggestions:\n");
+        for suggestion in &hints.suggestions {
+            prompt.push_str(&format!("  - {}\n", suggestion));
+        }
+    }
+    
+    prompt.push_str("\nPlease generate a new plan that uses only the available capabilities listed above.\n");
+    prompt.push_str("Respond ONLY with an RTFS vector where each element is a map describing a proposed capability step.\n");
+    prompt.push_str("Each map must include :id :name :capability-class :required-inputs (vector of strings) :expected-outputs (vector of strings) and optional :candidate-capabilities (vector of capability ids) :description.\n");
+    prompt.push_str("Focus on using the available capabilities and their parameters to achieve the goal.\n");
+    
+    prompt
+}
+
+/// Format found capabilities for display
+fn format_found_capabilities(found: &[FoundCapability]) -> String {
+    let mut result = String::new();
+    for cap in found {
+        result.push_str(&format!(
+            "  * {} ({}) - {}\n",
+            cap.id, cap.provider, cap.description
+        ));
+        if !cap.parameters.is_empty() {
+            result.push_str(&format!("    Parameters: {}\n", cap.parameters.join(", ")));
+        }
+        if !cap.hints.is_empty() {
+            for hint in &cap.hints {
+                result.push_str(&format!("    - {}\n", hint));
+            }
+        }
+    }
+    result
 }
 
 /// Resolve missing capabilities by searching marketplace, synthesizing, or creating stubs.
