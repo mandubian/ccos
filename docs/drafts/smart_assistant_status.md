@@ -32,11 +32,12 @@ The smart assistant demo has evolved from the original vision (`smart_assistant_
 - **Impact**: Improved quality of generated plans
 
 #### 2. Introspection Caching ✅
-- **Status**: Implemented
+- **Status**: Infrastructure implemented, default enabling pending
 - **Location**: `ccos/src/discovery/introspection_cache.rs`
-- **Details**: File-based cache for MCP and OpenAPI introspection results with 24-hour TTL
+- **Details**: File-based cache for MCP and OpenAPI introspection results with 24-hour TTL. Cache is integrated into `search_mcp_registry` and `search_openapi` methods but must be explicitly enabled via `.with_cache()`.
 - **Integration**: Cached in `DiscoveryEngine::search_mcp_registry` and `search_openapi`
-- **Impact**: Significantly reduces redundant network calls
+- **Impact**: Reduces redundant network calls when cache is enabled
+- **Note**: See "MCP Introspection Caching" task in Next Steps for enabling by default
 
 #### 3. Richer Context for Sub-Intents ✅
 - **Status**: Implemented
@@ -508,22 +509,31 @@ cargo run --example smart_assistant_demo -- \
    - ⏳ TODO: Capture prompts/responses in ledger (future enhancement)
    - ⏳ TODO: Enhanced error handling for provider failures (future enhancement)
 
-4. **Partial Execution Outcomes** (Medium priority)
+5. **MCP Introspection Caching** (Medium priority) 🔄 IN PROGRESS
+   - ✅ Introspection cache infrastructure implemented (`IntrospectionCache`)
+   - ✅ Cache integration in `search_mcp_registry` and `search_openapi` methods
+   - ✅ 24-hour TTL with file-based storage
+   - ⏳ TODO: Enable introspection cache by default in `DiscoveryEngine` initialization
+   - ⏳ TODO: Initialize cache in smart assistant demo and CCOS initialization paths
+   - ⏳ TODO: Add cache directory configuration option (default: `.cache/introspection/`)
+   - **Benefit**: Avoids repeated MCP server introspection calls, significantly speeding up discovery for previously seen servers
+
+6. **Partial Execution Outcomes** (Medium priority)
    - Emit partial outcomes at step boundaries
    - Implement re-planning loop
    - Integrate with causal chain
 
-5. **Governance Polish** (Medium priority)
+7. **Governance Polish** (Medium priority)
    - Policy denial messages
    - Privacy redaction
    - Deterministic replay
 
-6. **Synthetic Capability Pipeline** (Low priority)
+8. **Synthetic Capability Pipeline** (Low priority)
    - Contract inference
    - Test generation
    - Versioning
 
-7. **Showcase Polish** (Low priority)
+9. **Showcase Polish** (Low priority)
    - TUI improvements
    - Demo scripts
    - Visualizations
