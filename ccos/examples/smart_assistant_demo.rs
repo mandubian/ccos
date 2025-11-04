@@ -149,6 +149,9 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     let agent_config = load_agent_config(&args.config)?;
     apply_llm_profile(&agent_config, args.profile.as_deref())?;
 
+    // Print architecture summary before initializing
+    print_architecture_summary(&agent_config, args.profile.as_deref());
+
     let ccos = Arc::new(
         CCOS::new_with_agent_config_and_configs_and_debug_callback(
             IntentGraphConfig::default(),
@@ -163,6 +166,9 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     let delegating = ccos
         .get_delegating_arbiter()
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Delegating arbiter unavailable"))?;
+
+    // Print LLM provider details after initialization
+    print_llm_provider_info(&delegating);
 
     let stub_specs = register_stub_capabilities(&ccos).await?;
 
@@ -254,8 +260,9 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         );
         
         // Collect discovery hints for all capabilities in the plan
-        let capability_ids: Vec<String> = plan_steps.iter()
-            .map(|s| s.capability_class.clone())
+        // Build a map of capability_class -> description for better rationale
+        let capability_info: Vec<(String, Option<String>)> = plan_steps.iter()
+            .map(|s| (s.capability_class.clone(), s.description.clone()))
             .collect();
         
         let discovery_engine = DiscoveryEngine::new_with_arbiter(
@@ -264,7 +271,7 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
             ccos.get_delegating_arbiter(),
         );
         
-        let hints = discovery_engine.collect_discovery_hints(&capability_ids).await
+        let hints = discovery_engine.collect_discovery_hints_with_descriptions(&capability_info).await
             .map_err(|e| Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("Failed to collect discovery hints: {}", e)
@@ -459,6 +466,70 @@ type DemoResult<T> = Result<T, Box<dyn Error>>;
 
 fn runtime_error(err: RuntimeError) -> Box<dyn Error> {
     Box::new(err)
+}
+
+/// Print architecture summary and configuration
+fn print_architecture_summary(config: &AgentConfig, profile_name: Option<&str>) {
+    println!("\n{}", "═".repeat(80).bold());
+    println!("{}", "🏗️  CCOS Smart Assistant - Architecture Summary".bold().cyan());
+    println!("{}", "═".repeat(80).bold());
+    
+    println!("\n{}", "📋 Architecture Overview".bold());
+    println!("  ┌─────────────────────────────────────────────────────────────┐");
+    println!("  │ User Goal → Intent Extraction → Plan Generation → Execution │");
+    println!("  └─────────────────────────────────────────────────────────────┘");
+    println!("\n  {} Flow:", "1.".bold());
+    println!("     • Natural language goal → Intent (with constraints/criteria)");
+    println!("     • Intent → Clarifying questions (auto-answered by LLM)");
+    println!("     • Refined Intent → Plan steps (with capability needs)");
+    println!("     • Capability Discovery:");
+    println!("       - Local Marketplace → MCP Registry → OpenAPI → Recursive Synthesis");
+    println!("     • Re-planning with hints (if capabilities missing)");
+    println!("     • Execution graph construction → Orchestrator RTFS");
+    
+    println!("\n  {} Key Components:", "2.".bold());
+    println!("     • {}: Governs intent extraction, plan generation, execution", "DelegatingArbiter".cyan());
+    println!("     • {}: Finds/synthesizes missing capabilities", "DiscoveryEngine".cyan());
+    println!("     • {}: Recursively generates missing capabilities", "RecursiveSynthesizer".cyan());
+    println!("     • {}: Manages capability registration and search", "CapabilityMarketplace".cyan());
+    println!("     • {}: Tracks intent relationships and dependencies", "IntentGraph".cyan());
+    
+    // Show LLM profile
+    if let Some(llm_profiles) = &config.llm_profiles {
+        let (profiles, _meta, _why) = expand_profiles(config);
+        let chosen = profile_name
+            .map(|s| s.to_string())
+            .or_else(|| llm_profiles.default.clone())
+            .or_else(|| profiles.first().map(|p| p.name.clone()));
+        
+        if let Some(name) = chosen {
+            if let Some(profile) = profiles.iter().find(|p| p.name == name) {
+                println!("\n  {} LLM Configuration:", "3.".bold());
+                println!("     • Profile: {}", name.cyan());
+                println!("     • Provider: {}", profile.provider.as_str().cyan());
+                println!("     • Model: {}", profile.model.as_str().cyan());
+                if let Some(url) = &profile.base_url {
+                    println!("     • Base URL: {}", url.as_str().dim());
+                }
+            }
+        }
+    }
+    
+    println!("\n{}", "═".repeat(80).dim());
+}
+
+/// Print detailed LLM provider information after initialization
+fn print_llm_provider_info(delegating: &DelegatingArbiter) {
+    let _llm_config = delegating.get_llm_config(); // Available for future use
+    println!("\n{}", "🤖 Active LLM Provider".bold());
+    let provider = std::env::var("CCOS_LLM_PROVIDER").unwrap_or_else(|_| "unknown".to_string());
+    let model = std::env::var("CCOS_LLM_MODEL").unwrap_or_else(|_| "unknown".to_string());
+    println!("  • Provider: {}", provider.cyan());
+    println!("  • Model: {}", model.cyan());
+    if let Ok(base_url) = std::env::var("CCOS_LLM_BASE_URL") {
+        println!("  • Base URL: {}", base_url.dim());
+    }
+    println!();
 }
 
 fn determine_goal(args: &Args) -> DemoResult<String> {
@@ -2153,10 +2224,13 @@ fn build_replan_prompt(
         }
     }
     
-    prompt.push_str("\nPlease generate a new plan that uses only the available capabilities listed above.\n");
+    prompt.push_str("\nIMPORTANT: Please generate a new plan that uses ONLY the available capabilities listed above.\n");
+    prompt.push_str("If a capability was missing, try to achieve the same goal using the available capabilities and their parameters.\n");
+    prompt.push_str("For example, if 'github.issues.list' supports a 'state' parameter (open|closed|all), use it instead of a separate filtering capability.\n\n");
     prompt.push_str("Respond ONLY with an RTFS vector where each element is a map describing a proposed capability step.\n");
     prompt.push_str("Each map must include :id :name :capability-class :required-inputs (vector of strings) :expected-outputs (vector of strings) and optional :candidate-capabilities (vector of capability ids) :description.\n");
-    prompt.push_str("Focus on using the available capabilities and their parameters to achieve the goal.\n");
+    prompt.push_str("When specifying capability calls, use the exact capability IDs from the 'Available Capabilities' section above.\n");
+    prompt.push_str("Include parameter values in :required-inputs when they are known (e.g., if filtering is needed, specify the parameter name).\n");
     
     prompt
 }
