@@ -1,0 +1,36 @@
+;; MCP Capability: mcp.github.github-mcp.list_issues
+;; Generated: 2025-11-04T23:47:39.284391496+00:00
+;; MCP Server: https://api.githubcopilot.com/mcp/
+;; Tool: list_issues
+
+(capability "mcp.github.github-mcp.list_issues"
+  :name "list_issues"
+  :version "1.0.0"
+  :description "List issues in a GitHub repository. For pagination, use the 'endCursor' from the previous response's 'pageInfo' in the 'after' parameter."
+  :provider "MCP"
+  :permissions []
+  :effects []
+  :metadata {
+    :mcp {
+      :server_url "https://api.githubcopilot.com/mcp/"
+      :tool_name "list_issues"
+      :requires_session "auto"
+      :auth_env_var "MCP_AUTH_TOKEN"
+    }
+    :discovery {
+      :method "mcp_registry"
+      :created_at "2025-11-04T23:47:39.284399011+00:00"
+      :capability_type "mcp_tool"
+    }
+  }
+  :input-schema Map { entries: [MapTypeEntry { key: Keyword("after"), value_type: Primitive(String), optional: true }, MapTypeEntry { key: Keyword("direction"), value_type: Primitive(String), optional: true }, MapTypeEntry { key: Keyword("labels"), value_type: Vector(Primitive(String)), optional: true }, MapTypeEntry { key: Keyword("orderBy"), value_type: Primitive(String), optional: true }, MapTypeEntry { key: Keyword("owner"), value_type: Primitive(String), optional: false }, MapTypeEntry { key: Keyword("perPage"), value_type: Primitive(Float), optional: true }, MapTypeEntry { key: Keyword("repo"), value_type: Primitive(String), optional: false }, MapTypeEntry { key: Keyword("since"), value_type: Primitive(String), optional: true }, MapTypeEntry { key: Keyword("state"), value_type: Primitive(String), optional: true }], wildcard: None }
+  :output-schema :any
+  :implementation
+    (fn [input]
+  ;; MCP Tool: list_issues
+  ;; Runtime handles MCP protocol automatically
+  (call :ccos.capabilities.mcp.call
+    :server-url "https://api.githubcopilot.com/mcp/"
+    :tool-name "list_issues"
+    :input input))
+)

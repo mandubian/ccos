@@ -517,10 +517,16 @@ impl Evaluator {
         match expr {
             Expression::Literal(lit) => Ok(ExecutionOutcome::Complete(self.eval_literal(lit)?)),
             Expression::Symbol(sym) => {
-                let v = env
-                    .lookup(sym)
-                    .ok_or_else(|| RuntimeError::UndefinedSymbol(sym.clone()))?;
-                Ok(ExecutionOutcome::Complete(v))
+                // First try environment lookup (local bindings, set!, let, etc.)
+                if let Some(v) = env.lookup(sym) {
+                    return Ok(ExecutionOutcome::Complete(v));
+                }
+                // Fallback to cross-plan parameters if not found in environment
+                if let Some(v) = self.get_with_cross_plan_fallback(&sym.0) {
+                    return Ok(ExecutionOutcome::Complete(v));
+                }
+                // If still not found, return undefined symbol error
+                Err(RuntimeError::UndefinedSymbol(sym.clone()))
             }
             Expression::List(list) => {
                 if list.is_empty() {

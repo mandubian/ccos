@@ -385,6 +385,67 @@ impl CapabilityMarketplace {
         // Register default capabilities first
         crate::capabilities::register_default_capabilities(self).await?;
 
+        // Load saved capabilities from disk (discovered MCP capabilities and synthesized capabilities)
+        let base_storage = std::env::var("CCOS_CAPABILITY_STORAGE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("./capabilities"));
+        let storage_dirs = vec![
+            base_storage.join("discovered"),
+            base_storage.join("generated"),
+        ];
+        
+        let mut total_loaded = 0usize;
+        for storage_dir in storage_dirs {
+            if storage_dir.exists() {
+                // Recursively collect all .rtfs files
+                let mut rtfs_files = Vec::new();
+                if let Err(e) = Self::import_capabilities_recursive_sync(&self, &storage_dir, &mut rtfs_files) {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Warning: Failed to scan directory {}: {}",
+                            storage_dir.display(),
+                            e
+                        ));
+                    }
+                    continue;
+                }
+                
+                let file_count = rtfs_files.len();
+                
+                // Import each .rtfs file from its parent directory
+                for rtfs_file in rtfs_files {
+                    if let Some(parent_dir) = rtfs_file.parent() {
+                        match self.import_capabilities_from_rtfs_dir(parent_dir).await {
+                            Ok(loaded) => {
+                                if loaded > 0 {
+                                    total_loaded += loaded;
+                                }
+                            }
+                            Err(_) => {
+                                // Continue on error for individual files
+                            }
+                        }
+                    }
+                }
+                
+                if file_count > 0 {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Found {} saved capabilities in {}",
+                            file_count,
+                            storage_dir.display()
+                        ));
+                    }
+                }
+            }
+        }
+        
+        if total_loaded > 0 {
+            if let Some(cb) = &self.debug_callback {
+                cb(format!("Total: Loaded {} saved capabilities from disk", total_loaded));
+            }
+        }
+
         // Load built-in capabilities from the capability registry
         // Note: RTFS stub registry doesn't have list_capabilities, so we skip this
         // CCOS capabilities are registered through register_default_capabilities instead
@@ -2102,6 +2163,45 @@ impl CapabilityMarketplace {
         Ok(loaded)
     }
 
+    /// Recursively import capabilities from a directory and its subdirectories
+    fn import_capabilities_recursive_sync<P: AsRef<Path>>(
+        &self,
+        dir: P,
+        rtfs_files: &mut Vec<std::path::PathBuf>,
+    ) -> RuntimeResult<()> {
+        let dir_path = dir.as_ref();
+        
+        let entries = std::fs::read_dir(dir_path).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to read directory {}: {}",
+                dir_path.display(),
+                e
+            ))
+        })?;
+        
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            
+            if path.is_dir() {
+                // Recursively search subdirectories
+                if let Err(_) = Self::import_capabilities_recursive_sync(&self, &path, rtfs_files) {
+                    // Continue on error
+                }
+            } else if path.is_file() {
+                // Check if it's a .rtfs file
+                if path.extension().and_then(|s| s.to_str()) == Some("rtfs") {
+                    rtfs_files.push(path);
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
     /// Import capabilities exported as RTFS files (one .rtfs per capability) from a directory.
     /// Only supports provider types that are expressible in the exported RTFS (http, mcp, a2a, remote_rtfs).
     pub async fn import_capabilities_from_rtfs_dir<P: AsRef<Path>>(

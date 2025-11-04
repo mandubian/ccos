@@ -1,6 +1,6 @@
 # Smart Assistant Implementation Status
 
-**Last Updated**: 2025-01-02  
+**Last Updated**: 2025-01-04  
 **Main Demo**: `ccos/examples/smart_assistant_demo.rs`  
 **Architecture**: Recursive capability discovery + synthesis integrated into smart assistant
 
@@ -366,7 +366,65 @@ cargo run --example smart_assistant_demo -- \
 
 ## 🐛 Known Issues & Limitations
 
-### Issue 1: LLM Capability Name Mismatch with MCP IDs
+### Issue 1: Recursive Synthesis Doesn't Handle Simple Local Capabilities ⚠️
+**Status**: 🔍 Identified (2025-01-04)  
+**Severity**: High  
+**Impact**: Many capabilities marked as incomplete when they could be synthesized locally
+
+**Problem**: When capabilities like `text.filter.by-topic` or `ui.display.list` cannot be found in external registries (MCP, OpenAPI), the system marks them as incomplete rather than synthesizing them as local RTFS implementations.
+
+**Example from logs**:
+- Goal: "list github issues of repository ccos from owner mandubian and filter those concerning rtfs language"
+- Generated plan needs: `github.issues.list` ✅, `text.filter.by-topic` ❌, `ui.display.list` ❌
+- Result: `text.filter.by-topic` and `ui.display.list` marked as incomplete/not_found
+- Re-plan simplifies to just `mcp.github.github-mcp.list_issues` but **loses the RTFS filtering requirement**
+
+**Root Causes**:
+1. **Synthesis prompt bias**: The prompt asks LLM to "Identify the specific external service, API, or capability needed" which biases toward external service lookup rather than local implementation
+2. **No local RTFS synthesis fallback**: The recursive synthesizer doesn't attempt to synthesize simple operations (filtering, formatting, display) as local RTFS functions
+3. **Circular dependency detection too strict**: When plan only calls itself, system searches external registries but doesn't try local synthesis
+4. **Re-planning loses requirements**: When capabilities are missing, re-plan correctly uses only available capabilities but doesn't preserve original requirements (e.g., "filter for RTFS language")
+
+**Expected Behavior**:
+1. For simple operations like `text.filter.by-topic`: Synthesize a local RTFS function that:
+   - Takes `issues` (list) and `topic` (string) as inputs
+   - Filters issues by checking title/body for topic keywords
+   - Returns filtered list
+2. For `ui.display.list`: Synthesize a local RTFS function that:
+   - Takes `items` (list) as input
+   - Formats items into readable output
+   - Returns formatted string or prints to console
+3. Only mark as incomplete if:
+   - The capability requires external APIs that don't exist
+   - The capability requires complex domain knowledge not synthesizable from description
+   - User explicitly rejects local synthesis in interactive mode
+
+**Proposed Solutions**:
+1. **Enhanced synthesis prompt**: Add guidance that simple data operations (filter, map, reduce, format, display) should be synthesized as local RTFS rather than external services
+2. **Local synthesis attempt**: Before marking incomplete, try synthesizing as local RTFS capability:
+   - Check if operation is a simple data transformation (filter, map, format, display, sort, etc.)
+   - If yes, generate RTFS implementation using stdlib functions
+   - Register as local capability
+3. **Requirement preservation in re-planning**: When re-planning, include original requirements in the prompt so LLM can suggest alternative approaches (e.g., use GitHub labels for filtering instead of text filtering)
+
+**Files to Modify**:
+- `ccos/src/discovery/recursive_synthesizer.rs` - Add local synthesis attempt before marking incomplete
+- `ccos/src/discovery/intent_transformer.rs` - Enhance prompt to encourage local synthesis for simple operations
+- `ccos/examples/smart_assistant_demo.rs` - Enhance re-plan prompt to preserve original requirements
+
+**Test Case**:
+```bash
+cargo run --example smart_assistant_demo -- \
+  --config config/agent_config.toml \
+  --profile 'openrouter_free:balanced' \
+  --goal 'list github issues of repository ccos from owner mandubian and filter those concerning rtfs language'
+```
+
+Expected: Should synthesize `text.filter.by-topic` as local RTFS function that filters issues by topic keywords.
+
+---
+
+### Issue 2: LLM Capability Name Mismatch with MCP IDs
 **Status**: ✅ Fixed + Enhanced (2025-01-03)  
 **Date Identified**: 2025-01-03  
 **Date Fixed**: 2025-01-03  
@@ -482,26 +540,35 @@ cargo run --example smart_assistant_demo -- \
 
 ## 🎯 Next Steps (Priority Order)
 
-1. **MCP Semantic Matching** (High priority) ✅ COMPLETED (2025-01-03)
+1. **Local RTFS Synthesis for Simple Operations** (High priority) 🔍 IDENTIFIED (2025-01-04)
+   - ⏳ TODO: Enhance synthesis prompt to encourage local RTFS for simple operations (filter, map, format, display)
+   - ⏳ TODO: Add local synthesis attempt before marking capabilities incomplete
+   - ⏳ TODO: Implement simple operation detection (filter, map, reduce, format, display, sort, etc.)
+   - ⏳ TODO: Generate RTFS implementations using stdlib functions for these operations
+   - ⏳ TODO: Enhance re-plan prompt to preserve original requirements when capabilities missing
+   - **Impact**: Will allow system to synthesize filtering, formatting, and display capabilities locally instead of marking them incomplete
+   - **Test Case**: `text.filter.by-topic` should synthesize as local RTFS function
+
+2. **MCP Semantic Matching** (High priority) ✅ COMPLETED (2025-01-03)
    - ✅ Fixed capability name mismatch between LLM-generated names and MCP IDs
    - ✅ Implemented fuzzy/semantic matching in discovery engine
    - ✅ Normalized capability names for better matching
    - ✅ All tests passing
 
-2. **Embedding-Based Semantic Matching** (High priority) ✅ COMPLETED (2025-01-03)
+3. **Embedding-Based Semantic Matching** (High priority) ✅ COMPLETED (2025-01-03)
    - ✅ Implemented embedding service with OpenRouter and local model support
    - ✅ Automatic fallback to keyword matching when embedding unavailable
    - ✅ Integrated into discovery pipeline and test examples
    - ✅ In-memory caching for performance
    - ✅ Documentation and test examples created
 
-3. **Action Word Prioritization** (High priority) ✅ COMPLETED (2025-01-03)
+4. **Action Word Prioritization** (High priority) ✅ COMPLETED (2025-01-03)
    - ✅ Enhanced semantic matching to prioritize action words (e.g., "list" in "github.issues.list")
    - ✅ Added penalties for extra unmatched keywords to prefer exact matches
    - ✅ Action word bonuses for perfect matches
    - ✅ Better handling of similar capability names (e.g., `list_issues` vs `list_issue_types`)
 
-4. **Live LLM Wiring** (Medium priority) ✅ COMPLETED (2025-01-03)
+5. **Live LLM Wiring** (Medium priority) ✅ COMPLETED (2025-01-03)
    - ✅ Replaced StubLlmProvider with real LLM providers (OpenAI, OpenRouter, Anthropic)
    - ✅ Factory-level protection prevents stub usage in production
    - ✅ Default configuration uses real providers (openrouter_free:balanced)
@@ -509,7 +576,7 @@ cargo run --example smart_assistant_demo -- \
    - ⏳ TODO: Capture prompts/responses in ledger (future enhancement)
    - ⏳ TODO: Enhanced error handling for provider failures (future enhancement)
 
-5. **MCP Introspection Caching** (Medium priority) 🔄 IN PROGRESS
+6. **MCP Introspection Caching** (Medium priority) 🔄 IN PROGRESS
    - ✅ Introspection cache infrastructure implemented (`IntrospectionCache`)
    - ✅ Cache integration in `search_mcp_registry` and `search_openapi` methods
    - ✅ 24-hour TTL with file-based storage
@@ -518,22 +585,22 @@ cargo run --example smart_assistant_demo -- \
    - ⏳ TODO: Add cache directory configuration option (default: `.cache/introspection/`)
    - **Benefit**: Avoids repeated MCP server introspection calls, significantly speeding up discovery for previously seen servers
 
-6. **Partial Execution Outcomes** (Medium priority)
+7. **Partial Execution Outcomes** (Medium priority)
    - Emit partial outcomes at step boundaries
    - Implement re-planning loop
    - Integrate with causal chain
 
-7. **Governance Polish** (Medium priority)
+8. **Governance Polish** (Medium priority)
    - Policy denial messages
    - Privacy redaction
    - Deterministic replay
 
-8. **Synthetic Capability Pipeline** (Low priority)
+9. **Synthetic Capability Pipeline** (Low priority)
    - Contract inference
    - Test generation
    - Versioning
 
-9. **Showcase Polish** (Low priority)
+10. **Showcase Polish** (Low priority)
    - TUI improvements
    - Demo scripts
    - Visualizations

@@ -1015,67 +1015,125 @@ impl Orchestrator {
 
         // Convert the first available plan back to a Plan object
         if let Some(archivable_plan) = archivable_plans.first() {
-            // Helper function to safely deserialize JSON strings
-            let deserialize_json = |json_str: &Option<String>| -> Option<Value> {
-                json_str
-                    .as_ref()
-                    .and_then(|s| serde_json::from_str(s).ok())
-                    .map(Self::json_value_to_runtime_value)
-            };
-
-            // Convert ArchivablePlan back to Plan
-            let plan = Plan {
-                plan_id: archivable_plan.plan_id.clone(),
-                name: archivable_plan.name.clone(),
-                intent_ids: archivable_plan.intent_ids.clone(),
-                language: super::types::PlanLanguage::Rtfs20, // Default to RTFS 2.0
-                body: super::types::PlanBody::Rtfs(
-                    archivable_plan
-                        .body
-                        .steps
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| "()".to_string()),
-                ),
-                status: archivable_plan.status.clone(),
-                created_at: archivable_plan.created_at,
-                metadata: archivable_plan
-                    .metadata
-                    .iter()
-                    .filter_map(|(k, v)| {
-                        serde_json::from_str(v)
-                            .ok()
-                            .map(Self::json_value_to_runtime_value)
-                            .map(|val| (k.clone(), val))
-                    })
-                    .collect(),
-                input_schema: deserialize_json(&archivable_plan.input_schema),
-                output_schema: deserialize_json(&archivable_plan.output_schema),
-                policies: archivable_plan
-                    .policies
-                    .iter()
-                    .filter_map(|(k, v)| {
-                        serde_json::from_str(v)
-                            .ok()
-                            .map(Self::json_value_to_runtime_value)
-                            .map(|val| (k.clone(), val))
-                    })
-                    .collect(),
-                capabilities_required: archivable_plan.capabilities_required.clone(),
-                annotations: archivable_plan
-                    .annotations
-                    .iter()
-                    .filter_map(|(k, v)| {
-                        serde_json::from_str(v)
-                            .ok()
-                            .map(Self::json_value_to_runtime_value)
-                            .map(|val| (k.clone(), val))
-                    })
-                    .collect(),
-            };
-            Ok(Some(plan))
+            Ok(Some(Self::archivable_plan_to_plan(archivable_plan)))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Get plan by its plan_id
+    pub fn get_plan_by_id(&self, plan_id: &str) -> RuntimeResult<Option<Plan>> {
+        // Query the plan archive for the plan by ID
+        if let Some(archivable_plan) = self.plan_archive.get_plan_by_id(&plan_id.to_string()) {
+            Ok(Some(Self::archivable_plan_to_plan(&archivable_plan)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Helper function to convert ArchivablePlan to Plan
+    fn archivable_plan_to_plan(archivable_plan: &super::archivable_types::ArchivablePlan) -> Plan {
+        // Helper function to safely deserialize JSON strings
+        let deserialize_json = |json_str: &Option<String>| -> Option<Value> {
+            json_str
+                .as_ref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .map(Self::json_value_to_runtime_value)
+        };
+
+        // Extract the plan body, handling both plain RTFS code and (plan ...) forms
+        let raw_body = archivable_plan
+            .body
+            .steps
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "()".to_string());
+        
+        // If the body is a (plan ...) form, extract the :body property
+        // This happens when the plan was saved with the full (plan ...) declaration
+        let plan_body = if raw_body.trim().starts_with("(plan") {
+            // Use string parsing to extract :body value
+            // Look for :body followed by the body expression
+            if let Some(body_start) = raw_body.find(":body") {
+                // Skip whitespace after :body
+                let after_keyword = &raw_body[body_start + 5..];
+                // Find the opening paren (or other expression start)
+                if let Some(paren_start) = after_keyword.find('(') {
+                    let body_str = &after_keyword[paren_start..];
+                    // Find matching closing paren by tracking depth
+                    let mut depth = 0;
+                    let mut end_pos = None;
+                    for (i, ch) in body_str.char_indices() {
+                        match ch {
+                            '(' => depth += 1,
+                            ')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    end_pos = Some(i + 1);
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(end) = end_pos {
+                        body_str[..end].trim().to_string()
+                    } else {
+                        // If we can't find matching paren, return raw body
+                        raw_body
+                    }
+                } else {
+                    raw_body
+                }
+            } else {
+                raw_body
+            }
+        } else {
+            raw_body
+        };
+
+        // Convert ArchivablePlan back to Plan
+        Plan {
+            plan_id: archivable_plan.plan_id.clone(),
+            name: archivable_plan.name.clone(),
+            intent_ids: archivable_plan.intent_ids.clone(),
+            language: super::types::PlanLanguage::Rtfs20, // Default to RTFS 2.0
+            body: super::types::PlanBody::Rtfs(plan_body),
+            status: archivable_plan.status.clone(),
+            created_at: archivable_plan.created_at,
+            metadata: archivable_plan
+                .metadata
+                .iter()
+                .filter_map(|(k, v)| {
+                    serde_json::from_str(v)
+                        .ok()
+                        .map(Self::json_value_to_runtime_value)
+                        .map(|val| (k.clone(), val))
+                })
+                .collect(),
+            input_schema: deserialize_json(&archivable_plan.input_schema),
+            output_schema: deserialize_json(&archivable_plan.output_schema),
+            policies: archivable_plan
+                .policies
+                .iter()
+                .filter_map(|(k, v)| {
+                    serde_json::from_str(v)
+                        .ok()
+                        .map(Self::json_value_to_runtime_value)
+                        .map(|val| (k.clone(), val))
+                })
+                .collect(),
+            capabilities_required: archivable_plan.capabilities_required.clone(),
+            annotations: archivable_plan
+                .annotations
+                .iter()
+                .filter_map(|(k, v)| {
+                    serde_json::from_str(v)
+                        .ok()
+                        .map(Self::json_value_to_runtime_value)
+                        .map(|val| (k.clone(), val))
+                })
+                .collect(),
         }
     }
 

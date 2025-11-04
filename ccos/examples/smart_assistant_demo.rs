@@ -62,6 +62,10 @@ struct Args {
     /// Interactive mode: prompt user for clarifying question answers (default: auto-answer with LLM)
     #[arg(long, default_value_t = false)]
     interactive: bool,
+
+    /// Execute a saved plan by its plan_id instead of generating a new one
+    #[arg(long)]
+    execute_plan: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -152,16 +156,96 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     // Print architecture summary before initializing
     print_architecture_summary(&agent_config, args.profile.as_deref());
 
+    // Enable file storage for plans (defaults to demo_storage/plans if not set)
+    let plan_archive_path = std::env::var("CCOS_PLAN_ARCHIVE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("demo_storage/plans"));
+    
+    // Ensure the directory exists
+    if let Err(e) = std::fs::create_dir_all(&plan_archive_path) {
+        eprintln!("⚠️  Warning: Failed to create plan archive directory {:?}: {}", plan_archive_path, e);
+    } else {
+        println!("📁 Plan archive: {}", plan_archive_path.display());
+    }
+
     let ccos = Arc::new(
         CCOS::new_with_agent_config_and_configs_and_debug_callback(
             IntentGraphConfig::default(),
-            None,
+            Some(plan_archive_path),
             Some(agent_config.clone()),
             None,
         )
         .await
         .map_err(runtime_error)?,
     );
+
+    // If execute_plan is provided, load and execute it instead of generating a new plan
+    if let Some(plan_id) = args.execute_plan {
+        let plan_id_clone = plan_id.clone();
+        println!("\n{} {}", "🔄 Executing saved plan:".bold(), plan_id_clone.cyan());
+        println!("{}", "=".repeat(80));
+        
+        let orchestrator = ccos.get_orchestrator();
+        match orchestrator.get_plan_by_id(&plan_id) {
+            Ok(Some(plan)) => {
+                println!("  ✓ Found plan: {}", plan.plan_id);
+                if let Some(name) = &plan.name {
+                    println!("     Name: {}", name);
+                }
+                
+                // Create runtime context with parameters
+                let mut context = rtfs::runtime::security::RuntimeContext::full();
+                
+                // Extract common parameters from plan metadata if available
+                // For GitHub issues, add owner, repository, authentication, filter_topic
+                context.add_cross_plan_param("owner".to_string(), rtfs::runtime::values::Value::String("mandubian".to_string()));
+                context.add_cross_plan_param("repository".to_string(), rtfs::runtime::values::Value::String("ccos".to_string()));
+                context.add_cross_plan_param("filter_topic".to_string(), rtfs::runtime::values::Value::String("rtfs".to_string()));
+                context.add_cross_plan_param("output-format".to_string(), rtfs::runtime::values::Value::String("list".to_string()));
+                context.add_cross_plan_param("source".to_string(), rtfs::runtime::values::Value::String("github".to_string()));
+                
+                // Add authentication token if available
+                if let Ok(token) = std::env::var("MCP_AUTH_TOKEN") {
+                    context.add_cross_plan_param("authentication".to_string(), rtfs::runtime::values::Value::String(token));
+                } else if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+                    context.add_cross_plan_param("authentication".to_string(), rtfs::runtime::values::Value::String(token));
+                }
+                
+                // Execute the plan
+                println!("\n{}", "🚀 Executing Plan".bold());
+                println!("{}", "=".repeat(80));
+                match ccos.validate_and_execute_plan(plan, &context).await {
+                    Ok(exec_result) => {
+                        if exec_result.success {
+                            println!("\n{}", "✅ Plan execution completed successfully!".bold().green());
+                            println!("{}", "Result:".bold());
+                            println!("{:?}", exec_result.value);
+                        } else {
+                            println!("\n{}", "⚠️  Plan execution completed with warnings".bold().yellow());
+                            if let Some(error) = exec_result.metadata.get("error") {
+                                println!("Error: {:?}", error);
+                            }
+                            println!("Result: {:?}", exec_result.value);
+                        }
+                    }
+                    Err(e) => {
+                        println!("\n{}", "❌ Plan execution failed".bold().red());
+                        println!("Error: {}", e);
+                        return Err(Box::new(io::Error::new(io::ErrorKind::Other, format!("Plan execution failed: {}", e))));
+                    }
+                }
+                return Ok(());
+            }
+            Ok(None) => {
+                eprintln!("❌ Plan not found: {}", plan_id);
+                return Err(Box::new(io::Error::new(io::ErrorKind::NotFound, format!("Plan {} not found in archive", plan_id))));
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to load plan: {}", e);
+                return Err(Box::new(io::Error::new(io::ErrorKind::Other, format!("Failed to load plan: {}", e))));
+            }
+        }
+    }
 
     let delegating = ccos
         .get_delegating_arbiter()
@@ -458,8 +542,92 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         "\n{}",
         "✅ Orchestrator generated and registered in marketplace".bold().green()
     );
+    
+    // Save the plan to the plan archive
+    let orchestrator = ccos.get_orchestrator();
+    match orchestrator.store_plan(&plan) {
+        Ok(hash) => {
+            let hash_display = hash.clone();
+            println!(
+                "  💾 Saved plan to archive with hash: {}",
+                hash_display.cyan()
+            );
+            // If using file storage, show the file path
+            let plan_archive_path = std::env::var("CCOS_PLAN_ARCHIVE_PATH")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from("demo_storage/plans"));
+            let file_path = plan_archive_path
+                .join(format!("{}/{}", &hash[0..2], &hash[2..4]))
+                .join(format!("{}.json", hash));
+            println!(
+                "     File location: {}",
+                file_path.display().to_string().dim()
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "  ⚠️  Failed to save plan to archive: {}",
+                e
+            );
+        }
+    }
+    
+    // Execute the generated plan
+    println!("\n{}", "🚀 Executing Plan".bold());
+    println!("{}", "=".repeat(80));
+    
+    // Extract inputs from goal (simple parsing for GitHub issues goal)
+    let mut context = rtfs::runtime::security::RuntimeContext::full();
+    
+    // Extract owner and repository from goal
+    if goal.contains("repository") && goal.contains("owner") {
+        let owner = extract_pattern(&goal, r"owner\s+(\w+)").unwrap_or_else(|| "mandubian".to_string());
+        let repository = extract_pattern(&goal, r"repository\s+(\w+)").unwrap_or_else(|| "ccos".to_string());
+        let filter_topic = if goal.contains("rtfs") { "rtfs" } else { "" };
+        
+        context.add_cross_plan_param("owner".to_string(), rtfs::runtime::values::Value::String(owner));
+        context.add_cross_plan_param("repository".to_string(), rtfs::runtime::values::Value::String(repository));
+        context.add_cross_plan_param("filter_topic".to_string(), rtfs::runtime::values::Value::String(filter_topic.to_string()));
+        
+        // Add authentication token if available
+        if let Ok(token) = std::env::var("MCP_AUTH_TOKEN") {
+            context.add_cross_plan_param("authentication".to_string(), rtfs::runtime::values::Value::String(token));
+        } else if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+            context.add_cross_plan_param("authentication".to_string(), rtfs::runtime::values::Value::String(token));
+        }
+    }
+    
+    // Execute the plan
+    match ccos.validate_and_execute_plan(plan, &context).await {
+        Ok(exec_result) => {
+            if exec_result.success {
+                println!("\n{}", "✅ Plan execution completed successfully!".bold().green());
+                println!("{}", "Result:".bold());
+                println!("{:?}", exec_result.value);
+            } else {
+                println!("\n{}", "⚠️  Plan execution completed with warnings".bold().yellow());
+                if let Some(error) = exec_result.metadata.get("error") {
+                    println!("Error: {:?}", error);
+                }
+                println!("Result: {:?}", exec_result.value);
+            }
+        }
+        Err(e) => {
+            println!("\n{}", "❌ Plan execution failed".bold().red());
+            println!("Error: {}", e);
+        }
+    }
 
     Ok(())
+}
+
+// Helper function to extract pattern from goal string
+fn extract_pattern(goal: &str, pattern: &str) -> Option<String> {
+    use regex::Regex;
+    let re = Regex::new(pattern).ok()?;
+    re.captures(goal)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
 }
 
 type DemoResult<T> = Result<T, Box<dyn Error>>;
@@ -1438,6 +1606,13 @@ async fn propose_plan_steps(
                     for (i, step) in steps.iter().enumerate() {
                         println!("    {}. {} ({})", i + 1, step.name, step.capability_class);
                     }
+                    // Always show full LLM response for transparency
+                    println!("\n  📄 Full LLM plan generation response:");
+                    println!("  {}", "─".repeat(78));
+                    for line in response.lines() {
+                        println!("  {}", line);
+                    }
+                    println!("  {}", "─".repeat(78));
                 }
                 Ok(steps)
             }
@@ -2225,9 +2400,16 @@ fn build_replan_prompt(
     }
     
     prompt.push_str("\nIMPORTANT: Please generate a new plan that uses ONLY the available capabilities listed above.\n");
-    prompt.push_str("If a capability was missing, try to achieve the same goal using the available capabilities and their parameters.\n");
-    prompt.push_str("For example, if 'github.issues.list' supports a 'state' parameter (open|closed|all), use it instead of a separate filtering capability.\n\n");
-    prompt.push_str("Respond ONLY with an RTFS vector where each element is a map describing a proposed capability step.\n");
+    prompt.push_str("CRITICAL: You MUST preserve all original requirements from the goal, even if some capabilities are missing.\n");
+    prompt.push_str("Strategies to preserve requirements:\n");
+    prompt.push_str("  1. Use capability parameters (e.g., if 'github.issues.list' supports 'labels', 'state', or 'q' query parameters, use them for filtering)\n");
+    prompt.push_str("  2. If filtering/formatting/display operations are needed but missing, you can still include them in the plan - they will be synthesized locally\n");
+    prompt.push_str("  3. Combine available capabilities creatively to achieve the goal\n");
+    prompt.push_str("\nExample: If the goal requires 'filter issues by RTFS language' and filtering capability is missing:\n");
+    prompt.push_str("  - Option 1: Use 'github.issues.list' with 'labels' parameter if RTFS-related issues have labels\n");
+    prompt.push_str("  - Option 2: Use 'github.issues.list' with 'q' query parameter to search for 'RTFS' in titles/bodies\n");
+    prompt.push_str("  - Option 3: Still include a filtering step - it will be synthesized as a local operation\n");
+    prompt.push_str("\nRespond ONLY with an RTFS vector where each element is a map describing a proposed capability step.\n");
     prompt.push_str("Each map must include :id :name :capability-class :required-inputs (vector of strings) :expected-outputs (vector of strings) and optional :candidate-capabilities (vector of capability ids) :description.\n");
     prompt.push_str("When specifying capability calls, use the exact capability IDs from the 'Available Capabilities' section above.\n");
     prompt.push_str("Include parameter values in :required-inputs when they are known (e.g., if filtering is needed, specify the parameter name).\n");
