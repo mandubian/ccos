@@ -9,6 +9,7 @@ use crate::discovery::recursive_synthesizer::RecursiveSynthesizer;
 use crate::intent_graph::IntentGraph;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::sync::{Arc, Mutex};
+use regex;
 
 /// Statistics for MCP discovery summary
 #[derive(Debug, Default)]
@@ -70,6 +71,21 @@ impl DiscoveryEngine {
     
     /// Attempt to find a capability using the discovery priority chain
     pub async fn discover_capability(&self, need: &CapabilityNeed) -> RuntimeResult<DiscoveryResult> {
+        // Enhance rationale if it's too generic (improves semantic matching)
+        let enhanced_need = if need.rationale.starts_with("Need for capability:") {
+            let enhanced_rationale = self.generate_enhanced_rationale(&need.capability_class, &need.rationale);
+            CapabilityNeed::new(
+                need.capability_class.clone(),
+                need.required_inputs.clone(),
+                need.expected_outputs.clone(),
+                enhanced_rationale,
+            )
+        } else {
+            need.clone()
+        };
+        
+        let need = &enhanced_need;
+        
         // Print capability section header
         eprintln!("\n{}", "═".repeat(80));
         eprintln!("🔍 DISCOVERY: {}", need.capability_class);
@@ -354,19 +370,83 @@ impl DiscoveryEngine {
             }
         }
         
-        // If no servers found with full query, try searching with just the first keyword
-        // e.g., if "github issues list" finds nothing, try just "github"
+        // If no servers found with full query, try progressively simpler queries
+        // e.g., if "text filter by-content" finds nothing, try "text filter", then "filter"
+        // This avoids matching completely unrelated servers like "textarttools" when searching for "text.filter"
         if servers.is_empty() && !keywords.is_empty() {
-            let first_keyword = keywords[0];
-            eprintln!("  → No servers found, trying simpler query: '{}'", first_keyword);
-            let fallback_servers = match registry_client.search_servers(first_keyword).await {
-                Ok(fallback_servers) => {
-                    eprintln!("  → Found {} MCP server(s) for '{}'", fallback_servers.len(), first_keyword);
-                    fallback_servers
-                },
-                Err(_) => Vec::new(),
-            };
-            servers.extend(fallback_servers);
+            // Try with 2 keywords first (more specific than just one)
+            if keywords.len() >= 2 {
+                let two_keyword_query = format!("{} {}", keywords[0], keywords[1]);
+                eprintln!("  → No servers found, trying simpler query: '{}'", two_keyword_query);
+                let fallback_servers = match registry_client.search_servers(&two_keyword_query).await {
+                    Ok(fallback_servers) => {
+                        eprintln!("  → Found {} MCP server(s) for '{}'", fallback_servers.len(), two_keyword_query);
+                        servers.extend(fallback_servers);
+                    },
+                    Err(_) => {}
+                };
+            }
+            
+            // If still no servers, try with just the most relevant keyword (usually the action word)
+            // For "text.filter.by-content", prefer "filter" over "text"
+            if servers.is_empty() && keywords.len() >= 2 {
+                // Use the last keyword (usually the action word) instead of first
+                let action_keyword = keywords.last().unwrap();
+                eprintln!("  → No servers found, trying action keyword: '{}'", action_keyword);
+                let fallback_servers = match registry_client.search_servers(action_keyword).await {
+                    Ok(fallback_servers) => {
+                        eprintln!("  → Found {} MCP server(s) for '{}'", fallback_servers.len(), action_keyword);
+                        fallback_servers
+                    },
+                    Err(_) => Vec::new(),
+                };
+                servers.extend(fallback_servers);
+            } else if servers.is_empty() && !keywords.is_empty() {
+                // Fallback to first keyword only if we have just one keyword
+                let first_keyword = keywords[0];
+                eprintln!("  → No servers found, trying first keyword: '{}'", first_keyword);
+                let fallback_servers = match registry_client.search_servers(first_keyword).await {
+                    Ok(fallback_servers) => {
+                        eprintln!("  → Found {} MCP server(s) for '{}'", fallback_servers.len(), first_keyword);
+                        fallback_servers
+                    },
+                    Err(_) => Vec::new(),
+                };
+                servers.extend(fallback_servers);
+            }
+        }
+        
+        // Filter servers by description relevance before introspection
+        // This avoids introspecting completely unrelated servers when fallback query is too broad
+        let total_before_filter = servers.len();
+        if servers.len() > 5 && !keywords.is_empty() {
+            // If we have many servers from a broad fallback query, filter by description relevance
+            let need_keywords: Vec<String> = keywords.iter()
+                .map(|k| k.to_lowercase())
+                .collect();
+            let need_rationale_lower = need.rationale.to_lowercase();
+            
+            servers.retain(|server| {
+                let server_desc_lower = server.description.to_lowercase();
+                let server_name_lower = server.name.to_lowercase();
+                
+                // Check if server description/name contains any of our keywords
+                let has_keyword_match = need_keywords.iter().any(|kw| {
+                    server_desc_lower.contains(kw) || server_name_lower.contains(kw)
+                });
+                
+                // Also check if description relates to our rationale (basic keyword overlap)
+                let rationale_words: Vec<&str> = need_rationale_lower.split_whitespace().collect();
+                let has_rationale_match = rationale_words.iter().any(|word| {
+                    word.len() > 3 && (server_desc_lower.contains(word) || server_name_lower.contains(word))
+                });
+                
+                has_keyword_match || has_rationale_match
+            });
+            
+            if servers.len() < total_before_filter {
+                eprintln!("  → Filtered to {} relevant server(s) based on description matching (from {})", servers.len(), total_before_filter);
+            }
         }
         
         if servers.is_empty() {
@@ -508,9 +588,35 @@ impl DiscoveryEngine {
                 }
                 
                 // Build auth headers from environment (if available)
+                // Generic approach: works for any MCP server
+                // Priority: {NAMESPACE}_MCP_TOKEN > MCP_AUTH_TOKEN
                 let mut auth_headers = std::collections::HashMap::new();
-                if let Ok(token) = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("MCP_AUTH_TOKEN")) {
+                let token = self.get_mcp_auth_token(&server.name);
+                
+                if let Some(token) = token {
+                    // All MCP servers (including GitHub Copilot) use standard Authorization: Bearer
                     auth_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+                    if servers.len() == 1 {
+                        eprintln!("     ✓ Using authentication token from environment");
+                        // Show which env var was used (without revealing token value)
+                        let env_var_used = if std::env::var("GITHUB_MCP_TOKEN").is_ok() {
+                            "GITHUB_MCP_TOKEN"
+                        } else if std::env::var("MCP_AUTH_TOKEN").is_ok() {
+                            "MCP_AUTH_TOKEN"
+                        } else if std::env::var("GITHUB_PAT").is_ok() {
+                            "GITHUB_PAT"
+                        } else if std::env::var("GITHUB_TOKEN").is_ok() {
+                            "GITHUB_TOKEN"
+                        } else {
+                            "unknown"
+                        };
+                        eprintln!("     → Token source: {}", env_var_used);
+                        eprintln!("     → Using Authorization: Bearer header (standard MCP format)");
+                    }
+                } else if servers.len() == 1 {
+                    eprintln!("     ⚠️  No authentication token found in environment");
+                    let suggested_var = self.suggest_mcp_token_env_var(&server.name);
+                    eprintln!("     💡 Set {} or MCP_AUTH_TOKEN for authenticated MCP servers", suggested_var);
                 }
                 
                 // Check cache first if available
@@ -978,17 +1084,37 @@ impl DiscoveryEngine {
         &self,
         capability_ids: &[String],
     ) -> RuntimeResult<DiscoveryHints> {
+        self.collect_discovery_hints_with_descriptions(
+            &capability_ids.iter().map(|id| (id.clone(), None)).collect::<Vec<_>>()
+        ).await
+    }
+    
+    /// Collect discovery hints for capabilities with optional descriptions
+    /// Uses provided descriptions (from LLM) as rationale when available
+    pub async fn collect_discovery_hints_with_descriptions(
+        &self,
+        capability_info: &[(String, Option<String>)],
+    ) -> RuntimeResult<DiscoveryHints> {
         let mut found = Vec::new();
         let mut missing = Vec::new();
         let mut suggestions = Vec::new();
         
-        for cap_id in capability_ids {
+        for (cap_id, description) in capability_info {
+            // Use provided description if available, otherwise generate one
+            let rationale = if let Some(desc) = description {
+                // LLM provided a description - use it directly for semantic matching
+                desc.clone()
+            } else {
+                // No description provided - enhance the capability class name
+                self.generate_enhanced_rationale(cap_id, &format!("Need for capability: {}", cap_id))
+            };
+            
             // Create a minimal CapabilityNeed for this capability ID
             let need = CapabilityNeed::new(
                 cap_id.clone(),
                 Vec::new(), // Don't know inputs yet
                 Vec::new(), // Don't know outputs yet
-                format!("Need for capability: {}", cap_id),
+                rationale,
             );
             
             match self.discover_capability(&need).await? {
@@ -1073,6 +1199,12 @@ impl DiscoveryEngine {
             _ => {}
         }
         
+        // Extract parameter usage hints from input schema
+        if let Some(ref schema) = manifest.input_schema {
+            let param_hints = self.extract_parameter_usage_hints(schema);
+            hints.extend(param_hints);
+        }
+        
         // Extract any parameter hints from metadata
         if let Some(hint) = manifest.metadata.get("parameter_hints") {
             hints.push(hint.clone());
@@ -1087,6 +1219,64 @@ impl DiscoveryEngine {
         if let Some(desc) = manifest.metadata.get("mcp_tool_description") {
             if desc != &manifest.description {
                 hints.push(desc.clone());
+            }
+            // Extract parameter hints from MCP tool description
+            let param_hints = self.extract_parameter_hints_from_mcp_description(desc);
+            hints.extend(param_hints);
+        }
+        
+        hints
+    }
+    
+    /// Extract parameter usage hints from a TypeExpr schema
+    fn extract_parameter_usage_hints(&self, expr: &rtfs::ast::TypeExpr) -> Vec<String> {
+        let mut hints = Vec::new();
+        
+        match expr {
+            rtfs::ast::TypeExpr::Map { entries, .. } => {
+                for entry in entries {
+                    let param_name = &entry.key.0;
+                    // Check if this parameter has constraints or enum values
+                    let ty = &*entry.value_type;
+                    // For enum types, extract the values
+                    if let rtfs::ast::TypeExpr::Union(variants) = ty {
+                        let values: Vec<String> = variants.iter()
+                            .filter_map(|v| {
+                                if let rtfs::ast::TypeExpr::Literal(lit) = v {
+                                    match lit {
+                                        rtfs::ast::Literal::String(s) => Some(s.clone()),
+                                        rtfs::ast::Literal::Keyword(k) => Some(k.0.clone()),
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        if !values.is_empty() {
+                            hints.push(format!("{} supports: {}", param_name, values.join(", ")));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        
+        hints
+    }
+    
+    /// Extract parameter hints from MCP tool description
+    /// Finds patterns like "state (open|closed|all)" and converts to usage hints
+    fn extract_parameter_hints_from_mcp_description(&self, description: &str) -> Vec<String> {
+        let mut hints = Vec::new();
+        
+        // Pattern: "param_name (value1|value2|value3)"
+        let enum_re = regex::Regex::new(r"(\w+)\s*\(([^)]+)\)").unwrap();
+        for cap in enum_re.captures_iter(description) {
+            if let (Some(param), Some(values)) = (cap.get(1), cap.get(2)) {
+                let param_name = param.as_str();
+                let value_list = values.as_str();
+                hints.push(format!("{} parameter supports: {}", param_name, value_list));
             }
         }
         
@@ -1115,7 +1305,20 @@ impl DiscoveryEngine {
         if let Some(tool_desc) = manifest.metadata.get("mcp_tool_description") {
             // Try to extract parameter names from description
             // Common patterns: "state (open|closed|all)", "labels: array", etc.
-            // This is a simple heuristic - could be improved
+            let extracted = self.extract_params_from_mcp_description(tool_desc);
+            parameters.extend(extracted);
+        }
+        
+        // For MCP capabilities, also check input_schema JSON Schema if available
+        if let Some(schema_json) = manifest.metadata.get("mcp_input_schema") {
+            // Try to parse JSON Schema and extract property names
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(schema_json) {
+                if let Some(props) = parsed.get("properties").and_then(|p| p.as_object()) {
+                    for prop_name in props.keys() {
+                        parameters.push(prop_name.clone());
+                    }
+                }
+            }
         }
         
         // Remove duplicates while preserving order
@@ -1140,6 +1343,44 @@ impl DiscoveryEngine {
             _ => {
                 // For other types, we can't easily extract parameter names
                 // This is a limitation - we'd need more schema information
+            }
+        }
+        
+        params
+    }
+    
+    /// Extract parameter names and hints from MCP tool description
+    /// Parses descriptions like "state (open|closed|all)", "labels: array", etc.
+    fn extract_params_from_mcp_description(&self, description: &str) -> Vec<String> {
+        let mut params = Vec::new();
+        
+        // Common patterns in MCP tool descriptions:
+        // - "parameter_name (value1|value2|value3)" - enum values
+        // - "parameter_name: type" - type hints
+        // - "parameter_name parameter description" - parameter mentions
+        
+        // Use regex to find parameter mentions
+        // Pattern: word followed by optional type/enum in parentheses or colon
+        let re = regex::Regex::new(r"(\w+)\s*(?:\([^)]+\)|:\s*\w+|,)").unwrap();
+        for cap in re.captures_iter(description) {
+            if let Some(param) = cap.get(1) {
+                let param_name = param.as_str().to_string();
+                // Filter out common English words that aren't parameters
+                if !matches!(param_name.as_str(), "the" | "a" | "an" | "and" | "or" | "for" | "with" | "from" | "to" | "in" | "on" | "at" | "by") {
+                    params.push(param_name);
+                }
+            }
+        }
+        
+        // Also look for explicit parameter mentions in common formats
+        // "parameter_name" or "the parameter_name" patterns
+        let explicit_re = regex::Regex::new(r"(?:the\s+)?(\w+)\s+(?:parameter|argument|field|option)").unwrap();
+        for cap in explicit_re.captures_iter(description) {
+            if let Some(param) = cap.get(1) {
+                let param_name = param.as_str().to_string();
+                if !params.contains(&param_name) {
+                    params.push(param_name);
+                }
             }
         }
         
@@ -1187,6 +1428,110 @@ impl DiscoveryEngine {
         }
         
         Ok(best_match.map(|(manifest, _)| manifest))
+    }
+    
+    /// Get MCP authentication token from environment variables
+    /// 
+    /// Priority (generic for any MCP server):
+    /// 1. Server-specific token: {NAMESPACE}_MCP_TOKEN (e.g., GITHUB_MCP_TOKEN for github/github-mcp)
+    /// 2. Generic token: MCP_AUTH_TOKEN (works for any MCP server)
+    /// 
+    /// For GitHub servers specifically, also checks (for backward compatibility):
+    /// - GITHUB_PAT
+    /// - GITHUB_TOKEN
+    /// 
+    /// Returns the token if found, None otherwise
+    fn get_mcp_auth_token(&self, server_name: &str) -> Option<String> {
+        // Extract namespace from server name (e.g., "github/github-mcp" -> "github")
+        let namespace = if let Some(slash_pos) = server_name.find('/') {
+            &server_name[..slash_pos]
+        } else {
+            server_name
+        };
+        
+        // Normalize namespace: replace hyphens with underscores and uppercase
+        let normalized_namespace = namespace.replace("-", "_").to_uppercase();
+        let server_specific_var = format!("{}_MCP_TOKEN", normalized_namespace);
+        
+        // Try server-specific token first (e.g., GITHUB_MCP_TOKEN, SLACK_MCP_TOKEN)
+        if let Ok(token) = std::env::var(&server_specific_var) {
+            if !token.is_empty() {
+                return Some(token);
+            }
+        }
+        
+        // For GitHub servers, check legacy token names (backward compatibility)
+        let namespace_lower = namespace.to_lowercase();
+        if namespace_lower == "github" {
+            if let Ok(token) = std::env::var("GITHUB_PAT") {
+                if !token.is_empty() {
+                    return Some(token);
+                }
+            }
+            if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+                if !token.is_empty() {
+                    return Some(token);
+                }
+            }
+        }
+        
+        // Fall back to generic MCP auth token (works for any server)
+        if let Ok(token) = std::env::var("MCP_AUTH_TOKEN") {
+            if !token.is_empty() {
+                return Some(token);
+            }
+        }
+        
+        None
+    }
+    
+    /// Suggest an environment variable name for MCP authentication token
+    fn suggest_mcp_token_env_var(&self, server_name: &str) -> String {
+        let namespace = if let Some(slash_pos) = server_name.find('/') {
+            &server_name[..slash_pos]
+        } else {
+            server_name
+        };
+        
+        let normalized = namespace.replace("-", "_").to_uppercase();
+        format!("{}_MCP_TOKEN", normalized)
+    }
+    
+    /// Generate an enhanced rationale from a capability class name for better semantic matching
+    /// Converts abstract names like "DelegatingAsk" into functional descriptions
+    /// that semantic matching can understand
+    fn generate_enhanced_rationale(&self, capability_class: &str, fallback: &str) -> String {
+        let lower = capability_class.to_lowercase();
+        
+        // Generate functional descriptions based on common patterns
+        if lower.contains("ask") {
+            if lower.contains("user") || lower.contains("delegating") || lower.contains("interactive") {
+                return "Ask the user a question and get their response. Prompts user for input".to_string();
+            }
+        }
+        
+        if lower.contains("echo") || lower.contains("print") {
+            if !lower.contains("api") {
+                return "Echo or print a message. Output text to console".to_string();
+            }
+        }
+        
+        // Extract keywords and generate a functional description
+        let keywords = crate::discovery::capability_matcher::extract_keywords(capability_class);
+        if !keywords.is_empty() {
+            // Try to infer function from keywords
+            let action = keywords.iter().find(|k| {
+                matches!(k.as_str(), "ask" | "get" | "list" | "search" | "find" | "create" | "update" | "delete" | "echo" | "print")
+            });
+            
+            if let Some(action) = action {
+                let other_keywords: Vec<String> = keywords.iter().skip(1).take(2).cloned().collect();
+                return format!("{} {} capability", action, other_keywords.join(" "));
+            }
+        }
+        
+        // Fallback to original
+        fallback.to_string()
     }
     
     /// Format provider type as string for hints
