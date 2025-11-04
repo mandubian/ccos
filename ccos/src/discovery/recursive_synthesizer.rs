@@ -287,27 +287,76 @@ impl RecursiveSynthesizer {
             }
             
             // Search OpenAPI services
-            eprintln!("{}  → Searching OpenAPI services...", indent);
-            if let Some(openapi_manifest) = self.discovery_engine.search_openapi(need).await
-                .map_err(|e| RuntimeError::Generic(format!("OpenAPI search error: {}", e)))? {
-                eprintln!("{}  ✓ Found via OpenAPI: {}", indent, openapi_manifest.id);
-                // Register and return the OpenAPI capability
-                let marketplace = self.discovery_engine.get_marketplace();
-                if let Err(e) = marketplace.register_capability_manifest(openapi_manifest.clone()).await {
-                    eprintln!("{}  ⚠️  Failed to register OpenAPI capability: {}", indent, e);
+            // DISABLED: Web search and OpenAPI discovery temporarily disabled to avoid timeouts
+            // eprintln!("{}  → Searching OpenAPI services...", indent);
+            // if let Some(openapi_manifest) = self.discovery_engine.search_openapi(need).await
+            //     .map_err(|e| RuntimeError::Generic(format!("OpenAPI search error: {}", e)))? {
+            //     eprintln!("{}  ✓ Found via OpenAPI: {}", indent, openapi_manifest.id);
+            //     // Register and return the OpenAPI capability
+            //     let marketplace = self.discovery_engine.get_marketplace();
+            //     if let Err(e) = marketplace.register_capability_manifest(openapi_manifest.clone()).await {
+            //         eprintln!("{}  ⚠️  Failed to register OpenAPI capability: {}", indent, e);
+            //     }
+            //     return Ok(SynthesizedCapability {
+            //         manifest: openapi_manifest,
+            //         orchestrator_rtfs: "".to_string(),
+            //         plan: Some(plan),
+            //         sub_intents: vec![],
+            //         depth: self.cycle_detector.current_depth(),
+            //     });
+            // }
+            
+            // Try local RTFS synthesis for simple operations (ONLY if MCP didn't find anything)
+            // IMPORTANT: We only synthesize if no MCP capability was found above - if MCP found something,
+            // we would have returned early and never reached this point.
+            eprintln!("{}  → Attempting local RTFS synthesis (MCP found nothing, using fallback)...", indent);
+            if crate::discovery::local_synthesizer::LocalSynthesizer::can_synthesize_locally(need) {
+                match crate::discovery::local_synthesizer::LocalSynthesizer::synthesize_locally(need) {
+                    Ok(local_manifest) => {
+                        eprintln!("{}  ✓ Synthesized as local RTFS capability: {}", indent, local_manifest.id);
+                        
+                        // Display the generated RTFS code
+                        if let Some(rtfs_code) = local_manifest.metadata.get("rtfs_implementation") {
+                            eprintln!("{}  📝 Generated RTFS code:", indent);
+                            eprintln!("{}  {}", indent, "─".repeat(74));
+                            for line in rtfs_code.lines() {
+                                eprintln!("{}  {}", indent, line);
+                            }
+                            eprintln!("{}  {}", indent, "─".repeat(74));
+                        }
+                        
+                        // Save the capability to disk
+                        if let Err(e) = self.discovery_engine.save_synthesized_capability(&local_manifest).await {
+                            eprintln!("{}  ⚠️  Failed to save synthesized capability: {}", indent, e);
+                        } else {
+                            eprintln!("{}  💾 Saved synthesized capability to disk", indent);
+                        }
+                        
+                        // Register and return the local capability
+                        let marketplace = self.discovery_engine.get_marketplace();
+                        if let Err(e) = marketplace.register_capability_manifest(local_manifest.clone()).await {
+                            eprintln!("{}  ⚠️  Failed to register local capability: {}", indent, e);
+                        }
+                        return Ok(SynthesizedCapability {
+                            manifest: local_manifest,
+                            orchestrator_rtfs: "".to_string(),
+                            plan: Some(plan),
+                            sub_intents: vec![],
+                            depth: self.cycle_detector.current_depth(),
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!("{}  ⚠️  Local synthesis failed: {}", indent, e);
+                        eprintln!("{}  → Falling back to incomplete marking", indent);
+                    }
                 }
-                return Ok(SynthesizedCapability {
-                    manifest: openapi_manifest,
-                    orchestrator_rtfs: "".to_string(),
-                    plan: Some(plan),
-                    sub_intents: vec![],
-                    depth: self.cycle_detector.current_depth(),
-                });
+            } else {
+                eprintln!("{}  → Capability is not a simple local operation", indent);
             }
             
             // Not found anywhere - mark as incomplete/not_found
             eprintln!(
-                "{}  ✗ Not found in MCP registry or OpenAPI - marking as incomplete/not_found",
+                "{}  ✗ Not found in MCP registry (OpenAPI search disabled) - marking as incomplete/not_found",
                 indent
             );
             let incomplete_manifest = crate::discovery::engine::DiscoveryEngine::create_incomplete_capability(need);

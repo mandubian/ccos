@@ -115,13 +115,20 @@ impl DiscoveryEngine {
         }
         eprintln!("  ✗ Not found");
         
-        // 2. Try MCP registry search
+        // 2. Try MCP registry search (before local synthesis - MCP capabilities are real implementations)
         eprintln!("  [2/4] Searching MCP registry...");
         if let Some(manifest) = self.search_mcp_registry(need).await? {
             // Check if the capability is incomplete (shouldn't happen for MCP, but check anyway)
             let is_incomplete = manifest.metadata.get("status")
                 .map(|s| s == "incomplete")
                 .unwrap_or(false);
+            
+            // Save the discovered MCP capability to disk for persistence
+            if let Err(e) = self.save_mcp_capability(&manifest).await {
+                eprintln!("  ⚠️  Failed to save MCP capability to disk: {}", e);
+            } else {
+                eprintln!("  💾 Saved MCP capability to disk");
+            }
             
             // Register the discovered MCP capability in marketplace for future searches
             if let Err(e) = self.marketplace.register_capability_manifest(manifest.clone()).await {
@@ -141,14 +148,58 @@ impl DiscoveryEngine {
         }
         eprintln!("  ✗ Not found");
         
-        // 3. Try OpenAPI introspection
-        eprintln!("  [3/4] Searching OpenAPI services...");
-        if let Some(manifest) = self.search_openapi(need).await? {
-            eprintln!("  ✓ Found: {}", manifest.id);
-            eprintln!("{}", "═".repeat(80));
-            return Ok(DiscoveryResult::Found(manifest));
+        // 3. Try local RTFS synthesis for simple operations (ONLY if MCP didn't find anything)
+        // IMPORTANT: We only synthesize if no MCP capability was found above - if MCP found something,
+        // we would have returned early and never reached this point.
+        eprintln!("  [3/4] Checking for local RTFS synthesis (MCP found nothing, using fallback)...");
+        if crate::discovery::local_synthesizer::LocalSynthesizer::can_synthesize_locally(need) {
+            match crate::discovery::local_synthesizer::LocalSynthesizer::synthesize_locally(need) {
+                Ok(local_manifest) => {
+                    eprintln!("  ✓ Synthesized as local RTFS capability: {}", local_manifest.id);
+                    
+                    // Display the generated RTFS code
+                    if let Some(rtfs_code) = local_manifest.metadata.get("rtfs_implementation") {
+                        eprintln!("  📝 Generated RTFS code:");
+                        eprintln!("  {}", "─".repeat(76));
+                        for line in rtfs_code.lines() {
+                            eprintln!("  {}", line);
+                        }
+                        eprintln!("  {}", "─".repeat(76));
+                    }
+                    
+                    // Save the capability to disk
+                    if let Err(e) = self.save_synthesized_capability(&local_manifest).await {
+                        eprintln!("  ⚠️  Failed to save synthesized capability: {}", e);
+                    } else {
+                        eprintln!("  💾 Saved synthesized capability to disk");
+                    }
+                    
+                    // Register the local capability
+                    if let Err(e) = self.marketplace.register_capability_manifest(local_manifest.clone()).await {
+                        eprintln!("  ⚠️  Failed to register local capability: {}", e);
+                    } else {
+                        eprintln!("       Registered local capability in marketplace");
+                    }
+                    eprintln!("{}", "═".repeat(80));
+                    return Ok(DiscoveryResult::Found(local_manifest));
+                }
+                Err(e) => {
+                    eprintln!("  ⚠️  Local synthesis failed: {}, continuing...", e);
+                }
+            }
+        } else {
+            eprintln!("  → Not a simple local operation");
         }
-        eprintln!("  ✗ Not found");
+        
+        // 4. Try OpenAPI introspection
+        // DISABLED: Web search and OpenAPI discovery temporarily disabled to avoid timeouts
+        // eprintln!("  [3/5] Searching OpenAPI services...");
+        // if let Some(manifest) = self.search_openapi(need).await? {
+        //     eprintln!("  ✓ Found: {}", manifest.id);
+        //     eprintln!("{}", "═".repeat(80));
+        //     return Ok(DiscoveryResult::Found(manifest));
+        // }
+        // eprintln!("  ✗ Not found");
         
         // 4. Try recursive synthesis (if delegating arbiter is available)
         eprintln!("  [4/4] Attempting recursive synthesis...");
@@ -1535,6 +1586,219 @@ impl DiscoveryEngine {
     }
     
     /// Format provider type as string for hints
+    /// Save a synthesized capability to disk
+    pub async fn save_synthesized_capability(&self, manifest: &CapabilityManifest) -> RuntimeResult<()> {
+        use std::fs;
+        use std::path::Path;
+        
+        let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("./capabilities/generated"));
+        
+        fs::create_dir_all(&storage_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
+        })?;
+        
+        let capability_dir = storage_dir.join(&manifest.id);
+        fs::create_dir_all(&capability_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create capability directory: {}", e))
+        })?;
+        
+        // Get RTFS implementation code from metadata
+        let rtfs_code = manifest.metadata.get("rtfs_implementation")
+            .cloned()
+            .unwrap_or_else(|| {
+                format!(
+                    ";; Synthesized capability: {}\n;; No RTFS implementation stored",
+                    manifest.id
+                )
+            });
+        
+        // Create full capability RTFS file
+        let capability_rtfs = format!(
+            r#";; Synthesized capability: {}
+;; Generated: {}
+(capability "{}"
+  :name "{}"
+  :version "{}"
+  :description "{}"
+  :synthesis-method "local_rtfs"
+  :permissions []
+  :effects []
+  :implementation
+    {}
+)
+"#,
+            manifest.id,
+            chrono::Utc::now().to_rfc3339(),
+            manifest.id,
+            manifest.name,
+            manifest.version,
+            manifest.description,
+            rtfs_code
+        );
+        
+        let capability_file = capability_dir.join("capability.rtfs");
+        fs::write(&capability_file, capability_rtfs).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to write capability file: {}", e))
+        })?;
+        
+        Ok(())
+    }
+    
+    /// Save an MCP capability to disk (similar to synthesized capabilities)
+    pub async fn save_mcp_capability(&self, manifest: &CapabilityManifest) -> RuntimeResult<()> {
+        use std::fs;
+        use std::path::Path;
+        
+        // Extract MCP provider information - check both ProviderType::MCP and Local with MCP metadata
+        let (server_url, tool_name) = match &manifest.provider {
+            crate::capability_marketplace::types::ProviderType::MCP(mcp) => {
+                (mcp.server_url.clone(), mcp.tool_name.clone())
+            }
+            // MCP introspection creates Local capabilities with MCP metadata
+            crate::capability_marketplace::types::ProviderType::Local(_) => {
+                // Check if this is an MCP capability by looking at metadata
+                let server_url = manifest.metadata.get("mcp_server_url")
+                    .ok_or_else(|| RuntimeError::Generic(format!(
+                        "Capability {} has Local provider but missing mcp_server_url in metadata",
+                        manifest.id
+                    )))?;
+                let tool_name = manifest.metadata.get("mcp_tool_name")
+                    .ok_or_else(|| RuntimeError::Generic(format!(
+                        "Capability {} has Local provider but missing mcp_tool_name in metadata",
+                        manifest.id
+                    )))?;
+                (server_url.clone(), tool_name.clone())
+            }
+            _ => {
+                return Err(RuntimeError::Generic(format!(
+                    "Capability {} is not an MCP capability (provider: {:?})",
+                    manifest.id,
+                    manifest.provider
+                )));
+            }
+        };
+        
+        let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("./capabilities/discovered"));
+        
+        // Use hierarchical structure: capabilities/discovered/mcp/<namespace>/<tool>.rtfs
+        // Parse capability ID: "mcp.namespace.tool_name" or "github.issues.list"
+        let parts: Vec<&str> = manifest.id.split('.').collect();
+        let capability_dir = if parts.len() >= 3 && parts[0] == "mcp" {
+            // MCP capability with explicit "mcp" prefix
+            let namespace = parts[1];
+            let tool = parts[2..].join("_");
+            storage_dir.join("mcp").join(namespace)
+        } else if parts.len() >= 2 {
+            // Capability like "github.issues.list"
+            let namespace = parts[0];
+            let tool = parts[1..].join("_");
+            storage_dir.join("mcp").join(namespace)
+        } else {
+            // Fallback: use capability ID directly
+            storage_dir.join("mcp").join("misc")
+        };
+        
+        fs::create_dir_all(&capability_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create capability directory: {}", e))
+        })?;
+        
+        // Get tool name from parts or metadata
+        let tool_file_name = if parts.len() >= 3 {
+            parts[2..].join("_")
+        } else if parts.len() >= 2 {
+            parts[1..].join("_")
+        } else {
+            tool_name.clone()
+        };
+        
+        // Get RTFS implementation code if available, otherwise generate a placeholder
+        let rtfs_code = manifest.metadata.get("rtfs_implementation")
+            .cloned()
+            .unwrap_or_else(|| {
+                // Generate a simple MCP wrapper if no implementation is stored
+                format!(
+                    r#"(fn [input]
+  ;; MCP Tool: {}
+  ;; Runtime handles MCP protocol automatically
+  (call :ccos.capabilities.mcp.call
+    :server-url "{}"
+    :tool-name "{}"
+    :input input))"#,
+                    manifest.name,
+                    server_url,
+                    tool_name
+                )
+            });
+        
+        // Get schema strings
+        let input_schema_str = manifest.input_schema.as_ref()
+            .map(|s| format!("{:?}", s))
+            .unwrap_or_else(|| ":any".to_string());
+        let output_schema_str = manifest.output_schema.as_ref()
+            .map(|s| format!("{:?}", s))
+            .unwrap_or_else(|| ":any".to_string());
+        
+        // Create full capability RTFS file
+        let capability_rtfs = format!(
+            r#";; MCP Capability: {}
+;; Generated: {}
+;; MCP Server: {}
+;; Tool: {}
+
+(capability "{}"
+  :name "{}"
+  :version "{}"
+  :description "{}"
+  :provider "MCP"
+  :permissions []
+  :effects []
+  :metadata {{
+    :mcp {{
+      :server_url "{}"
+      :tool_name "{}"
+      :requires_session "auto"
+      :auth_env_var "MCP_AUTH_TOKEN"
+    }}
+    :discovery {{
+      :method "mcp_registry"
+      :created_at "{}"
+      :capability_type "mcp_tool"
+    }}
+  }}
+  :input-schema {}
+  :output-schema {}
+  :implementation
+    {}
+)
+"#,
+            manifest.id,
+            chrono::Utc::now().to_rfc3339(),
+            server_url,
+            tool_name,
+            manifest.id,
+            manifest.name,
+            manifest.version,
+            manifest.description,
+            server_url,
+            tool_name,
+            chrono::Utc::now().to_rfc3339(),
+            input_schema_str,
+            output_schema_str,
+            rtfs_code
+        );
+        
+        let capability_file = capability_dir.join(format!("{}.rtfs", tool_file_name));
+        fs::write(&capability_file, capability_rtfs).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to write capability file: {}", e))
+        })?;
+        
+        Ok(())
+    }
+    
     fn format_provider(&self, provider: &crate::capability_marketplace::types::ProviderType) -> String {
         match provider {
             crate::capability_marketplace::types::ProviderType::MCP(_) => "MCP".to_string(),

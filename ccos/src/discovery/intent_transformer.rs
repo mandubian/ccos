@@ -57,13 +57,30 @@ impl IntentTransformer {
             String::new()
         };
         
+        // Check if this is a simple operation that should be synthesized locally
+        let is_simple_op = need.capability_class.contains("filter") || 
+                          need.capability_class.contains("display") ||
+                          need.capability_class.contains("format") ||
+                          need.capability_class.contains("map") ||
+                          need.capability_class.contains("sort") ||
+                          need.rationale.to_lowercase().contains("filter") ||
+                          need.rationale.to_lowercase().contains("display") ||
+                          need.rationale.to_lowercase().contains("format");
+        
+        let local_synthesis_hint = if is_simple_op {
+            "\n\nIMPORTANT: This appears to be a simple data transformation operation (filter, display, format, etc.). If possible, implement this using local RTFS stdlib functions (filter, map, str, etc.) rather than requiring an external service. Only use external services if the operation requires domain-specific APIs or complex external resources."
+        } else {
+            ""
+        };
+        
         let goal = format!(
-            "Identify the specific external service, API, or capability needed to implement: {} (inputs: {}, outputs: {}). Then generate a plan that calls this service. IMPORTANT: Do NOT ask users questions - instead, declare the specific service capability ID you need (e.g., 'restaurant.api.search', 'hotel.booking.reserve', etc.) and use it in a (call :service.id {{...}}) form. If the service doesn't exist yet, declare what it should be called.{}{}",
+            "Identify the specific external service, API, or capability needed to implement: {} (inputs: {}, outputs: {}). Then generate a plan that calls this service. IMPORTANT: Do NOT ask users questions - instead, declare the specific service capability ID you need (e.g., 'restaurant.api.search', 'hotel.booking.reserve', etc.) and use it in a (call :service.id {{...}}) form. If the service doesn't exist yet, declare what it should be called.{}{}{}",
             need.capability_class,
             need.required_inputs.join(", "),
             need.expected_outputs.join(", "),
             examples_section,
-            parent_context
+            parent_context,
+            local_synthesis_hint
         );
         
         // Build constraints from required inputs

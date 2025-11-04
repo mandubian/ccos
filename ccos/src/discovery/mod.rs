@@ -12,6 +12,7 @@ pub mod recursive_synthesizer;
 pub mod introspection_cache;
 pub mod capability_matcher;
 pub mod embedding_service;
+pub mod local_synthesizer;
 
 pub use need_extractor::*;
 pub use engine::*;
@@ -21,4 +22,5 @@ pub use recursive_synthesizer::*;
 pub use introspection_cache::*;
 pub use capability_matcher::*;
 pub use embedding_service::*;
+pub use local_synthesizer::*;
 
