@@ -6,6 +6,7 @@
 
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::capability_marketplace::types::{CapabilityManifest, LocalCapability};
+use rtfs::ast::{Keyword, MapTypeEntry, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use std::sync::Arc;
@@ -183,6 +184,11 @@ impl LocalSynthesizer {
             "1.0.0".to_string(),
         );
         manifest.metadata = metadata;
+        
+        // Set input/output schemas based on required inputs and expected outputs
+        manifest.input_schema = Self::create_input_schema(&need.required_inputs);
+        manifest.output_schema = Self::create_output_schema(&need.expected_outputs);
+        
         Ok(manifest)
     }
     
@@ -257,6 +263,11 @@ impl LocalSynthesizer {
             "1.0.0".to_string(),
         );
         manifest.metadata = metadata;
+        
+        // Set input/output schemas based on required inputs and expected outputs
+        manifest.input_schema = Self::create_input_schema(&need.required_inputs);
+        manifest.output_schema = Self::create_output_schema(&need.expected_outputs);
+        
         Ok(manifest)
     }
     
@@ -284,6 +295,48 @@ impl LocalSynthesizer {
     /// Synthesize a transform operation
     fn synthesize_transform(need: &CapabilityNeed) -> RuntimeResult<CapabilityManifest> {
         Err(RuntimeError::Generic("Transform synthesis not yet implemented".to_string()))
+    }
+    
+    /// Create input schema from required inputs
+    fn create_input_schema(required_inputs: &[String]) -> Option<TypeExpr> {
+        if required_inputs.is_empty() {
+            return None;
+        }
+        
+        let entries: Vec<MapTypeEntry> = required_inputs
+            .iter()
+            .map(|input| MapTypeEntry {
+                key: Keyword(input.clone()),
+                value_type: Box::new(TypeExpr::Any),
+                optional: false,
+            })
+            .collect();
+        
+        Some(TypeExpr::Map {
+            entries,
+            wildcard: None,
+        })
+    }
+    
+    /// Create output schema from expected outputs
+    fn create_output_schema(expected_outputs: &[String]) -> Option<TypeExpr> {
+        if expected_outputs.is_empty() {
+            return None;
+        }
+        
+        let entries: Vec<MapTypeEntry> = expected_outputs
+            .iter()
+            .map(|output| MapTypeEntry {
+                key: Keyword(output.clone()),
+                value_type: Box::new(TypeExpr::Any),
+                optional: false,
+            })
+            .collect();
+        
+        Some(TypeExpr::Map {
+            entries,
+            wildcard: None,
+        })
     }
 }
 

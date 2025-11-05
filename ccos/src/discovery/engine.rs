@@ -1614,6 +1614,14 @@ impl DiscoveryEngine {
                 )
             });
         
+        // Get schema strings
+        let input_schema_str = manifest.input_schema.as_ref()
+            .map(|s| format!("{:?}", s))
+            .unwrap_or_else(|| ":any".to_string());
+        let output_schema_str = manifest.output_schema.as_ref()
+            .map(|s| format!("{:?}", s))
+            .unwrap_or_else(|| ":any".to_string());
+        
         // Create full capability RTFS file
         let capability_rtfs = format!(
             r#";; Synthesized capability: {}
@@ -1625,6 +1633,8 @@ impl DiscoveryEngine {
   :synthesis-method "local_rtfs"
   :permissions []
   :effects []
+  :input-schema {}
+  :output-schema {}
   :implementation
     {}
 )
@@ -1635,6 +1645,8 @@ impl DiscoveryEngine {
             manifest.name,
             manifest.version,
             manifest.description,
+            input_schema_str,
+            output_schema_str,
             rtfs_code
         );
         

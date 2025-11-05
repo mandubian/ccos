@@ -27,19 +27,35 @@ pub fn extract_intent_from_rtfs(expr: &Expression) -> Result<Intent, RtfsBridgeE
 ///
 /// Supports both function call format: `(ccos/plan "name" :body (...))`
 /// and map format: `{:type "plan" :name "..." :body (...)}`
+/// 
+/// This function normalizes function-call syntax to canonical maps before extraction.
 pub fn extract_plan_from_rtfs(expr: &Expression) -> Result<Plan, RtfsBridgeError> {
-    match expr {
-        Expression::FunctionCall { callee, arguments } => {
-            extract_plan_from_function_call(callee, arguments)
+    use super::normalizer::{normalize_plan_to_map, NormalizationConfig};
+    
+    // Normalize to canonical map format first (handles function-call syntax)
+    let normalized = normalize_plan_to_map(
+        expr,
+        NormalizationConfig {
+            warn_on_function_call: true,
+            validate_after_normalization: true,
+        },
+    )?;
+    
+    // Extract from normalized map (guaranteed to be a map after normalization)
+    let plan = match normalized {
+        Expression::Map(map) => extract_plan_from_map(&map)?,
+        _ => {
+            return Err(RtfsBridgeError::InvalidObjectFormat {
+                message: "Normalization should produce a map".to_string(),
+            });
         }
-        Expression::Map(map) => extract_plan_from_map(map),
-        _ => Err(RtfsBridgeError::InvalidObjectFormat {
-            message: format!(
-                "Expected FunctionCall or Map for Plan, got {}",
-                expression_to_rtfs_string(expr)
-            ),
-        }),
-    }
+    };
+
+    // Validate the extracted plan (including TypeExpr-aware schema validation)
+    use super::validators::validate_plan;
+    validate_plan(&plan)?;
+
+    Ok(plan)
 }
 
 fn extract_intent_from_function_call(
