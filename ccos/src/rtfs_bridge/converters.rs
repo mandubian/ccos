@@ -129,9 +129,11 @@ pub fn intent_to_rtfs_map(intent: &Intent) -> Result<Expression, RtfsBridgeError
     Ok(Expression::Map(map))
 }
 
-/// Converts a CCOS Plan to an RTFS function call expression
+/// Converts a CCOS Plan to an RTFS function call expression (LEGACY)
 ///
 /// Format: `(ccos/plan "name" :body (...) :intent-ids [...] :input-schema {...} :output-schema {...} :policies {...} :capabilities-required [...] :annotations {...})`
+/// 
+/// ⚠️ DEPRECATED: This produces legacy function-call format. Use `plan_to_rtfs_map` for canonical map format.
 pub fn plan_to_rtfs_function_call(plan: &Plan) -> Result<Expression, RtfsBridgeError> {
     let mut args = vec![];
 
