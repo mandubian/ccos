@@ -10,15 +10,15 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use chrono::Utc;
-use clap::Parser;
-use crossterm::style::Stylize;
-use rtfs::ast::{Expression, Keyword, Literal, MapKey};
 use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
 use ccos::discovery::{CapabilityNeed, DiscoveryEngine};
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::types::{Intent, Plan};
 use ccos::CCOS;
+use chrono::Utc;
+use clap::Parser;
+use crossterm::style::Stylize;
+use rtfs::ast::{Expression, Keyword, Literal, MapKey};
 use rtfs::config::profile_selection::expand_profiles;
 use rtfs::config::types::{AgentConfig, LlmProfile};
 use rtfs::parser::parse_expression;
@@ -230,15 +230,16 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     annotate_steps_with_matches(&mut plan_steps, &matches);
 
     let needs_value = build_needs_capabilities(&plan_steps);
-    
+
     // Resolve missing capabilities and build orchestrating agent
     let resolved_steps = resolve_and_stub_capabilities(&ccos, &plan_steps, &matches).await?;
     let orchestrator_rtfs = generate_orchestrator_capability(&goal, &resolved_steps)?;
-    
+
     // Register the orchestrator as a reusable capability in the marketplace
-    let planner_capability_id = format!("synth.plan.orchestrator.{}", chrono::Utc::now().timestamp());
+    let planner_capability_id =
+        format!("synth.plan.orchestrator.{}", chrono::Utc::now().timestamp());
     register_orchestrator_in_marketplace(&ccos, &planner_capability_id, &orchestrator_rtfs).await?;
-    
+
     let mut plan = Plan::new_rtfs(orchestrator_rtfs, vec![]);
     plan.metadata
         .insert("needs_capabilities".to_string(), needs_value.clone());
@@ -258,7 +259,9 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     print_plan_draft(&plan_steps, &matches, &plan);
     println!(
         "\n{}",
-        "✅ Orchestrator generated and registered in marketplace".bold().green()
+        "✅ Orchestrator generated and registered in marketplace"
+            .bold()
+            .green()
     );
 
     Ok(())
@@ -714,15 +717,20 @@ mod tests {
             resolution_strategy: ResolutionStrategy::Found,
         };
 
-        let rtfs = generate_orchestrator_capability(
-            "Book trip",
-            &[step1, step2],
-        )
-        .expect("rtfs generation");
+        let rtfs = generate_orchestrator_capability("Book trip", &[step1, step2])
+            .expect("rtfs generation");
 
-    // Must contain schemas
-        assert!(rtfs.contains(":input-schema"), "missing input-schema: {}", rtfs);
-        assert!(rtfs.contains(":output-schema"), "missing output-schema: {}", rtfs);
+        // Must contain schemas
+        assert!(
+            rtfs.contains(":input-schema"),
+            "missing input-schema: {}",
+            rtfs
+        );
+        assert!(
+            rtfs.contains(":output-schema"),
+            "missing output-schema: {}",
+            rtfs
+        );
 
         // No legacy $ prefix
         assert!(
@@ -733,8 +741,11 @@ mod tests {
 
         // Capabilities required vector present with both caps
         assert!(
-            rtfs.contains(":capabilities-required [\"travel.flights.search\" \"travel.lodging.reserve\"]")
-                || rtfs.contains(":capabilities-required [\"travel.lodging.reserve\" \"travel.flights.search\"]"),
+            rtfs.contains(
+                ":capabilities-required [\"travel.flights.search\" \"travel.lodging.reserve\"]"
+            ) || rtfs.contains(
+                ":capabilities-required [\"travel.lodging.reserve\" \"travel.flights.search\"]"
+            ),
             "capabilities-required vector missing or incomplete: {}",
             rtfs
         );
@@ -746,12 +757,28 @@ mod tests {
         assert!(rtfs.contains(":dates dates"));
 
         // Output schema should reflect union of all step outputs
-        assert!(rtfs.contains(":flight_options :any"), "output-schema missing flight_options: {}", rtfs);
-        assert!(rtfs.contains(":reservation :any"), "output-schema missing reservation: {}", rtfs);
+        assert!(
+            rtfs.contains(":flight_options :any"),
+            "output-schema missing flight_options: {}",
+            rtfs
+        );
+        assert!(
+            rtfs.contains(":reservation :any"),
+            "output-schema missing reservation: {}",
+            rtfs
+        );
 
         // Body should bind steps and compose final map using get
-        assert!(rtfs.contains("(let ["), "plan should bind step results with let: {}", rtfs);
-        assert!(rtfs.contains("(get step_1 :reservation"), "final composition should reference step outputs: {}", rtfs);
+        assert!(
+            rtfs.contains("(let ["),
+            "plan should bind step results with let: {}",
+            rtfs
+        );
+        assert!(
+            rtfs.contains("(get step_1 :reservation"),
+            "final composition should reference step outputs: {}",
+            rtfs
+        );
     }
 
     #[test]
@@ -786,11 +813,19 @@ mod tests {
             resolution_strategy: ResolutionStrategy::Found,
         };
 
-    let rtfs = generate_orchestrator_capability("Trip", &[s1, s2]).expect("generate");
+        let rtfs = generate_orchestrator_capability("Trip", &[s1, s2]).expect("generate");
 
         // Step 2 should wire :prefs from step_0 output; destination remains a free input
-        assert!(rtfs.contains(":prefs (get step_0 :prefs)"), "prefs should be wired from previous step: {}", rtfs);
-        assert!(rtfs.contains(":destination destination"), "destination should remain a free symbol input: {}", rtfs);
+        assert!(
+            rtfs.contains(":prefs (get step_0 :prefs)"),
+            "prefs should be wired from previous step: {}",
+            rtfs
+        );
+        assert!(
+            rtfs.contains(":destination destination"),
+            "destination should remain a free symbol input: {}",
+            rtfs
+        );
 
         // Input schema should not require internal-only keys like :prefs (produced by step_0)
         assert!(rtfs.contains(":input-schema"));
@@ -853,33 +888,35 @@ async fn auto_answer_with_llm(
     debug: bool,
 ) -> DemoResult<AnswerRecord> {
     let mut prompt = String::new();
-    prompt.push_str("You are answering clarifying questions for a smart assistant based on a user's goal.\n");
+    prompt.push_str(
+        "You are answering clarifying questions for a smart assistant based on a user's goal.\n",
+    );
     prompt.push_str("Respond with ONLY the answer value, no explanation or context.\n");
     prompt.push_str("Do NOT use code fences, quotes, or any special formatting.\n");
     prompt.push_str("\nGoal: ");
     prompt.push_str(goal);
-    
+
     if !intent.constraints.is_empty() {
         prompt.push_str("\n\nKnown constraints:");
         for (k, v) in &intent.constraints {
             prompt.push_str(&format!("\n  {} = {}", k, format_value(v)));
         }
     }
-    
+
     if !intent.preferences.is_empty() {
         prompt.push_str("\n\nKnown preferences:");
         for (k, v) in &intent.preferences {
             prompt.push_str(&format!("\n  {} = {}", k, format_value(v)));
         }
     }
-    
+
     if !collected_answers.is_empty() {
         prompt.push_str("\n\nPreviously answered questions:");
         for answer in collected_answers {
             prompt.push_str(&format!("\n  {} = {}", answer.key, answer.text));
         }
     }
-    
+
     prompt.push_str("\n\nCurrent question: ");
     prompt.push_str(&question.prompt);
     prompt.push_str("\nRationale: ");
@@ -976,8 +1013,9 @@ async fn conduct_interview(
         if !interactive {
             println!("\n{}", "❓ Auto-answering clarifying question".bold());
             println!("{}", question.prompt.as_str().cyan());
-            
-            let answer = auto_answer_with_llm(delegating, goal, intent, &collected, question, debug).await?;
+
+            let answer =
+                auto_answer_with_llm(delegating, goal, intent, &collected, question, debug).await?;
             collected.push(answer);
             continue;
         }
@@ -1876,7 +1914,10 @@ async fn register_stub_capability(
         for output_key in &step_copy.expected_outputs {
             out_map.insert(
                 MapKey::String(output_key.clone()),
-                Value::String(format!("{{pending: stub for {}}}", step_copy.capability_class)),
+                Value::String(format!(
+                    "{{pending: stub for {}}}",
+                    step_copy.capability_class
+                )),
             );
         }
         Ok(Value::Map(out_map))
@@ -1924,7 +1965,8 @@ async fn register_orchestrator_in_marketplace(
         .register_local_capability(
             capability_id.to_string(),
             "Synthesized Plan Orchestrator".to_string(),
-            "Auto-generated capability that orchestrates multiple steps into a coordinated plan".to_string(),
+            "Auto-generated capability that orchestrates multiple steps into a coordinated plan"
+                .to_string(),
             handler,
         )
         .await;
@@ -1954,7 +1996,8 @@ async fn register_orchestrator_in_marketplace(
     // Also convert the plan into a first-class Capability and persist under capabilities/generated/<id>/capability.rtfs
     {
         let persist_cap_result: Result<(), Box<dyn std::error::Error>> = (|| {
-            let capability_rtfs = convert_plan_to_capability_rtfs(capability_id, orchestrator_rtfs)?;
+            let capability_rtfs =
+                convert_plan_to_capability_rtfs(capability_id, orchestrator_rtfs)?;
             let cap_dir = Path::new("capabilities/generated").join(capability_id);
             fs::create_dir_all(&cap_dir)?;
             let cap_file = cap_dir.join("capability.rtfs");
@@ -1974,10 +2017,7 @@ async fn register_orchestrator_in_marketplace(
         }
     }
 
-    println!(
-        "  📦 Registered as capability: {}",
-        capability_id.cyan()
-    );
+    println!("  📦 Registered as capability: {}", capability_id.cyan());
 
     Ok(())
 }
@@ -1990,7 +2030,11 @@ fn convert_plan_to_capability_rtfs(capability_id: &str, plan_rtfs: &str) -> Demo
     // Extract fields from plan
     let body_do = extract_s_expr_after_key(plan_rtfs, ":body")
         .or_else(|| extract_do_block(plan_rtfs))
-        .ok_or_else(|| runtime_error(RuntimeError::Generic("Could not extract :body from plan".to_string())))?;
+        .ok_or_else(|| {
+            runtime_error(RuntimeError::Generic(
+                "Could not extract :body from plan".to_string(),
+            ))
+        })?;
     let input_schema = extract_block_after_key(plan_rtfs, ":input-schema", '{', '}')
         .unwrap_or_else(|| "{}".to_string());
     let output_schema = extract_block_after_key(plan_rtfs, ":output-schema", '{', '}')
@@ -2003,7 +2047,9 @@ fn convert_plan_to_capability_rtfs(capability_id: &str, plan_rtfs: &str) -> Demo
     out.push_str(&format!("(capability \"{}\"\n", capability_id));
     out.push_str("  :name \"Synthesized Plan Orchestrator\"\n");
     out.push_str("  :version \"1.0.0\"\n");
-    out.push_str("  :description \"Auto-generated orchestrator capability from smart_assistant plan\"\n");
+    out.push_str(
+        "  :description \"Auto-generated orchestrator capability from smart_assistant plan\"\n",
+    );
     out.push_str("  :source_url \"ccos://generated\"\n");
     out.push_str("  :discovery_method \"smart_assistant\"\n");
     out.push_str(&format!("  :created_at \"{}\"\n", created_at));
@@ -2021,7 +2067,9 @@ fn convert_plan_to_capability_rtfs(capability_id: &str, plan_rtfs: &str) -> Demo
 }
 
 /// Extracts the first top-level (do ...) s-expression from a text blob.
-fn extract_do_block(text: &str) -> Option<String> { extract_block_with_head(text, "do") }
+fn extract_do_block(text: &str) -> Option<String> {
+    extract_block_with_head(text, "do")
+}
 
 /// Extracts the first top-level s-expression immediately following a given keyword key.
 fn extract_s_expr_after_key(text: &str, key: &str) -> Option<String> {
@@ -2030,13 +2078,21 @@ fn extract_s_expr_after_key(text: &str, key: &str) -> Option<String> {
     let mut in_string = false;
     while i + key.len() <= bytes.len() {
         let c = bytes[i] as char;
-        if c == '"' { in_string = !in_string; i += 1; continue; }
+        if c == '"' {
+            in_string = !in_string;
+            i += 1;
+            continue;
+        }
         if !in_string && &text[i..i + key.len()] == key {
             // Move to next '('
             let mut j = i + key.len();
             while j < bytes.len() {
                 let cj = bytes[j] as char;
-                if cj == '"' { in_string = !in_string; j += 1; continue; }
+                if cj == '"' {
+                    in_string = !in_string;
+                    j += 1;
+                    continue;
+                }
                 if !in_string && cj == '(' {
                     return extract_balanced_from(text, j, '(', ')');
                 }
@@ -2055,13 +2111,21 @@ fn extract_block_after_key(text: &str, key: &str, open: char, close: char) -> Op
     let mut in_string = false;
     while i + key.len() <= bytes.len() {
         let c = bytes[i] as char;
-        if c == '"' { in_string = !in_string; i += 1; continue; }
+        if c == '"' {
+            in_string = !in_string;
+            i += 1;
+            continue;
+        }
         if !in_string && &text[i..i + key.len()] == key {
             // Move to next opening delimiter
             let mut j = i + key.len();
             while j < bytes.len() {
                 let cj = bytes[j] as char;
-                if cj == '"' { in_string = !in_string; j += 1; continue; }
+                if cj == '"' {
+                    in_string = !in_string;
+                    j += 1;
+                    continue;
+                }
                 if !in_string && cj == open {
                     return extract_balanced_from(text, j, open, close);
                 }
@@ -2080,11 +2144,17 @@ fn extract_block_with_head(text: &str, head: &str) -> Option<String> {
     let mut in_string = false;
     while i < bytes.len() {
         let c = bytes[i] as char;
-        if c == '"' { in_string = !in_string; i += 1; continue; }
+        if c == '"' {
+            in_string = !in_string;
+            i += 1;
+            continue;
+        }
         if !in_string && c == '(' {
             // Check head
             let mut j = i + 1;
-            while j < bytes.len() && (bytes[j] as char).is_whitespace() { j += 1; }
+            while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+                j += 1;
+            }
             if j + head.len() <= bytes.len() && &text[j..j + head.len()] == head {
                 return extract_balanced_from(text, i, '(', ')');
             }
@@ -2097,16 +2167,28 @@ fn extract_block_with_head(text: &str, head: &str) -> Option<String> {
 /// Helper to extract a balanced region starting at index `start` where `text[start] == open`.
 fn extract_balanced_from(text: &str, start: usize, open: char, close: char) -> Option<String> {
     let bytes = text.as_bytes();
-    if start >= bytes.len() || (bytes[start] as char) != open { return None; }
+    if start >= bytes.len() || (bytes[start] as char) != open {
+        return None;
+    }
     let mut depth: i32 = 0;
     let mut in_string = false;
     let mut i = start;
     while i < bytes.len() {
         let c = bytes[i] as char;
-        if c == '"' { in_string = !in_string; i += 1; continue; }
+        if c == '"' {
+            in_string = !in_string;
+            i += 1;
+            continue;
+        }
         if !in_string {
-            if c == open { depth += 1; }
-            else if c == close { depth -= 1; if depth == 0 { return Some(text[start..=i].to_string()); } }
+            if c == open {
+                depth += 1;
+            } else if c == close {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(text[start..=i].to_string());
+                }
+            }
         }
         i += 1;
     }
@@ -2119,7 +2201,7 @@ fn generate_orchestrator_capability(
     resolved_steps: &[ResolvedStep],
 ) -> DemoResult<String> {
     let mut rtfs_code = String::new();
-    
+
     // Compute true external inputs by walking steps and excluding inputs produced by prior steps
     let mut produced: HashSet<String> = HashSet::new();
     let mut external_inputs: HashSet<String> = HashSet::new();
@@ -2149,7 +2231,7 @@ fn generate_orchestrator_capability(
     }
     let mut all_outputs: Vec<_> = output_to_idx.keys().cloned().collect();
     all_outputs.sort();
-    
+
     // Build input-schema map with :any type as default
     let input_schema = if external_inputs.is_empty() {
         "{}".to_string()
@@ -2163,7 +2245,7 @@ fn generate_orchestrator_capability(
         }
         format!("{{\n{}\n  }}", schema_parts.join("\n"))
     };
-    
+
     // Build a proper RTFS 2.0 plan structure with input/output schemas
     rtfs_code.push_str("(plan\n");
     rtfs_code.push_str(&format!("  :name \"synth.plan.orchestrator.v1\"\n"));
@@ -2207,7 +2289,9 @@ fn generate_orchestrator_capability(
             // For wiring, compute a map of available outputs from previous steps
             let mut prior_outputs: HashMap<String, usize> = HashMap::new();
             for (pidx, prev) in resolved_steps.iter().enumerate() {
-                if pidx >= idx { break; }
+                if pidx >= idx {
+                    break;
+                }
                 for out in &prev.original.expected_outputs {
                     prior_outputs.insert(out.clone(), pidx);
                 }
@@ -2226,20 +2310,17 @@ fn generate_orchestrator_capability(
         rtfs_code.push_str("      {\n");
         for (i, key) in all_outputs.iter().enumerate() {
             let src_idx = output_to_idx.get(key).cloned().unwrap_or(0);
-            rtfs_code.push_str(&format!(
-                "        :{} (get step_{} :{})",
-                key, src_idx, key
-            ));
+            rtfs_code.push_str(&format!("        :{} (get step_{} :{})", key, src_idx, key));
             if i < all_outputs.len() - 1 {
                 rtfs_code.push_str("\n");
             }
         }
         rtfs_code.push_str("\n      })\n");
     }
-    
+
     rtfs_code.push_str("  )\n");
     rtfs_code.push_str(")\n");
-    
+
     Ok(rtfs_code)
 }
 
@@ -2251,7 +2332,7 @@ fn build_step_call_args(
     if step.required_inputs.is_empty() {
         return Ok("{}".to_string());
     }
-    
+
     let mut args_parts = vec!["{".to_string()];
     for (i, input) in step.required_inputs.iter().enumerate() {
         if let Some(pidx) = prior_outputs.get(input) {
@@ -2264,7 +2345,7 @@ fn build_step_call_args(
         }
     }
     args_parts.push("\n  }".to_string());
-    
+
     Ok(args_parts.join(""))
 }
 
@@ -2273,7 +2354,8 @@ fn infer_input_type(name: &str) -> &'static str {
     let n = name.trim().to_ascii_lowercase();
     match n.as_str() {
         // Strings
-        "goal" | "origin" | "destination" | "dates" | "lodging_style" | "risk_profile" | "date_range" => "string",
+        "goal" | "origin" | "destination" | "dates" | "lodging_style" | "risk_profile"
+        | "date_range" => "string",
         // Integers
         "party_size" | "n" | "count" => "integer",
         // Numbers (floats/ints)
@@ -2292,7 +2374,7 @@ fn build_final_output(resolved_steps: &[ResolvedStep]) -> DemoResult<String> {
     if resolved_steps.is_empty() {
         return Ok("    {}".to_string());
     }
-    
+
     let mut outputs = Vec::new();
     for (idx, step) in resolved_steps.iter().enumerate() {
         for output_key in &step.original.expected_outputs {
@@ -2303,10 +2385,7 @@ fn build_final_output(resolved_steps: &[ResolvedStep]) -> DemoResult<String> {
     if outputs.is_empty() {
         Ok("    {}".to_string())
     } else {
-        Ok(format!(
-            "    {{\n{}\n    }}",
-            outputs.join("\n")
-        ))
+        Ok(format!("    {{\n{}\n    }}", outputs.join("\n")))
     }
 }
 
@@ -2316,10 +2395,7 @@ fn build_resolved_steps_metadata(resolved_steps: &[ResolvedStep]) -> Value {
         .enumerate()
         .map(|(idx, resolved)| {
             let mut map = HashMap::new();
-            map.insert(
-                MapKey::String("index".into()),
-                Value::Integer(idx as i64),
-            );
+            map.insert(MapKey::String("index".into()), Value::Integer(idx as i64));
             map.insert(
                 MapKey::String("step_id".into()),
                 Value::String(resolved.original.id.clone()),
@@ -2330,11 +2406,13 @@ fn build_resolved_steps_metadata(resolved_steps: &[ResolvedStep]) -> Value {
             );
             map.insert(
                 MapKey::String("strategy".into()),
-                Value::String(match resolved.resolution_strategy {
-                    ResolutionStrategy::Found => "found",
-                    ResolutionStrategy::Stubbed => "stubbed",
-                }
-                .to_string()),
+                Value::String(
+                    match resolved.resolution_strategy {
+                        ResolutionStrategy::Found => "found",
+                        ResolutionStrategy::Stubbed => "stubbed",
+                    }
+                    .to_string(),
+                ),
             );
             Value::Map(map)
         })
@@ -2348,7 +2426,7 @@ async fn match_proposed_steps(
 ) -> DemoResult<Vec<CapabilityMatch>> {
     let marketplace = ccos.get_capability_marketplace();
     let intent_graph = ccos.get_intent_graph();
-    
+
     // Create discovery engine for enhanced capability search
     // Pass delegating arbiter if available for recursive synthesis
     let delegating_arbiter = ccos.get_delegating_arbiter();
@@ -2357,7 +2435,7 @@ async fn match_proposed_steps(
         Arc::clone(&intent_graph),
         delegating_arbiter,
     );
-    
+
     let manifests = marketplace.list_capabilities().await;
     let mut matches = Vec::with_capacity(steps.len());
 
@@ -2395,7 +2473,7 @@ async fn match_proposed_steps(
             step.expected_outputs.clone(),
             format!("Need for step: {}", step.name),
         );
-        
+
         match discovery_engine.discover_capability(&need).await {
             Ok(ccos::discovery::DiscoveryResult::Found(_manifest)) => {
                 // Found via discovery - could enhance note with source

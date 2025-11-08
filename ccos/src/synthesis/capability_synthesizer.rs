@@ -706,15 +706,13 @@ impl CapabilitySynthesizer {
             input_schema: None,
             output_schema: None,
             attestation: None,
-            provenance: Some(
-                crate::capability_marketplace::types::CapabilityProvenance {
-                    source: "capability_synthesizer".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    content_hash: format!("synthesized_{}", request.capability_name),
-                    custody_chain: vec!["capability_synthesizer".to_string()],
-                    registered_at: chrono::Utc::now(),
-                },
-            ),
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "capability_synthesizer".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!("synthesized_{}", request.capability_name),
+                custody_chain: vec!["capability_synthesizer".to_string()],
+                registered_at: chrono::Utc::now(),
+            }),
             permissions: vec![],
             effects,
             metadata,
@@ -874,18 +872,16 @@ impl CapabilitySynthesizer {
             input_schema: None,
             output_schema: None,
             attestation: None,
-            provenance: Some(
-                crate::capability_marketplace::types::CapabilityProvenance {
-                    source: "multi_capability_synthesizer".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    content_hash: format!(
-                        "multi_{}_{}",
-                        request.api_domain, endpoint.capability_suffix
-                    ),
-                    custody_chain: vec!["multi_capability_synthesizer".to_string()],
-                    registered_at: chrono::Utc::now(),
-                },
-            ),
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "multi_capability_synthesizer".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!(
+                    "multi_{}_{}",
+                    request.api_domain, endpoint.capability_suffix
+                ),
+                custody_chain: vec!["multi_capability_synthesizer".to_string()],
+                registered_at: chrono::Utc::now(),
+            }),
             permissions: vec!["network.http".to_string()],
             effects: vec!["network_request".to_string()],
             metadata: {

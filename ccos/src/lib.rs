@@ -5,24 +5,25 @@
 pub mod agent;
 pub mod arbiter;
 pub mod archivable_types;
+pub mod catalog;
 pub mod causal_chain;
 pub mod checkpoint_archive;
 pub mod discovery;
 pub mod event_sink;
+pub mod execution_context;
 pub mod governance_kernel;
 pub mod intent_archive;
-pub mod security_policies;
 pub mod intent_graph;
 pub mod intent_storage;
 pub mod orchestrator;
 pub mod plan_archive;
 pub mod rtfs_bridge;
+pub mod security_policies;
 pub mod storage;
 pub mod storage_backends;
+pub mod synthesis;
 pub mod types;
 pub mod wm_integration;
-pub mod execution_context;
-pub mod synthesis;
 
 // Delegation and execution stack
 pub mod adaptive_threshold;
@@ -65,4 +66,3 @@ pub mod ccos_core;
 // Re-export the main CCOS system
 pub use crate::ccos_core::CCOS;
 pub use crate::types::ExecutionResult;
-

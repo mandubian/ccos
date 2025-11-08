@@ -1,11 +1,11 @@
+use crate::capability_marketplace::types::CapabilityDiscovery;
+use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
+use async_trait::async_trait;
+use chrono::Utc;
 use rtfs::ast::{
     Expression, Keyword, Literal, MapKey, MapTypeEntry, PrimitiveType, Symbol, TypeExpr,
 };
-use crate::capability_marketplace::types::CapabilityDiscovery;
-use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use async_trait::async_trait;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
@@ -412,15 +412,13 @@ impl MCPDiscoveryProvider {
             input_schema: None,  // TODO: Convert JSON schema to TypeExpr
             output_schema: None, // TODO: Convert JSON schema to TypeExpr
             attestation: None,
-            provenance: Some(
-                crate::capability_marketplace::types::CapabilityProvenance {
-                    source: "mcp_discovery".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    content_hash: format!("mcp_{}_{}", self.config.name, tool.name),
-                    custody_chain: vec!["mcp_discovery".to_string()],
-                    registered_at: Utc::now(),
-                },
-            ),
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "mcp_discovery".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!("mcp_{}_{}", self.config.name, tool.name),
+                custody_chain: vec!["mcp_discovery".to_string()],
+                registered_at: Utc::now(),
+            }),
             permissions: vec![],
             effects,
             metadata: {
@@ -1310,15 +1308,13 @@ impl MCPDiscoveryProvider {
             input_schema,
             output_schema,
             attestation: None,
-            provenance: Some(
-                crate::capability_marketplace::types::CapabilityProvenance {
-                    source: "rtfs_persistence".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    content_hash: format!("rtfs_{}", name),
-                    custody_chain: vec!["rtfs_persistence".to_string()],
-                    registered_at: Utc::now(),
-                },
-            ),
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "rtfs_persistence".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!("rtfs_{}", name),
+                custody_chain: vec!["rtfs_persistence".to_string()],
+                registered_at: Utc::now(),
+            }),
             permissions,
             effects,
             metadata,
@@ -1559,15 +1555,13 @@ impl MCPDiscoveryProvider {
             input_schema: None,
             output_schema: None, // MCP resources don't have structured schemas like tools
             attestation: None,
-            provenance: Some(
-                crate::capability_marketplace::types::CapabilityProvenance {
-                    source: "mcp_discovery".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    content_hash: format!("mcp_resource_{}_{}", self.config.name, resource_name),
-                    custody_chain: vec!["mcp_discovery".to_string()],
-                    registered_at: Utc::now(),
-                },
-            ),
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "mcp_discovery".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!("mcp_resource_{}_{}", self.config.name, resource_name),
+                custody_chain: vec!["mcp_discovery".to_string()],
+                registered_at: Utc::now(),
+            }),
             permissions: vec![],
             effects,
             metadata: {

@@ -1,6 +1,6 @@
-use rtfs::ast::{Keyword, MapTypeEntry, TypeExpr};
 use crate::capability_marketplace::types::CapabilityManifest;
-use crate::synthesis::schema_serializer::type_expr_to_rtfs_pretty;
+use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
+use rtfs::ast::{Keyword, MapTypeEntry, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 
@@ -666,15 +666,13 @@ impl APIIntrospector {
             input_schema: endpoint.input_schema.clone(),
             output_schema: endpoint.output_schema.clone(),
             attestation: None,
-            provenance: Some(
-                crate::capability_marketplace::types::CapabilityProvenance {
-                    source: "api_introspector".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    content_hash: format!("introspected_{}", endpoint.endpoint_id),
-                    custody_chain: vec!["api_introspector".to_string()],
-                    registered_at: chrono::Utc::now(),
-                },
-            ),
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "api_introspector".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!("introspected_{}", endpoint.endpoint_id),
+                custody_chain: vec!["api_introspector".to_string()],
+                registered_at: chrono::Utc::now(),
+            }),
             permissions: vec!["network.http".to_string()],
             effects,
             metadata,
@@ -690,9 +688,10 @@ impl APIIntrospector {
     ) -> RuntimeResult<APIIntrospectionResult> {
         // This would implement API discovery by making actual HTTP calls
         // Return error - discovery by calls not yet implemented
-        Err(RuntimeError::Generic(
-            format!("API discovery by HTTP calls not implemented for domain: {}", api_domain)
-        ))
+        Err(RuntimeError::Generic(format!(
+            "API discovery by HTTP calls not implemented for domain: {}",
+            api_domain
+        )))
     }
 
     /// Mock API introspection for testing
@@ -1073,7 +1072,7 @@ impl APIIntrospector {
 
     /// Convert TypeExpr to RTFS schema string (using shared utility)
     fn type_expr_to_rtfs_string(expr: &TypeExpr) -> String {
-        type_expr_to_rtfs_pretty(expr)
+        type_expr_to_rtfs_compact(expr)
     }
 
     /// Serialize capability to RTFS format

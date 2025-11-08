@@ -75,4 +75,3 @@ pub enum SimpleCachePolicy {
     BypassCache,
     RefreshCache,
 }
-

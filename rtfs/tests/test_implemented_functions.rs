@@ -1,8 +1,8 @@
 use rtfs::ast::MapKey;
 use rtfs::parser::parse_expression;
-use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::runtime::evaluator::Evaluator;
 use rtfs::runtime::module_runtime::ModuleRegistry;
+use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::runtime::stdlib::StandardLibrary;
 use rtfs::runtime::values::Value;
 use std::sync::Arc;
@@ -152,7 +152,6 @@ fn test_length_value() {
     assert!(result.is_err());
 }
 
-
 #[test]
 fn test_json_functions() {
     let mut env = StandardLibrary::create_global_environment();
@@ -276,8 +275,6 @@ fn test_json_functions() {
     let result = evaluator.evaluate_with_env(&expr, &mut env);
     assert!(result.is_err());
 }
-
-
 
 #[test]
 fn test_map_filter_functions() {

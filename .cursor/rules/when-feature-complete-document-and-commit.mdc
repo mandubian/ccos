@@ -1,7 +1,8 @@
 ---
+description: When Feature Complete (implementation, test and doc): Commit if needed
 alwaysApply: false
 ---
-# When Feature Complete: Document and Commit if needed
+# When Feature Complete (implementation, test and doc): Commit if needed
 
 ## 🚀 **Documentation and Commit Rule**
 

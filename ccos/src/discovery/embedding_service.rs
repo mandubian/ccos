@@ -3,7 +3,8 @@
 //! Provides vector embeddings for semantic similarity calculation.
 //! Supports both remote (OpenRouter) and local embedding models.
 
-use serde::{Deserialize, Serialize};
+use crate::discovery::config::DiscoveryConfig;
+use serde::Deserialize;
 use std::collections::HashMap;
 
 // Use RuntimeError from rtfs, but check if it's available
@@ -26,19 +27,23 @@ pub enum EmbeddingProvider {
 }
 
 impl EmbeddingProvider {
-    /// Create provider from environment variables
-    pub fn from_env() -> Option<Self> {
+    /// Create provider from environment variables and optional discovery configuration
+    pub fn from_env(config: Option<&DiscoveryConfig>) -> Option<Self> {
         // Try OpenRouter first
         if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
             let model = std::env::var("EMBEDDING_MODEL")
-                .unwrap_or_else(|_| "text-embedding-ada-002".to_string());
+                .ok()
+                .or_else(|| config.and_then(|c| c.embedding_model.clone()))
+                .unwrap_or_else(|| "text-embedding-ada-002".to_string());
             return Some(EmbeddingProvider::OpenRouter { api_key, model });
         }
 
         // Try local model
         if let Ok(base_url) = std::env::var("LOCAL_EMBEDDING_URL") {
             let model = std::env::var("LOCAL_EMBEDDING_MODEL")
-                .unwrap_or_else(|_| "nomic-embed-text".to_string());
+                .ok()
+                .or_else(|| config.and_then(|c| c.local_embedding_model.clone()))
+                .unwrap_or_else(|| "nomic-embed-text".to_string());
             return Some(EmbeddingProvider::Local { base_url, model });
         }
 
@@ -65,7 +70,12 @@ impl EmbeddingService {
 
     /// Create from environment variables (returns None if not configured)
     pub fn from_env() -> Option<Self> {
-        EmbeddingProvider::from_env().map(Self::new)
+        Self::from_settings(None)
+    }
+
+    /// Create from discovery configuration + environment overrides
+    pub fn from_settings(config: Option<&DiscoveryConfig>) -> Option<Self> {
+        EmbeddingProvider::from_env(config).map(Self::new)
     }
 
     /// Generate embedding for a text string
@@ -110,10 +120,16 @@ impl EmbeddingService {
             .post(url)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
-            .header("HTTP-Referer", std::env::var("OPENROUTER_HTTP_REFERER")
-                .unwrap_or_else(|_| "https://github.com/mandubian/ccos".to_string()))
-            .header("X-Title", std::env::var("OPENROUTER_TITLE")
-                .unwrap_or_else(|_| "CCOS Embedding Service".to_string()))
+            .header(
+                "HTTP-Referer",
+                std::env::var("OPENROUTER_HTTP_REFERER")
+                    .unwrap_or_else(|_| "https://github.com/mandubian/ccos".to_string()),
+            )
+            .header(
+                "X-Title",
+                std::env::var("OPENROUTER_TITLE")
+                    .unwrap_or_else(|_| "CCOS Embedding Service".to_string()),
+            )
             .json(&request_body)
             .send()
             .await
@@ -121,21 +137,25 @@ impl EmbeddingService {
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(RuntimeError::Generic(format!(
                 "OpenRouter API error ({}): {}",
                 status, error_text
             )));
         }
 
-        let result: OpenRouterEmbeddingResponse = response
-            .json()
-            .await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse OpenRouter response: {}", e)))?;
+        let result: OpenRouterEmbeddingResponse = response.json().await.map_err(|e| {
+            RuntimeError::Generic(format!("Failed to parse OpenRouter response: {}", e))
+        })?;
 
         // Extract embedding vector
         if result.data.is_empty() {
-            return Err(RuntimeError::Generic("No embedding data in response".to_string()));
+            return Err(RuntimeError::Generic(
+                "No embedding data in response".to_string(),
+            ));
         }
 
         Ok(result.data[0].embedding.clone())
@@ -161,21 +181,25 @@ impl EmbeddingService {
             .json(&request_body)
             .send()
             .await
-            .map_err(|e| RuntimeError::Generic(format!("Local embedding API request failed: {}", e)))?;
+            .map_err(|e| {
+                RuntimeError::Generic(format!("Local embedding API request failed: {}", e))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(RuntimeError::Generic(format!(
                 "Local embedding API error ({}): {}",
                 status, error_text
             )));
         }
 
-        let result: LocalEmbeddingResponse = response
-            .json()
-            .await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse local API response: {}", e)))?;
+        let result: LocalEmbeddingResponse = response.json().await.map_err(|e| {
+            RuntimeError::Generic(format!("Failed to parse local API response: {}", e))
+        })?;
 
         Ok(result.embedding)
     }
@@ -235,7 +259,10 @@ mod tests {
         let a = vec![1.0, 1.0, 0.0];
         let b = vec![1.0, 1.0, 0.001];
         let similarity = EmbeddingService::cosine_similarity(&a, &b);
-        assert!(similarity > 0.9, "Similar vectors should have high similarity");
+        assert!(
+            similarity > 0.9,
+            "Similar vectors should have high similarity"
+        );
     }
 
     #[tokio::test]
@@ -248,4 +275,3 @@ mod tests {
         }
     }
 }
-

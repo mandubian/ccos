@@ -122,7 +122,7 @@ impl MCPSessionManager {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unable to read error response".to_string());
-            
+
             // Provide helpful error messages for common auth failures
             let error_msg = if status.as_u16() == 401 {
                 format!(
@@ -132,12 +132,16 @@ impl MCPSessionManager {
                      • Token has required permissions/scopes\n\
                      • Environment variable is set correctly (MCP_AUTH_TOKEN or {}_MCP_TOKEN)",
                     error_text,
-                    if server_url.contains("githubcopilot") { "GITHUB" } else { "SERVER" }
+                    if server_url.contains("githubcopilot") {
+                        "GITHUB"
+                    } else {
+                        "SERVER"
+                    }
                 )
             } else {
                 format!("MCP initialization failed ({}): {}", status, error_text)
             };
-            
+
             return Err(RuntimeError::Generic(error_msg));
         }
 

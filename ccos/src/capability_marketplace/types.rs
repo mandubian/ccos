@@ -1,12 +1,12 @@
+use crate::streaming::{
+    BidirectionalConfig, DuplexChannels, StreamCallbacks, StreamConfig, StreamType,
+    StreamingProvider,
+};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use rtfs::ast::TypeExpr;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
-use crate::streaming::{
-    BidirectionalConfig, DuplexChannels, StreamConfig, StreamType, StreamCallbacks,
-    StreamingProvider,
-};
 use rtfs::runtime::values::Value;
-use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -787,7 +787,8 @@ pub struct PluginCapability {
 pub struct CapabilityMarketplace {
     pub(crate) capabilities: Arc<RwLock<HashMap<String, CapabilityManifest>>>,
     pub(crate) discovery_agents: Vec<Box<dyn CapabilityDiscovery>>,
-    pub(crate) capability_registry: Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
+    pub(crate) capability_registry:
+        Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
     pub(crate) network_registry: Option<NetworkRegistryConfig>,
     pub(crate) type_validator: Arc<rtfs::runtime::type_validator::TypeValidator>,
     pub(crate) executor_registry:
@@ -798,8 +799,9 @@ pub struct CapabilityMarketplace {
     pub(crate) debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
     /// Optional session pool for stateful capabilities (generic, provider-agnostic)
     /// Uses RwLock for interior mutability since marketplace is wrapped in Arc
-    pub(crate) session_pool:
-        Arc<RwLock<Option<Arc<crate::capabilities::SessionPoolManager>>>>,
+    pub(crate) session_pool: Arc<RwLock<Option<Arc<crate::capabilities::SessionPoolManager>>>>,
+    /// Optional catalog service for indexing capabilities
+    pub(crate) catalog: Arc<RwLock<Option<Arc<crate::catalog::CatalogService>>>>,
 }
 
 /// Trait for capability discovery providers

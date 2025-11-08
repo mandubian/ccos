@@ -1,5 +1,7 @@
+use super::rtfs_bridge::extractors::expression_to_rtfs_string;
 use super::storage::Archivable;
 use super::types::{Action, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent};
+use rtfs::utils::format_rtfs_value_pretty;
 /// Serializable versions of CCOS types for unified storage architecture
 ///
 /// This module provides archivable versions of CCOS entities that implement
@@ -9,7 +11,6 @@ use super::types::{Action, Plan, PlanBody, PlanLanguage, PlanStatus, StorableInt
 /// rather than creating a duplicate ArchivableIntent, since StorableIntent
 /// already serves as the official archivable version with full context.
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::collections::HashMap;
 
 /// Serializable version of Plan for archiving
@@ -48,10 +49,16 @@ pub enum ArchivablePlanLanguage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArchivablePlanBody {
-    pub steps: Vec<String>, // RTFS expressions as strings
-    pub preconditions: Vec<String>,
-    pub postconditions: Vec<String>,
+#[serde(untagged)]
+pub enum ArchivablePlanBody {
+    // New format: single RTFS string (preferred)
+    String(String),
+    // Legacy format: steps array (for backward compatibility)
+    Legacy {
+        steps: Vec<String>,
+        preconditions: Vec<String>,
+        postconditions: Vec<String>,
+    },
 }
 
 impl From<&PlanLanguage> for ArchivablePlanLanguage {
@@ -73,45 +80,76 @@ impl From<&Plan> for ArchivablePlan {
             name: plan.name.clone(),
             intent_ids: plan.intent_ids.clone(),
             language: (&plan.language).into(),
-            body: ArchivablePlanBody {
-                steps: match &plan.body {
-                    PlanBody::Rtfs(rtfs_code) => {
-                        vec![rtfs_code.clone()] // Store RTFS as string
-                    }
-                    PlanBody::Wasm(_) => {
-                        vec!["<WASM bytecode>".to_string()] // Placeholder for WASM
-                    }
-                },
-                preconditions: vec![], // Plan doesn't have preconditions in current structure
-                postconditions: vec![], // Plan doesn't have postconditions in current structure
+            body: match &plan.body {
+                PlanBody::Rtfs(rtfs_code) => {
+                    // Extract just the body if it's wrapped in a (plan ...) form
+                    let body_code = if rtfs_code.trim_start().starts_with("(plan") {
+                        // Try to parse as top-level construct to extract :body from (plan ...) form
+                        match rtfs::parser::parse(rtfs_code) {
+                            Ok(top_levels) => {
+                                // Look for a Plan top-level construct
+                                if let Some(rtfs::ast::TopLevel::Plan(plan_def)) =
+                                    top_levels.first()
+                                {
+                                    // Find the :body property in the plan definition
+                                    // Keywords are stored without the : prefix, so :body becomes "body"
+                                    if let Some(body_prop) =
+                                        plan_def.properties.iter().find(|p| p.key.0 == "body")
+                                    {
+                                        // Format the body expression as RTFS string
+                                        expression_to_rtfs_string(&body_prop.value)
+                                    } else {
+                                        eprintln!("⚠️  Warning: Plan has (plan ...) form but no :body property found. Available properties: {:?}", 
+                                            plan_def.properties.iter().map(|p| &p.key.0).collect::<Vec<_>>());
+                                        rtfs_code.clone() // No :body property found, use as-is
+                                    }
+                                } else {
+                                    eprintln!(
+                                        "⚠️  Warning: Parsed top-level is not a Plan: {:?}",
+                                        top_levels.first()
+                                    );
+                                    rtfs_code.clone() // Not a Plan top-level, use as-is
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("⚠️  Warning: Failed to parse (plan ...) form: {:?}", e);
+                                rtfs_code.clone() // Parse failed, use as-is
+                            }
+                        }
+                    } else {
+                        rtfs_code.clone() // Not a (plan ...) form, use as-is
+                    };
+                    ArchivablePlanBody::String(body_code)
+                }
+                PlanBody::Wasm(_) => ArchivablePlanBody::String("<WASM bytecode>".to_string()),
             },
             status: plan.status.clone(),
             created_at: plan.created_at,
             metadata: plan
                 .metadata
                 .iter()
-                .map(|(k, v)| (k.clone(), format!("{:?}", v)))
+                .map(|(k, v)| (k.clone(), format_rtfs_value_pretty(v)))
                 .collect(),
 
-            // Serialize new fields as JSON strings
+            // Serialize new fields as RTFS pretty-printed strings
             input_schema: plan
                 .input_schema
                 .as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default()),
+                .map(|v| format_rtfs_value_pretty(v)),
             output_schema: plan
                 .output_schema
                 .as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default()),
+                .map(|v| format_rtfs_value_pretty(v)),
             policies: plan
                 .policies
                 .iter()
-                .map(|(k, v)| (k.clone(), serde_json::to_string(v).unwrap_or_default()))
+                .map(|(k, v)| (k.clone(), format_rtfs_value_pretty(v)))
                 .collect(),
             capabilities_required: plan.capabilities_required.clone(),
             annotations: plan
                 .annotations
                 .iter()
-                .map(|(k, v)| (k.clone(), serde_json::to_string(v).unwrap_or_default()))
+                .map(|(k, v)| (k.clone(), format_rtfs_value_pretty(v)))
                 .collect(),
         }
     }
@@ -175,7 +213,7 @@ impl From<&Action> for ArchivableAction {
             metadata: action
                 .metadata
                 .iter()
-                .map(|(k, v)| (k.clone(), format!("{:?}", v)))
+                .map(|(k, v)| (k.clone(), format_rtfs_value_pretty(v)))
                 .collect(),
         }
     }
@@ -199,11 +237,7 @@ mod tests {
             name: Some("Test Plan".to_string()),
             intent_ids: vec![],
             language: ArchivablePlanLanguage::Rtfs20,
-            body: ArchivablePlanBody {
-                steps: vec![],
-                preconditions: vec![],
-                postconditions: vec![],
-            },
+            body: ArchivablePlanBody::String("()".to_string()),
             status: PlanStatus::Draft,
             created_at: 0,
             metadata: HashMap::new(),

@@ -23,10 +23,10 @@ use tokio::sync::RwLock;
 pub mod shared;
 
 // Core CCOS + RTFS imports
-use rtfs::ast::TopLevel;
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::delegation::ModelRegistry;
 use ccos::types::{Intent, Plan, StorableIntent};
+use rtfs::ast::TopLevel;
 use rtfs::parser;
 use rtfs::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs::runtime::security::RuntimeContext;

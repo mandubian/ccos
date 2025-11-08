@@ -9,7 +9,6 @@ use async_trait::async_trait;
 use regex::Regex;
 use std::collections::HashMap;
 
-use rtfs::ast::TopLevel;
 use crate::arbiter::arbiter_config::{
     FallbackBehavior, IntentPattern, LlmConfig, PlanTemplate, TemplateConfig,
 };
@@ -20,6 +19,7 @@ use crate::delegation_keys::generation;
 use crate::types::{
     ExecutionResult, Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
 };
+use rtfs::ast::TopLevel;
 use rtfs::runtime::error::RuntimeError;
 use rtfs::runtime::values::Value;
 

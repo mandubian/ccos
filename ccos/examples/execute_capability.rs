@@ -1,6 +1,6 @@
+use ccos::environment::CCOSBuilder;
 use clap::Parser;
 use rtfs::ast::MapKey;
-use ccos::environment::CCOSBuilder;
 use rtfs::runtime::values::Value;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -9,7 +9,10 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Parser, Debug)]
-#[command(name = "execute-capability", about = "Execute a registered capability by id with JSON inputs")] 
+#[command(
+    name = "execute-capability",
+    about = "Execute a registered capability by id with JSON inputs"
+)]
 struct Args {
     /// Path to AgentConfig (TOML or JSON) used to initialize CCOS and providers
     #[arg(long)]
@@ -93,14 +96,20 @@ fn json_to_rtfs_value(v: &JsonValue) -> Result<Value, Box<dyn Error>> {
         JsonValue::Null => Value::Nil,
         JsonValue::Bool(b) => Value::Boolean(*b),
         JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() { Value::Integer(i) }
-            else if let Some(f) = n.as_f64() { Value::Float(f) }
-            else { return Err("unsupported number format".into()); }
+            if let Some(i) = n.as_i64() {
+                Value::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Float(f)
+            } else {
+                return Err("unsupported number format".into());
+            }
         }
         JsonValue::String(s) => Value::String(s.clone()),
         JsonValue::Array(arr) => {
             let mut vec = Vec::with_capacity(arr.len());
-            for item in arr { vec.push(json_to_rtfs_value(item)?); }
+            for item in arr {
+                vec.push(json_to_rtfs_value(item)?);
+            }
             Value::Vector(vec)
         }
         JsonValue::Object(obj) => {
@@ -127,7 +136,16 @@ fn pretty_rtfs_value(v: &Value) -> String {
         Value::Map(m) => {
             let mut pairs: Vec<String> = m
                 .iter()
-                .map(|(k, vv)| format!("{}: {}", match k { MapKey::String(s) => s.clone(), _ => format!("{:?}", k) }, pretty_rtfs_value(vv)))
+                .map(|(k, vv)| {
+                    format!(
+                        "{}: {}",
+                        match k {
+                            MapKey::String(s) => s.clone(),
+                            _ => format!("{:?}", k),
+                        },
+                        pretty_rtfs_value(vv)
+                    )
+                })
                 .collect();
             pairs.sort();
             format!("{{{}}}", pairs.join(", "))
@@ -135,7 +153,6 @@ fn pretty_rtfs_value(v: &Value) -> String {
         _ => format!("{:?}", v),
     }
 }
-
 
 fn extract_input_keys(rtfs: &str) -> Vec<String> {
     let mut keys = Vec::new();

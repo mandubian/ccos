@@ -1,6 +1,6 @@
 use crate::capabilities::provider::{
-    CapabilityDescriptor, CapabilityProvider, ExecutionContext, HealthStatus, Permission,
-    ProviderMetadata, ResourceLimits, SecurityRequirements, NetworkAccess,
+    CapabilityDescriptor, CapabilityProvider, ExecutionContext, HealthStatus, NetworkAccess,
+    Permission, ProviderMetadata, ResourceLimits, SecurityRequirements,
 };
 use rtfs::ast::{PrimitiveType, TypeExpr};
 use rtfs::runtime::{RuntimeError, RuntimeResult, Value};
@@ -101,7 +101,10 @@ impl A2AProvider {
                 None,
             ),
             security_requirements: SecurityRequirements {
-                permissions: vec![Permission::NetworkAccess("*".to_string()), Permission::AgentCommunication],
+                permissions: vec![
+                    Permission::NetworkAccess("*".to_string()),
+                    Permission::AgentCommunication,
+                ],
                 requires_microvm: true,
                 resource_limits: ResourceLimits {
                     max_memory: Some(256 * 1024 * 1024), // 256 MB
@@ -159,9 +162,10 @@ impl A2AProvider {
             )));
         }
 
-        let a2a_response: A2AResponse = response.json().await.map_err(|e| {
-            RuntimeError::IoError(format!("Failed to parse A2A response: {}", e))
-        })?;
+        let a2a_response: A2AResponse = response
+            .json()
+            .await
+            .map_err(|e| RuntimeError::IoError(format!("Failed to parse A2A response: {}", e)))?;
 
         if !a2a_response.success {
             return Err(RuntimeError::Generic(
@@ -204,7 +208,10 @@ impl A2AProvider {
             serde_json::Value::Object(map) => {
                 let mut result = std::collections::HashMap::new();
                 for (k, v) in map {
-                    result.insert(rtfs::ast::MapKey::String(k.clone()), Self::json_to_value(v)?);
+                    result.insert(
+                        rtfs::ast::MapKey::String(k.clone()),
+                        Self::json_to_value(v)?,
+                    );
                 }
                 Ok(Value::Map(result))
             }
@@ -259,21 +266,17 @@ impl A2AProvider {
             });
         }
 
-        let agent_id = args[0]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "ccos.a2a.send (agent_id)".to_string(),
-            })?;
+        let agent_id = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[0].type_name().to_string(),
+            operation: "ccos.a2a.send (agent_id)".to_string(),
+        })?;
 
-        let message_type = args[1]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[1].type_name().to_string(),
-                operation: "ccos.a2a.send (message_type)".to_string(),
-            })?;
+        let message_type = args[1].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[1].type_name().to_string(),
+            operation: "ccos.a2a.send (message_type)".to_string(),
+        })?;
 
         // Payload (convert to JSON)
         let payload = Self::value_to_json(&args[2])?;
@@ -318,21 +321,17 @@ impl A2AProvider {
             });
         }
 
-        let agent_id = args[0]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "ccos.a2a.query (agent_id)".to_string(),
-            })?;
+        let agent_id = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[0].type_name().to_string(),
+            operation: "ccos.a2a.query (agent_id)".to_string(),
+        })?;
 
-        let query = args[1]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[1].type_name().to_string(),
-                operation: "ccos.a2a.query (query)".to_string(),
-            })?;
+        let query = args[1].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[1].type_name().to_string(),
+            operation: "ccos.a2a.query (query)".to_string(),
+        })?;
 
         // Create query payload
         let payload = serde_json::json!({
@@ -437,7 +436,10 @@ impl CapabilityProvider for A2AProvider {
         }
     }
 
-    fn initialize(&mut self, _config: &crate::capabilities::provider::ProviderConfig) -> Result<(), String> {
+    fn initialize(
+        &mut self,
+        _config: &crate::capabilities::provider::ProviderConfig,
+    ) -> Result<(), String> {
         Ok(())
     }
 
@@ -452,7 +454,11 @@ impl CapabilityProvider for A2AProvider {
             description: "Agent-to-Agent communication with security validation".to_string(),
             author: "CCOS".to_string(),
             license: Some("MIT".to_string()),
-            dependencies: vec!["reqwest".to_string(), "serde_json".to_string(), "uuid".to_string()],
+            dependencies: vec![
+                "reqwest".to_string(),
+                "serde_json".to_string(),
+                "uuid".to_string(),
+            ],
         }
     }
 }
@@ -487,7 +493,7 @@ mod tests {
 
         let provider = A2AProvider::new(config, "source-agent".to_string()).unwrap();
         let capabilities = provider.list_capabilities();
-        
+
         assert_eq!(capabilities.len(), 3);
         assert!(capabilities.iter().any(|c| c.id == "ccos.a2a.send"));
         assert!(capabilities.iter().any(|c| c.id == "ccos.a2a.query"));

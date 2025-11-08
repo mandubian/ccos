@@ -1,6 +1,6 @@
 use super::errors::RtfsBridgeError;
-use rtfs::ast::{Expression, Keyword, Literal, MapKey, Pattern};
 use crate::types::{Intent, IntentStatus, Plan};
+use rtfs::ast::{Expression, Keyword, Literal, MapKey, Pattern};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 
@@ -27,11 +27,11 @@ pub fn extract_intent_from_rtfs(expr: &Expression) -> Result<Intent, RtfsBridgeE
 ///
 /// Supports both function call format: `(ccos/plan "name" :body (...))`
 /// and map format: `{:type "plan" :name "..." :body (...)}`
-/// 
+///
 /// This function normalizes function-call syntax to canonical maps before extraction.
 pub fn extract_plan_from_rtfs(expr: &Expression) -> Result<Plan, RtfsBridgeError> {
     use super::normalizer::{normalize_plan_to_map, NormalizationConfig};
-    
+
     // Normalize to canonical map format first (handles function-call syntax)
     let normalized = normalize_plan_to_map(
         expr,
@@ -40,7 +40,7 @@ pub fn extract_plan_from_rtfs(expr: &Expression) -> Result<Plan, RtfsBridgeError
             validate_after_normalization: true,
         },
     )?;
-    
+
     // Extract from normalized map (guaranteed to be a map after normalization)
     let plan = match normalized {
         Expression::Map(map) => extract_plan_from_map(&map)?,
@@ -664,13 +664,14 @@ pub fn expression_to_rtfs_string(expr: &Expression) -> String {
             format!("{{{}}}", parts.join(" "))
         }
         Expression::Let(let_expr) => {
-            // RTFS canonical form for let: (let (p1 v1) (p2 v2) body...)
+            // RTFS canonical form for let: (let [binding1 binding2 ...] body...)
+            // where each binding is a pattern-value pair
             let bindings = let_expr
                 .bindings
                 .iter()
                 .map(|b| {
                     format!(
-                        "({} {})",
+                        "{} {}",
                         pattern_to_string(&b.pattern),
                         expression_to_rtfs_string(&b.value)
                     )
@@ -690,7 +691,7 @@ pub fn expression_to_rtfs_string(expr: &Expression) -> String {
                 format!("(do {})", parts)
             };
 
-            format!("(let ({}) {})", bindings, body_str)
+            format!("(let [{}] {})", bindings, body_str)
         }
         // Fallback: produce a compact string representation
         _ => expression_to_string(expr),

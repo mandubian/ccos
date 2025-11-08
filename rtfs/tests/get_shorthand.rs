@@ -37,8 +37,7 @@ impl HostInterface for StubHost {
         &self,
         cap: &str,
         args: &[rtfs::runtime::values::Value],
-    ) -> Result<rtfs::runtime::values::Value, rtfs::runtime::error::RuntimeError>
-    {
+    ) -> Result<rtfs::runtime::values::Value, rtfs::runtime::error::RuntimeError> {
         match cap {
             "ccos.state.kv.put" => Ok(rtfs::runtime::values::Value::Nil), // Put operations return nil
             "ccos.state.kv.get" => {
@@ -49,9 +48,7 @@ impl HostInterface for StubHost {
                             map.get(&MapKey::Keyword(Keyword("key".to_string())))
                         {
                             if key == "k" {
-                                return Ok(rtfs::runtime::values::Value::String(
-                                    "v".to_string(),
-                                ));
+                                return Ok(rtfs::runtime::values::Value::String("v".to_string()));
                             }
                         }
                     }

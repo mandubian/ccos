@@ -1,5 +1,5 @@
-use rtfs::ast::{Keyword, MapKey};
 use crate::capability_marketplace::CapabilityMarketplace;
+use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use std::sync::Arc;
@@ -205,6 +205,83 @@ pub async fn register_default_capabilities(
         )
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.user.ask: {:?}", e)))?;
+
+    // Register IO capabilities (println, log, print)
+    marketplace
+        .register_local_capability(
+            "ccos.io.println".to_string(),
+            "Print Line Capability".to_string(),
+            "Prints a line to stdout".to_string(),
+            Arc::new(|input| {
+                let message = match input {
+                    Value::Map(map) => {
+                        if let Some(args_val) =
+                            map.get(&MapKey::Keyword(Keyword("args".to_string())))
+                        {
+                            match args_val {
+                                Value::List(args) => args
+                                    .iter()
+                                    .map(|v| format!("{:?}", v))
+                                    .collect::<Vec<_>>()
+                                    .join(" "),
+                                _ => format!("{:?}", args_val),
+                            }
+                        } else {
+                            format!("{:?}", input)
+                        }
+                    }
+                    Value::List(args) => args
+                        .iter()
+                        .map(|v| format!("{:?}", v))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    other => format!("{:?}", other),
+                };
+                println!("{}", message);
+                Ok(Value::Nil)
+            }),
+        )
+        .await
+        .map_err(|e| {
+            RuntimeError::Generic(format!("Failed to register ccos.io.println: {:?}", e))
+        })?;
+
+    marketplace
+        .register_local_capability(
+            "ccos.io.log".to_string(),
+            "Log Capability".to_string(),
+            "Logs a message".to_string(),
+            Arc::new(|input| {
+                let message = match input {
+                    Value::Map(map) => {
+                        if let Some(args_val) =
+                            map.get(&MapKey::Keyword(Keyword("args".to_string())))
+                        {
+                            match args_val {
+                                Value::List(args) => args
+                                    .iter()
+                                    .map(|v| format!("{:?}", v))
+                                    .collect::<Vec<_>>()
+                                    .join(" "),
+                                _ => format!("{:?}", args_val),
+                            }
+                        } else {
+                            format!("{:?}", input)
+                        }
+                    }
+                    Value::List(args) => args
+                        .iter()
+                        .map(|v| format!("{:?}", v))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    other => format!("{:?}", other),
+                };
+                println!("[CCOS-LOG] {}", message);
+                Ok(Value::Nil)
+            }),
+        )
+        .await
+        .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.io.log: {:?}", e)))?;
 
     Ok(())
 }

@@ -1,15 +1,15 @@
-pub mod runtime;
 pub mod mock_loop;
 pub mod rtfs_streaming_syntax;
+pub mod runtime;
 
 pub use runtime::{
     BidirectionalConfig, DuplexChannels, InMemoryStreamPersistence, McpClientConfig,
     McpStreamingProvider, StreamCallbacks, StreamChunkSink, StreamConfig, StreamHandle,
     StreamInspectOptions, StreamPersistence, StreamSnapshot, StreamStatus, StreamTransport,
-    StreamTransportArgs, StreamingCapability, StreamingProvider, StreamType,
-    DEFAULT_LOCAL_MCP_SSE_ENDPOINT, ENV_LEGACY_CLOUDFLARE_DOCS_SSE_URL,
-    ENV_LOCAL_MCP_SSE_URL, ENV_MCP_STREAM_AUTH_HEADER, ENV_MCP_STREAM_AUTO_CONNECT,
-    ENV_MCP_STREAM_BEARER_TOKEN, ENV_MCP_STREAM_ENDPOINT,
+    StreamTransportArgs, StreamType, StreamingCapability, StreamingProvider,
+    DEFAULT_LOCAL_MCP_SSE_ENDPOINT, ENV_LEGACY_CLOUDFLARE_DOCS_SSE_URL, ENV_LOCAL_MCP_SSE_URL,
+    ENV_MCP_STREAM_AUTH_HEADER, ENV_MCP_STREAM_AUTO_CONNECT, ENV_MCP_STREAM_BEARER_TOKEN,
+    ENV_MCP_STREAM_ENDPOINT,
 };
 
 use crate::capability_marketplace::CapabilityMarketplace;
@@ -92,4 +92,3 @@ pub async fn register_mcp_streaming_capability(
 
     Ok(())
 }
-

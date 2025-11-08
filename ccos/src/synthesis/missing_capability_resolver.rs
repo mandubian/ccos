@@ -5,10 +5,7 @@
 //! - Resolution queue for background processing
 //! - Integration with marketplace discovery
 
-use rtfs::ast::TypeExpr;
-use crate::capability_marketplace::types::{
-    CapabilityKind, CapabilityManifest, CapabilityQuery,
-};
+use crate::capability_marketplace::types::{CapabilityKind, CapabilityManifest, CapabilityQuery};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::checkpoint_archive::CheckpointArchive;
 use crate::synthesis::capability_synthesizer::{
@@ -18,6 +15,7 @@ use crate::synthesis::feature_flags::{FeatureFlagChecker, MissingCapabilityConfi
 use crate::synthesis::server_trust::{
     create_default_trust_registry, ServerCandidate, ServerSelectionHandler, ServerTrustRegistry,
 };
+use rtfs::ast::TypeExpr;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -685,15 +683,14 @@ impl MissingCapabilityResolver {
             .await?;
 
         // Find the selected server from ranked servers; if not found, reload curated overrides (user may have added one)
-        let mut selected_server_opt: Option<
-            crate::synthesis::mcp_registry_client::McpServer,
-        > = ranked_servers
-            .iter()
-            .find(|ranked| {
-                self.extract_domain_from_server_name(&ranked.server.name)
-                    == selection_result.selected_domain
-            })
-            .map(|r| r.server.clone());
+        let mut selected_server_opt: Option<crate::synthesis::mcp_registry_client::McpServer> =
+            ranked_servers
+                .iter()
+                .find(|ranked| {
+                    self.extract_domain_from_server_name(&ranked.server.name)
+                        == selection_result.selected_domain
+                })
+                .map(|r| r.server.clone());
 
         if selected_server_opt.is_none() {
             // Try curated overrides again to include any newly added entry during interaction
@@ -1099,9 +1096,7 @@ impl MissingCapabilityResolver {
 
         // Use web search to find API specs and documentation
         let mut web_searcher =
-            crate::synthesis::web_search_discovery::WebSearchDiscovery::new(
-                "auto".to_string(),
-            );
+            crate::synthesis::web_search_discovery::WebSearchDiscovery::new("auto".to_string());
 
         // Search for OpenAPI specs, API docs, etc.
         let search_results = web_searcher.search_for_api_specs(capability_id).await?;
@@ -1155,8 +1150,7 @@ impl MissingCapabilityResolver {
         }
 
         // Create OpenAPI importer
-        let importer =
-            crate::synthesis::openapi_importer::OpenAPIImporter::new(url.to_string());
+        let importer = crate::synthesis::openapi_importer::OpenAPIImporter::new(url.to_string());
 
         // Create complete RTFS capability from OpenAPI spec
         match importer.create_rtfs_capability(url, capability_id).await {
@@ -1238,15 +1232,13 @@ impl MissingCapabilityResolver {
             input_schema: None,  // TODO: Parse from API docs
             output_schema: None, // TODO: Parse from API docs
             attestation: None,
-            provenance: Some(
-                crate::capability_marketplace::types::CapabilityProvenance {
-                    source: "web_search_discovery".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    content_hash: format!("web_{}", url.replace("/", "_")),
-                    custody_chain: vec!["web_search".to_string()],
-                    registered_at: chrono::Utc::now(),
-                },
-            ),
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "web_search_discovery".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!("web_{}", url.replace("/", "_")),
+                custody_chain: vec!["web_search".to_string()],
+                registered_at: chrono::Utc::now(),
+            }),
             permissions: vec!["network.http".to_string()],
             effects: vec!["network_request".to_string()],
             metadata: {
@@ -2317,7 +2309,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_missing_capability_resolver() {
-        let registry = Arc::new(RwLock::new(rtfs::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let registry = Arc::new(RwLock::new(
+            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+        ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let checkpoint_archive = Arc::new(CheckpointArchive::new());
         // Use a testing feature configuration that enables runtime detection
@@ -2353,7 +2347,9 @@ mod tests {
         };
         use rtfs::runtime::values::Value;
 
-        let registry = Arc::new(RwLock::new(rtfs::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let registry = Arc::new(RwLock::new(
+            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+        ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let checkpoint_archive = Arc::new(CheckpointArchive::new());
 

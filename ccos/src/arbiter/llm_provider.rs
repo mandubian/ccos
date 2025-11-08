@@ -8,10 +8,10 @@ use crate::arbiter::prompt::{FilePromptStore, PromptManager};
 use crate::types::{
     GenerationContext, IntentStatus, Plan, PlanBody, PlanLanguage, StorableIntent, TriggerSource,
 };
+use async_trait::async_trait;
 use rtfs::parser;
 use rtfs::runtime::error::RuntimeError;
 use rtfs::runtime::values::Value;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap; // for validating reduced-grammar RTFS plans
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -141,12 +141,14 @@ fn attach_completion_metadata_to_intent(
     config: &LlmProviderConfig,
     completion: &LlmCompletion,
 ) {
-    intent
-        .metadata
-        .insert("llm.prompt_hash".to_string(), completion.prompt_hash.clone());
-    intent
-        .metadata
-        .insert("llm.response_hash".to_string(), completion.response_hash.clone());
+    intent.metadata.insert(
+        "llm.prompt_hash".to_string(),
+        completion.prompt_hash.clone(),
+    );
+    intent.metadata.insert(
+        "llm.response_hash".to_string(),
+        completion.response_hash.clone(),
+    );
     intent
         .metadata
         .insert("llm.model".to_string(), config.model.clone());
@@ -154,9 +156,10 @@ fn attach_completion_metadata_to_intent(
         "llm.provider".to_string(),
         format!("{:?}", config.provider_type),
     );
-    intent
-        .metadata
-        .insert("llm.latency_ms".to_string(), completion.latency_ms.to_string());
+    intent.metadata.insert(
+        "llm.latency_ms".to_string(),
+        completion.latency_ms.to_string(),
+    );
     if let Some(tokens) = completion.prompt_tokens {
         intent
             .metadata
@@ -583,28 +586,172 @@ impl OpenAILlmProvider {
             .await
             .map_err(|e| RuntimeError::Generic(format!("HTTP request failed: {}", e)))?;
         let status = response.status();
-        let raw_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
+        // Read bytes first so we can show them even if UTF-8 conversion fails
+        let bytes = match response.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                return Err(RuntimeError::Generic(format!(
+                    "❌ Failed to read LLM API response body\n\n\
+                    🔍 Error reading response bytes: {}\n\n\
+                    📊 HTTP Status: {}\n\n\
+                    💡 This could be due to:\n\
+                    • Network connection was interrupted\n\
+                    • Response was too large to read\n\
+                    • API endpoint is unreachable\n\n\
+                    🔧 Try checking:\n\
+                    • Network connection stability\n\
+                    • API endpoint configuration\n\
+                    • Firewall or proxy settings",
+                    e,
+                    status.as_u16()
+                )));
+            }
+        };
+
+        // Try to convert bytes to text, but show bytes if conversion fails
+        let raw_body = match String::from_utf8(bytes.to_vec()) {
+            Ok(text) => text,
+            Err(e) => {
+                // Show the raw bytes (lossy conversion) so user can see what was actually received
+                let body_preview = if bytes.len() > 500 {
+                    format!(
+                        "{}...\n[truncated, total length: {} bytes]",
+                        String::from_utf8_lossy(&bytes[..500]),
+                        bytes.len()
+                    )
+                } else {
+                    String::from_utf8_lossy(&bytes).to_string()
+                };
+
+                return Err(RuntimeError::Generic(format!(
+                    "❌ LLM API response is not valid UTF-8 text\n\n\
+                    🔍 UTF-8 conversion error: {}\n\n\
+                    📊 HTTP Status: {}\n\n\
+                    📥 Response body (raw bytes, lossy UTF-8 conversion):\n\
+                    ┌─────────────────────────────────────────────────────────\n\
+                    {}\n\
+                    └─────────────────────────────────────────────────────────\n\n\
+                    💡 This could be due to:\n\
+                    • API returned binary data instead of text\n\
+                    • Response encoding is not UTF-8\n\
+                    • Response contains invalid UTF-8 sequences\n\
+                    • API error response in unexpected format\n\n\
+                    🔧 Try checking:\n\
+                    • API logs for the actual response\n\
+                    • Response content-type header\n\
+                    • API documentation for expected response format",
+                    e,
+                    status.as_u16(),
+                    body_preview
+                )));
+            }
+        };
 
         if !status.is_success() {
+            // Enhanced error message for HTTP errors
+            let response_preview = if raw_body.len() > 1000 {
+                format!(
+                    "{}...\n[truncated, total length: {} chars]",
+                    &raw_body[..1000],
+                    raw_body.len()
+                )
+            } else {
+                raw_body.clone()
+            };
+
             return Err(RuntimeError::Generic(format!(
-                "API request failed: {}",
-                raw_body
+                "❌ LLM API request failed (HTTP {})\n\n\
+                📥 API response:\n\
+                ┌─────────────────────────────────────────────────────────\n\
+                {}\n\
+                └─────────────────────────────────────────────────────────\n\n\
+                💡 Common causes:\n\
+                • Invalid API key or authentication failure\n\
+                • Rate limiting (too many requests)\n\
+                • Quota exceeded\n\
+                • Invalid model name\n\
+                • Network connectivity issues\n\
+                • API endpoint unavailable\n\n\
+                🔧 Check the response above for specific error details.",
+                status.as_u16(),
+                response_preview
             )));
         }
 
         let response_hash = sha256_hex(raw_body.as_bytes());
 
-        let response_body: OpenAIResponse = serde_json::from_str(&raw_body)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse response: {}", e)))?;
+        let response_body: OpenAIResponse = serde_json::from_str(&raw_body).map_err(|e| {
+            // Enhanced error message with full response for debugging
+            let response_preview = if raw_body.len() > 1000 {
+                format!(
+                    "{}...\n[truncated, total length: {} chars]",
+                    &raw_body[..1000],
+                    raw_body.len()
+                )
+            } else {
+                raw_body.clone()
+            };
 
-        let content = response_body
+            RuntimeError::Generic(format!(
+                "❌ Failed to parse LLM API response as JSON\n\n\
+                    📥 Raw API response:\n\
+                    ┌─────────────────────────────────────────────────────────\n\
+                    {}\n\
+                    └─────────────────────────────────────────────────────────\n\n\
+                    🔍 JSON parsing error: {}\n\n\
+                    💡 This could be due to:\n\
+                    • API returned an error message instead of a valid response\n\
+                    • Response format changed or is unexpected\n\
+                    • Network issue causing incomplete response\n\
+                    • API rate limiting or authentication error\n\n\
+                    🔧 Check the raw response above to see what the API actually returned.",
+                response_preview, e
+            ))
+        })?;
+
+        let choice = response_body
             .choices
             .first()
-            .map(|choice| choice.message.content.clone())
             .ok_or_else(|| RuntimeError::Generic("LLM response missing choices".to_string()))?;
+
+        let content = choice.message.content.clone();
+        let finish_reason = choice.finish_reason.as_deref();
+
+        // Handle different finish_reason values
+        match finish_reason {
+            Some("length") => {
+                // Response was truncated due to token limit
+                let max_tokens = self.config.max_tokens.unwrap_or(0);
+                eprintln!(
+                    "⚠️  WARNING: LLM response was truncated (finish_reason: length). \
+                    Current max_tokens: {}. \
+                    Consider increasing CCOS_LLM_MAX_TOKENS environment variable or max_tokens in config.",
+                    max_tokens
+                );
+            }
+            Some("content_filter") => {
+                // Response was stopped due to content filter
+                eprintln!(
+                    "⚠️  WARNING: LLM response was stopped by content filter (finish_reason: content_filter). \
+                    The response may be incomplete or filtered."
+                );
+            }
+            Some("function_call") => {
+                // Response stopped for function call (this is normal for function-calling models)
+                // Don't warn, this is expected behavior
+            }
+            Some("stop") | None => {
+                // Normal completion or null (both are fine)
+                // No warning needed
+            }
+            Some(other) => {
+                // Unknown finish_reason value
+                eprintln!(
+                    "ℹ️  LLM response finished with reason: {} (unexpected value)",
+                    other
+                );
+            }
+        }
 
         let usage = response_body.usage.unwrap_or_default();
         let elapsed_ms = start.elapsed().as_millis();
@@ -705,7 +852,6 @@ impl OpenAILlmProvider {
             annotations: HashMap::new(),
         })
     }
-
 }
 
 #[async_trait]
@@ -781,8 +927,8 @@ Only respond with valid JSON."#.to_string()
                 completion.content
             );
         }
-    let mut intent = self.parse_intent_from_json(&completion.content)?;
-    attach_completion_metadata_to_intent(&mut intent, &self.config, &completion);
+        let mut intent = self.parse_intent_from_json(&completion.content)?;
+        attach_completion_metadata_to_intent(&mut intent, &self.config, &completion);
         Ok(intent)
     }
 
@@ -974,8 +1120,8 @@ Final step should return a structured map with keyword keys for downstream reuse
         }
 
         // Fallback: previous JSON-wrapped steps contract
-    let mut plan = self.parse_plan_from_json(&response, &intent.intent_id)?;
-    attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
+        let mut plan = self.parse_plan_from_json(&response, &intent.intent_id)?;
+        attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
         Ok(plan)
     }
 
@@ -1084,49 +1230,42 @@ Final step should return a structured map with keyword keys for downstream reuse
                 let response = completion.content.clone();
 
                 // Validate and parse the plan just like the legacy path
-                let plan_result =
-                    if let Some(do_block) = OpenAILlmProvider::extract_do_block(&response) {
-                        if parser::parse(&do_block).is_ok() {
-                            let mut plan = Plan {
-                                plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
-                                name: None,
-                                intent_ids: vec![intent.intent_id.clone()],
-                                language: PlanLanguage::Rtfs20,
-                                body: PlanBody::Rtfs(do_block.to_string()),
-                                status: crate::types::PlanStatus::Draft,
-                                created_at: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_secs(),
-                                metadata: HashMap::new(),
-                                input_schema: None,
-                                output_schema: None,
-                                policies: HashMap::new(),
-                                capabilities_required: vec![],
-                                annotations: HashMap::new(),
-                            };
-                            attach_completion_metadata_to_plan(
-                                &mut plan,
-                                &self.config,
-                                &completion,
-                            );
-                            Ok(plan)
-                        } else {
-                            Err(RuntimeError::Generic(format!(
-                                "Failed to parse RTFS plan: {}",
-                                do_block
-                            )))
-                        }
-                    } else {
-                        // Fallback to JSON parsing
-                        let mut plan = self.parse_plan_from_json(&response, &intent.intent_id)?;
-                        attach_completion_metadata_to_plan(
-                            &mut plan,
-                            &self.config,
-                            &completion,
-                        );
+                let plan_result = if let Some(do_block) =
+                    OpenAILlmProvider::extract_do_block(&response)
+                {
+                    if parser::parse(&do_block).is_ok() {
+                        let mut plan = Plan {
+                            plan_id: format!("openai_plan_{}", uuid::Uuid::new_v4()),
+                            name: None,
+                            intent_ids: vec![intent.intent_id.clone()],
+                            language: PlanLanguage::Rtfs20,
+                            body: PlanBody::Rtfs(do_block.to_string()),
+                            status: crate::types::PlanStatus::Draft,
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs(),
+                            metadata: HashMap::new(),
+                            input_schema: None,
+                            output_schema: None,
+                            policies: HashMap::new(),
+                            capabilities_required: vec![],
+                            annotations: HashMap::new(),
+                        };
+                        attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
                         Ok(plan)
-                    };
+                    } else {
+                        Err(RuntimeError::Generic(format!(
+                            "Failed to parse RTFS plan: {}",
+                            do_block
+                        )))
+                    }
+                } else {
+                    // Fallback to JSON parsing
+                    let mut plan = self.parse_plan_from_json(&response, &intent.intent_id)?;
+                    attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
+                    Ok(plan)
+                };
 
                 match plan_result {
                     Ok(plan) => {
@@ -1713,6 +1852,8 @@ struct OpenAIResponse {
 #[derive(Deserialize)]
 struct OpenAIChoice {
     message: OpenAIMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -2052,10 +2193,10 @@ Only respond with valid JSON."#;
             content: format!("{}\n\n{}", system_message, user_message),
         }];
 
-    let completion = self.make_request(messages).await?;
-    let mut plan = self.parse_plan_from_json(&completion.content, &intent.intent_id)?;
-    attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
-    Ok(plan)
+        let completion = self.make_request(messages).await?;
+        let mut plan = self.parse_plan_from_json(&completion.content, &intent.intent_id)?;
+        attach_completion_metadata_to_plan(&mut plan, &self.config, &completion);
+        Ok(plan)
     }
 
     async fn validate_plan(&self, plan_content: &str) -> Result<ValidationResult, RuntimeError> {
@@ -2079,8 +2220,8 @@ Only respond with valid JSON."#;
             content: format!("{}\n\n{}", system_message, user_message),
         }];
 
-    let completion = self.make_request(messages).await?;
-    let response = completion.content;
+        let completion = self.make_request(messages).await?;
+        let response = completion.content;
 
         // Try to extract JSON from the response
         let json_start = response.find('{').unwrap_or(0);
@@ -2097,8 +2238,8 @@ Only respond with valid JSON."#;
             content: prompt.to_string(),
         }];
 
-    let completion = self.make_request(messages).await?;
-    Ok(completion.content)
+        let completion = self.make_request(messages).await?;
+        Ok(completion.content)
     }
 
     fn get_info(&self) -> LlmProviderInfo {
@@ -2681,13 +2822,13 @@ impl LlmProviderFactory {
                     .map(|v| v == "1" || v == "true")
                     .unwrap_or(false)
                     || cfg!(test);
-                
+
                 if !allow_stub {
                     return Err(RuntimeError::Generic(
                         "Stub LLM provider is not allowed in production. Set CCOS_ALLOW_STUB_PROVIDER=1 to enable (for testing only), or use a real provider (openai, anthropic, openrouter).".to_string()
                     ));
                 }
-                
+
                 eprintln!("⚠️  WARNING: Using Stub LLM Provider (testing only - not realistic)");
                 eprintln!("   Set CCOS_LLM_PROVIDER=openai or CCOS_LLM_PROVIDER=anthropic for real LLM calls");
                 Ok(Box::new(StubLlmProvider::new(config)))
@@ -2819,7 +2960,10 @@ mod tests {
             intent.metadata.get("llm.provider"),
             Some(&format!("{:?}", LlmProviderType::Stub)),
         );
-        assert_eq!(intent.metadata.get("llm.latency_ms"), Some(&"0".to_string()));
+        assert_eq!(
+            intent.metadata.get("llm.latency_ms"),
+            Some(&"0".to_string())
+        );
 
         let expected_prompt_hash = sha256_hex(prompt.as_bytes());
         assert_eq!(

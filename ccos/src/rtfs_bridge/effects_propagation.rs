@@ -1,5 +1,5 @@
 //! Effects and Permissions Propagation for Plan-as-Capability
-//! 
+//!
 //! This module analyzes a Plan's body to extract capability calls and
 //! conservatively propagates their effects and permissions to the wrapper capability.
 
@@ -56,13 +56,13 @@ impl PropagatedEffects {
 }
 
 /// Analyze a plan and propagate effects/permissions from used capabilities
-/// 
+///
 /// This function:
 /// 1. Extracts all capability calls from the plan's body
 /// 2. Looks up each capability using the provided lookup function
 /// 3. Collects all effects and permissions (union)
 /// 4. Returns the propagated effects and permissions
-/// 
+///
 /// The `capability_lookup` function should return `Some(CapabilityManifest)` if the
 /// capability is found, or `None` if not found. This allows flexibility in how
 /// capabilities are looked up (from marketplace, cache, etc.).
@@ -125,7 +125,7 @@ where
 }
 
 /// Extract all capability IDs from a plan's body
-/// 
+///
 /// This analyzes the RTFS code to find all `(call :capability.id ...)` patterns.
 fn extract_capability_ids_from_plan(plan: &Plan) -> Result<Vec<String>, RtfsBridgeError> {
     let body_str = match &plan.body {
@@ -145,19 +145,22 @@ fn extract_capability_ids_from_plan(plan: &Plan) -> Result<Vec<String>, RtfsBrid
 }
 
 /// Extract capability IDs from RTFS code string using regex
-/// 
+///
 /// This finds all patterns like `(call :capability.id ...)` and extracts the capability ID.
-fn extract_capability_ids_from_rtfs_string(rtfs_code: &str) -> Result<Vec<String>, RtfsBridgeError> {
+fn extract_capability_ids_from_rtfs_string(
+    rtfs_code: &str,
+) -> Result<Vec<String>, RtfsBridgeError> {
     use regex::Regex;
 
     let mut capability_ids = HashSet::new();
 
     // Regex to match (call :capability.id ...) patterns
     // Handles both keyword and symbol forms: (call :cap.id ...) or (call cap.id ...)
-    let call_regex = Regex::new(r#"(?m)\(call\s+[:]?([a-zA-Z0-9._-]+)\s+"#)
-        .map_err(|e| RtfsBridgeError::ValidationFailed {
+    let call_regex = Regex::new(r#"(?m)\(call\s+[:]?([a-zA-Z0-9._-]+)\s+"#).map_err(|e| {
+        RtfsBridgeError::ValidationFailed {
             message: format!("Failed to compile regex for capability extraction: {}", e),
-        })?;
+        }
+    })?;
 
     for captures in call_regex.captures_iter(rtfs_code) {
         if let Some(cap_id_match) = captures.get(1) {
@@ -180,7 +183,7 @@ fn extract_capability_ids_from_rtfs_string(rtfs_code: &str) -> Result<Vec<String
 }
 
 /// Extract capability IDs from an RTFS Expression AST
-/// 
+///
 /// Recursively walks the expression tree to find all `(call :capability.id ...)` forms.
 fn extract_capability_ids_from_expression(
     expr: &Expression,
@@ -302,7 +305,7 @@ mod tests {
         "#;
 
         let capability_ids = extract_capability_ids_from_rtfs_string(rtfs_code).unwrap();
-        
+
         assert!(capability_ids.contains(&"github.list-issues".to_string()));
         assert!(capability_ids.contains(&"data.filter".to_string()));
         assert!(capability_ids.contains(&"data.format.structure".to_string()));
@@ -322,4 +325,3 @@ mod tests {
         assert_eq!(capability_ids.len(), 0);
     }
 }
-

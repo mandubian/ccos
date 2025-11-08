@@ -18,11 +18,7 @@ fn test_mutual_recursion_pattern() {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
-    let evaluator = Evaluator::new(
-        module_registry,
-        security_context,
-        host,
-    );
+    let evaluator = Evaluator::new(module_registry, security_context, host);
     let outcome = if let TopLevel::Expression(expr) = &parsed[0] {
         evaluator
             .evaluate(expr)
@@ -63,9 +59,7 @@ fn test_nested_recursion_pattern() {
         panic!("Expected expression");
     };
     let module_registry = Arc::new(ModuleRegistry::new());
-    
-    
-    
+
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
     let evaluator = Evaluator::new(
@@ -108,9 +102,7 @@ fn test_higher_order_recursion_pattern() {
         panic!("Expected expression");
     };
     let module_registry = Arc::new(ModuleRegistry::new());
-    
-    
-    
+
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
     let evaluator = Evaluator::new(
@@ -129,15 +121,15 @@ fn test_higher_order_recursion_pattern() {
         }
     };
 
-    // Should return squares in reverse order: [16, 9, 4, 1, 0] 
+    // Should return squares in reverse order: [16, 9, 4, 1, 0]
     // (conj prepends, so range 5 = [4,3,2,1,0], then squares = [16,9,4,1,0])
     if let rtfs::runtime::values::Value::Vector(vec) = &result {
         assert_eq!(vec.len(), 5);
         assert_eq!(vec[0], rtfs::runtime::values::Value::Integer(16)); // 4^2
-        assert_eq!(vec[1], rtfs::runtime::values::Value::Integer(9));  // 3^2
-        assert_eq!(vec[2], rtfs::runtime::values::Value::Integer(4));  // 2^2
-        assert_eq!(vec[3], rtfs::runtime::values::Value::Integer(1));  // 1^2
-        assert_eq!(vec[4], rtfs::runtime::values::Value::Integer(0));  // 0^2
+        assert_eq!(vec[1], rtfs::runtime::values::Value::Integer(9)); // 3^2
+        assert_eq!(vec[2], rtfs::runtime::values::Value::Integer(4)); // 2^2
+        assert_eq!(vec[3], rtfs::runtime::values::Value::Integer(1)); // 1^2
+        assert_eq!(vec[4], rtfs::runtime::values::Value::Integer(0)); // 0^2
     } else {
         panic!("Expected vector result, got: {:?}", result);
     }
@@ -163,9 +155,7 @@ fn test_three_way_recursion_pattern() {
         panic!("Expected expression");
     };
     let module_registry = Arc::new(ModuleRegistry::new());
-    
-    
-    
+
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
     let evaluator = Evaluator::new(
@@ -184,15 +174,15 @@ fn test_three_way_recursion_pattern() {
         }
     };
 
-    // Should return squares in reverse order: [16, 9, 4, 1, 0] 
+    // Should return squares in reverse order: [16, 9, 4, 1, 0]
     // (conj prepends, so range 5 = [4,3,2,1,0], then squares = [16,9,4,1,0])
     if let rtfs::runtime::values::Value::Vector(vec) = &result {
         assert_eq!(vec.len(), 5);
         assert_eq!(vec[0], rtfs::runtime::values::Value::Integer(16)); // 4^2
-        assert_eq!(vec[1], rtfs::runtime::values::Value::Integer(9));  // 3^2
-        assert_eq!(vec[2], rtfs::runtime::values::Value::Integer(4));  // 2^2
-        assert_eq!(vec[3], rtfs::runtime::values::Value::Integer(1));  // 1^2
-        assert_eq!(vec[4], rtfs::runtime::values::Value::Integer(0));  // 0^2
+        assert_eq!(vec[1], rtfs::runtime::values::Value::Integer(9)); // 3^2
+        assert_eq!(vec[2], rtfs::runtime::values::Value::Integer(4)); // 2^2
+        assert_eq!(vec[3], rtfs::runtime::values::Value::Integer(1)); // 1^2
+        assert_eq!(vec[4], rtfs::runtime::values::Value::Integer(0)); // 0^2
     } else {
         panic!("Expected vector result, got: {:?}", result);
     }

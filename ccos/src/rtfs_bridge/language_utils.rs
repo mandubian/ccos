@@ -1,5 +1,5 @@
 //! Language Tagging Utilities
-//! 
+//!
 //! This module provides utilities for validating and normalizing language tags
 //! for Plans and Capabilities.
 
@@ -39,13 +39,13 @@ pub fn parse_language_string(lang: &str) -> Result<PlanLanguage, RtfsBridgeError
 }
 
 /// Extract language from a capability map
-/// 
+///
 /// Returns the language string if present, or None if not found.
 pub fn extract_language_from_capability_map(
     cap_map: &std::collections::HashMap<MapKey, Value>,
 ) -> Option<String> {
     let lang_key = MapKey::String(":language".to_string());
-    
+
     if let Some(lang_val) = cap_map.get(&lang_key) {
         match lang_val {
             Value::String(s) => Some(s.clone()),
@@ -63,7 +63,7 @@ pub fn extract_provider_from_capability_map(
     cap_map: &std::collections::HashMap<MapKey, Value>,
 ) -> Option<String> {
     let provider_key = MapKey::String(":provider".to_string());
-    
+
     if let Some(provider_val) = cap_map.get(&provider_key) {
         match provider_val {
             Value::String(s) => Some(s.clone()),
@@ -86,7 +86,10 @@ pub fn validate_language_string(lang: &str) -> Result<(), RtfsBridgeError> {
     }
 
     // Language should be a valid identifier (alphanumeric, dots, hyphens, underscores)
-    if !lang.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_') {
+    if !lang
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_')
+    {
         return Err(RtfsBridgeError::ValidationFailed {
             message: format!("Invalid language string format: '{}' (must be alphanumeric with dots, hyphens, or underscores)", lang),
         });
@@ -96,15 +99,15 @@ pub fn validate_language_string(lang: &str) -> Result<(), RtfsBridgeError> {
 }
 
 /// Validate that a local capability has a language field
-/// 
+///
 /// Local capabilities MUST have a `:language` field to indicate how to execute
 /// the implementation.
 pub fn validate_local_capability_has_language(
     cap_map: &std::collections::HashMap<MapKey, Value>,
 ) -> Result<(), RtfsBridgeError> {
-    let provider = extract_provider_from_capability_map(cap_map)
-        .unwrap_or_else(|| "Local".to_string());
-    
+    let provider =
+        extract_provider_from_capability_map(cap_map).unwrap_or_else(|| "Local".to_string());
+
     // Only validate for local capabilities
     if provider.to_lowercase() == "local" {
         if extract_language_from_capability_map(cap_map).is_none() {
@@ -118,16 +121,16 @@ pub fn validate_local_capability_has_language(
 }
 
 /// Ensure language is set for local capabilities
-/// 
+///
 /// If a local capability doesn't have a language, this function will attempt
 /// to infer it from the implementation or set a default.
 pub fn ensure_language_for_local_capability(
     cap_map: &mut std::collections::HashMap<MapKey, Value>,
     default_language: Option<&str>,
 ) -> Result<(), RtfsBridgeError> {
-    let provider = extract_provider_from_capability_map(cap_map)
-        .unwrap_or_else(|| "Local".to_string());
-    
+    let provider =
+        extract_provider_from_capability_map(cap_map).unwrap_or_else(|| "Local".to_string());
+
     // Only enforce for local capabilities
     if provider.to_lowercase() == "local" {
         if extract_language_from_capability_map(cap_map).is_none() {
@@ -135,13 +138,10 @@ pub fn ensure_language_for_local_capability(
             let lang = default_language
                 .unwrap_or(canonical_languages::RTFS20)
                 .to_string();
-            
+
             validate_language_string(&lang)?;
-            
-            cap_map.insert(
-                MapKey::String(":language".to_string()),
-                Value::String(lang),
-            );
+
+            cap_map.insert(MapKey::String(":language".to_string()), Value::String(lang));
         }
     }
 
@@ -160,7 +160,10 @@ mod tests {
         assert_eq!(plan_language_to_string(&PlanLanguage::Rtfs20), "rtfs20");
         assert_eq!(plan_language_to_string(&PlanLanguage::Wasm), "wasm");
         assert_eq!(plan_language_to_string(&PlanLanguage::Python), "python");
-        assert_eq!(plan_language_to_string(&PlanLanguage::GraphJson), "graphjson");
+        assert_eq!(
+            plan_language_to_string(&PlanLanguage::GraphJson),
+            "graphjson"
+        );
     }
 
     #[test]
@@ -225,4 +228,3 @@ mod tests {
         );
     }
 }
-

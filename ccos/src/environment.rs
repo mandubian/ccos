@@ -6,9 +6,9 @@
 //! - Progress tracking
 //! - Resource management
 
-use rtfs::ast::{DoExpr, Expression, TopLevel};
 use crate::causal_chain::CausalChain;
 use crate::{capability_marketplace::CapabilityMarketplace, host::RuntimeHost};
+use rtfs::ast::{DoExpr, Expression, TopLevel};
 use rtfs::parser;
 use rtfs::runtime::host_interface::HostInterface;
 use rtfs::runtime::{
@@ -19,8 +19,8 @@ use rtfs::runtime::{
 };
 use std::sync::Arc;
 // switched to Arc for ModuleRegistry
-use rtfs::ast::{Keyword, MapKey};
 use crate::working_memory::{InMemoryJsonlBackend, WorkingMemory, WorkingMemorySink};
+use rtfs::ast::{Keyword, MapKey};
 #[allow(unused_imports)]
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -350,123 +350,126 @@ impl CCOSEnvironment {
                 }
 
                 // Parse high-level inputs
-                let (mode, records): (
-                    String,
-                    Vec<crate::working_memory::ingestor::ActionRecord>,
-                ) = match input {
-                    // New calling convention: { :args [...] , :context ... }
-                    Value::Map(m) => {
-                        let args_val = map_get(m, "args").cloned().unwrap_or(Value::List(vec![]));
-                        match args_val {
-                            Value::List(args) => {
-                                // Supported forms:
-                                // ["single", <record>]
-                                // ["batch", [<record>...]]
-                                // ["replay"]
-                                let mode = args
-                                    .get(0)
-                                    .and_then(|v| v.as_string())
-                                    .unwrap_or("single")
-                                    .to_string();
-                                match mode.as_str() {
-                                    "single" => {
-                                        let rec_v = args.get(1).ok_or_else(|| {
-                                            RuntimeError::Generic(
-                                                "missing record for single mode".into(),
-                                            )
-                                        })?;
-                                        let rec = parse_record(rec_v)?;
-                                        (mode, vec![rec])
-                                    }
-                                    "batch" => {
-                                        let list_v = args.get(1).ok_or_else(|| {
-                                            RuntimeError::Generic(
-                                                "missing records for batch mode".into(),
-                                            )
-                                        })?;
-                                        let mut recs = Vec::new();
-                                        if let Value::Vector(vs) | Value::List(vs) = list_v {
-                                            for v in vs {
-                                                recs.push(parse_record(v)?);
-                                            }
-                                        } else {
-                                            return Err(RuntimeError::TypeError {
-                                                expected: "list".into(),
-                                                actual: list_v.type_name().into(),
-                                                operation: "observability.ingestor:v1.ingest"
-                                                    .into(),
-                                            });
+                let (mode, records): (String, Vec<crate::working_memory::ingestor::ActionRecord>) =
+                    match input {
+                        // New calling convention: { :args [...] , :context ... }
+                        Value::Map(m) => {
+                            let args_val =
+                                map_get(m, "args").cloned().unwrap_or(Value::List(vec![]));
+                            match args_val {
+                                Value::List(args) => {
+                                    // Supported forms:
+                                    // ["single", <record>]
+                                    // ["batch", [<record>...]]
+                                    // ["replay"]
+                                    let mode = args
+                                        .get(0)
+                                        .and_then(|v| v.as_string())
+                                        .unwrap_or("single")
+                                        .to_string();
+                                    match mode.as_str() {
+                                        "single" => {
+                                            let rec_v = args.get(1).ok_or_else(|| {
+                                                RuntimeError::Generic(
+                                                    "missing record for single mode".into(),
+                                                )
+                                            })?;
+                                            let rec = parse_record(rec_v)?;
+                                            (mode, vec![rec])
                                         }
-                                        (mode, recs)
-                                    }
-                                    "replay" => (mode, vec![]),
-                                    _ => {
-                                        return Err(RuntimeError::Generic(format!(
-                                            "unsupported mode: {}",
-                                            mode
-                                        )))
+                                        "batch" => {
+                                            let list_v = args.get(1).ok_or_else(|| {
+                                                RuntimeError::Generic(
+                                                    "missing records for batch mode".into(),
+                                                )
+                                            })?;
+                                            let mut recs = Vec::new();
+                                            if let Value::Vector(vs) | Value::List(vs) = list_v {
+                                                for v in vs {
+                                                    recs.push(parse_record(v)?);
+                                                }
+                                            } else {
+                                                return Err(RuntimeError::TypeError {
+                                                    expected: "list".into(),
+                                                    actual: list_v.type_name().into(),
+                                                    operation: "observability.ingestor:v1.ingest"
+                                                        .into(),
+                                                });
+                                            }
+                                            (mode, recs)
+                                        }
+                                        "replay" => (mode, vec![]),
+                                        _ => {
+                                            return Err(RuntimeError::Generic(format!(
+                                                "unsupported mode: {}",
+                                                mode
+                                            )))
+                                        }
                                     }
                                 }
-                            }
-                            other => {
-                                return Err(RuntimeError::TypeError {
-                                    expected: "list".into(),
-                                    actual: other.type_name().into(),
-                                    operation: "observability.ingestor:v1.ingest".into(),
-                                })
-                            }
-                        }
-                    }
-                    // Back-compat: raw list
-                    Value::List(args) => {
-                        let mode = args
-                            .get(0)
-                            .and_then(|v| v.as_string())
-                            .unwrap_or("single")
-                            .to_string();
-                        match mode.as_str() {
-                            "single" => {
-                                let rec_v = args.get(1).ok_or_else(|| {
-                                    RuntimeError::Generic("missing record for single mode".into())
-                                })?;
-                                let rec = parse_record(rec_v)?;
-                                (mode, vec![rec])
-                            }
-                            "batch" => {
-                                let list_v = args.get(1).ok_or_else(|| {
-                                    RuntimeError::Generic("missing records for batch mode".into())
-                                })?;
-                                let mut recs = Vec::new();
-                                if let Value::Vector(vs) | Value::List(vs) = list_v {
-                                    for v in vs {
-                                        recs.push(parse_record(v)?);
-                                    }
-                                } else {
+                                other => {
                                     return Err(RuntimeError::TypeError {
                                         expected: "list".into(),
-                                        actual: list_v.type_name().into(),
+                                        actual: other.type_name().into(),
                                         operation: "observability.ingestor:v1.ingest".into(),
-                                    });
+                                    })
                                 }
-                                (mode, recs)
-                            }
-                            "replay" => (mode, vec![]),
-                            _ => {
-                                return Err(RuntimeError::Generic(format!(
-                                    "unsupported mode: {}",
-                                    mode
-                                )))
                             }
                         }
-                    }
-                    other => {
-                        return Err(RuntimeError::TypeError {
-                            expected: "map or list".into(),
-                            actual: other.type_name().into(),
-                            operation: "observability.ingestor:v1.ingest".into(),
-                        })
-                    }
-                };
+                        // Back-compat: raw list
+                        Value::List(args) => {
+                            let mode = args
+                                .get(0)
+                                .and_then(|v| v.as_string())
+                                .unwrap_or("single")
+                                .to_string();
+                            match mode.as_str() {
+                                "single" => {
+                                    let rec_v = args.get(1).ok_or_else(|| {
+                                        RuntimeError::Generic(
+                                            "missing record for single mode".into(),
+                                        )
+                                    })?;
+                                    let rec = parse_record(rec_v)?;
+                                    (mode, vec![rec])
+                                }
+                                "batch" => {
+                                    let list_v = args.get(1).ok_or_else(|| {
+                                        RuntimeError::Generic(
+                                            "missing records for batch mode".into(),
+                                        )
+                                    })?;
+                                    let mut recs = Vec::new();
+                                    if let Value::Vector(vs) | Value::List(vs) = list_v {
+                                        for v in vs {
+                                            recs.push(parse_record(v)?);
+                                        }
+                                    } else {
+                                        return Err(RuntimeError::TypeError {
+                                            expected: "list".into(),
+                                            actual: list_v.type_name().into(),
+                                            operation: "observability.ingestor:v1.ingest".into(),
+                                        });
+                                    }
+                                    (mode, recs)
+                                }
+                                "replay" => (mode, vec![]),
+                                _ => {
+                                    return Err(RuntimeError::Generic(format!(
+                                        "unsupported mode: {}",
+                                        mode
+                                    )))
+                                }
+                            }
+                        }
+                        other => {
+                            return Err(RuntimeError::TypeError {
+                                expected: "map or list".into(),
+                                actual: other.type_name().into(),
+                                operation: "observability.ingestor:v1.ingest".into(),
+                            })
+                        }
+                    };
 
                 // Ensure WM is available
                 let wm_arc = wm_for_cap.clone().ok_or_else(|| {
@@ -599,8 +602,7 @@ impl CCOSEnvironment {
         let session_pool = std::sync::Arc::new(session_pool);
 
         // Create and configure registry
-        let mut configured_registry =
-            crate::capabilities::registry::CapabilityRegistry::new();
+        let mut configured_registry = crate::capabilities::registry::CapabilityRegistry::new();
         configured_registry.set_marketplace(marketplace.clone());
         configured_registry.set_session_pool(session_pool.clone());
 
@@ -668,6 +670,16 @@ impl CCOSEnvironment {
             vec!["repl-intent".to_string()],
             "root-action".to_string(),
         );
+
+        // Load CCOS prelude (effectful helpers like println, log, etc.)
+        // This ensures capabilities like println are available
+        {
+            let mut evaluator = self
+                .evaluator
+                .lock()
+                .map_err(|_| RuntimeError::Generic("Failed to lock evaluator".to_string()))?;
+            crate::prelude::load_prelude(&mut evaluator.env);
+        }
 
         // Execute each top-level item
         let execution_result = (|| -> RuntimeResult<ExecutionOutcome> {
@@ -759,6 +771,121 @@ impl CCOSEnvironment {
                                     }
                                 }
                             }
+                        }
+                    }
+                    TopLevel::Plan(plan_def) => {
+                        // Handle plan definitions
+                        if self.config.verbose {
+                            println!("Loading plan: {:?}", plan_def.name);
+                        }
+
+                        // Convert RTFS PlanDefinition to Expression map for extraction
+                        // Build a map from the plan definition properties
+                        let mut plan_map: std::collections::HashMap<MapKey, Expression> =
+                            std::collections::HashMap::new();
+
+                        // Required fields - use Keyword format for consistency with extractor expectations
+                        plan_map.insert(
+                            MapKey::Keyword(rtfs::ast::Keyword("type".to_string())),
+                            Expression::Literal(rtfs::ast::Literal::String("plan".to_string())),
+                        );
+                        plan_map.insert(
+                            MapKey::Keyword(rtfs::ast::Keyword("name".to_string())),
+                            Expression::Literal(rtfs::ast::Literal::String(
+                                plan_def.name.0.clone(),
+                            )),
+                        );
+
+                        // Add all properties from the plan definition
+                        // Normalize keys to Keyword("body") form (strip any leading colon if present)
+                        for prop in &plan_def.properties {
+                            let mut key_str = prop.key.0.clone();
+                            if key_str.starts_with(':') {
+                                key_str = key_str.trim_start_matches(':').to_string();
+                            }
+                            let map_key = MapKey::Keyword(rtfs::ast::Keyword(key_str));
+                            plan_map.insert(map_key, prop.value.clone());
+                        }
+
+                        // Ensure :body key exists (fallback to :rtfs-body or :program if provided)
+                        let has_body = plan_map
+                            .contains_key(&MapKey::Keyword(rtfs::ast::Keyword("body".to_string())));
+                        if !has_body {
+                            if let Some(v) = plan_map
+                                .get(&MapKey::Keyword(rtfs::ast::Keyword(
+                                    "rtfs-body".to_string(),
+                                )))
+                                .cloned()
+                            {
+                                plan_map.insert(
+                                    MapKey::Keyword(rtfs::ast::Keyword("body".to_string())),
+                                    v,
+                                );
+                            } else if let Some(v) = plan_map
+                                .get(&MapKey::Keyword(rtfs::ast::Keyword("program".to_string())))
+                                .cloned()
+                            {
+                                plan_map.insert(
+                                    MapKey::Keyword(rtfs::ast::Keyword("body".to_string())),
+                                    v,
+                                );
+                            }
+                        }
+
+                        let plan_expr = Expression::Map(plan_map);
+
+                        // Extract plan using rtfs_bridge
+                        match crate::rtfs_bridge::extractors::extract_plan_from_rtfs(&plan_expr) {
+                            Ok(plan) => {
+                                if self.config.verbose {
+                                    println!("✓ Extracted plan: {}", plan.plan_id);
+                                }
+
+                                // Execute the plan body directly by evaluating the expression
+                                // This is a lightweight execution without full orchestrator
+                                // For full orchestrator support, use CCOS core instead
+                                match &plan.body {
+                                    crate::types::PlanBody::Rtfs(rtfs_body) => {
+                                        if self.config.verbose {
+                                            println!("Executing plan body...");
+                                        }
+                                        // Parse and evaluate the plan body expression directly
+                                        // This avoids recursive execute_code calls and potential deadlocks
+                                        match rtfs::parser::parse_expression(rtfs_body) {
+                                            Ok(body_expr) => {
+                                                // Ensure prelude is loaded
+                                                crate::prelude::load_prelude(&mut evaluator.env);
+                                                // Evaluate using the already-locked evaluator from outer scope to avoid deadlocks
+                                                last_result = evaluator.evaluate(&body_expr)?;
+                                            }
+                                            Err(e) => {
+                                                return Err(RuntimeError::Generic(format!(
+                                                    "Failed to parse plan body: {:?}",
+                                                    e
+                                                )));
+                                            }
+                                        }
+                                    }
+                                    crate::types::PlanBody::Wasm(_) => {
+                                        return Err(RuntimeError::Generic(
+                                            "WASM plan bodies not supported in environment execution".to_string(),
+                                        ));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                if self.config.verbose {
+                                    println!("Failed to extract plan: {:?}", e);
+                                }
+                                return Err(RuntimeError::Generic(format!(
+                                    "Failed to extract plan from RTFS: {:?}",
+                                    e
+                                )));
+                            }
+                        }
+
+                        if let ExecutionOutcome::RequiresHost(_) = last_result {
+                            return Ok(last_result);
                         }
                     }
                     TopLevel::Capability(cap_def) => {
@@ -854,19 +981,64 @@ impl CCOSEnvironment {
                             std::thread::spawn(move || {
                                 let handler = std::sync::Arc::new(
                                     move |input: &Value| -> RuntimeResult<Value> {
+                                        // Extract actual input from the calling convention
+                                        // The host wraps args in {:args [...]}, so we need to unwrap it
+                                        let actual_input = match input {
+                                            Value::Map(map) => {
+                                                // Check if it's the new calling convention with :args
+                                                if let Some(args_val) = map.get(&MapKey::Keyword(
+                                                    Keyword("args".to_string()),
+                                                )) {
+                                                    match args_val {
+                                                        Value::List(args) if args.len() == 1 => {
+                                                            // Single argument - unwrap it
+                                                            args[0].clone()
+                                                        }
+                                                        Value::List(args) => {
+                                                            // Multiple arguments - wrap in a map or use first
+                                                            // For now, use first argument (most common case)
+                                                            args.first()
+                                                                .cloned()
+                                                                .unwrap_or(Value::Nil)
+                                                        }
+                                                        _ => args_val.clone(),
+                                                    }
+                                                } else {
+                                                    // Not wrapped, use as-is
+                                                    input.clone()
+                                                }
+                                            }
+                                            Value::List(args) if args.len() == 1 => {
+                                                // Single argument in list - unwrap it
+                                                args[0].clone()
+                                            }
+                                            _ => {
+                                                // Use as-is
+                                                input.clone()
+                                            }
+                                        };
+
                                         // Fresh evaluator per invocation to ensure isolation
                                         let mut eval = rtfs::runtime::evaluator::Evaluator::new(
                                             module_registry.clone(),
                                             rtfs::runtime::security::RuntimeContext::full(),
                                             host_for_cap.clone(),
                                         );
-                                        // Provide the entire input under a conventional symbol 'input'
+                                        // Provide the actual input under a conventional symbol 'input'
                                         eval.env.define(
                                             &rtfs::ast::Symbol("input".to_string()),
-                                            input.clone(),
+                                            actual_input,
                                         );
 
-                                        match eval.evaluate(&impl_expr_arc) {
+                                        // Call the implementation function with the input argument
+                                        let call_expr = rtfs::ast::Expression::FunctionCall {
+                                            callee: Box::new((*impl_expr_arc).clone()),
+                                            arguments: vec![rtfs::ast::Expression::Symbol(
+                                                rtfs::ast::Symbol("input".to_string()),
+                                            )],
+                                        };
+
+                                        match eval.evaluate(&call_expr) {
                                             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
                                             Ok(other) => Err(RuntimeError::Generic(format!(
                                                 "Capability implementation did not complete: {:?}",
@@ -1271,7 +1443,11 @@ impl CCOSEnvironment {
                                     })
                                     .collect(),
                                 defn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
-                                defn_expr.params.iter().map(|p| p.type_annotation.clone()).collect(),
+                                defn_expr
+                                    .params
+                                    .iter()
+                                    .map(|p| p.type_annotation.clone())
+                                    .collect(),
                                 defn_expr.variadic_param.as_ref().map(|p| match &p.pattern {
                                     rtfs::ast::Pattern::Symbol(s) => s.clone(),
                                     _ => {

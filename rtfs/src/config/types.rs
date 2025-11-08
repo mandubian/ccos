@@ -46,6 +46,12 @@ pub struct AgentConfig {
     /// Optional catalog of LLM model profiles for interactive selection
     #[serde(default)]
     pub llm_profiles: Option<LlmProfilesConfig>,
+    /// Discovery engine configuration
+    #[serde(default)]
+    pub discovery: DiscoveryConfig,
+    /// Catalog configuration (plan/capability reuse thresholds)
+    #[serde(default)]
+    pub catalog: CatalogConfig,
 }
 
 /// A named LLM model profile that can be selected at runtime
@@ -116,6 +122,92 @@ pub struct LlmModelSpec {
     pub max_output_tokens: Option<u32>,
     /// Free-form notes (latency expectations, etc.)
     pub notes: Option<String>,
+}
+
+/// Discovery engine configuration persisted in agent config
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DiscoveryConfig {
+    /// Minimum semantic match score threshold (0.0 to 1.0)
+    #[serde(default = "default_discovery_match_threshold")]
+    pub match_threshold: f64,
+    /// Enable embedding-based matching (more accurate but requires API)
+    #[serde(default = "default_discovery_use_embeddings")]
+    pub use_embeddings: bool,
+    /// Preferred remote embedding model (e.g., OpenRouter)
+    #[serde(default)]
+    pub embedding_model: Option<String>,
+    /// Preferred local embedding model (e.g., Ollama)
+    #[serde(default)]
+    pub local_embedding_model: Option<String>,
+    /// Minimum score required for action verb match (0.0 to 1.0)
+    #[serde(default = "default_discovery_action_verb_threshold")]
+    pub action_verb_threshold: f64,
+    /// Weight for action verbs in matching (higher = more important)
+    #[serde(default = "default_discovery_action_verb_weight")]
+    pub action_verb_weight: f64,
+    /// Weight for capability class matching (0.0 to 1.0)
+    #[serde(default = "default_discovery_capability_class_weight")]
+    pub capability_class_weight: f64,
+}
+
+impl Default for DiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            match_threshold: default_discovery_match_threshold(),
+            use_embeddings: default_discovery_use_embeddings(),
+            embedding_model: None,
+            local_embedding_model: None,
+            action_verb_threshold: default_discovery_action_verb_threshold(),
+            action_verb_weight: default_discovery_action_verb_weight(),
+            capability_class_weight: default_discovery_capability_class_weight(),
+        }
+    }
+}
+
+fn default_discovery_match_threshold() -> f64 {
+    0.65
+}
+
+fn default_discovery_use_embeddings() -> bool {
+    false
+}
+
+fn default_discovery_action_verb_threshold() -> f64 {
+    0.7
+}
+
+fn default_discovery_action_verb_weight() -> f64 {
+    0.4
+}
+
+fn default_discovery_capability_class_weight() -> f64 {
+    0.3
+}
+
+/// Catalog configuration stored in agent config
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CatalogConfig {
+    #[serde(default = "default_catalog_plan_min_score")]
+    pub plan_min_score: f32,
+    #[serde(default = "default_catalog_keyword_min_score")]
+    pub keyword_min_score: f32,
+}
+
+impl Default for CatalogConfig {
+    fn default() -> Self {
+        Self {
+            plan_min_score: default_catalog_plan_min_score(),
+            keyword_min_score: default_catalog_keyword_min_score(),
+        }
+    }
+}
+
+fn default_catalog_plan_min_score() -> f32 {
+    0.65
+}
+
+fn default_catalog_keyword_min_score() -> f32 {
+    1.0
 }
 
 /// Orchestrator configuration
@@ -495,6 +587,8 @@ impl Default for AgentConfig {
             delegation: DelegationConfig::default(),
             features: vec![],
             llm_profiles: None,
+            discovery: DiscoveryConfig::default(),
+            catalog: CatalogConfig::default(),
         }
     }
 }
@@ -777,7 +871,7 @@ impl DelegationConfig {
         // Implementation requires CCOS integration
         todo!("CCOS integration required for to_arbiter_config")
     }
-    
+
     #[cfg(not(feature = "ccos-integration"))]
     #[cfg(test)]
     pub fn to_arbiter_config(&self) -> DelegationConfigStub {
@@ -787,15 +881,18 @@ impl DelegationConfig {
             threshold: self.threshold.unwrap_or(0.65),
             max_candidates: self.max_candidates.unwrap_or(3) as usize,
             min_skill_hits: self.min_skill_hits,
-            agent_registry: self.agent_registry.clone().unwrap_or_else(|| AgentRegistryConfig {
-                registry_type: RegistryType::InMemory,
-                database_url: None,
-                agents: vec![],
-            }),
+            agent_registry: self
+                .agent_registry
+                .clone()
+                .unwrap_or_else(|| AgentRegistryConfig {
+                    registry_type: RegistryType::InMemory,
+                    database_url: None,
+                    agents: vec![],
+                }),
             adaptive_threshold: self.adaptive_threshold.clone(),
         }
     }
-    
+
     #[cfg(not(feature = "ccos-integration"))]
     #[cfg(not(test))]
     pub fn to_arbiter_config(&self) -> () {

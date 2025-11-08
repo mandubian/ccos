@@ -167,7 +167,7 @@ impl<'a> IrConverter<'a> {
     fn add_builtin_functions(&mut self) {
         // Helper: Number type = Int | Float
         let number_type = IrType::Union(vec![IrType::Int, IrType::Float]);
-        
+
         let builtins = [
             // Arithmetic operators - accept Number, return Number
             // Runtime promotes Int to Float when mixed
@@ -1872,8 +1872,9 @@ impl<'a> IrConverter<'a> {
                     let variadic_param = if let Some(variadic_param_def) = fn_expr.variadic_param {
                         if let Pattern::Symbol(s) = variadic_param_def.pattern {
                             let var_param_id = self.next_id();
-                            let var_param_type = self
-                                .convert_type_annotation_option(variadic_param_def.type_annotation.clone())?;
+                            let var_param_type = self.convert_type_annotation_option(
+                                variadic_param_def.type_annotation.clone(),
+                            )?;
 
                             // Define the variadic binding in current scope
                             let binding_info = BindingInfo {
@@ -1912,8 +1913,7 @@ impl<'a> IrConverter<'a> {
                     let return_type = if let Some(ret_annot) = fn_expr.return_type {
                         self.convert_type_annotation(ret_annot)?
                     } else {
-                        body
-                            .last()
+                        body.last()
                             .and_then(|n| n.ir_type())
                             .cloned()
                             .unwrap_or(IrType::Any)
@@ -2266,10 +2266,10 @@ impl<'a> IrConverter<'a> {
             };
             elements.push(element?);
         }
-        
+
         // Infer element type from actual elements (least upper bound)
         let element_type = infer_vector_element_type(&elements);
-        
+
         Ok(IrNode::Vector {
             id,
             elements,
@@ -3281,43 +3281,45 @@ fn infer_vector_element_type(elements: &[IrNode]) -> IrType {
     if elements.is_empty() {
         return IrType::Any; // Empty vector: Vector<Any>
     }
-    
+
     // Collect all element types
     let mut element_types: Vec<IrType> = elements
         .iter()
         .filter_map(|node| node.ir_type().cloned())
         .collect();
-    
+
     if element_types.is_empty() {
         return IrType::Any;
     }
-    
+
     // Remove duplicates and compute join
     element_types.sort_by_key(|t| format!("{:?}", t));
     element_types.dedup();
-    
+
     // Case 1: All elements have the same type → homogeneous vector
     if element_types.len() == 1 {
         return element_types[0].clone();
     }
-    
+
     // Case 2: Mixed Int and Float → Number (Int | Float)
     // This is a special case for the numeric tower
     let has_int = element_types.iter().any(|t| matches!(t, IrType::Int));
     let has_float = element_types.iter().any(|t| matches!(t, IrType::Float));
-    let only_numeric = element_types.iter().all(|t| matches!(t, IrType::Int | IrType::Float));
-    
+    let only_numeric = element_types
+        .iter()
+        .all(|t| matches!(t, IrType::Int | IrType::Float));
+
     if only_numeric && (has_int || has_float) {
         // Return Number = Int | Float (normalized union)
         return IrType::Union(vec![IrType::Int, IrType::Float]);
     }
-    
+
     // Case 3: Multiple different types → create union (up to 5 types)
     // Beyond 5 types, we consider it too heterogeneous and use Any
     if element_types.len() <= 5 {
         return IrType::Union(element_types);
     }
-    
+
     // Case 4: Too many different types (> 5) → Any
     IrType::Any
 }
