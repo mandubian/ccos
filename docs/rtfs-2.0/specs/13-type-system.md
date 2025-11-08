@@ -168,6 +168,8 @@ We define a binary relation `τ₁ ≤ τ₂` (read "`τ₁` is a subtype of `τ
 
 **Note**: All collection types are **covariant** in their element types.
 
+**Note**: Map type subtyping rules are **not currently implemented**. Map types are checked structurally - all required fields in the type definition must be present in the data, but extra fields are allowed regardless of wildcard specification.
+
 #### 3.1.5 Join (Least Upper Bound)
 
 For vector and list type inference, we define the **join** operation:
@@ -778,6 +780,7 @@ infer(if condition 42 3.14)
 | **Inference** | Top-level definitions may require annotations |
 | **Effect Tracking** | Side effects not tracked in types (yet) |
 | **Termination** | Type system doesn't prove program termination |
+| **Map Type Subtyping** | Map types do not support subtyping relationships. A map type `A` is not considered a subtype of map type `B` just because `A` has fewer required fields than `B`. Extra fields in data are allowed even without wildcards. |
 
 ---
 
