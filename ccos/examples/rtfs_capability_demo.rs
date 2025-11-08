@@ -9,8 +9,8 @@
 //! Usage:
 //!   cargo run --example rtfs_capability_demo -- --rtfs-file capabilities.json --tool-name my_tool
 
-use clap::Parser;
 use ccos::environment::{CCOSConfig, CCOSEnvironment, SecurityLevel};
+use clap::Parser;
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 

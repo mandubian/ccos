@@ -27,13 +27,13 @@
 // primitive. For example, `(call ccos.user.ask "What are your dates?")` delegates a
 // question to the host so that runtime, security, and replayability are enforced.
 
-use clap::Parser;
-use crossterm::style::Stylize;
-use rtfs::ast::CapabilityDefinition as CapabilityDef;
 use ccos::agent::registry::AgentRegistry;
 use ccos::arbiter::ArbiterEngine;
 use ccos::types::{ExecutionResult, StorableIntent};
 use ccos::CCOS;
+use clap::Parser;
+use crossterm::style::Stylize;
+use rtfs::ast::CapabilityDefinition as CapabilityDef;
 use rtfs::config::profile_selection::ProfileMeta;
 use rtfs::config::types::{AgentConfig, LlmProfile};
 use rtfs::config::validation::validate_config;
@@ -617,24 +617,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     schema.params.len(), metrics.coverage, metrics.redundancy, metrics.enum_specificity);
                 for (name, meta) in schema.params.iter() {
                     let kind = match meta.param_type {
-                        ccos::synthesis::preference_schema::ParamType::Enum => {
-                            "enum"
-                        }
-                        ccos::synthesis::preference_schema::ParamType::String => {
-                            "string"
-                        }
-                        ccos::synthesis::preference_schema::ParamType::Integer => {
-                            "int"
-                        }
-                        ccos::synthesis::preference_schema::ParamType::Float => {
-                            "float"
-                        }
-                        ccos::synthesis::preference_schema::ParamType::Boolean => {
-                            "bool"
-                        }
-                        ccos::synthesis::preference_schema::ParamType::Unknown => {
-                            "?"
-                        }
+                        ccos::synthesis::preference_schema::ParamType::Enum => "enum",
+                        ccos::synthesis::preference_schema::ParamType::String => "string",
+                        ccos::synthesis::preference_schema::ParamType::Integer => "int",
+                        ccos::synthesis::preference_schema::ParamType::Float => "float",
+                        ccos::synthesis::preference_schema::ParamType::Boolean => "bool",
+                        ccos::synthesis::preference_schema::ParamType::Unknown => "?",
                     };
                     let enum_desc = if !meta.enum_values.is_empty() {
                         format!(" {:?}", meta.enum_values)
@@ -885,18 +873,16 @@ async fn generate_synthesis_summary(
 
     // --- Quick, local synthesis using the built-in pipeline (Phase 8 minimal)
     println!("{}", "[synthesis] Running quick local synthesis pipeline (schema extraction + artifact generation)...".yellow());
-    let interaction_turns_for_synthesis: Vec<ccos::synthesis::InteractionTurn> =
-        history
-            .iter()
-            .map(|t| ccos::synthesis::InteractionTurn {
-                turn_index: 0,
-                prompt: t.user_input.clone(),
-                answer: None,
-            })
-            .collect();
+    let interaction_turns_for_synthesis: Vec<ccos::synthesis::InteractionTurn> = history
+        .iter()
+        .map(|t| ccos::synthesis::InteractionTurn {
+            turn_index: 0,
+            prompt: t.user_input.clone(),
+            answer: None,
+        })
+        .collect();
 
-    let synth_result =
-        ccos::synthesis::synthesize_capabilities(&interaction_turns_for_synthesis);
+    let synth_result = ccos::synthesis::synthesize_capabilities(&interaction_turns_for_synthesis);
     if let Some(col) = &synth_result.collector {
         println!("[synthesis.quick] Collector:\n{}", col);
         if persist {
@@ -977,15 +963,12 @@ async fn generate_synthesis_summary(
 
     // 3. Parser-first attempt: try to parse the raw response into TopLevel ASTs and
     // if we find a TopLevel::Capability, pretty-print it into canonical RTFS source.
-    let mut spec = if let Ok(parsed) = rtfs::parser::parse_with_enhanced_errors(&raw, None)
-    {
+    let mut spec = if let Ok(parsed) = rtfs::parser::parse_with_enhanced_errors(&raw, None) {
         // If parser returns at least one capability top-level node, convert it to canonical RTFS
         let mut found_cap: Option<String> = None;
         for tl in parsed.iter() {
             if let rtfs::ast::TopLevel::Capability(_) = tl {
-                if let Some(s) =
-                    ccos::rtfs_bridge::extractors::toplevel_to_rtfs_string(tl)
-                {
+                if let Some(s) = ccos::rtfs_bridge::extractors::toplevel_to_rtfs_string(tl) {
                     // Wrap in fenced block for downstream processing
                     found_cap = Some(format!("```rtfs\n{}\n```", s));
                     break;
@@ -1169,14 +1152,14 @@ async fn generate_synthesis_summary(
                                 Value::String(s) => s.clone(),
                                 Value::Map(m) => {
                                     if let Some(Value::String(p)) =
-                                        m.get(&rtfs::ast::MapKey::Keyword(
-                                            rtfs::ast::Keyword::new("prompt"),
-                                        ))
+                                        m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword::new(
+                                            "prompt",
+                                        )))
                                     {
                                         p.clone()
-                                    } else if let Some(Value::String(p)) = m.get(
-                                        &rtfs::ast::MapKey::String("prompt".to_string()),
-                                    ) {
+                                    } else if let Some(Value::String(p)) =
+                                        m.get(&rtfs::ast::MapKey::String("prompt".to_string()))
+                                    {
                                         p.clone()
                                     } else {
                                         "Please provide input:".to_string()
@@ -1189,11 +1172,9 @@ async fn generate_synthesis_summary(
                             if std::env::var("CCOS_INTERACTIVE_ASK").is_ok() {
                                 match prompt_user(&format!("(user.ask) {} ", prompt_text)) {
                                     Ok(ans) => Ok(Value::String(ans)),
-                                    Err(e) => {
-                                        Err(rtfs::runtime::error::RuntimeError::Generic(
-                                            format!("prompt failed: {}", e),
-                                        ))
-                                    }
+                                    Err(e) => Err(rtfs::runtime::error::RuntimeError::Generic(
+                                        format!("prompt failed: {}", e),
+                                    )),
                                 }
                             } else {
                                 // Try canned env response by generating a question key
@@ -1208,9 +1189,7 @@ async fn generate_synthesis_summary(
                                     Ok(Value::Map({
                                         let mut m = std::collections::HashMap::new();
                                         m.insert(
-                                            rtfs::ast::MapKey::String(
-                                                "status".to_string(),
-                                            ),
+                                            rtfs::ast::MapKey::String("status".to_string()),
                                             Value::String("executed".to_string()),
                                         );
                                         m.insert(
@@ -1717,10 +1696,7 @@ impl ResponseHandler {
     }
 
     /// Extract and store responses from execution results
-    fn extract_and_store_responses(
-        &mut self,
-        result: &ccos::types::ExecutionResult,
-    ) {
+    fn extract_and_store_responses(&mut self, result: &ccos::types::ExecutionResult) {
         match &result.value {
             rtfs::runtime::values::Value::String(response_value) => {
                 // Try to identify if this contains structured response data
@@ -1783,9 +1759,7 @@ impl ResponseHandler {
 }
 
 /// Extract context variables from a successful plan execution result
-fn extract_context_from_result(
-    result: &ccos::types::ExecutionResult,
-) -> HashMap<String, String> {
+fn extract_context_from_result(result: &ccos::types::ExecutionResult) -> HashMap<String, String> {
     let mut context = HashMap::new();
 
     match &result.value {
@@ -1876,9 +1850,7 @@ fn extract_pending_questions_and_generate_responses(
 }
 
 /// Extract question prompt from a PlanPaused action
-fn extract_question_prompt_from_action(
-    action: &ccos::types::Action,
-) -> Option<String> {
+fn extract_question_prompt_from_action(action: &ccos::types::Action) -> Option<String> {
     if let Some(args) = &action.arguments {
         if args.len() >= 2 {
             match &args[1] {
@@ -1916,9 +1888,7 @@ fn get_map_string_value<'a>(
     map: &'a std::collections::HashMap<rtfs::ast::MapKey, Value>,
     key: &str,
 ) -> Option<&'a String> {
-    if let Some(value) = map.get(&rtfs::ast::MapKey::Keyword(
-        rtfs::ast::Keyword::new(key),
-    )) {
+    if let Some(value) = map.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword::new(key))) {
         if let Value::String(s) = value {
             return Some(s);
         }
@@ -2021,9 +1991,9 @@ fn find_latest_plan_checkpoint(ccos: &Arc<CCOS>, plan_id: &str) -> Option<String
 fn is_refinement_exhausted(value: &Value) -> bool {
     if let Value::Map(map) = value {
         // Match against MapKey::Keyword("status")
-        if let Some(status_val) = map.get(&rtfs::ast::MapKey::Keyword(
-            rtfs::ast::Keyword::new("status"),
-        )) {
+        if let Some(status_val) = map.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword::new(
+            "status",
+        ))) {
             if let Value::String(s) = status_val {
                 return s == "refinement_exhausted";
             }

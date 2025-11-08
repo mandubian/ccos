@@ -2,6 +2,7 @@ use super::archivable_types::ArchivablePlan;
 use super::storage::{ContentAddressableArchive, InMemoryArchive, IndexedArchive};
 use super::storage_backends::file_archive::FileArchive;
 use super::types::{IntentId, Plan, PlanId};
+use crate::catalog::{CatalogLocation, CatalogService, CatalogSource};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -16,6 +17,7 @@ pub struct PlanArchive {
     storage: PlanArchiveStorage,
     plan_id_index: Arc<Mutex<HashMap<PlanId, String>>>,
     intent_id_index: Arc<Mutex<HashMap<IntentId, Vec<String>>>>,
+    catalog: Arc<Mutex<Option<Arc<CatalogService>>>>,
 }
 
 impl PlanArchive {
@@ -117,6 +119,7 @@ impl PlanArchive {
             storage: PlanArchiveStorage::InMemory(InMemoryArchive::new()),
             plan_id_index: Arc::new(Mutex::new(HashMap::new())),
             intent_id_index: Arc::new(Mutex::new(HashMap::new())),
+            catalog: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -127,6 +130,7 @@ impl PlanArchive {
             storage: PlanArchiveStorage::File(indexed),
             plan_id_index: Arc::new(Mutex::new(HashMap::new())),
             intent_id_index: Arc::new(Mutex::new(HashMap::new())),
+            catalog: Arc::new(Mutex::new(None)),
         };
         if let Err(e) = this.rehydrate() {
             eprintln!("⚠️ PlanArchive rehydrate failed: {}", e);
@@ -194,7 +198,20 @@ impl PlanArchive {
             }
         }
 
+        if let Some(catalog) = self.catalog.lock().unwrap().clone() {
+            catalog.register_plan(
+                plan,
+                CatalogSource::Generated,
+                Some(CatalogLocation::ArchiveHash(hash.clone())),
+            );
+        }
+
         Ok(hash)
+    }
+
+    pub fn set_catalog(&self, catalog: Arc<CatalogService>) {
+        let mut guard = self.catalog.lock().unwrap();
+        *guard = Some(catalog);
     }
 
     /// Retrieve a plan by its ID

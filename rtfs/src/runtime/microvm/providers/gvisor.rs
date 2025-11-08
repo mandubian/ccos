@@ -351,7 +351,13 @@ fi
 
         // Create a new container
         // CCOS dependency: Uuid::new_v4()
-        let container_id = format!("rtfs-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let container_id = format!(
+            "rtfs-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
         let mut container = self.create_container(&container_id)?;
 
         // Start the container

@@ -1,7 +1,7 @@
-use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::parser::parse_expression;
 use rtfs::runtime::evaluator::Evaluator;
 use rtfs::runtime::module_runtime::ModuleRegistry;
+use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::runtime::stdlib::StandardLibrary;
 use rtfs::runtime::values::Value;
 use std::sync::Arc;
@@ -12,28 +12,20 @@ fn test_missing_stdlib_functions() {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
-    let evaluator = Evaluator::new(
-        module_registry,
-        security_context,
-        host,
-    );
+    let evaluator = Evaluator::new(module_registry, security_context, host);
 
     // Test empty?
     let expr = parse_expression("(empty? [])").expect("Parse failed");
     let result = evaluator.evaluate(&expr).expect("Evaluation failed");
     match result {
-        rtfs::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Boolean(
-            true,
-        )) => {}
+        rtfs::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Boolean(true)) => {}
         _ => panic!("Expected Complete(Boolean(true)) result"),
     }
 
     let expr = parse_expression("(empty? [1 2 3])").expect("Parse failed");
     let result = evaluator.evaluate(&expr).expect("Evaluation failed");
     match result {
-        rtfs::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Boolean(
-            false,
-        )) => {}
+        rtfs::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Boolean(false)) => {}
         _ => panic!("Expected Complete(Boolean(false)) result"),
     }
 
@@ -54,9 +46,7 @@ fn test_missing_stdlib_functions() {
     let expr = parse_expression("(first [1 2 3])").expect("Parse failed");
     let result = evaluator.evaluate(&expr).expect("Evaluation failed");
     match result {
-        rtfs::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Integer(
-            1,
-        )) => {}
+        rtfs::runtime::execution_outcome::ExecutionOutcome::Complete(Value::Integer(1)) => {}
         _ => panic!("Expected Complete(Integer(1)) result"),
     }
 

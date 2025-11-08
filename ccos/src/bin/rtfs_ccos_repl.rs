@@ -6,12 +6,10 @@
 //! - File execution support
 //! - Command-line configuration
 
+use ccos::environment::{CCOSBuilder, CCOSEnvironment, CapabilityCategory, SecurityLevel};
 use clap::{Arg, Command};
-use ccos::environment::{
-    CCOSBuilder, CCOSEnvironment, CapabilityCategory, SecurityLevel,
-};
-use rtfs::runtime::values::Value;
 use rtfs::runtime::execution_outcome::ExecutionOutcome;
+use rtfs::runtime::values::Value;
 use rustyline::Editor;
 use std::path::Path;
 

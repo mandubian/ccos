@@ -155,7 +155,7 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
             RuntimeType::Ast => {
                 let module_registry = ModuleRegistry::new();
                 // Load standard library
-                    if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
+                if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
                     eprintln!("Warning: Failed to load standard library: {:?}", e);
                 }
                 // Use pure host for standalone RTFS compilation (no CCOS dependencies)
@@ -170,22 +170,22 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
             RuntimeType::Ir => {
                 let module_registry = ModuleRegistry::new();
                 // Load standard library
-                    if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
+                if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
                     eprintln!("Warning: Failed to load standard library: {:?}", e);
                 }
-                Box::new(rtfs::runtime::ir_runtime::IrStrategy::new(
-                    Arc::new(module_registry),
-                ))
+                Box::new(rtfs::runtime::ir_runtime::IrStrategy::new(Arc::new(
+                    module_registry,
+                )))
             }
             RuntimeType::Fallback => {
                 let module_registry = ModuleRegistry::new();
                 // Load standard library
-                    if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
+                if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
                     eprintln!("Warning: Failed to load standard library: {:?}", e);
                 }
-                Box::new(rtfs::runtime::IrWithFallbackStrategy::new(
-                    Arc::new(module_registry),
-                ))
+                Box::new(rtfs::runtime::IrWithFallbackStrategy::new(Arc::new(
+                    module_registry,
+                )))
             }
         }
     }
@@ -315,10 +315,15 @@ fn main() {
             println!("{}", format_toplevel(item));
         }
         println!("\n✅ Format complete");
-        
+
         // If format is the only operation, exit early
-        if !args.execute && !args.dump_ir && !args.dump_ir_optimized && !args.show_types 
-           && !args.compile_wasm && !args.security_audit {
+        if !args.execute
+            && !args.dump_ir
+            && !args.dump_ir_optimized
+            && !args.show_types
+            && !args.compile_wasm
+            && !args.security_audit
+        {
             return;
         }
     }
@@ -329,7 +334,12 @@ fn main() {
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         for (i, item) in parsed_items.iter().enumerate() {
             let inferred_type = infer_type(item);
-            println!("[{}] {} :: {}", i + 1, describe_toplevel(item), inferred_type);
+            println!(
+                "[{}] {} :: {}",
+                i + 1,
+                describe_toplevel(item),
+                inferred_type
+            );
         }
         println!("\n✅ Type inference complete");
     }
@@ -356,31 +366,37 @@ fn main() {
                     // Convert to IR for dumping
                     let ir_start = Instant::now();
                     let module_registry = ModuleRegistry::new();
-                        if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
-                        eprintln!("Warning: Failed to load standard library for IR conversion: {:?}", e);
+                    if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&module_registry) {
+                        eprintln!(
+                            "Warning: Failed to load standard library for IR conversion: {:?}",
+                            e
+                        );
                     }
-                    
+
                     let mut ir_converter = IrConverter::with_module_registry(&module_registry);
                     match ir_converter.convert_expression(expr.clone()) {
                         Ok(ir_node) => {
                             let ir_time = ir_start.elapsed();
                             total_ir_time += ir_time;
-                            
+
                             // Dump IR before optimization
                             if args.dump_ir {
                                 println!("\n📊 IR (Before Optimization) for Expression {}:", i + 1);
                                 println!("{:#?}", ir_node);
                             }
-                            
+
                             // Optimize and dump if requested
                             if args.dump_ir_optimized {
                                 let opt_start = Instant::now();
                                 let opt_level = args.opt_level.clone();
-                                let mut optimizer = EnhancedOptimizationPipeline::with_optimization_level(opt_level.into());
+                                let mut optimizer =
+                                    EnhancedOptimizationPipeline::with_optimization_level(
+                                        opt_level.into(),
+                                    );
                                 let optimized_ir = optimizer.optimize(ir_node);
                                 let opt_time = opt_start.elapsed();
                                 total_opt_time += opt_time;
-                                
+
                                 println!("\n📊 IR (After Optimization) for Expression {}:", i + 1);
                                 println!("{:#?}", optimized_ir);
                             }
@@ -392,7 +408,7 @@ fn main() {
                 }
             }
         }
-        
+
         // Execute all expressions together to preserve state
         let exec_start = Instant::now();
 
@@ -451,8 +467,7 @@ fn main() {
                             if args.verbose {
                                 println!("📊 Result: {:?}", value);
                             }
-                            all_results
-                                .push(rtfs::runtime::ExecutionOutcome::Complete(value));
+                            all_results.push(rtfs::runtime::ExecutionOutcome::Complete(value));
                         }
                         Err(e) => {
                             eprintln!("❌ Runtime error for expression {}: {:?}", i + 1, e);
@@ -498,8 +513,7 @@ fn main() {
 
                             // Create module registry and load standard library for IR conversion
                             let mut module_registry = ModuleRegistry::new();
-                            if let Err(e) =
-                                rtfs::runtime::stdlib::load_stdlib(&mut module_registry)
+                            if let Err(e) = rtfs::runtime::stdlib::load_stdlib(&mut module_registry)
                             {
                                 eprintln!("Warning: Failed to load standard library for IR conversion: {:?}", e);
                             }
@@ -566,13 +580,16 @@ fn main() {
                             if args.compile_wasm {
                                 let wasm_backend = rtfs::bytecode::WasmBackend;
                                 let bytecode = wasm_backend.compile_module(&optimized_ir);
-                                
+
                                 if let Some(ref wasm_path) = args.wasm_output {
                                     if let Err(e) = fs::write(wasm_path, &bytecode) {
                                         eprintln!("❌ Error writing WASM output: {}", e);
                                         std::process::exit(1);
                                     }
-                                    println!("✅ WASM bytecode written to: {}", wasm_path.display());
+                                    println!(
+                                        "✅ WASM bytecode written to: {}",
+                                        wasm_path.display()
+                                    );
                                     println!("   Size: {} bytes", bytecode.len());
                                 } else {
                                     println!("📦 WASM Bytecode (Expression {}):", i + 1);
@@ -645,7 +662,9 @@ fn main() {
         // Always show compilation success message when not executing
         println!("✅ Compilation successful!");
         if !args.verbose {
-            println!("💡 Tip: Use --execute to run the compiled code, or --verbose for more details.");
+            println!(
+                "💡 Tip: Use --execute to run the compiled code, or --verbose for more details."
+            );
         }
     }
 
@@ -683,7 +702,7 @@ fn format_toplevel(item: &TopLevel) -> String {
 fn format_expression(expr: &rtfs::ast::Expression, indent: usize) -> String {
     use rtfs::ast::Expression;
     let indent_str = "  ".repeat(indent);
-    
+
     match expr {
         Expression::Literal(lit) => format!("{}{:?}", indent_str, lit),
         Expression::Symbol(s) => format!("{}{}", indent_str, s.0),
@@ -707,25 +726,34 @@ fn format_expression(expr: &rtfs::ast::Expression, indent: usize) -> String {
             }
         }
         Expression::Vector(items) => {
-            format!("{}[{}]", indent_str, items.iter()
-                .map(|e| format_expression(e, 0).trim().to_string())
-                .collect::<Vec<_>>()
-                .join(" "))
+            format!(
+                "{}[{}]",
+                indent_str,
+                items
+                    .iter()
+                    .map(|e| format_expression(e, 0).trim().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
         }
         Expression::Map(pairs) => {
             use rtfs::ast::MapKey;
             let mut result = format!("{}{{", indent_str);
             for (i, (k, v)) in pairs.iter().enumerate() {
-                if i > 0 { result.push_str(",\n"); }
+                if i > 0 {
+                    result.push_str(",\n");
+                }
                 let key_str = match k {
                     MapKey::Keyword(k) => format!(":{}", k.0),
                     MapKey::String(s) => format!("\"{}\"", s),
                     MapKey::Integer(n) => n.to_string(),
                 };
-                result.push_str(&format!("\n{}  {} {}",
+                result.push_str(&format!(
+                    "\n{}  {} {}",
                     indent_str,
                     key_str,
-                    format_expression(v, 0).trim()));
+                    format_expression(v, 0).trim()
+                ));
             }
             result.push_str(&format!("\n{}}}", indent_str));
             result
@@ -750,7 +778,7 @@ fn infer_type(item: &TopLevel) -> String {
 /// Infer the type of an expression
 fn infer_expression_type(expr: &rtfs::ast::Expression) -> String {
     use rtfs::ast::{Expression, Literal};
-    
+
     match expr {
         Expression::Literal(lit) => match lit {
             Literal::Integer(_) => "Integer",
@@ -763,7 +791,8 @@ fn infer_expression_type(expr: &rtfs::ast::Expression) -> String {
             Literal::Timestamp(_) => "Timestamp",
             Literal::Uuid(_) => "UUID",
             Literal::ResourceHandle(_) => "ResourceHandle",
-        }.to_string(),
+        }
+        .to_string(),
         Expression::Symbol(s) => format!("Symbol({})", s.0),
         Expression::List(items) => {
             if items.is_empty() {
@@ -804,7 +833,7 @@ fn describe_toplevel(item: &TopLevel) -> String {
 /// Get a short description of an expression
 fn describe_expression(expr: &rtfs::ast::Expression) -> String {
     use rtfs::ast::Expression;
-    
+
     match expr {
         Expression::Literal(lit) => format!("{:?}", lit),
         Expression::Symbol(s) => s.0.clone(),
@@ -851,7 +880,7 @@ fn perform_security_audit(items: &[TopLevel]) -> SecurityAudit {
     let mut system_ops = Vec::new();
     let mut issues = Vec::new();
     let mut needs_sandboxed = false;
-    
+
     for (i, item) in items.iter().enumerate() {
         if let TopLevel::Expression(expr) = item {
             audit_expression(
@@ -866,7 +895,7 @@ fn perform_security_audit(items: &[TopLevel]) -> SecurityAudit {
             );
         }
     }
-    
+
     // Remove duplicates
     capabilities.sort();
     capabilities.dedup();
@@ -876,31 +905,36 @@ fn perform_security_audit(items: &[TopLevel]) -> SecurityAudit {
     network_ops.dedup();
     system_ops.sort();
     system_ops.dedup();
-    
+
     // Determine resource limits based on operations (before moving the Vecs)
     let network_count = network_ops.len();
     let file_count = file_ops.len();
-    
+
     let memory_limit = if network_count == 0 && file_count < 3 {
         16 * 1024 * 1024 // 16MB for simple operations
     } else {
         64 * 1024 * 1024 // 64MB for complex operations
     };
-    
+
     let time_limit = if network_count == 0 {
         1000 // 1s for local operations
     } else {
         5000 // 5s for network operations
     };
-    
+
     let microvm_required = network_count > 0 || file_count > 0;
-    
+
     SecurityAudit {
         required_capabilities: capabilities,
         file_operations: file_ops,
         network_operations: network_ops,
         system_operations: system_ops,
-        isolation_level: if needs_sandboxed { "Sandboxed" } else { "Controlled" }.to_string(),
+        isolation_level: if needs_sandboxed {
+            "Sandboxed"
+        } else {
+            "Controlled"
+        }
+        .to_string(),
         microvm_required,
         security_issues: issues,
         recommended_memory_limit: memory_limit,
@@ -920,7 +954,7 @@ fn audit_expression(
     needs_sandboxed: &mut bool,
 ) {
     use rtfs::ast::Expression;
-    
+
     match expr {
         // Handle FunctionCall variant (modern AST structure)
         Expression::FunctionCall { callee, arguments } => {
@@ -954,7 +988,7 @@ fn audit_expression(
                             location: location.to_string(),
                         });
                     }
-                    
+
                     // Network operations
                     "http-fetch" | "ccos.network.http-fetch" | "fetch" => {
                         capabilities.push("ccos.network.http-fetch".to_string());
@@ -968,7 +1002,7 @@ fn audit_expression(
                             });
                         }
                     }
-                    
+
                     // System operations
                     "get-env" | "ccos.system.get-env" => {
                         capabilities.push("ccos.system.get-env".to_string());
@@ -984,18 +1018,36 @@ fn audit_expression(
                             location: location.to_string(),
                         });
                     }
-                    
+
                     _ => {}
                 }
             }
-            
+
             // Recursively audit arguments
-            audit_expression(callee.as_ref(), &format!("{}[callee]", location), capabilities, file_ops, network_ops, system_ops, issues, needs_sandboxed);
+            audit_expression(
+                callee.as_ref(),
+                &format!("{}[callee]", location),
+                capabilities,
+                file_ops,
+                network_ops,
+                system_ops,
+                issues,
+                needs_sandboxed,
+            );
             for (i, arg) in arguments.iter().enumerate() {
-                audit_expression(arg, &format!("{}[arg:{}]", location, i), capabilities, file_ops, network_ops, system_ops, issues, needs_sandboxed);
+                audit_expression(
+                    arg,
+                    &format!("{}[arg:{}]", location, i),
+                    capabilities,
+                    file_ops,
+                    network_ops,
+                    system_ops,
+                    issues,
+                    needs_sandboxed,
+                );
             }
         }
-        
+
         // Handle List variant (legacy AST structure)
         Expression::List(items) if !items.is_empty() => {
             if let Expression::Symbol(func) = &items[0] {
@@ -1027,7 +1079,7 @@ fn audit_expression(
                             location: location.to_string(),
                         });
                     }
-                    
+
                     // Network operations
                     "http-fetch" | "ccos.network.http-fetch" | "fetch" => {
                         capabilities.push("ccos.network.http-fetch".to_string());
@@ -1041,7 +1093,7 @@ fn audit_expression(
                             });
                         }
                     }
-                    
+
                     // System operations
                     "get-env" | "ccos.system.get-env" => {
                         capabilities.push("ccos.system.get-env".to_string());
@@ -1057,11 +1109,11 @@ fn audit_expression(
                             location: location.to_string(),
                         });
                     }
-                    
+
                     _ => {}
                 }
             }
-            
+
             // Recursively audit nested expressions
             for (i, item) in items.iter().enumerate() {
                 audit_expression(
@@ -1111,15 +1163,18 @@ fn audit_expression(
 /// Print security audit results
 fn print_security_audit(audit: &SecurityAudit) {
     println!("Security Level: {}", audit.isolation_level);
-    
+
     if !audit.required_capabilities.is_empty() {
         println!("\n🎯 Required Capabilities:");
         for cap in &audit.required_capabilities {
             println!("  - {}", cap);
         }
     }
-    
-    if !audit.file_operations.is_empty() || !audit.network_operations.is_empty() || !audit.system_operations.is_empty() {
+
+    if !audit.file_operations.is_empty()
+        || !audit.network_operations.is_empty()
+        || !audit.system_operations.is_empty()
+    {
         println!("\n⚠️  Effects Produced:");
         if !audit.file_operations.is_empty() {
             println!("  File I/O: {} operation(s)", audit.file_operations.len());
@@ -1140,17 +1195,32 @@ fn print_security_audit(audit: &SecurityAudit) {
             }
         }
     }
-    
+
     println!("\n🔐 Recommended Security Settings:");
     println!("  Isolation Level: {}", audit.isolation_level);
-    println!("  MicroVM Required: {}", if audit.microvm_required { "Yes" } else { "No" });
-    println!("  Memory Limit: {} MB", audit.recommended_memory_limit / (1024 * 1024));
-    println!("  Execution Time Limit: {} ms", audit.recommended_time_limit);
-    
+    println!(
+        "  MicroVM Required: {}",
+        if audit.microvm_required { "Yes" } else { "No" }
+    );
+    println!(
+        "  Memory Limit: {} MB",
+        audit.recommended_memory_limit / (1024 * 1024)
+    );
+    println!(
+        "  Execution Time Limit: {} ms",
+        audit.recommended_time_limit
+    );
+
     if !audit.security_issues.is_empty() {
-        println!("\n⛔ Security Issues Found: {}", audit.security_issues.len());
+        println!(
+            "\n⛔ Security Issues Found: {}",
+            audit.security_issues.len()
+        );
         for issue in &audit.security_issues {
-            println!("  [{}] {}: {}", issue.severity, issue.location, issue.message);
+            println!(
+                "  [{}] {}: {}",
+                issue.severity, issue.location, issue.message
+            );
         }
     } else {
         println!("\n✅ No security issues detected");

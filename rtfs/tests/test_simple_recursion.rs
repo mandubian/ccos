@@ -20,11 +20,7 @@ fn test_simple_mutual_recursion() {
     let module_registry = std::sync::Arc::new(ModuleRegistry::new());
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
-    let evaluator = Evaluator::new(
-        module_registry,
-        security_context,
-        host,
-    );
+    let evaluator = Evaluator::new(module_registry, security_context, host);
     let outcome = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");
@@ -60,11 +56,7 @@ fn test_simple_factorial() {
     let module_registry = std::sync::Arc::new(ModuleRegistry::new());
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
-    let evaluator = Evaluator::new(
-        module_registry,
-        security_context,
-        host,
-    );
+    let evaluator = Evaluator::new(module_registry, security_context, host);
     let result = evaluator
         .evaluate(&parsed)
         .expect("Should evaluate successfully");

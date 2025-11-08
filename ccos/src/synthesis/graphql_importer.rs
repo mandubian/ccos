@@ -452,18 +452,13 @@ impl GraphQLImporter {
             input_schema: None,
             output_schema: None,
             attestation: None,
-            provenance: Some(
-                crate::capability_marketplace::types::CapabilityProvenance {
-                    source: "graphql_importer".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    content_hash: format!(
-                        "graphql_{}_{}",
-                        operation.operation_type, operation.name
-                    ),
-                    custody_chain: vec!["graphql_importer".to_string()],
-                    registered_at: chrono::Utc::now(),
-                },
-            ),
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "graphql_importer".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!("graphql_{}_{}", operation.operation_type, operation.name),
+                custody_chain: vec!["graphql_importer".to_string()],
+                registered_at: chrono::Utc::now(),
+            }),
             permissions: vec![],
             effects,
             metadata,

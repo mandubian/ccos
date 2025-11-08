@@ -1,5 +1,5 @@
 //! Normalization of function-call syntax to canonical map format
-//! 
+//!
 //! This module provides functions to convert RTFS function-call expressions
 //! (e.g., `(plan "name" :body ...)`) into canonical map format
 //! (e.g., `{:type "plan" :name "name" :body ...}`) with deprecation warnings.
@@ -29,10 +29,10 @@ impl Default for NormalizationConfig {
 }
 
 /// Normalize a Plan expression to canonical map format
-/// 
+///
 /// Converts function calls like `(plan "name" :body ...)` or `(ccos/plan "name" :body ...)`
 /// to canonical maps like `{:type "plan" :name "name" :body ...}`.
-/// 
+///
 /// If the input is already a map, validates it and returns it as-is (or normalizes field names).
 pub fn normalize_plan_to_map(
     expr: &Expression,
@@ -77,7 +77,7 @@ pub fn normalize_plan_to_map(
 
             // Build canonical map
             let mut plan_map: HashMap<MapKey, Expression> = HashMap::new();
-            
+
             // Required fields
             plan_map.insert(
                 MapKey::String(":type".to_string()),
@@ -101,10 +101,7 @@ pub fn normalize_plan_to_map(
                         } else {
                             format!(":{}", key_str)
                         };
-                        plan_map.insert(
-                            MapKey::String(normalized_key),
-                            value.clone(),
-                        );
+                        plan_map.insert(MapKey::String(normalized_key), value.clone());
                     }
                 } else {
                     // Old style: keyword-value pairs as separate arguments
@@ -117,10 +114,7 @@ pub fn normalize_plan_to_map(
                                     message: format!("Plan property '{}' requires a value", key),
                                 });
                             }
-                            plan_map.insert(
-                                MapKey::String(key),
-                                arguments[i + 1].clone(),
-                            );
+                            plan_map.insert(MapKey::String(key), arguments[i + 1].clone());
                             i += 2;
                         } else {
                             return Err(RtfsBridgeError::InvalidObjectFormat {
@@ -139,11 +133,9 @@ pub fn normalize_plan_to_map(
                 // Convert Expression map to Value map for validation
                 let value_map: HashMap<MapKey, Value> = plan_map
                     .iter()
-                    .filter_map(|(k, v)| {
-                        Some((k.clone(), expression_to_value_simple(v)?))
-                    })
+                    .filter_map(|(k, v)| Some((k.clone(), expression_to_value_simple(v)?)))
                     .collect();
-                
+
                 if let Err(e) = CanonicalPlanSchema::validate(&value_map) {
                     return Err(RtfsBridgeError::InvalidObjectFormat {
                         message: format!("Normalized plan failed validation: {}", e),
@@ -156,7 +148,7 @@ pub fn normalize_plan_to_map(
         Expression::Map(map) => {
             // Already a map - validate and normalize field names if needed
             let mut normalized_map: HashMap<MapKey, Expression> = HashMap::new();
-            
+
             // Ensure :type is set
             if !map.contains_key(&MapKey::String(":type".to_string())) {
                 normalized_map.insert(
@@ -164,7 +156,7 @@ pub fn normalize_plan_to_map(
                     Expression::Literal(Literal::String("plan".to_string())),
                 );
             }
-            
+
             // Copy and normalize all fields
             for (key, value) in map {
                 let key_str = map_key_to_string(key);
@@ -173,21 +165,16 @@ pub fn normalize_plan_to_map(
                 } else {
                     format!(":{}", key_str)
                 };
-                normalized_map.insert(
-                    MapKey::String(normalized_key),
-                    value.clone(),
-                );
+                normalized_map.insert(MapKey::String(normalized_key), value.clone());
             }
 
             // Validate if enabled
             if config.validate_after_normalization {
                 let value_map: HashMap<MapKey, Value> = normalized_map
                     .iter()
-                    .filter_map(|(k, v)| {
-                        Some((k.clone(), expression_to_value_simple(v)?))
-                    })
+                    .filter_map(|(k, v)| Some((k.clone(), expression_to_value_simple(v)?)))
                     .collect();
-                
+
                 if let Err(e) = CanonicalPlanSchema::validate(&value_map) {
                     return Err(RtfsBridgeError::InvalidObjectFormat {
                         message: format!("Plan map failed validation: {}", e),
@@ -207,7 +194,7 @@ pub fn normalize_plan_to_map(
 }
 
 /// Normalize a Capability expression to canonical map format
-/// 
+///
 /// Converts function calls like `(capability "id" :name "..." :implementation ...)`
 /// to canonical maps like `{:type "capability" :id "id" :name "..." :implementation ...}`.
 pub fn normalize_capability_to_map(
@@ -252,7 +239,7 @@ pub fn normalize_capability_to_map(
 
             // Build canonical map
             let mut cap_map: HashMap<MapKey, Expression> = HashMap::new();
-            
+
             // Required fields
             cap_map.insert(
                 MapKey::String(":type".to_string()),
@@ -275,10 +262,7 @@ pub fn normalize_capability_to_map(
                         } else {
                             format!(":{}", key_str)
                         };
-                        cap_map.insert(
-                            MapKey::String(normalized_key),
-                            value.clone(),
-                        );
+                        cap_map.insert(MapKey::String(normalized_key), value.clone());
                     }
                 } else {
                     // Old style: keyword-value pairs as separate arguments
@@ -288,13 +272,13 @@ pub fn normalize_capability_to_map(
                             let key = format!(":{}", k.0);
                             if i + 1 >= arguments.len() {
                                 return Err(RtfsBridgeError::InvalidObjectFormat {
-                                    message: format!("Capability property '{}' requires a value", key),
+                                    message: format!(
+                                        "Capability property '{}' requires a value",
+                                        key
+                                    ),
                                 });
                             }
-                            cap_map.insert(
-                                MapKey::String(key),
-                                arguments[i + 1].clone(),
-                            );
+                            cap_map.insert(MapKey::String(key), arguments[i + 1].clone());
                             i += 2;
                         } else {
                             return Err(RtfsBridgeError::InvalidObjectFormat {
@@ -312,11 +296,9 @@ pub fn normalize_capability_to_map(
             if config.validate_after_normalization {
                 let value_map: HashMap<MapKey, Value> = cap_map
                     .iter()
-                    .filter_map(|(k, v)| {
-                        Some((k.clone(), expression_to_value_simple(v)?))
-                    })
+                    .filter_map(|(k, v)| Some((k.clone(), expression_to_value_simple(v)?)))
                     .collect();
-                
+
                 if let Err(e) = CanonicalCapabilitySchema::validate(&value_map) {
                     return Err(RtfsBridgeError::InvalidObjectFormat {
                         message: format!("Normalized capability failed validation: {}", e),
@@ -329,7 +311,7 @@ pub fn normalize_capability_to_map(
         Expression::Map(map) => {
             // Already a map - validate and normalize field names if needed
             let mut normalized_map: HashMap<MapKey, Expression> = HashMap::new();
-            
+
             // Ensure :type is set
             if !map.contains_key(&MapKey::String(":type".to_string())) {
                 normalized_map.insert(
@@ -337,7 +319,7 @@ pub fn normalize_capability_to_map(
                     Expression::Literal(Literal::String("capability".to_string())),
                 );
             }
-            
+
             // Copy and normalize all fields
             for (key, value) in map {
                 let key_str = map_key_to_string(key);
@@ -346,21 +328,16 @@ pub fn normalize_capability_to_map(
                 } else {
                     format!(":{}", key_str)
                 };
-                normalized_map.insert(
-                    MapKey::String(normalized_key),
-                    value.clone(),
-                );
+                normalized_map.insert(MapKey::String(normalized_key), value.clone());
             }
 
             // Validate if enabled
             if config.validate_after_normalization {
                 let value_map: HashMap<MapKey, Value> = normalized_map
                     .iter()
-                    .filter_map(|(k, v)| {
-                        Some((k.clone(), expression_to_value_simple(v)?))
-                    })
+                    .filter_map(|(k, v)| Some((k.clone(), expression_to_value_simple(v)?)))
                     .collect();
-                
+
                 if let Err(e) = CanonicalCapabilitySchema::validate(&value_map) {
                     return Err(RtfsBridgeError::InvalidObjectFormat {
                         message: format!("Capability map failed validation: {}", e),
@@ -391,7 +368,7 @@ fn map_key_to_string(key: &MapKey) -> String {
 
 /// Simple expression-to-value conversion for validation purposes
 /// This is a simplified version that only handles basic types
-fn expression_to_value_simple(expr: &Expression) -> Option<Value> {
+pub fn expression_to_value_simple(expr: &Expression) -> Option<Value> {
     match expr {
         Expression::Literal(lit) => match lit {
             Literal::String(s) => Some(Value::String(s.clone())),
@@ -404,21 +381,18 @@ fn expression_to_value_simple(expr: &Expression) -> Option<Value> {
         },
         Expression::Symbol(s) => Some(Value::Symbol(s.clone())),
         Expression::Vector(vec) => {
-            let values: Option<Vec<Value>> = vec
-                .iter()
-                .map(expression_to_value_simple)
-                .collect();
+            let values: Option<Vec<Value>> = vec.iter().map(expression_to_value_simple).collect();
             values.map(Value::Vector)
-        },
+        }
         Expression::Map(map) => {
             let value_map: Option<HashMap<MapKey, Value>> = map
                 .iter()
-                .map(|(k, v)| {
-                    expression_to_value_simple(v).map(|val| (k.clone(), val))
-                })
+                .map(|(k, v)| expression_to_value_simple(v).map(|val| (k.clone(), val)))
                 .collect();
             value_map.map(Value::Map)
-        },
-        _ => None,
+        }
+        // For complex expressions (do, let, fn, calls, etc.), return a placeholder string.
+        // Validation only checks presence/type for some fields; presence is enough for :body.
+        _ => Some(Value::String("<expr>".to_string())),
     }
 }

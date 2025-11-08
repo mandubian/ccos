@@ -2,17 +2,17 @@
 // This module manages dangerous operations that require special permissions,
 // sandboxing, or delegation to secure execution environments.
 
-use rtfs::ast::{Keyword, MapKey};
 use crate::capabilities::capability::Capability;
 use crate::capabilities::provider::CapabilityProvider;
 use crate::capabilities::providers::{JsonProvider, LocalFileProvider};
 use crate::synthesis::missing_capability_resolver::MissingCapabilityResolver;
+use reqwest::blocking::Client as BlockingHttpClient;
+use reqwest::{Method as HttpMethod, Url};
+use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::microvm::{ExecutionContext, MicroVMConfig, MicroVMFactory};
 use rtfs::runtime::security::{RuntimeContext, SecurityAuthorizer};
 use rtfs::runtime::values::{Arity, Value};
-use reqwest::blocking::Client as BlockingHttpClient;
-use reqwest::{Method as HttpMethod, Url};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -796,7 +796,7 @@ impl CapabilityRegistry {
         );
     }
 
-    fn  register_io_capabilities(&mut self) {
+    fn register_io_capabilities(&mut self) {
         // File operations - delegate to providers
         self.capabilities.insert(
             "ccos.io.file-exists".to_string(),

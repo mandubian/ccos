@@ -4,11 +4,11 @@
 
 use crate::ir::converter::IrConverter;
 use crate::parser::parse_expression;
+use crate::runtime::pure_host::create_pure_host;
 use crate::runtime::{
     IrRuntime, IrWithFallbackStrategy, Runtime, RuntimeStrategy, RuntimeStrategyValue,
     TreeWalkingStrategy,
 };
-use crate::runtime::pure_host::create_pure_host;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -240,9 +240,9 @@ impl RtfsRepl {
             }
             ":runtime-fallback" => {
                 self.context.runtime_strategy = RuntimeStrategyValue::IrWithFallback;
-                self.runtime = Runtime::new(Box::new(IrWithFallbackStrategy::new(
-                    Arc::clone(&self.module_registry),
-                )));
+                self.runtime = Runtime::new(Box::new(IrWithFallbackStrategy::new(Arc::clone(
+                    &self.module_registry,
+                ))));
                 println!("🔄 Switched to IR with AST fallback runtime");
             }
             ":test" => {

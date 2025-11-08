@@ -176,6 +176,64 @@ pub fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
                             properties,
                         };
                         return Ok(TopLevel::Capability(cap_def));
+                    } else if sym.0 == "plan" {
+                        // Parse (plan "name" :property1 value1 :property2 value2 ...)
+                        if arguments.is_empty() {
+                            return Err(super::errors::PestParseError::InvalidInput {
+                                message: "plan requires a name".to_string(),
+                                span: Some(super::errors::pair_to_source_span(&pair)),
+                            });
+                        }
+                        // First arg should be the name (string)
+                        let name_expr = &arguments[0];
+                        let name_str = match name_expr {
+                            AstExpression::Literal(crate::ast::Literal::String(s)) => s.clone(),
+                            _ => {
+                                return Err(super::errors::PestParseError::InvalidInput {
+                                    message: "plan name must be a string".to_string(),
+                                    span: Some(super::errors::pair_to_source_span(&pair)),
+                                });
+                            }
+                        };
+
+                        // Parse property entries from remaining arguments
+                        let mut properties: Vec<Property> = Vec::new();
+                        let mut i = 1;
+                        while i < arguments.len() {
+                            // Expect keyword followed by value
+                            match &arguments[i] {
+                                AstExpression::Literal(crate::ast::Literal::Keyword(k)) => {
+                                    if i + 1 >= arguments.len() {
+                                        return Err(super::errors::PestParseError::InvalidInput {
+                                            message: format!(
+                                                "plan property '{}' requires a value",
+                                                k.0
+                                            ),
+                                            span: Some(super::errors::pair_to_source_span(&pair)),
+                                        });
+                                    }
+                                    let value_expr = arguments[i + 1].clone();
+                                    properties.push(Property {
+                                        key: k.clone(),
+                                        value: value_expr,
+                                    });
+                                    i += 2;
+                                }
+                                _ => {
+                                    return Err(super::errors::PestParseError::InvalidInput {
+                                        message: "plan properties must be keyword-value pairs"
+                                            .to_string(),
+                                        span: Some(super::errors::pair_to_source_span(&pair)),
+                                    });
+                                }
+                            }
+                        }
+
+                        let plan_def = crate::ast::PlanDefinition {
+                            name: Symbol(name_str),
+                            properties,
+                        };
+                        return Ok(TopLevel::Plan(plan_def));
                     }
                 }
             }

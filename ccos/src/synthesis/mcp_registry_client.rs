@@ -123,6 +123,45 @@ impl McpRegistryClient {
         }
     }
 
+    /// Select the most suitable remote URL for HTTP-based interactions.
+    /// Preference order:
+    ///  1. Explicit HTTP/HTTPS remotes
+    ///  2. `mcp://` style remotes (may map to HTTP gateways)
+    ///  3. Any non-empty URL as a last resort
+    pub fn select_best_remote_url(remotes: &[McpRemote]) -> Option<String> {
+        for remote in remotes {
+            let remote_type = remote.r#type.to_ascii_lowercase();
+            let url = remote.url.trim();
+            if url.is_empty() {
+                continue;
+            }
+            if remote_type == "http"
+                || remote_type == "https"
+                || url.starts_with("http://")
+                || url.starts_with("https://")
+            {
+                return Some(url.to_string());
+            }
+        }
+
+        for remote in remotes {
+            let remote_type = remote.r#type.to_ascii_lowercase();
+            let url = remote.url.trim();
+            if url.is_empty() {
+                continue;
+            }
+            if remote_type == "mcp" || url.starts_with("mcp://") {
+                return Some(url.to_string());
+            }
+        }
+
+        remotes
+            .iter()
+            .map(|remote| remote.url.trim())
+            .find(|url| !url.is_empty())
+            .map(|url| url.to_string())
+    }
+
     /// Search for MCP servers by capability name or description
     pub async fn search_servers(&self, query: &str) -> RuntimeResult<Vec<McpServer>> {
         let url = format!("{}/v0.1/servers", self.base_url);
@@ -324,11 +363,8 @@ impl McpRegistryClient {
 
         // Determine the server URL for the MCP capability
         let server_url = if let Some(ref remotes) = server.remotes {
-            if let Some(remote) = remotes.first() {
-                remote.url.clone()
-            } else {
-                format!("mcp://{}", server.name)
-            }
+            Self::select_best_remote_url(remotes)
+                .unwrap_or_else(|| format!("mcp://{}", server.name))
         } else {
             format!("mcp://{}", server.name)
         };
@@ -342,13 +378,11 @@ impl McpRegistryClient {
                 server.description, server.name
             ),
             version: server.version.clone(),
-            provider: ProviderType::MCP(
-                crate::capability_marketplace::types::MCPCapability {
-                    server_url,
-                    tool_name: capability_name.to_string(),
-                    timeout_ms: 30000, // 30 second timeout
-                },
-            ),
+            provider: ProviderType::MCP(crate::capability_marketplace::types::MCPCapability {
+                server_url,
+                tool_name: capability_name.to_string(),
+                timeout_ms: 30000, // 30 second timeout
+            }),
             input_schema: None,  // MCP Registry doesn't provide schema information
             output_schema: None, // MCP Registry doesn't provide schema information
             attestation: None,

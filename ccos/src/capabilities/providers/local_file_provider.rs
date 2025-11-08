@@ -2,7 +2,10 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 
-use crate::capabilities::provider::{CapabilityDescriptor, CapabilityProvider, ExecutionContext, HealthStatus, Permission, ProviderMetadata, ResourceLimits, SecurityRequirements};
+use crate::capabilities::provider::{
+    CapabilityDescriptor, CapabilityProvider, ExecutionContext, HealthStatus, Permission,
+    ProviderMetadata, ResourceLimits, SecurityRequirements,
+};
 use rtfs::ast::{PrimitiveType, TypeExpr};
 use rtfs::runtime::{RuntimeError, RuntimeResult, Value};
 
@@ -55,19 +58,18 @@ impl LocalFileProvider {
                 actual: args.len(),
             });
         }
-        let path = args[0]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "ccos.io.read-file".to_string(),
-            })?;
+        let path = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[0].type_name().to_string(),
+            operation: "ccos.io.read-file".to_string(),
+        })?;
         if path.is_empty() {
             return Err(RuntimeError::InvalidArgument(
                 "File path must not be empty".to_string(),
             ));
         }
-        let mut file = fs::File::open(Path::new(path)).map_err(|e| RuntimeError::IoError(e.to_string()))?;
+        let mut file =
+            fs::File::open(Path::new(path)).map_err(|e| RuntimeError::IoError(e.to_string()))?;
         let mut content = String::new();
         file.read_to_string(&mut content)
             .map_err(|e| RuntimeError::IoError(e.to_string()))?;
@@ -82,26 +84,23 @@ impl LocalFileProvider {
                 actual: args.len(),
             });
         }
-        let path = args[0]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "ccos.io.write-file".to_string(),
-            })?;
+        let path = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[0].type_name().to_string(),
+            operation: "ccos.io.write-file".to_string(),
+        })?;
         if path.is_empty() {
             return Err(RuntimeError::InvalidArgument(
                 "File path must not be empty".to_string(),
             ));
         }
-        let content = args[1]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[1].type_name().to_string(),
-                operation: "ccos.io.write-file".to_string(),
-            })?;
-        let mut file = fs::File::create(Path::new(path)).map_err(|e| RuntimeError::IoError(e.to_string()))?;
+        let content = args[1].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[1].type_name().to_string(),
+            operation: "ccos.io.write-file".to_string(),
+        })?;
+        let mut file =
+            fs::File::create(Path::new(path)).map_err(|e| RuntimeError::IoError(e.to_string()))?;
         file.write_all(content.as_bytes())
             .map_err(|e| RuntimeError::IoError(e.to_string()))?;
         Ok(Value::Boolean(true))
@@ -115,13 +114,11 @@ impl LocalFileProvider {
                 actual: args.len(),
             });
         }
-        let path = args[0]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "ccos.io.delete-file".to_string(),
-            })?;
+        let path = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[0].type_name().to_string(),
+            operation: "ccos.io.delete-file".to_string(),
+        })?;
         if path.is_empty() {
             return Err(RuntimeError::InvalidArgument(
                 "File path must not be empty".to_string(),
@@ -143,13 +140,11 @@ impl LocalFileProvider {
                 actual: args.len(),
             });
         }
-        let path = args[0]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "ccos.io.file-exists".to_string(),
-            })?;
+        let path = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[0].type_name().to_string(),
+            operation: "ccos.io.file-exists".to_string(),
+        })?;
         if path.is_empty() {
             return Err(RuntimeError::InvalidArgument(
                 "File path must not be empty".to_string(),
@@ -223,7 +218,10 @@ impl CapabilityProvider for LocalFileProvider {
         }
     }
 
-    fn initialize(&mut self, _config: &crate::capabilities::provider::ProviderConfig) -> Result<(), String> {
+    fn initialize(
+        &mut self,
+        _config: &crate::capabilities::provider::ProviderConfig,
+    ) -> Result<(), String> {
         Ok(())
     }
 

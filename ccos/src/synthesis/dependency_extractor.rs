@@ -6,8 +6,8 @@
 //! - Attach metadata and emit audit events
 
 use crate::capability_marketplace::types::CapabilityManifest;
-use rtfs::runtime::error::RuntimeResult;
 use regex::Regex;
+use rtfs::runtime::error::RuntimeResult;
 use std::collections::{HashMap, HashSet};
 
 /// Represents a capability dependency found in RTFS code

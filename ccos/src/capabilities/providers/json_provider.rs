@@ -1,4 +1,7 @@
-use crate::capabilities::provider::{CapabilityProvider, ExecutionContext, HealthStatus, NetworkAccess, ProviderMetadata, ResourceLimits, SecurityRequirements};
+use crate::capabilities::provider::{
+    CapabilityProvider, ExecutionContext, HealthStatus, NetworkAccess, ProviderMetadata,
+    ResourceLimits, SecurityRequirements,
+};
 use rtfs::ast::{PrimitiveType, TypeExpr};
 use rtfs::runtime::{RuntimeError, RuntimeResult, Value};
 
@@ -14,11 +17,12 @@ impl JsonProvider {
         crate::capabilities::provider::CapabilityDescriptor {
             id: id.to_string(),
             description: description.to_string(),
-            capability_type: crate::capabilities::provider::CapabilityDescriptor::constrained_function_type(
-                vec![TypeExpr::Primitive(PrimitiveType::String)],
-                return_type,
-                None,
-            ),
+            capability_type:
+                crate::capabilities::provider::CapabilityDescriptor::constrained_function_type(
+                    vec![TypeExpr::Primitive(PrimitiveType::String)],
+                    return_type,
+                    None,
+                ),
             security_requirements: SecurityRequirements {
                 permissions: vec![],
                 requires_microvm: false,
@@ -41,13 +45,11 @@ impl JsonProvider {
                 actual: args.len(),
             });
         }
-        let json_str = args[0]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "ccos.json.parse".to_string(),
-            })?;
+        let json_str = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[0].type_name().to_string(),
+            operation: "ccos.json.parse".to_string(),
+        })?;
         let parsed: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| RuntimeError::Generic(format!("JSON parsing error: {}", e)))?;
         Ok(Self::json_to_value(&parsed))
@@ -134,9 +136,7 @@ impl JsonProvider {
             Value::Symbol(s) => Ok(serde_json::Value::String(s.0.clone())),
             Value::Timestamp(ts) => Ok(serde_json::Value::String(format!("@{}", ts))),
             Value::Uuid(uuid) => Ok(serde_json::Value::String(format!("@{}", uuid))),
-            Value::ResourceHandle(handle) => {
-                Ok(serde_json::Value::String(format!("@{}", handle)))
-            }
+            Value::ResourceHandle(handle) => Ok(serde_json::Value::String(format!("@{}", handle))),
             Value::Function(_) | Value::FunctionPlaceholder(_) => Err(RuntimeError::Generic(
                 "Cannot serialize functions to JSON".to_string(),
             )),
@@ -212,7 +212,10 @@ impl CapabilityProvider for JsonProvider {
         }
     }
 
-    fn initialize(&mut self, _config: &crate::capabilities::provider::ProviderConfig) -> Result<(), String> {
+    fn initialize(
+        &mut self,
+        _config: &crate::capabilities::provider::ProviderConfig,
+    ) -> Result<(), String> {
         Ok(())
     }
 

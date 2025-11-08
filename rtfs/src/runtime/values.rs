@@ -402,7 +402,7 @@ pub struct Closure {
 #[derive(Clone, Debug)]
 pub struct IrLambda {
     pub params: Vec<IrNode>,
-    pub param_type_annotations: Vec<Option<crate::ir::core::IrType>>, 
+    pub param_type_annotations: Vec<Option<crate::ir::core::IrType>>,
     pub variadic_param: Option<Box<IrNode>>,
     pub variadic_param_type: Option<crate::ir::core::IrType>,
     pub body: Vec<IrNode>,

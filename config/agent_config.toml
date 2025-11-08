@@ -58,6 +58,40 @@ enabled = true
 print_extracted_intent = true
 print_extracted_plan = true
 
+[discovery]
+# Minimum semantic match score threshold (0.0 to 1.0)
+# Higher values reduce false positives but may miss valid matches
+match_threshold = 0.65
+
+# Enable embedding-based matching (more accurate but requires API)
+# Requires OPENROUTER_API_KEY or LOCAL_EMBEDDING_URL to be set
+use_embeddings = true
+
+# Preferred embedding models (optional overrides for env defaults)
+# Remote/OpenRouter model to request (falls back to env EMBEDDING_MODEL)
+embedding_model = "text-embedding-3-small"
+# Local embedding model name when using LOCAL_EMBEDDING_URL
+# local_embedding_model = "nomic-embed-text"
+local_embedding_model = "embeddinggemma"
+
+# Minimum score required for action verb match (0.0 to 1.0)
+# Action verbs (display, filter, list, etc.) must match for capabilities to be considered compatible
+action_verb_threshold = 0.7
+
+# Weight for action verbs in matching (0.0 to 1.0)
+# Higher = action verbs are more important in matching decisions
+action_verb_weight = 0.4
+
+# Weight for capability class matching (0.0 to 1.0)
+# How much the capability class operation type (e.g., "list" in "ui.list.display") matters
+capability_class_weight = 0.3
+
+[catalog]
+# Minimum semantic similarity score required to reuse a catalog plan hit
+plan_min_score = 0.65
+# Minimum keyword score required to reuse a catalog plan hit
+keyword_min_score = 1.0
+
 [llm_profiles]
 default = "openrouter_free:balanced"
 
@@ -93,6 +127,21 @@ default = "balanced"
   max_prompt_cost_per_1k = 0.0
   max_completion_cost_per_1k = 0.0
   quality = "balanced"
+
+  [[llm_profiles.model_sets.models]]
+  name = "balanced_m2"
+  model = "minimax/minimax-m2"
+  max_prompt_cost_per_1k = 0.0
+  max_completion_cost_per_1k = 0.0
+  quality = "balanced"
+
+  [[llm_profiles.model_sets.models]]
+  name = "balanced_gfl"
+  model = "google/gemini-2.5-flash-lite"
+  max_prompt_cost_per_1k = 0.0
+  max_completion_cost_per_1k = 0.0
+  quality = "balanced"
+
 
   [[llm_profiles.model_sets.models]]
   name = "premium"

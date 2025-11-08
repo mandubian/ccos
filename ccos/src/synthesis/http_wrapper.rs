@@ -244,15 +244,13 @@ impl HTTPWrapper {
             input_schema: None,
             output_schema: None,
             attestation: None,
-            provenance: Some(
-                crate::capability_marketplace::types::CapabilityProvenance {
-                    source: "http_wrapper".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    content_hash: format!("http_{}_{}", endpoint.method, endpoint.path),
-                    custody_chain: vec!["http_wrapper".to_string()],
-                    registered_at: chrono::Utc::now(),
-                },
-            ),
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "http_wrapper".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!("http_{}_{}", endpoint.method, endpoint.path),
+                custody_chain: vec!["http_wrapper".to_string()],
+                registered_at: chrono::Utc::now(),
+            }),
             permissions: vec![],
             effects,
             metadata,

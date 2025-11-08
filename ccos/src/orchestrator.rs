@@ -17,10 +17,10 @@
 //! - Determinism flags for reproducible execution
 //! - Resource limits and isolation levels
 
-use rtfs::ast::MapKey;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::execution_context::IsolationLevel;
 use crate::host::RuntimeHost;
+use rtfs::ast::MapKey;
 use rtfs::parser::parse_expression;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::evaluator::Evaluator;
@@ -40,10 +40,10 @@ use rtfs::ast::{Expression, Literal};
 
 use super::checkpoint_archive::{CheckpointArchive, CheckpointRecord};
 use super::plan_archive::PlanArchive;
+use chrono;
 use rtfs::runtime::host_interface::HostInterface;
 use rtfs::runtime::module_runtime::ModuleRegistry;
 use rtfs::runtime::values::Value as RtfsValue;
-use chrono;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
@@ -707,6 +707,13 @@ impl Orchestrator {
         // Load CCOS prelude (effectful helpers) into the evaluator's environment
         crate::prelude::load_prelude(&mut evaluator.env);
 
+        // Bind cross-plan parameters to the evaluator environment
+        // This makes plan inputs (like owner, repository, language) available as variables
+        for (key, value) in &context.cross_plan_params {
+            let symbol = rtfs::ast::Symbol(key.clone());
+            evaluator.env.define(&symbol, value.clone());
+        }
+
         // ContextManager removed from RTFS - step lifecycle now handled by host
         // Plan context initialization is managed through set_execution_context
 
@@ -1032,61 +1039,83 @@ impl Orchestrator {
     }
 
     /// Helper function to convert ArchivablePlan to Plan
-    fn archivable_plan_to_plan(archivable_plan: &super::archivable_types::ArchivablePlan) -> Plan {
-        // Helper function to safely deserialize JSON strings
-        let deserialize_json = |json_str: &Option<String>| -> Option<Value> {
-            json_str
-                .as_ref()
-                .and_then(|s| serde_json::from_str(s).ok())
-                .map(Self::json_value_to_runtime_value)
-        };
+    pub fn archivable_plan_to_plan(
+        archivable_plan: &super::archivable_types::ArchivablePlan,
+    ) -> Plan {
+        // Helper function to parse RTFS or JSON strings (tries RTFS first, falls back to JSON)
+        // Uses a simple evaluator to convert RTFS expressions to values
+        fn deserialize_value(value_str: &str) -> Option<Value> {
+            // Try parsing as RTFS expression first
+            if let Ok(expr) = parse_expression(value_str) {
+                // Use a simple evaluator to convert expression to value
+                // For literals and simple structures, this works directly
+                use rtfs::runtime::evaluator::Evaluator;
+                use rtfs::runtime::execution_outcome::ExecutionOutcome;
+                use rtfs::runtime::module_runtime::ModuleRegistry;
+                use rtfs::runtime::pure_host::create_pure_host;
+                use rtfs::runtime::security::RuntimeContext;
 
-        // Extract the plan body, handling both plain RTFS code and (plan ...) forms
-        let raw_body = archivable_plan
-            .body
-            .steps
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "()".to_string());
-        
-        // If the body is a (plan ...) form, extract the :body property
-        // This happens when the plan was saved with the full (plan ...) declaration
-        let plan_body = if raw_body.trim().starts_with("(plan") {
-            // Use string parsing to extract :body value
-            // Look for :body followed by the body expression
-            if let Some(body_start) = raw_body.find(":body") {
-                // Skip whitespace after :body
-                let after_keyword = &raw_body[body_start + 5..];
-                // Find the opening paren (or other expression start)
-                if let Some(paren_start) = after_keyword.find('(') {
-                    let body_str = &after_keyword[paren_start..];
-                    // Find matching closing paren by tracking depth
-                    let mut depth = 0;
-                    let mut end_pos = None;
-                    for (i, ch) in body_str.char_indices() {
-                        match ch {
-                            '(' => depth += 1,
-                            ')' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    end_pos = Some(i + 1);
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
+                let module_registry = ModuleRegistry::new();
+                let security_context = RuntimeContext::pure();
+                let host = create_pure_host();
+                let evaluator =
+                    Evaluator::new(std::sync::Arc::new(module_registry), security_context, host);
+
+                // Try to evaluate the expression
+                match evaluator.evaluate(&expr) {
+                    Ok(ExecutionOutcome::Complete(value)) => Some(value),
+                    _ => {
+                        // If evaluation fails, try JSON fallback
+                        serde_json::from_str::<JsonValue>(value_str)
+                            .ok()
+                            .map(Orchestrator::json_value_to_runtime_value)
                     }
-                    if let Some(end) = end_pos {
-                        body_str[..end].trim().to_string()
-                    } else {
-                        // If we can't find matching paren, return raw body
-                        raw_body
-                    }
-                } else {
-                    raw_body
                 }
             } else {
-                raw_body
+                // Fall back to JSON parsing for backward compatibility
+                serde_json::from_str::<JsonValue>(value_str)
+                    .ok()
+                    .map(Orchestrator::json_value_to_runtime_value)
+            }
+        }
+
+        // Helper function to safely deserialize optional JSON/RTFS strings
+        let deserialize_optional = |value_str: &Option<String>| -> Option<Value> {
+            value_str.as_ref().and_then(|s| deserialize_value(s))
+        };
+
+        // Extract the plan body, handling both new String format and legacy steps array format
+        let raw_body = match &archivable_plan.body {
+            crate::archivable_types::ArchivablePlanBody::String(s) => s.clone(),
+            crate::archivable_types::ArchivablePlanBody::Legacy { steps, .. } => {
+                steps.first().cloned().unwrap_or_else(|| "()".to_string())
+            }
+        };
+
+        // If the body is a (plan ...) form, extract the :body property
+        // This happens when the plan was saved with the full (plan ...) declaration (legacy format)
+        let plan_body = if raw_body.trim().starts_with("(plan") {
+            // Try to parse as top-level construct to extract :body from (plan ...) form
+            match rtfs::parser::parse(&raw_body) {
+                Ok(top_levels) => {
+                    // Look for a Plan top-level construct
+                    if let Some(rtfs::ast::TopLevel::Plan(plan_def)) = top_levels.first() {
+                        // Find the :body property in the plan definition
+                        if let Some(body_prop) =
+                            plan_def.properties.iter().find(|p| p.key.0 == "body")
+                        {
+                            // Format the body expression as RTFS string
+                            super::rtfs_bridge::extractors::expression_to_rtfs_string(
+                                &body_prop.value,
+                            )
+                        } else {
+                            raw_body // No :body property found, use as-is
+                        }
+                    } else {
+                        raw_body // Not a Plan top-level, use as-is
+                    }
+                }
+                Err(_) => raw_body, // Parse failed, use as-is
             }
         } else {
             raw_body
@@ -1104,35 +1133,20 @@ impl Orchestrator {
             metadata: archivable_plan
                 .metadata
                 .iter()
-                .filter_map(|(k, v)| {
-                    serde_json::from_str(v)
-                        .ok()
-                        .map(Self::json_value_to_runtime_value)
-                        .map(|val| (k.clone(), val))
-                })
+                .filter_map(|(k, v)| deserialize_value(v).map(|val| (k.clone(), val)))
                 .collect(),
-            input_schema: deserialize_json(&archivable_plan.input_schema),
-            output_schema: deserialize_json(&archivable_plan.output_schema),
+            input_schema: deserialize_optional(&archivable_plan.input_schema),
+            output_schema: deserialize_optional(&archivable_plan.output_schema),
             policies: archivable_plan
                 .policies
                 .iter()
-                .filter_map(|(k, v)| {
-                    serde_json::from_str(v)
-                        .ok()
-                        .map(Self::json_value_to_runtime_value)
-                        .map(|val| (k.clone(), val))
-                })
+                .filter_map(|(k, v)| deserialize_value(v).map(|val| (k.clone(), val)))
                 .collect(),
             capabilities_required: archivable_plan.capabilities_required.clone(),
             annotations: archivable_plan
                 .annotations
                 .iter()
-                .filter_map(|(k, v)| {
-                    serde_json::from_str(v)
-                        .ok()
-                        .map(Self::json_value_to_runtime_value)
-                        .map(|val| (k.clone(), val))
-                })
+                .filter_map(|(k, v)| deserialize_value(v).map(|val| (k.clone(), val)))
                 .collect(),
         }
     }
@@ -1541,9 +1555,9 @@ impl Orchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rtfs::ast::Symbol;
     use crate::event_sink::CausalChainIntentEventSink;
     use crate::types::{PlanStatus, StorableIntent};
+    use rtfs::ast::Symbol;
     use rtfs::runtime::security::SecurityLevel;
 
     fn test_context() -> RuntimeContext {
@@ -1574,9 +1588,11 @@ mod tests {
     async fn orchestrator_emits_executing_and_completed() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -1661,9 +1677,11 @@ mod tests {
     async fn orchestrator_emits_failed_on_error() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -1744,9 +1762,11 @@ mod tests {
     async fn test_step_profile_derivation_safe_operations() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -1781,9 +1801,11 @@ mod tests {
     async fn test_step_profile_derivation_network_operations() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -1833,9 +1855,11 @@ mod tests {
     async fn test_step_profile_derivation_file_operations() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -1880,9 +1904,11 @@ mod tests {
     async fn test_step_profile_derivation_system_operations() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -1916,9 +1942,11 @@ mod tests {
     async fn test_step_profile_resource_limits() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -1953,9 +1981,11 @@ mod tests {
     async fn test_step_profile_runtime_context_constraints() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -1989,9 +2019,11 @@ mod tests {
     async fn test_step_profile_causal_chain_logging() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -2034,9 +2066,11 @@ mod tests {
     async fn test_orchestrator_step_profile_management() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -2075,9 +2109,11 @@ mod tests {
     async fn test_security_flag_combinations() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -2112,9 +2148,11 @@ mod tests {
     async fn test_network_bandwidth_limits() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),
@@ -2149,9 +2187,11 @@ mod tests {
     async fn test_data_operations_deterministic() {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
-        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ))));
+        let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
+            tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            ),
+        )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
             Arc::clone(&chain),

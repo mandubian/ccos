@@ -113,7 +113,7 @@ pub fn validate_plan(plan: &Plan) -> Result<(), RtfsBridgeError> {
 }
 
 /// Validates that a Value represents a valid TypeExpr schema structure
-/// 
+///
 /// This checks that input/output schemas in Plans and Capabilities are
 /// properly structured as TypeExpr maps (e.g., {:key1 :type1 :key2 :type2}).
 fn validate_type_expr_schema(schema: &Value, schema_name: &str) -> Result<(), RtfsBridgeError> {
@@ -152,7 +152,10 @@ fn validate_type_expr_schema(schema: &Value, schema_name: &str) -> Result<(), Rt
                         // Nested map might be a complex type (Map, Vector, etc.)
                         // Recursively validate
                         let nested_value = Value::Map(nested_map.clone());
-                        if let Err(e) = validate_type_expr_schema(&nested_value, &format!("{}.{}", schema_name, key_str)) {
+                        if let Err(e) = validate_type_expr_schema(
+                            &nested_value,
+                            &format!("{}.{}", schema_name, key_str),
+                        ) {
                             return Err(e);
                         }
                     }
@@ -223,7 +226,7 @@ fn validate_type_expr_schema(schema: &Value, schema_name: &str) -> Result<(), Rt
 }
 
 /// Validates a Capability's input/output schemas
-/// 
+///
 /// This is a helper function that can be used when validating capabilities
 /// extracted from RTFS expressions.
 pub fn validate_capability_schemas(

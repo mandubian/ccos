@@ -13,18 +13,22 @@ pub use crate::arbiter::delegating_arbiter;
 
 // --- Core CCOS System ---
 
+use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::agent::AgentRegistry; // bring trait into scope for record_feedback
 use crate::arbiter::{Arbiter, DelegatingArbiter};
 use crate::capability_marketplace::CapabilityMarketplace;
+use crate::catalog::{CatalogEntryKind, CatalogFilter, CatalogHit, CatalogService};
+use rtfs::ast::{Keyword, MapKey};
 use rtfs::config::types::AgentConfig;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 use rtfs::runtime::{ModuleRegistry, RTFSRuntime, Runtime};
 
-use crate::types::ExecutionResult;
+use crate::types::{ActionType, ExecutionResult};
 
 use crate::causal_chain::CausalChain;
 use crate::event_sink::CausalChainIntentEventSink;
@@ -46,6 +50,7 @@ pub struct CCOS {
     intent_graph: Arc<Mutex<IntentGraph>>,
     causal_chain: Arc<Mutex<CausalChain>>,
     capability_marketplace: Arc<CapabilityMarketplace>,
+    plan_archive: Arc<PlanArchive>,
     rtfs_runtime: Arc<Mutex<dyn RTFSRuntime>>,
     // Optional LLM-driven engine
     delegating_arbiter: Option<Arc<DelegatingArbiter>>,
@@ -56,6 +61,22 @@ pub struct CCOS {
         Option<Arc<crate::synthesis::missing_capability_resolver::MissingCapabilityResolver>>,
     /// Optional debug callback for emitting lifecycle JSON lines (plan generation, execution etc.)
     debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    catalog: Arc<CatalogService>,
+}
+
+#[derive(Clone, Copy)]
+enum CatalogQueryMode {
+    Semantic,
+    Keyword,
+}
+
+impl CatalogQueryMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            CatalogQueryMode::Semantic => "semantic",
+            CatalogQueryMode::Keyword => "keyword",
+        }
+    }
 }
 
 impl CCOS {
@@ -130,6 +151,11 @@ impl CCOS {
 
         let capability_marketplace = Arc::new(capability_marketplace);
 
+        let catalog = Arc::new(CatalogService::new());
+        capability_marketplace
+            .set_catalog_service(Arc::clone(&catalog))
+            .await;
+
         // Use provided AgentConfig or default
         let agent_config = if let Some(cfg) = agent_config_opt {
             Arc::new(cfg)
@@ -147,6 +173,10 @@ impl CCOS {
             })?,
             None => PlanArchive::new(),
         });
+        plan_archive.set_catalog(Arc::clone(&catalog));
+
+        catalog.ingest_marketplace(&capability_marketplace).await;
+        catalog.ingest_plan_archive(&plan_archive);
         let orchestrator = Arc::new(Orchestrator::new(
             Arc::clone(&causal_chain),
             Arc::clone(&intent_graph),
@@ -303,8 +333,7 @@ impl CCOS {
         };
 
         // Initialize checkpoint archive
-        let checkpoint_archive =
-            Arc::new(crate::checkpoint_archive::CheckpointArchive::new());
+        let checkpoint_archive = Arc::new(crate::checkpoint_archive::CheckpointArchive::new());
 
         // Initialize missing capability resolver
         let missing_capability_resolver = Arc::new(
@@ -329,6 +358,7 @@ impl CCOS {
             intent_graph,
             causal_chain,
             capability_marketplace,
+            plan_archive,
             rtfs_runtime: Arc::new(Mutex::new(Runtime::new_with_tree_walking_strategy(
                 Arc::new(ModuleRegistry::new()),
             ))),
@@ -337,6 +367,7 @@ impl CCOS {
             agent_config,
             missing_capability_resolver: Some(missing_capability_resolver),
             debug_callback: debug_callback.clone(),
+            catalog,
         })
     }
 
@@ -1120,20 +1151,43 @@ impl CCOS {
         Arc::clone(&self.agent_config)
     }
 
+    pub fn get_catalog(&self) -> Arc<CatalogService> {
+        Arc::clone(&self.catalog)
+    }
+
+    pub fn get_plan_archive(&self) -> Arc<PlanArchive> {
+        Arc::clone(&self.plan_archive)
+    }
+
     /// Validate and execute a pre-built Plan via the Governance Kernel.
     /// This is a convenience wrapper for examples and integration tests that
     /// already have a Plan object and want to run it through governance.
     pub async fn validate_and_execute_plan(
         &self,
-    plan: crate::types::Plan,
+        plan: crate::types::Plan,
         context: &RuntimeContext,
     ) -> RuntimeResult<ExecutionResult> {
         // Preflight capability validation
         self.preflight_validate_capabilities(&plan).await?;
-        // Delegate to governance kernel for sanitization, scaffolding and orchestration
-        self.governance_kernel
+
+        let reuse_hit = self.query_catalog_for_reuse(&plan);
+        if let Some((ref hit, mode)) = reuse_hit {
+            self.log_catalog_reuse_action(&plan, hit, mode).await?;
+        }
+
+        let mut result = self
+            .governance_kernel
             .validate_and_execute(plan, context)
-            .await
+            .await?;
+
+        if let Some((hit, mode)) = reuse_hit {
+            result.metadata.insert(
+                "catalog_reuse".to_string(),
+                Self::create_catalog_hit_metadata(&hit, mode),
+            );
+        }
+
+        Ok(result)
     }
 
     /// Analyze the current session's interactions and synthesize new capabilities.
@@ -1195,9 +1249,7 @@ impl CCOS {
     }
 
     /// Extract recent intents from the IntentGraph for analysis.
-    async fn extract_recent_intents(
-        &self,
-    ) -> RuntimeResult<Vec<crate::types::StorableIntent>> {
+    async fn extract_recent_intents(&self) -> RuntimeResult<Vec<crate::types::StorableIntent>> {
         let ig = self
             .intent_graph
             .lock()
@@ -1365,6 +1417,185 @@ impl CCOS {
             .await?;
 
         Ok(capability_id)
+    }
+
+    fn query_catalog_for_reuse(
+        &self,
+        plan: &crate::types::Plan,
+    ) -> Option<(CatalogHit, CatalogQueryMode)> {
+        let query = Self::build_catalog_query_from_plan(plan)?;
+        let filter = CatalogFilter::for_kind(CatalogEntryKind::Plan);
+        let thresholds = &self.agent_config.catalog;
+
+        let semantic_candidate = self
+            .catalog
+            .search_semantic(&query, Some(&filter), 5)
+            .into_iter()
+            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal));
+        if let Some(hit) = semantic_candidate.clone() {
+            if hit.score >= thresholds.plan_min_score {
+                return Some((hit, CatalogQueryMode::Semantic));
+            }
+        }
+
+        let keyword_candidate = self
+            .catalog
+            .search_keyword(&query, Some(&filter), 5)
+            .into_iter()
+            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal));
+        if let Some(hit) = keyword_candidate {
+            if hit.score >= thresholds.keyword_min_score {
+                return Some((hit, CatalogQueryMode::Keyword));
+            }
+        }
+
+        None
+    }
+
+    async fn log_catalog_reuse_action(
+        &self,
+        plan: &crate::types::Plan,
+        hit: &CatalogHit,
+        mode: CatalogQueryMode,
+    ) -> RuntimeResult<()> {
+        let intent_id = plan
+            .intent_ids
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "catalog-reuse".to_string());
+
+        let mut causal_chain = self
+            .causal_chain
+            .lock()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to lock causal chain: {}", e)))?;
+
+        let action =
+            causal_chain.log_plan_event(&plan.plan_id, &intent_id, ActionType::CatalogReuse)?;
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "catalog_entry_id".to_string(),
+            Value::String(hit.entry.id.clone()),
+        );
+        metadata.insert(
+            "catalog_entry_kind".to_string(),
+            Value::String(format!("{:?}", hit.entry.kind)),
+        );
+        metadata.insert(
+            "catalog_mode".to_string(),
+            Value::String(mode.as_str().to_string()),
+        );
+        metadata.insert("catalog_score".to_string(), Value::Float(hit.score as f64));
+        metadata.insert(
+            "catalog_source".to_string(),
+            Value::String(format!("{:?}", hit.entry.source)),
+        );
+        if let Some(name) = &hit.entry.name {
+            metadata.insert(
+                "catalog_entry_name".to_string(),
+                Value::String(name.clone()),
+            );
+        }
+
+        let result = ExecutionResult {
+            success: true,
+            value: Value::Nil,
+            metadata,
+        };
+
+        causal_chain.record_result(action, result)?;
+        Ok(())
+    }
+
+    fn create_catalog_hit_metadata(hit: &CatalogHit, mode: CatalogQueryMode) -> Value {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            MapKey::Keyword(Keyword::new("id")),
+            Value::String(hit.entry.id.clone()),
+        );
+        if let Some(name) = &hit.entry.name {
+            map.insert(
+                MapKey::Keyword(Keyword::new("name")),
+                Value::String(name.clone()),
+            );
+        }
+        map.insert(
+            MapKey::Keyword(Keyword::new("score")),
+            Value::Float(hit.score as f64),
+        );
+        map.insert(
+            MapKey::Keyword(Keyword::new("mode")),
+            Value::String(mode.as_str().to_string()),
+        );
+        map.insert(
+            MapKey::Keyword(Keyword::new("kind")),
+            Value::String(format!("{:?}", hit.entry.kind)),
+        );
+        map.insert(
+            MapKey::Keyword(Keyword::new("source")),
+            Value::String(format!("{:?}", hit.entry.source)),
+        );
+        if let Some(goal) = &hit.entry.goal {
+            map.insert(
+                MapKey::Keyword(Keyword::new("goal")),
+                Value::String(goal.clone()),
+            );
+        }
+
+        Value::Map(map)
+    }
+
+    fn build_catalog_query_from_plan(plan: &crate::types::Plan) -> Option<String> {
+        let mut parts = Vec::new();
+        parts.push(plan.plan_id.clone());
+        if let Some(name) = &plan.name {
+            parts.push(name.clone());
+        }
+        if let Some(goal) = plan
+            .metadata
+            .get("goal")
+            .and_then(Self::plan_value_to_string)
+        {
+            parts.push(goal);
+        }
+        if let Some(goal) = plan
+            .annotations
+            .get("goal")
+            .and_then(Self::plan_value_to_string)
+        {
+            parts.push(goal);
+        }
+        parts.extend(plan.capabilities_required.iter().cloned());
+
+        let query = parts.join(" ").trim().to_string();
+        if query.is_empty() {
+            None
+        } else {
+            Some(query)
+        }
+    }
+
+    fn plan_value_to_string(value: &Value) -> Option<String> {
+        match value {
+            Value::String(s) => Some(s.clone()),
+            Value::Keyword(k) => Some(k.0.clone()),
+            Value::Symbol(sym) => Some(sym.0.clone()),
+            Value::Integer(i) => Some(i.to_string()),
+            Value::Float(f) => Some(f.to_string()),
+            Value::Boolean(b) => Some(b.to_string()),
+            Value::Vector(items) => {
+                let joined: Vec<String> = items
+                    .iter()
+                    .filter_map(Self::plan_value_to_string)
+                    .collect();
+                if joined.is_empty() {
+                    None
+                } else {
+                    Some(joined.join(" "))
+                }
+            }
+            _ => None,
+        }
     }
 }
 

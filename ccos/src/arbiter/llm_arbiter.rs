@@ -9,10 +9,10 @@ use crate::rtfs_bridge::graph_interpreter::build_graph_from_rtfs;
 use crate::types::{
     ExecutionResult, GenerationContext, Intent, IntentStatus, Plan, StorableIntent, TriggerSource,
 };
-use rtfs::runtime::error::RuntimeError;
-use rtfs::runtime::values::Value;
 use async_trait::async_trait;
 use regex;
+use rtfs::runtime::error::RuntimeError;
+use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -657,13 +657,11 @@ impl ArbiterEngine for LlmArbiter {
         };
 
         // For now, we don't pass a real marketplace; provider currently doesn't use it.
-        let marketplace = Arc::new(
-            crate::capability_marketplace::CapabilityMarketplace::new(Arc::new(
-                tokio::sync::RwLock::new(
-                    rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-                ),
+        let marketplace = Arc::new(crate::capability_marketplace::CapabilityMarketplace::new(
+            Arc::new(tokio::sync::RwLock::new(
+                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
             )),
-        );
+        ));
         provider.generate_plan(&rt_intent, marketplace).await
     }
 }

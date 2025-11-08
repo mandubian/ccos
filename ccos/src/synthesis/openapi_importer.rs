@@ -1,11 +1,11 @@
-use rtfs::ast::TypeExpr;
 use crate::capability_marketplace::types::{
     CapabilityManifest, CapabilityProvenance, OpenApiAuth, OpenApiCapability, OpenApiOperation,
     ProviderType,
 };
 use crate::synthesis::auth_injector::AuthInjector;
-use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use chrono::Utc;
+use rtfs::ast::TypeExpr;
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -1164,15 +1164,13 @@ impl OpenAPIImporter {
             input_schema: None,
             output_schema: None,
             attestation: None,
-            provenance: Some(
-                crate::capability_marketplace::types::CapabilityProvenance {
-                    source: "openapi_importer".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    content_hash: format!("openapi_{}_{}", operation.method, operation.path),
-                    custody_chain: vec!["openapi_importer".to_string()],
-                    registered_at: chrono::Utc::now(),
-                },
-            ),
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "openapi_importer".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!("openapi_{}_{}", operation.method, operation.path),
+                custody_chain: vec!["openapi_importer".to_string()],
+                registered_at: chrono::Utc::now(),
+            }),
             permissions: vec![],
             effects,
             metadata,

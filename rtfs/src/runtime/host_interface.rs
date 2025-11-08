@@ -54,11 +54,11 @@ pub trait HostInterface: std::fmt::Debug {
     /// - "intent-ids"
     /// - "parent-action-id"
     /// Returns None when the value is not available.
-    /// 
+    ///
     /// This method should check both step-scoped context (from current step) and
     /// plan-scoped context, in that order.
     fn get_context_value(&self, key: &str) -> Option<Value>;
-    
+
     /// Sets a step-scoped context value (optional - for hosts that support step-local storage).
     /// If the host doesn't support step-scoped context, this is a no-op.
     /// Step-scoped values are automatically cleared when the step exits.

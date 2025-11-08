@@ -1,9 +1,9 @@
+use rtfs::parser::parse;
+use rtfs::runtime::evaluator::Evaluator;
+use rtfs::runtime::execution_outcome::ExecutionOutcome;
 use rtfs::runtime::module_runtime::ModuleRegistry;
 use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::runtime::security::RuntimeContext;
-use rtfs::runtime::evaluator::Evaluator;
-use rtfs::parser::parse;
-use rtfs::runtime::execution_outcome::ExecutionOutcome;
 use rtfs::runtime::values::Value;
 use std::sync::Arc;
 
@@ -23,10 +23,10 @@ fn test_int_plus_float() {
     } else {
         panic!("Expected expression")
     };
-    
+
     let mut eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
-    
+
     match outcome {
         ExecutionOutcome::Complete(Value::Float(f)) => assert!((f - 3.5).abs() < 1e-10),
         other => panic!("Expected 3.5, got {:?}", other),
@@ -42,10 +42,10 @@ fn test_float_plus_int() {
     } else {
         panic!("Expected expression")
     };
-    
+
     let mut eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
-    
+
     match outcome {
         ExecutionOutcome::Complete(Value::Float(f)) => assert!((f - 3.5).abs() < 1e-10),
         other => panic!("Expected 3.5, got {:?}", other),
@@ -61,10 +61,10 @@ fn test_int_multiplication_with_float() {
     } else {
         panic!("Expected expression")
     };
-    
+
     let mut eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
-    
+
     match outcome {
         ExecutionOutcome::Complete(Value::Float(f)) => assert!((f - 7.5).abs() < 1e-10),
         other => panic!("Expected 7.5, got {:?}", other),
@@ -80,10 +80,10 @@ fn test_float_division_with_int() {
     } else {
         panic!("Expected expression")
     };
-    
+
     let mut eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
-    
+
     match outcome {
         ExecutionOutcome::Complete(Value::Float(f)) => assert!((f - 2.5).abs() < 1e-10),
         other => panic!("Expected 2.5, got {:?}", other),
@@ -99,10 +99,10 @@ fn test_all_int_returns_int() {
     } else {
         panic!("Expected expression")
     };
-    
+
     let mut eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
-    
+
     match outcome {
         ExecutionOutcome::Complete(Value::Integer(6)) => (),
         other => panic!("Expected 6, got {:?}", other),
@@ -118,10 +118,10 @@ fn test_all_float_returns_float() {
     } else {
         panic!("Expected expression")
     };
-    
+
     let mut eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
-    
+
     match outcome {
         ExecutionOutcome::Complete(Value::Float(f)) => assert!((f - 7.5).abs() < 1e-10),
         other => panic!("Expected 7.5, got {:?}", other),
@@ -137,10 +137,10 @@ fn test_mixed_arithmetic() {
     } else {
         panic!("Expected expression")
     };
-    
+
     let mut eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
-    
+
     match outcome {
         ExecutionOutcome::Complete(Value::Float(f)) => assert!((f - 7.0).abs() < 1e-10),
         other => panic!("Expected 7.0, got {:?}", other),
@@ -156,13 +156,12 @@ fn test_division_that_results_in_int() {
     } else {
         panic!("Expected expression")
     };
-    
+
     let mut eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
-    
+
     match outcome {
         ExecutionOutcome::Complete(Value::Integer(3)) => (),
         other => panic!("Expected 3, got {:?}", other),
     }
 }
-

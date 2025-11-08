@@ -9,15 +9,18 @@ use super::types::*;
 // use super::network_discovery::{NetworkDiscoveryProvider, NetworkDiscoveryBuilder};
 // use super::mcp_discovery::{MCPDiscoveryProvider, MCPDiscoveryBuilder, MCPServerConfig};
 // use super::a2a_discovery::{A2ADiscoveryProvider, A2ADiscoveryBuilder, A2AAgentConfig};
+use crate::catalog::{CatalogService, CatalogSource};
 use rtfs::ast::{MapKey, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 // RuntimeContext no longer needed in missing-capability path
 use super::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
-use crate::synthesis::schema_serializer::type_expr_to_rtfs_pretty;
-use crate::streaming::{McpStreamingProvider, StreamConfig, StreamHandle, StreamType, StreamingProvider};
+use crate::streaming::{
+    McpStreamingProvider, StreamConfig, StreamHandle, StreamType, StreamingProvider,
+};
+use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
+use chrono::Utc;
 use rtfs::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
 use rtfs::runtime::values::Value;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
@@ -157,6 +160,36 @@ impl SerializableProvider {
     }
 }
 
+fn infer_catalog_source(manifest: &CapabilityManifest) -> CatalogSource {
+    if let Some(source) = manifest.metadata.get("source") {
+        let lowered = source.to_lowercase();
+        if lowered.contains("user") {
+            return CatalogSource::User;
+        }
+        if lowered.contains("generated") || lowered.contains("synthesized") {
+            return CatalogSource::Generated;
+        }
+        if lowered.contains("system") {
+            return CatalogSource::System;
+        }
+        if lowered.contains("discovered") {
+            return CatalogSource::Discovered;
+        }
+    }
+
+    match &manifest.provider {
+        ProviderType::MCP(_) | ProviderType::OpenApi(_) | ProviderType::Registry(_) => {
+            CatalogSource::Discovered
+        }
+        ProviderType::Local(_)
+        | ProviderType::RemoteRTFS(_)
+        | ProviderType::Stream(_)
+        | ProviderType::Http(_)
+        | ProviderType::Plugin(_)
+        | ProviderType::A2A(_) => CatalogSource::Generated,
+    }
+}
+
 /// Serializable DTO for capability manifests
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SerializableManifest {
@@ -217,26 +250,20 @@ impl From<SerializableManifest> for CapabilityManifest {
 
 impl CapabilityMarketplace {
     pub fn new(
-        capability_registry: Arc<
-            RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>,
-        >,
+        capability_registry: Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
     ) -> Self {
         Self::with_causal_chain(capability_registry, None)
     }
 
     pub fn with_causal_chain(
-        capability_registry: Arc<
-            RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>,
-        >,
+        capability_registry: Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
         causal_chain: Option<Arc<std::sync::Mutex<crate::causal_chain::CausalChain>>>,
     ) -> Self {
         Self::with_causal_chain_and_debug_callback(capability_registry, causal_chain, None)
     }
 
     pub fn with_causal_chain_and_debug_callback(
-        capability_registry: Arc<
-            RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>,
-        >,
+        capability_registry: Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
         causal_chain: Option<Arc<std::sync::Mutex<crate::causal_chain::CausalChain>>>,
         debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
     ) -> Self {
@@ -252,6 +279,7 @@ impl CapabilityMarketplace {
             resource_monitor: None,
             debug_callback,
             session_pool: Arc::new(RwLock::new(None)),
+            catalog: Arc::new(RwLock::new(None)),
         };
         marketplace.executor_registry.insert(
             TypeId::of::<MCPCapability>(),
@@ -280,6 +308,36 @@ impl CapabilityMarketplace {
         marketplace
     }
 
+    /// Attach a catalog service for capability indexing
+    pub async fn set_catalog_service(&self, catalog: Arc<CatalogService>) {
+        let mut guard = self.catalog.write().await;
+        *guard = Some(catalog);
+    }
+
+    /// Trigger a full capability re-ingestion into the catalog
+    pub async fn refresh_catalog_index(&self) {
+        let maybe_catalog = {
+            let guard = self.catalog.read().await;
+            guard.clone()
+        };
+
+        if let Some(catalog) = maybe_catalog {
+            catalog.ingest_marketplace(self).await;
+        }
+    }
+
+    async fn index_capability_in_catalog(&self, manifest: &CapabilityManifest) {
+        let maybe_catalog = {
+            let guard = self.catalog.read().await;
+            guard.clone()
+        };
+
+        if let Some(catalog) = maybe_catalog {
+            let source = infer_catalog_source(manifest);
+            catalog.register_capability(manifest, source);
+        }
+    }
+
     /// Set a debug callback function to receive debug messages instead of printing to stderr
     pub fn set_debug_callback<F>(&mut self, callback: F)
     where
@@ -298,9 +356,7 @@ impl CapabilityMarketplace {
 
     /// Create marketplace with resource monitoring enabled
     pub fn with_resource_monitoring(
-        capability_registry: Arc<
-            RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>,
-        >,
+        capability_registry: Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
         causal_chain: Option<Arc<std::sync::Mutex<crate::causal_chain::CausalChain>>>,
         monitoring_config: ResourceMonitoringConfig,
     ) -> Self {
@@ -384,67 +440,6 @@ impl CapabilityMarketplace {
     pub async fn bootstrap(&self) -> RuntimeResult<()> {
         // Register default capabilities first
         crate::capabilities::register_default_capabilities(self).await?;
-
-        // Load saved capabilities from disk (discovered MCP capabilities and synthesized capabilities)
-        let base_storage = std::env::var("CCOS_CAPABILITY_STORAGE")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("./capabilities"));
-        let storage_dirs = vec![
-            base_storage.join("discovered"),
-            base_storage.join("generated"),
-        ];
-        
-        let mut total_loaded = 0usize;
-        for storage_dir in storage_dirs {
-            if storage_dir.exists() {
-                // Recursively collect all .rtfs files
-                let mut rtfs_files = Vec::new();
-                if let Err(e) = Self::import_capabilities_recursive_sync(&self, &storage_dir, &mut rtfs_files) {
-                    if let Some(cb) = &self.debug_callback {
-                        cb(format!(
-                            "Warning: Failed to scan directory {}: {}",
-                            storage_dir.display(),
-                            e
-                        ));
-                    }
-                    continue;
-                }
-                
-                let file_count = rtfs_files.len();
-                
-                // Import each .rtfs file from its parent directory
-                for rtfs_file in rtfs_files {
-                    if let Some(parent_dir) = rtfs_file.parent() {
-                        match self.import_capabilities_from_rtfs_dir(parent_dir).await {
-                            Ok(loaded) => {
-                                if loaded > 0 {
-                                    total_loaded += loaded;
-                                }
-                            }
-                            Err(_) => {
-                                // Continue on error for individual files
-                            }
-                        }
-                    }
-                }
-                
-                if file_count > 0 {
-                    if let Some(cb) = &self.debug_callback {
-                        cb(format!(
-                            "Found {} saved capabilities in {}",
-                            file_count,
-                            storage_dir.display()
-                        ));
-                    }
-                }
-            }
-        }
-        
-        if total_loaded > 0 {
-            if let Some(cb) = &self.debug_callback {
-                cb(format!("Total: Loaded {} saved capabilities from disk", total_loaded));
-            }
-        }
 
         // Load built-in capabilities from the capability registry
         // Note: RTFS stub registry doesn't have list_capabilities, so we skip this
@@ -722,11 +717,15 @@ impl CapabilityMarketplace {
             agent_metadata: None,
         };
 
+        let catalog_manifest = manifest.clone();
+
         // Register the capability
         {
             let mut caps = self.capabilities.write().await;
             caps.insert(id.clone(), manifest);
         }
+
+        self.index_capability_in_catalog(&catalog_manifest).await;
 
         // Emit audit event to Causal Chain
         self.emit_capability_audit_event("capability_registered", &id, None)
@@ -742,11 +741,15 @@ impl CapabilityMarketplace {
     ) -> RuntimeResult<()> {
         let id = manifest.id.clone();
 
+        let catalog_manifest = manifest.clone();
+
         // Register the capability
         {
             let mut caps = self.capabilities.write().await;
             caps.insert(id.clone(), manifest);
         }
+
+        self.index_capability_in_catalog(&catalog_manifest).await;
 
         // Emit audit event to Causal Chain
         self.emit_capability_audit_event("capability_registered", &id, None)
@@ -766,6 +769,8 @@ impl CapabilityMarketplace {
             // Emit audit event to Causal Chain
             self.emit_capability_audit_event("capability_removed", id, None)
                 .await?;
+
+            self.refresh_catalog_index().await;
         }
 
         Ok(())
@@ -1386,6 +1391,27 @@ impl CapabilityMarketplace {
         capabilities.get(id).cloned()
     }
 
+    pub async fn update_capability_output_schema(
+        &self,
+        id: &str,
+        new_schema: TypeExpr,
+    ) -> RuntimeResult<()> {
+        let mut capabilities = self.capabilities.write().await;
+        if let Some(manifest) = capabilities.get_mut(id) {
+            manifest.output_schema = Some(new_schema);
+            manifest.metadata.insert(
+                "ccos_sampled_output_schema".to_string(),
+                Utc::now().to_rfc3339(),
+            );
+            Ok(())
+        } else {
+            Err(RuntimeError::Generic(format!(
+                "Capability '{}' not found",
+                id
+            )))
+        }
+    }
+
     pub async fn list_capabilities(&self) -> Vec<CapabilityManifest> {
         let capabilities = self.capabilities.read().await;
         capabilities.values().cloned().collect()
@@ -1497,17 +1523,14 @@ impl CapabilityMarketplace {
         let manifest = if let Some(m) = manifest_opt {
             m
         } else {
-            let registry = self.capability_registry.read().await;
-            // Extract arguments from the input Value::List if it's a list, otherwise wrap in vector
-            let args = match inputs {
-                Value::List(list) => list.clone(),
-                _ => vec![inputs.clone()],
-            };
             // If capability not registered locally, surface a clear error
             // Note: RTFS stub registry doesn't support enqueue_missing_capability
             // TODO: Implement missing capability resolution at CCOS level
             return Err(RuntimeError::UnknownCapability(id.to_string()));
         };
+
+        let normalized_inputs = Self::normalize_input_envelope(inputs);
+        let inputs_ref = normalized_inputs.as_ref().unwrap_or(inputs);
 
         // Check for session management requirements (generic, metadata-driven)
         // This works for ANY provider that declares session needs via metadata
@@ -1532,9 +1555,10 @@ impl CapabilityMarketplace {
 
                 if let Some(pool) = pool_opt {
                     eprintln!("🔄 Delegating to session pool for session management");
-                    let args = match inputs {
+                    let args = match inputs_ref {
                         Value::List(list) => list.clone(),
-                        _ => vec![inputs.clone()],
+                        Value::Vector(vec) => vec.clone(),
+                        other => vec![other.clone()],
                     };
 
                     // Session pool will:
@@ -1558,7 +1582,7 @@ impl CapabilityMarketplace {
         // Validate inputs if a schema is provided
         if let Some(input_schema) = &manifest.input_schema {
             self.type_validator
-                .validate_with_config(inputs, input_schema, &type_config, &boundary_context)
+                .validate_with_config(inputs_ref, input_schema, &type_config, &boundary_context)
                 .map_err(|e| RuntimeError::Generic(format!("Input validation failed: {}", e)))?;
         }
 
@@ -1575,14 +1599,14 @@ impl CapabilityMarketplace {
                 ProviderType::Stream(_) => std::any::TypeId::of::<StreamCapabilityImpl>(),
                 ProviderType::Registry(_) => std::any::TypeId::of::<RegistryCapability>(),
             }) {
-            executor.execute(&manifest.provider, inputs).await
+            executor.execute(&manifest.provider, inputs_ref).await
         } else {
             match &manifest.provider {
-                ProviderType::Local(local) => (local.handler)(inputs),
-                ProviderType::Http(http) => self.execute_http_capability(http, inputs).await,
+                ProviderType::Local(local) => (local.handler)(inputs_ref),
+                ProviderType::Http(http) => self.execute_http_capability(http, inputs_ref).await,
                 ProviderType::OpenApi(_) => {
                     let executor = OpenApiExecutor;
-                    executor.execute(&manifest.provider, inputs).await
+                    executor.execute(&manifest.provider, inputs_ref).await
                 }
                 ProviderType::MCP(_mcp) => {
                     Err(RuntimeError::Generic("MCP not configured".to_string()))
@@ -1597,7 +1621,8 @@ impl CapabilityMarketplace {
                     "Remote RTFS not configured".to_string(),
                 )),
                 ProviderType::Stream(stream_impl) => {
-                    self.execute_stream_capability(stream_impl, inputs).await
+                    self.execute_stream_capability(stream_impl, inputs_ref)
+                        .await
                 }
                 ProviderType::Registry(_) => Err(RuntimeError::Generic(
                     "Registry provider missing executor".to_string(),
@@ -1621,6 +1646,16 @@ impl CapabilityMarketplace {
         }
 
         Ok(exec_result)
+    }
+
+    fn normalize_input_envelope(inputs: &Value) -> Option<Value> {
+        match inputs {
+            Value::List(list) if list.len() == 1 => match &list[0] {
+                Value::Map(map) => Some(Value::Map(map.clone())),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     async fn execute_stream_capability(
@@ -1971,12 +2006,12 @@ impl CapabilityMarketplace {
             let input_schema_str = cap
                 .input_schema
                 .as_ref()
-                .map(|s| type_expr_to_rtfs_pretty(s))
+                .map(type_expr_to_rtfs_compact)
                 .unwrap_or_else(|| ":any".to_string());
             let output_schema_str = cap
                 .output_schema
                 .as_ref()
-                .map(|s| type_expr_to_rtfs_pretty(s))
+                .map(type_expr_to_rtfs_compact)
                 .unwrap_or_else(|| ":any".to_string());
 
             let permissions_str = if cap.permissions.is_empty() {
@@ -2163,45 +2198,6 @@ impl CapabilityMarketplace {
         Ok(loaded)
     }
 
-    /// Recursively import capabilities from a directory and its subdirectories
-    fn import_capabilities_recursive_sync<P: AsRef<Path>>(
-        &self,
-        dir: P,
-        rtfs_files: &mut Vec<std::path::PathBuf>,
-    ) -> RuntimeResult<()> {
-        let dir_path = dir.as_ref();
-        
-        let entries = std::fs::read_dir(dir_path).map_err(|e| {
-            RuntimeError::Generic(format!(
-                "Failed to read directory {}: {}",
-                dir_path.display(),
-                e
-            ))
-        })?;
-        
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let path = entry.path();
-            
-            if path.is_dir() {
-                // Recursively search subdirectories
-                if let Err(_) = Self::import_capabilities_recursive_sync(&self, &path, rtfs_files) {
-                    // Continue on error
-                }
-            } else if path.is_file() {
-                // Check if it's a .rtfs file
-                if path.extension().and_then(|s| s.to_str()) == Some("rtfs") {
-                    rtfs_files.push(path);
-                }
-            }
-        }
-        
-        Ok(())
-    }
-    
     /// Import capabilities exported as RTFS files (one .rtfs per capability) from a directory.
     /// Only supports provider types that are expressible in the exported RTFS (http, mcp, a2a, remote_rtfs).
     pub async fn import_capabilities_from_rtfs_dir<P: AsRef<Path>>(

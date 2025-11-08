@@ -1,5 +1,5 @@
 //! Canonical schemas for Plan and Capability RTFS maps
-//! 
+//!
 //! This module defines the canonical field names, types, and validation rules
 //! for Plan and Capability objects in RTFS. All function-call syntax should
 //! normalize to these canonical map structures.
@@ -9,7 +9,7 @@ use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 
 /// Canonical Plan map schema
-/// 
+///
 /// A Plan is represented as a map with these canonical fields:
 /// - `:type` (String): Always "plan"
 /// - `:name` (String): Plan name/identifier
@@ -93,8 +93,7 @@ impl CanonicalPlanSchema {
         }
 
         // Validate :capabilities-required if present (should be vector)
-        if let Some(caps_val) =
-            plan_map.get(&MapKey::String(":capabilities-required".to_string()))
+        if let Some(caps_val) = plan_map.get(&MapKey::String(":capabilities-required".to_string()))
         {
             if !matches!(caps_val, Value::Vector(_) | Value::List(_)) {
                 return Err("Plan :capabilities-required must be a vector or list".to_string());
@@ -105,8 +104,8 @@ impl CanonicalPlanSchema {
     }
 
     /// Extract canonical Plan map from a function call expression
-    /// 
-    /// Normalizes `(plan "name" :body ...)` or `(ccos/plan "name" :body ...)` 
+    ///
+    /// Normalizes `(plan "name" :body ...)` or `(ccos/plan "name" :body ...)`
     /// to canonical map format.
     pub fn from_function_call(
         callee: &Expression,
@@ -119,17 +118,19 @@ impl CanonicalPlanSchema {
         };
 
         if callee_name != "plan" && callee_name != "ccos/plan" {
-            return Err(format!("Expected 'plan' or 'ccos/plan', got: {}", callee_name));
+            return Err(format!(
+                "Expected 'plan' or 'ccos/plan', got: {}",
+                callee_name
+            ));
         }
 
         // First argument should be name (string)
-        let name = if let Some(Expression::Literal(rtfs::ast::Literal::String(s))) =
-            arguments.first()
-        {
-            s.clone()
-        } else {
-            return Err("Plan name must be a string literal".to_string());
-        };
+        let name =
+            if let Some(Expression::Literal(rtfs::ast::Literal::String(s))) = arguments.first() {
+                s.clone()
+            } else {
+                return Err("Plan name must be a string literal".to_string());
+            };
 
         // Build canonical map
         let mut plan_map = HashMap::new();
@@ -151,7 +152,10 @@ impl CanonicalPlanSchema {
                 // For now, we'll handle this in the extractor
                 i += 2;
             } else {
-                return Err(format!("Plan properties must be keyword-value pairs, got: {:?}", arguments[i]));
+                return Err(format!(
+                    "Plan properties must be keyword-value pairs, got: {:?}",
+                    arguments[i]
+                ));
             }
         }
 
@@ -160,7 +164,7 @@ impl CanonicalPlanSchema {
 }
 
 /// Canonical Capability map schema
-/// 
+///
 /// A Capability is represented as a map with these canonical fields:
 /// - `:type` (String): Always "capability" (optional if top-level form)
 /// - `:id` (String): Capability identifier (preferred for immutability)
@@ -182,7 +186,8 @@ pub struct CanonicalCapabilitySchema;
 
 impl CanonicalCapabilitySchema {
     /// Required fields for a canonical Capability map
-    pub const REQUIRED_FIELDS: &'static [&'static str] = &[":id", ":name", ":version", ":description"];
+    pub const REQUIRED_FIELDS: &'static [&'static str] =
+        &[":id", ":name", ":version", ":description"];
 
     /// Optional fields for a canonical Capability map
     pub const OPTIONAL_FIELDS: &'static [&'static str] = &[
@@ -213,7 +218,10 @@ impl CanonicalCapabilitySchema {
         // Validate :type field if present
         if let Some(Value::String(type_val)) = cap_map.get(&MapKey::String(":type".to_string())) {
             if type_val != "capability" {
-                return Err(format!("Capability :type must be 'capability', got: {}", type_val));
+                return Err(format!(
+                    "Capability :type must be 'capability', got: {}",
+                    type_val
+                ));
             }
         }
 
@@ -245,10 +253,12 @@ impl CanonicalCapabilitySchema {
                 Value::Keyword(k) => Some(format!(":{}", k.0)),
                 Value::Symbol(rtfs::ast::Symbol(s)) => Some(s.clone()),
                 _ => {
-                    return Err("Capability :language must be string, symbol, or keyword".to_string());
+                    return Err(
+                        "Capability :language must be string, symbol, or keyword".to_string()
+                    );
                 }
             };
-            
+
             // Validate language string format
             if let Some(lang) = lang_str {
                 use super::language_utils::validate_language_string;
@@ -257,9 +267,10 @@ impl CanonicalCapabilitySchema {
                 }
             }
         }
-        
+
         // Validate that local capabilities have :language
-        let provider = cap_map.get(&MapKey::String(":provider".to_string()))
+        let provider = cap_map
+            .get(&MapKey::String(":provider".to_string()))
             .and_then(|v| match v {
                 Value::String(s) => Some(s.clone()),
                 Value::Keyword(k) => Some(format!(":{}", k.0)),
@@ -267,7 +278,7 @@ impl CanonicalCapabilitySchema {
                 _ => None,
             })
             .unwrap_or_else(|| "Local".to_string());
-        
+
         if provider.to_lowercase() == "local" {
             use super::language_utils::validate_local_capability_has_language;
             if let Err(e) = validate_local_capability_has_language(cap_map) {

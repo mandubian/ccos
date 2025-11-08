@@ -1,5 +1,5 @@
-use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::runtime::module_runtime::ModuleRegistry;
+use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::*;
 use std::sync::Arc;
 

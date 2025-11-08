@@ -1,8 +1,8 @@
 // Console demo for the CCOS runtime service: shows how to embed CCOS cleanly
 // Build: cargo run --example ccos_runtime_service_demo --manifest-path rtfs_compiler/Cargo.toml
 
-use clap::Parser;
 use ccos::{runtime_service, CCOS};
+use clap::Parser;
 use std::sync::Arc;
 
 #[derive(Debug, Parser)]

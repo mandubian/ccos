@@ -13,10 +13,10 @@ impl CapabilityMarketplace {
     pub fn new() -> Self {
         Self
     }
-    
+
     pub async fn execute_capability(&self, _id: &str, _args: &[Value]) -> RuntimeResult<Value> {
         Err(crate::runtime::error::RuntimeError::NotImplemented(
-            "Capability execution requires CCOS integration".to_string()
+            "Capability execution requires CCOS integration".to_string(),
         ))
     }
 }

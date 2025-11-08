@@ -1,15 +1,13 @@
 //! Plan-as-Capability Adapter
-//! 
+//!
 //! This module provides functionality to expose a Plan as a callable Capability.
 //! This enables plans to be reused as capabilities in the marketplace, with
 //! proper schema inheritance and effect propagation.
-//! 
+//!
 //! Effects and permissions are automatically propagated from the plan's used capabilities
 //! by analyzing the plan body and looking up capabilities in the marketplace.
 
-use super::effects_propagation::{
-    propagate_effects_from_plan, EffectsPropagationConfig,
-};
+use super::effects_propagation::{propagate_effects_from_plan, EffectsPropagationConfig};
 use super::errors::RtfsBridgeError;
 use super::language_utils::{
     ensure_language_for_local_capability, plan_language_to_string,
@@ -101,11 +99,11 @@ impl PlanAsCapabilityConfig {
 }
 
 /// Convert a Plan to a Capability RTFS map expression
-/// 
+///
 /// This creates a canonical capability map that wraps the plan's :body as the
 /// :implementation. The capability inherits the plan's input/output schemas
 /// and capabilities-required list.
-/// 
+///
 /// Example:
 /// ```rtfs
 /// {:type "capability"
@@ -125,7 +123,7 @@ pub fn plan_to_capability_map(
     config: PlanAsCapabilityConfig,
 ) -> Result<Expression, RtfsBridgeError> {
     use super::converters::plan_to_rtfs_map;
-    
+
     // Get plan map first
     let plan_map_expr = plan_to_rtfs_map(plan)?;
     let plan_map = match plan_map_expr {
@@ -146,7 +144,8 @@ pub fn plan_to_capability_map(
     });
 
     // Determine capability name
-    let capability_name = config.capability_name
+    let capability_name = config
+        .capability_name
         .or_else(|| plan.name.clone())
         .unwrap_or_else(|| "Unnamed Plan".to_string());
 
@@ -174,9 +173,10 @@ pub fn plan_to_capability_map(
     );
     cap_map.insert(
         MapKey::String(":description".to_string()),
-        Expression::Literal(Literal::String(
-            format!("Plan '{}' exposed as capability", capability_name),
-        )),
+        Expression::Literal(Literal::String(format!(
+            "Plan '{}' exposed as capability",
+            capability_name
+        ))),
     );
 
     // Inherit input/output schemas from plan
@@ -187,9 +187,7 @@ pub fn plan_to_capability_map(
         );
     }
 
-    if let Some(output_schema_expr) =
-        plan_map.get(&MapKey::String(":output-schema".to_string()))
-    {
+    if let Some(output_schema_expr) = plan_map.get(&MapKey::String(":output-schema".to_string())) {
         cap_map.insert(
             MapKey::String(":output-schema".to_string()),
             output_schema_expr.clone(),
@@ -231,9 +229,9 @@ pub fn plan_to_capability_map(
     );
 
     // Set language (from plan or config) - REQUIRED for local capabilities
-    let language = config.language.unwrap_or_else(|| {
-        plan_language_to_string(&plan.language)
-    });
+    let language = config
+        .language
+        .unwrap_or_else(|| plan_language_to_string(&plan.language));
     cap_map.insert(
         MapKey::String(":language".to_string()),
         Expression::Literal(Literal::String(language)),
@@ -351,11 +349,12 @@ pub fn plan_to_capability_map(
     // Validate local capability has language
     if let Err(e) = validate_local_capability_has_language(&cap_map_value) {
         // If validation fails, ensure language is set with default
-        ensure_language_for_local_capability(&mut cap_map_value, Some("rtfs20"))
-            .map_err(|_| e)?;
-        
+        ensure_language_for_local_capability(&mut cap_map_value, Some("rtfs20")).map_err(|_| e)?;
+
         // Update the Expression map with the ensured language
-        if let Some(lang_val) = cap_map_value.get(&rtfs::ast::MapKey::String(":language".to_string())) {
+        if let Some(lang_val) =
+            cap_map_value.get(&rtfs::ast::MapKey::String(":language".to_string()))
+        {
             if let Value::String(lang) = lang_val {
                 cap_map.insert(
                     MapKey::String(":language".to_string()),
@@ -369,14 +368,14 @@ pub fn plan_to_capability_map(
 }
 
 /// Prepare a plan for registration as a capability with automatic effects propagation
-/// 
+///
 /// This function:
 /// 1. Analyzes the plan's body to extract capability calls
 /// 2. Looks up capabilities using the provided lookup function to get their effects/permissions
 /// 3. Conservatively propagates all effects and permissions to the wrapper capability
 /// 4. Converts the plan to a capability map with propagated effects
 /// 5. Returns the capability ID and map for registration
-/// 
+///
 /// The `capability_lookup` function should return `Some(CapabilityManifest)` if the
 /// capability is found, or `None` if not found. If None is always returned,
 /// falls back to using plan's capabilities-required as effects.
@@ -421,26 +420,30 @@ where
 }
 
 /// Prepare a plan for registration as a capability
-/// 
+///
 /// This is a convenience function that:
 /// 1. Converts the plan to a capability map
 /// 2. Validates the conversion
 /// 3. Returns the capability ID for registration
-/// 
+///
 /// Note: Full implementation would need access to the marketplace and orchestrator
 /// to actually register and execute the plan. This is a placeholder that validates
 /// the conversion and returns the capability ID.
-/// 
+///
 /// To register, use the returned capability map with the marketplace's registration
 /// methods after converting it to a CapabilityManifest.
-/// 
+///
 /// For automatic effects propagation, use `prepare_plan_as_capability_with_propagation`.
 pub fn prepare_plan_as_capability(
     plan: &Plan,
     config: PlanAsCapabilityConfig,
 ) -> Result<(String, Expression), RtfsBridgeError> {
     // Use a dummy lookup function that always returns None
-    prepare_plan_as_capability_with_propagation(plan, config, Option::<fn(&str) -> Option<CapabilityManifest>>::None)
+    prepare_plan_as_capability_with_propagation(
+        plan,
+        config,
+        Option::<fn(&str) -> Option<CapabilityManifest>>::None,
+    )
 }
 
 #[cfg(test)]

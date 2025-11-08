@@ -153,8 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             prompts: Some(ccos::arbiter::prompt::PromptConfig::default()),
         }),
         delegation_config: None,
-        capability_config: ccos::arbiter::arbiter_config::CapabilityConfig::default(
-        ),
+        capability_config: ccos::arbiter::arbiter_config::CapabilityConfig::default(),
         security_config: ccos::arbiter::arbiter_config::SecurityConfig::default(),
         template_config: None,
     };

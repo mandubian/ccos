@@ -1,5 +1,5 @@
-use ccos::capabilities::{CapabilityExecutionPolicy, CapabilityProvider, CapabilityRegistry};
 use ccos::capabilities::providers::a2a_provider::{A2AConfig, A2AProvider};
+use ccos::capabilities::{CapabilityExecutionPolicy, CapabilityProvider, CapabilityRegistry};
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 
@@ -61,7 +61,7 @@ fn test_a2a_discover_capability() {
     assert!(result.is_ok());
     // Should return a map with agents list
     match result.unwrap() {
-        Value::Map(_) => {},
+        Value::Map(_) => {}
         other => panic!("Expected map, got {:?}", other),
     }
 }
@@ -106,4 +106,3 @@ fn test_a2a_metadata() {
     assert!(metadata.description.contains("Agent-to-Agent"));
     assert!(!metadata.dependencies.is_empty());
 }
-

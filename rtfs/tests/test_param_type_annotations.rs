@@ -8,11 +8,21 @@ use rtfs::runtime::values::Value;
 use rtfs::RuntimeStrategy; // bring .run() into scope for IR strategy
 use std::sync::Arc;
 
-fn eval_ast_and_ir(code: &str) -> (Result<ExecutionOutcome, String>, Result<ExecutionOutcome, String>) {
+fn eval_ast_and_ir(
+    code: &str,
+) -> (
+    Result<ExecutionOutcome, String>,
+    Result<ExecutionOutcome, String>,
+) {
     // Parse to AST
     let parsed = match parser::parse_expression(code) {
         Ok(ast) => ast,
-        Err(e) => return (Err(format!("Parse error: {:?}", e)), Err("parse failed".into())),
+        Err(e) => {
+            return (
+                Err(format!("Parse error: {:?}", e)),
+                Err("parse failed".into()),
+            )
+        }
     };
 
     // AST evaluator
@@ -80,18 +90,34 @@ fn test_fn_return_type_annotation_enforced() {
     // Declares return : Int but returns a string -> should error
     let code_bad = r#"(let [f (fn [x : Int] : Int (str x))] (f 1))"#;
     let (ast_bad, ir_bad) = eval_ast_and_ir(code_bad);
-    assert!(ast_bad.is_err(), "AST should reject mismatched return type: {:?}", ast_bad);
-    assert!(ir_bad.is_err(), "IR should reject mismatched return type: {:?}", ir_bad);
+    assert!(
+        ast_bad.is_err(),
+        "AST should reject mismatched return type: {:?}",
+        ast_bad
+    );
+    assert!(
+        ir_bad.is_err(),
+        "IR should reject mismatched return type: {:?}",
+        ir_bad
+    );
 
     // Declares return : Int and returns (+ x 1) -> ok
     let code_ok = r#"(let [f (fn [x : Int] : Int (+ x 1))] (f 1))"#;
     let (ast_ok, ir_ok) = eval_ast_and_ir(code_ok);
-    assert!(ast_ok.is_ok(), "AST should accept correct return type: {:?}", ast_ok);
+    assert!(
+        ast_ok.is_ok(),
+        "AST should accept correct return type: {:?}",
+        ast_ok
+    );
     match ast_ok.unwrap() {
         ExecutionOutcome::Complete(Value::Integer(2)) => {}
         other => panic!("Expected 2, got {:?}", other),
     }
-    assert!(ir_ok.is_ok(), "IR should accept correct return type: {:?}", ir_ok);
+    assert!(
+        ir_ok.is_ok(),
+        "IR should accept correct return type: {:?}",
+        ir_ok
+    );
     match ir_ok.unwrap() {
         ExecutionOutcome::Complete(Value::Integer(2)) => {}
         other => panic!("Expected 2, got {:?}", other),

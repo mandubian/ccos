@@ -21,10 +21,10 @@
 //! 2. Call tools/list with session ID
 //! 3. Terminate session when done
 
-use rtfs::ast::{Keyword, MapTypeEntry, TypeExpr};
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::synthesis::mcp_session::{MCPServerInfo, MCPSessionManager};
-use crate::synthesis::schema_serializer::type_expr_to_rtfs_pretty;
+use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
+use rtfs::ast::{Keyword, MapTypeEntry, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -261,7 +261,7 @@ impl MCPIntrospector {
             tool.tool_name.replace("-", "_")
         );
 
-        let mut effects = vec!["network_request".to_string(), "mcp_call".to_string()];
+        let effects = vec!["network_request".to_string(), "mcp_call".to_string()];
 
         let mut metadata = HashMap::new();
         metadata.insert(
@@ -314,15 +314,13 @@ impl MCPIntrospector {
             input_schema: tool.input_schema.clone(),
             output_schema: tool.output_schema.clone(),
             attestation: None,
-            provenance: Some(
-                crate::capability_marketplace::types::CapabilityProvenance {
-                    source: "mcp_introspector".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    content_hash: format!("mcp_{}_{}", introspection.server_name, tool.tool_name),
-                    custody_chain: vec!["mcp_introspector".to_string()],
-                    registered_at: chrono::Utc::now(),
-                },
-            ),
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "mcp_introspector".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!("mcp_{}_{}", introspection.server_name, tool.tool_name),
+                custody_chain: vec!["mcp_introspector".to_string()],
+                registered_at: chrono::Utc::now(),
+            }),
             permissions: vec!["network.http".to_string()],
             effects,
             metadata,
@@ -402,13 +400,13 @@ impl MCPIntrospector {
         let input_schema_str = capability
             .input_schema
             .as_ref()
-            .map(|s| type_expr_to_rtfs_pretty(s))
+            .map(type_expr_to_rtfs_compact)
             .unwrap_or_else(|| ":any".to_string());
 
         let output_schema_str = capability
             .output_schema
             .as_ref()
-            .map(|s| type_expr_to_rtfs_pretty(s))
+            .map(type_expr_to_rtfs_compact)
             .unwrap_or_else(|| ":any".to_string());
 
         let permissions_str = if capability.permissions.is_empty() {
@@ -578,9 +576,7 @@ impl MCPIntrospector {
                 input_schema: Some(TypeExpr::Map {
                     entries: vec![MapTypeEntry {
                         key: Keyword("query".to_string()),
-                        value_type: Box::new(TypeExpr::Primitive(
-                            rtfs::ast::PrimitiveType::String,
-                        )),
+                        value_type: Box::new(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
                         optional: false,
                     }],
                     wildcard: None,
@@ -588,9 +584,7 @@ impl MCPIntrospector {
                 output_schema: Some(TypeExpr::Map {
                     entries: vec![MapTypeEntry {
                         key: Keyword("result".to_string()),
-                        value_type: Box::new(TypeExpr::Primitive(
-                            rtfs::ast::PrimitiveType::String,
-                        )),
+                        value_type: Box::new(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
                         optional: false,
                     }],
                     wildcard: None,

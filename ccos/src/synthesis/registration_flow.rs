@@ -13,12 +13,10 @@ use crate::capability_marketplace::types::{
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::synthesis::governance_policies::GovernancePolicy;
 use crate::synthesis::static_analyzers::StaticAnalyzer;
-use crate::synthesis::validation_harness::{
-    ValidationHarness, ValidationResult, ValidationStatus,
-};
+use crate::synthesis::validation_harness::{ValidationHarness, ValidationResult, ValidationStatus};
+use chrono::Utc;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::values::Value;
-use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -386,8 +384,7 @@ impl RegistrationFlow {
             .issues
             .iter()
             .filter(|issue| {
-                issue.severity
-                    == crate::synthesis::validation_harness::IssueSeverity::Critical
+                issue.severity == crate::synthesis::validation_harness::IssueSeverity::Critical
             })
             .count();
 

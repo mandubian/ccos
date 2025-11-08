@@ -1,7 +1,7 @@
 //! Shared utilities for example demos
-use reqwest::blocking::Client;
 use ccos::delegation::ModelProvider;
 use ccos::remote_models::RemoteModelConfig;
+use reqwest::blocking::Client;
 
 /// Real OpenRouter provider that makes actual API calls
 #[derive(Debug)]

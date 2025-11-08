@@ -9,12 +9,12 @@ use super::skill_extractor::{
 };
 use super::status::{STATUS_PROCESSING, STATUS_READY_FOR_EXECUTION};
 use super::InteractionTurn;
+use crate::capability_marketplace::types::CapabilityManifest;
+use crate::rtfs_bridge::extractors::capability_def_to_rtfs_string;
 use rtfs::ast::{
     CapabilityDefinition, DoExpr, Expression, Keyword, LetBinding, LetExpr, Literal, MapKey,
     Property, Symbol,
 };
-use crate::capability_marketplace::types::CapabilityManifest;
-use crate::rtfs_bridge::extractors::capability_def_to_rtfs_string;
 use std::collections::HashMap;
 
 /// Generate a collector capability that asks sequential questions.

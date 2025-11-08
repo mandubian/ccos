@@ -3,16 +3,12 @@
 //! This tool implements advanced CLI commands for managing missing capability resolution,
 //! monitoring, and observability as part of Phase 8 enhancements.
 
-use clap::{Parser, Subcommand};
-use ccos::capability_marketplace::types::{
-    CapabilityManifest, LocalCapability, ProviderType,
-};
+use ccos::capability_marketplace::types::{CapabilityManifest, LocalCapability, ProviderType};
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::checkpoint_archive::CheckpointArchive;
 use ccos::synthesis::feature_flags::MissingCapabilityConfig;
-use ccos::synthesis::missing_capability_resolver::{
-    MissingCapabilityResolver, ResolverConfig,
-};
+use ccos::synthesis::missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig};
+use clap::{Parser, Subcommand};
 use rtfs::runtime::values::Value;
 use serde_json;
 use std::collections::{HashMap, HashSet};
@@ -656,9 +652,7 @@ async fn handle_cleanup(
     Ok(())
 }
 
-fn calculate_success_rate(
-    stats: &ccos::synthesis::missing_capability_resolver::QueueStats,
-) -> f64 {
+fn calculate_success_rate(stats: &ccos::synthesis::missing_capability_resolver::QueueStats) -> f64 {
     let total = stats.pending_count + stats.in_progress_count + stats.failed_count;
     if total == 0 {
         100.0

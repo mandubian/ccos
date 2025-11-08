@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 
-use rtfs::ast::{MapKey, PrimitiveType, TypeExpr};
 use crate::capabilities::provider::{
     CapabilityDescriptor, CapabilityProvider, ExecutionContext, HealthStatus, NetworkAccess,
     ProviderConfig, ProviderMetadata, ResourceLimits, SecurityRequirements,
 };
+use rtfs::ast::{MapKey, PrimitiveType, TypeExpr};
 use rtfs::runtime::{RuntimeError, RuntimeResult, Value};
 
 #[derive(Debug, Default)]
@@ -99,10 +99,7 @@ impl CapabilityProvider for LocalLlmProvider {
         }
     }
 
-    fn initialize(
-        &mut self,
-    _config: &ProviderConfig,
-    ) -> Result<(), String> {
+    fn initialize(&mut self, _config: &ProviderConfig) -> Result<(), String> {
         Ok(())
     }
 

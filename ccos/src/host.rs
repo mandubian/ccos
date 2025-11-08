@@ -313,6 +313,8 @@ impl HostInterface for RuntimeHost {
         let name_owned = name.to_string();
         let args_owned: Vec<Value> = args.to_vec();
         let marketplace = self.capability_marketplace.clone();
+        let runtime_handle = tokio::runtime::Handle::try_current().ok();
+
         let result = std::thread::spawn(move || {
             let fut = async move {
                 let args_value = Value::List(args_owned);
@@ -320,7 +322,12 @@ impl HostInterface for RuntimeHost {
                     .execute_capability(&name_owned, &args_value)
                     .await
             };
-            futures::executor::block_on(fut)
+
+            if let Some(handle) = runtime_handle {
+                handle.block_on(fut)
+            } else {
+                futures::executor::block_on(fut)
+            }
         })
         .join()
         .map_err(|_| {

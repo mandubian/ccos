@@ -4,6 +4,7 @@
 //! implemented in the submodules listed below.
 
 pub mod capabilities;
+pub mod capability_marketplace;
 pub mod environment;
 pub mod error;
 pub mod evaluator;
@@ -14,11 +15,10 @@ pub mod microvm;
 pub mod module_runtime;
 pub mod param_binding;
 pub mod pure_host;
-pub mod capability_marketplace;
 pub mod secure_stdlib;
 pub mod security;
-pub mod stubs;
 pub mod stdlib;
+pub mod stubs;
 pub mod type_validator;
 pub mod values;
 
@@ -134,7 +134,7 @@ impl Runtime {
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-    let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
+        let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!(
@@ -154,7 +154,7 @@ impl Runtime {
             Ok(p) => p,
             Err(e) => return Err(RuntimeError::Generic(format!("Parse error: {}", e))),
         };
-    let module_registry = ModuleRegistry::new();
+        let module_registry = ModuleRegistry::new();
         crate::runtime::stdlib::load_stdlib(&module_registry)?;
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
@@ -255,7 +255,9 @@ impl RTFSRuntime for Runtime {
         match self.run(&expr) {
             Ok(outcome) => match outcome {
                 ExecutionOutcome::Complete(value) => Ok(value),
-                _ => Err(RuntimeError::NotImplemented("Non-complete outcomes not yet handled".to_string())),
+                _ => Err(RuntimeError::NotImplemented(
+                    "Non-complete outcomes not yet handled".to_string(),
+                )),
             },
             Err(e) => Err(e),
         }

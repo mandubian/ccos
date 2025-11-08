@@ -5,14 +5,17 @@ use crate::ast::{
     Keyword, LetExpr, Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, Symbol, TopLevel,
     TryCatchExpr, WithResourceExpr,
 };
-use crate::runtime::stubs::{ConflictResolution, ExecutionResultStruct, SimpleAgentCard, SimpleCachePolicy, SimpleDiscoveryOptions, SimpleDiscoveryQuery};
-use crate::runtime::security::IsolationLevel;
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::execution_outcome::{CallMetadata, ExecutionOutcome, HostCall};
 use crate::runtime::host_interface::HostInterface;
 use crate::runtime::module_runtime::ModuleRegistry;
+use crate::runtime::security::IsolationLevel;
 use crate::runtime::security::RuntimeContext;
+use crate::runtime::stubs::{
+    ConflictResolution, ExecutionResultStruct, SimpleAgentCard, SimpleCachePolicy,
+    SimpleDiscoveryOptions, SimpleDiscoveryQuery,
+};
 use crate::runtime::type_validator::{
     TypeCheckingConfig, TypeValidator, ValidationLevel, VerificationContext,
 };
@@ -1200,7 +1203,7 @@ impl Evaluator {
                         &step_action_id,
                         "Host call required during loop condition",
                     )?;
-                        // ContextManager removed - step lifecycle handled by host
+                    // ContextManager removed - step lifecycle handled by host
                     self.host.clear_step_exposure_override();
                     return Ok(ExecutionOutcome::RequiresHost(hc));
                 }
@@ -1231,7 +1234,7 @@ impl Evaluator {
                         &step_action_id,
                         "Host call required during loop body",
                     )?;
-                        // ContextManager removed - step lifecycle handled by host
+                    // ContextManager removed - step lifecycle handled by host
                     self.host.clear_step_exposure_override();
                     return Ok(ExecutionOutcome::RequiresHost(hc));
                 }
@@ -1326,12 +1329,16 @@ impl Evaluator {
                         merge_policy = match val {
                             Value::Keyword(crate::ast::Keyword(s)) | Value::String(s) => {
                                 match s.as_str() {
-                                    "keep-existing" | "keep_existing" | "parent-wins" | "parent_wins" => ConflictResolution::KeepExisting,
-                                    "overwrite" | "child-wins" | "child_wins" => ConflictResolution::Overwrite,
+                                    "keep-existing" | "keep_existing" | "parent-wins"
+                                    | "parent_wins" => ConflictResolution::KeepExisting,
+                                    "overwrite" | "child-wins" | "child_wins" => {
+                                        ConflictResolution::Overwrite
+                                    }
                                     "merge" => ConflictResolution::Merge,
                                     other => {
                                         return Err(RuntimeError::InvalidArguments {
-                                            expected: ":keep-existing | :overwrite | :merge".to_string(),
+                                            expected: ":keep-existing | :overwrite | :merge"
+                                                .to_string(),
                                             actual: other.to_string(),
                                         });
                                     }
@@ -1869,15 +1876,16 @@ impl Evaluator {
                     if closure.param_type_annotations.len() == closure.param_patterns.len() {
                         for i in 0..required_param_count {
                             if let Some(t) = closure.param_type_annotations[i].clone() {
-                                self
-                                    .type_validator
+                                self.type_validator
                                     .validate_with_config(
                                         &args[i],
                                         &t,
                                         &self.type_config,
                                         &VerificationContext::default(),
                                     )
-                                    .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))?;
+                                    .map_err(|e| {
+                                        RuntimeError::TypeValidationError(e.to_string())
+                                    })?;
                             }
                         }
                     }
@@ -1896,18 +1904,19 @@ impl Evaluator {
                     // Validate variadic items against their annotation if present
                     if let Some(var_type) = &closure.variadic_param_type {
                         for (j, a) in rest_args.iter().enumerate() {
-                            self
-                                .type_validator
+                            self.type_validator
                                 .validate_with_config(
                                     a,
                                     var_type,
                                     &self.type_config,
                                     &VerificationContext::default(),
                                 )
-                                .map_err(|e| RuntimeError::TypeValidationError(format!(
-                                    "variadic argument {}: {}",
-                                    j, e
-                                )))?;
+                                .map_err(|e| {
+                                    RuntimeError::TypeValidationError(format!(
+                                        "variadic argument {}: {}",
+                                        j, e
+                                    ))
+                                })?;
                         }
                     }
                     func_env.define(variadic_symbol, Value::List(rest_args));
@@ -1924,15 +1933,16 @@ impl Evaluator {
                     if closure.param_type_annotations.len() == closure.param_patterns.len() {
                         for (i, arg) in args.iter().enumerate() {
                             if let Some(t) = closure.param_type_annotations[i].clone() {
-                                self
-                                    .type_validator
+                                self.type_validator
                                     .validate_with_config(
                                         arg,
                                         &t,
                                         &self.type_config,
                                         &VerificationContext::default(),
                                     )
-                                    .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))?;
+                                    .map_err(|e| {
+                                        RuntimeError::TypeValidationError(e.to_string())
+                                    })?;
                             }
                         }
                     }
@@ -1948,8 +1958,7 @@ impl Evaluator {
                     ExecutionOutcome::Complete(v) => {
                         // Enforce return type if declared
                         if let Some(ret_t) = &closure.return_type {
-                            self
-                                .type_validator
+                            self.type_validator
                                 .validate_with_config(
                                     &v,
                                     ret_t,
@@ -2516,30 +2525,32 @@ impl Evaluator {
             .as_ref()
             .map(|p| self.extract_param_symbol(&p.pattern));
 
-        Ok(ExecutionOutcome::Complete(Value::Function(Function::new_closure(
-            fn_expr
-                .params
-                .iter()
-                .map(|p| self.extract_param_symbol(&p.pattern))
-                .collect(),
-            fn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
-            fn_expr
-                .params
-                .iter()
-                .map(|p| p.type_annotation.clone())
-                .collect(),
-            variadic_param,
-            fn_expr
-                .variadic_param
-                .as_ref()
-                .and_then(|p| p.type_annotation.clone()),
-            Box::new(Expression::Do(DoExpr {
-                expressions: fn_expr.body.clone(),
-            })),
-            Arc::new(env.clone()),
-            fn_expr.delegation_hint.clone(),
-            fn_expr.return_type.clone(),
-        ))))
+        Ok(ExecutionOutcome::Complete(Value::Function(
+            Function::new_closure(
+                fn_expr
+                    .params
+                    .iter()
+                    .map(|p| self.extract_param_symbol(&p.pattern))
+                    .collect(),
+                fn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
+                fn_expr
+                    .params
+                    .iter()
+                    .map(|p| p.type_annotation.clone())
+                    .collect(),
+                variadic_param,
+                fn_expr
+                    .variadic_param
+                    .as_ref()
+                    .and_then(|p| p.type_annotation.clone()),
+                Box::new(Expression::Do(DoExpr {
+                    expressions: fn_expr.body.clone(),
+                })),
+                Arc::new(env.clone()),
+                fn_expr.delegation_hint.clone(),
+                fn_expr.return_type.clone(),
+            ),
+        )))
     }
 
     fn eval_with_resource(
@@ -3482,10 +3493,12 @@ impl Evaluator {
         if let Some(metadata) = &agent_card.metadata {
             let metadata_map: std::collections::HashMap<_, _> = metadata
                 .iter()
-                .map(|(k, v)| (
-                    crate::ast::MapKey::String(k.clone()),
-                    Value::String(v.clone()),
-                ))
+                .map(|(k, v)| {
+                    (
+                        crate::ast::MapKey::String(k.clone()),
+                        Value::String(v.clone()),
+                    )
+                })
                 .collect();
             map.insert(
                 crate::ast::MapKey::Keyword(crate::ast::Keyword("metadata".to_string())),
@@ -3965,7 +3978,7 @@ impl Default for Evaluator {
         // Use pure host for standalone RTFS (no CCOS dependencies)
         use crate::runtime::pure_host::create_pure_host;
         let host = create_pure_host();
-        
+
         Self::new(module_registry, security_context, host)
     }
 }

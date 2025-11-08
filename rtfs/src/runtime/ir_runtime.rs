@@ -13,8 +13,8 @@ use crate::ir::converter::IrConverter;
 use crate::ir::core::{IrNode, IrPattern};
 use crate::runtime::host_interface::HostInterface;
 use crate::runtime::security::RuntimeContext;
-use crate::runtime::RuntimeStrategy;
 use crate::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
+use crate::runtime::RuntimeStrategy;
 use std::collections::HashMap;
 use std::sync::Arc;
 // L4AwareDelegationEngine is CCOS-specific, not used in pure RTFS
@@ -31,8 +31,8 @@ pub struct IrStrategy {
 
 impl IrStrategy {
     pub fn new(module_registry: Arc<ModuleRegistry>) -> Self {
-    // Ensure the standard library is loaded into the provided module registry
-    let _ = crate::runtime::stdlib::load_stdlib(&module_registry);
+        // Ensure the standard library is loaded into the provided module registry
+        let _ = crate::runtime::stdlib::load_stdlib(&module_registry);
         // Load stdlib into the module registry if not already loaded
         // Note: Since ModuleRegistry is Arc-wrapped, we ensure stdlib is loaded when needed
         // The module registry will handle stdlib loading lazily via module resolution
@@ -152,19 +152,23 @@ impl IrRuntime {
                 // Simplify: treat as Any for now; extend if needed
                 TypeExpr::Any
             }
-            IT::Function { param_types, variadic_param_type, return_type } => {
-                TypeExpr::Function {
-                    param_types: param_types
-                        .iter()
-                        .map(|t| crate::ast::ParamType::Simple(Box::new(Self::ir_to_type_expr(t))))
-                        .collect(),
-                    variadic_param_type: variadic_param_type
-                        .as_ref()
-                        .map(|t| Box::new(Self::ir_to_type_expr(t))),
-                    return_type: Box::new(Self::ir_to_type_expr(return_type)),
-                }
+            IT::Function {
+                param_types,
+                variadic_param_type,
+                return_type,
+            } => TypeExpr::Function {
+                param_types: param_types
+                    .iter()
+                    .map(|t| crate::ast::ParamType::Simple(Box::new(Self::ir_to_type_expr(t))))
+                    .collect(),
+                variadic_param_type: variadic_param_type
+                    .as_ref()
+                    .map(|t| Box::new(Self::ir_to_type_expr(t))),
+                return_type: Box::new(Self::ir_to_type_expr(return_type)),
+            },
+            IT::Union(types) => {
+                TypeExpr::Union(types.iter().map(|t| Self::ir_to_type_expr(t)).collect())
             }
-            IT::Union(types) => TypeExpr::Union(types.iter().map(|t| Self::ir_to_type_expr(t)).collect()),
             IT::Intersection(types) => {
                 TypeExpr::Intersection(types.iter().map(|t| Self::ir_to_type_expr(t)).collect())
             }
@@ -296,10 +300,13 @@ impl IrRuntime {
                 ..
             } => {
                 // Extract parameter and return type annotations from IR
-                let mut param_types: Vec<Option<crate::ir::core::IrType>> = Vec::with_capacity(params.len());
+                let mut param_types: Vec<Option<crate::ir::core::IrType>> =
+                    Vec::with_capacity(params.len());
                 for p in params.iter() {
                     match p {
-                        IrNode::Param { type_annotation, .. } => {
+                        IrNode::Param {
+                            type_annotation, ..
+                        } => {
                             param_types.push(type_annotation.clone());
                         }
                         _ => param_types.push(None),
@@ -307,12 +314,12 @@ impl IrRuntime {
                 }
 
                 // Variadic param type (if present)
-                let variadic_type = variadic_param
-                    .as_ref()
-                    .and_then(|b| match b.as_ref() {
-                        IrNode::Param { type_annotation, .. } => type_annotation.clone(),
-                        _ => None,
-                    });
+                let variadic_type = variadic_param.as_ref().and_then(|b| match b.as_ref() {
+                    IrNode::Param {
+                        type_annotation, ..
+                    } => type_annotation.clone(),
+                    _ => None,
+                });
 
                 // Return type (if available on the lambda's type)
                 let return_type = match ir_type {
@@ -689,13 +696,8 @@ impl IrRuntime {
                     // Check if pattern matches
                     if self.pattern_matches(&clause.pattern, &value)? {
                         // Bind pattern variables to environment
-                        self.execute_destructure(
-                            &clause.pattern,
-                            &value,
-                            env,
-                            module_registry,
-                        )?;
-                        
+                        self.execute_destructure(&clause.pattern, &value, env, module_registry)?;
+
                         // Check guard condition if present
                         if let Some(guard) = &clause.guard {
                             let guard_result =
@@ -1836,8 +1838,7 @@ impl IrRuntime {
             for i in 0..fixed_arity {
                 if let Some(Some(ir_t)) = ir_func.param_type_annotations.get(i) {
                     let texpr = Self::ir_to_type_expr(ir_t);
-                    self
-                        .type_validator
+                    self.type_validator
                         .validate_with_config(
                             &args[i],
                             &texpr,
@@ -1851,8 +1852,7 @@ impl IrRuntime {
             if let Some(var_t) = &ir_func.variadic_param_type {
                 let texpr = Self::ir_to_type_expr(var_t);
                 for i in fixed_arity..args.len() {
-                    self
-                        .type_validator
+                    self.type_validator
                         .validate_with_config(
                             &args[i],
                             &texpr,
@@ -1952,8 +1952,7 @@ impl IrRuntime {
                     // Enforce return type at function boundary if annotated
                     if let Some(ir_ret) = &ir_func.return_type {
                         let texpr = Self::ir_to_type_expr(ir_ret);
-                        self
-                            .type_validator
+                        self.type_validator
                             .validate_with_config(
                                 &result,
                                 &texpr,
@@ -2325,31 +2324,39 @@ impl IrRuntime {
                                     // Validate argument types for nested IR lambda if annotations exist
                                     if !next_ir.param_type_annotations.is_empty() {
                                         for i in 0..next_fixed {
-                                            if let Some(Some(ir_t)) = next_ir.param_type_annotations.get(i) {
+                                            if let Some(Some(ir_t)) =
+                                                next_ir.param_type_annotations.get(i)
+                                            {
                                                 let texpr = Self::ir_to_type_expr(ir_t);
-                                                self
-                                                    .type_validator
+                                                self.type_validator
                                                     .validate_with_config(
                                                         &arg_vals[i],
                                                         &texpr,
                                                         &self.type_config,
                                                         &VerificationContext::default(),
                                                     )
-                                                    .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))?;
+                                                    .map_err(|e| {
+                                                        RuntimeError::TypeValidationError(
+                                                            e.to_string(),
+                                                        )
+                                                    })?;
                                             }
                                         }
                                         if let Some(var_t) = &next_ir.variadic_param_type {
                                             let texpr = Self::ir_to_type_expr(var_t);
                                             for i in next_fixed..arg_vals.len() {
-                                                self
-                                                    .type_validator
+                                                self.type_validator
                                                     .validate_with_config(
                                                         &arg_vals[i],
                                                         &texpr,
                                                         &self.type_config,
                                                         &VerificationContext::default(),
                                                     )
-                                                    .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))?;
+                                                    .map_err(|e| {
+                                                        RuntimeError::TypeValidationError(
+                                                            e.to_string(),
+                                                        )
+                                                    })?;
                                             }
                                         }
                                     }
@@ -3888,8 +3895,7 @@ impl IrRuntime {
             if closure.param_type_annotations.len() == closure.param_patterns.len() {
                 for i in 0..required_param_count {
                     if let Some(t) = closure.param_type_annotations[i].clone() {
-                        self
-                            .type_validator
+                        self.type_validator
                             .validate_with_config(
                                 &args[i],
                                 &t,
@@ -3915,18 +3921,19 @@ impl IrRuntime {
             // Validate variadic items against their annotation if present
             if let Some(var_type) = &closure.variadic_param_type {
                 for (j, a) in rest_args.iter().enumerate() {
-                    self
-                        .type_validator
+                    self.type_validator
                         .validate_with_config(
                             a,
                             var_type,
                             &self.type_config,
                             &VerificationContext::default(),
                         )
-                        .map_err(|e| RuntimeError::TypeValidationError(format!(
-                            "variadic argument {}: {}",
-                            j, e
-                        )))?;
+                        .map_err(|e| {
+                            RuntimeError::TypeValidationError(format!(
+                                "variadic argument {}: {}",
+                                j, e
+                            ))
+                        })?;
                 }
             }
             func_env.define(variadic_symbol.0.clone(), Value::List(rest_args));
@@ -3943,8 +3950,7 @@ impl IrRuntime {
             if closure.param_type_annotations.len() == closure.param_patterns.len() {
                 for (i, arg) in args.iter().enumerate() {
                     if let Some(t) = closure.param_type_annotations[i].clone() {
-                        self
-                            .type_validator
+                        self.type_validator
                             .validate_with_config(
                                 arg,
                                 &t,
@@ -3961,12 +3967,12 @@ impl IrRuntime {
         }
 
         // Execute function body by evaluating the AST contained in the closure body
-        let result = self.execute_closure_body(&closure.body, &mut func_env, module_registry)
+        let result = self
+            .execute_closure_body(&closure.body, &mut func_env, module_registry)
             .and_then(|outcome| match outcome {
                 ExecutionOutcome::Complete(v) => {
                     if let Some(ret_t) = &closure.return_type {
-                        self
-                            .type_validator
+                        self.type_validator
                             .validate_with_config(
                                 &v,
                                 ret_t,
@@ -4231,7 +4237,9 @@ impl IrRuntime {
                     Vec::with_capacity(params.len());
                 for p in params.iter() {
                     match p {
-                        IrNode::Param { type_annotation, .. } => {
+                        IrNode::Param {
+                            type_annotation, ..
+                        } => {
                             param_types.push(type_annotation.clone());
                         }
                         _ => param_types.push(None),
@@ -4239,12 +4247,12 @@ impl IrRuntime {
                 }
 
                 // Variadic param type (if present)
-                let variadic_type = variadic_param
-                    .as_ref()
-                    .and_then(|b| match b.as_ref() {
-                        IrNode::Param { type_annotation, .. } => type_annotation.clone(),
-                        _ => None,
-                    });
+                let variadic_type = variadic_param.as_ref().and_then(|b| match b.as_ref() {
+                    IrNode::Param {
+                        type_annotation, ..
+                    } => type_annotation.clone(),
+                    _ => None,
+                });
 
                 // Return type from lambda's IrType
                 let return_type = match ir_type {
