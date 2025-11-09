@@ -12,12 +12,12 @@ The original specifications in `../specs/` were written before the decoupling an
 
 ## Philosophy
 
-RTFS 2.0 is a **pure functional language** with a **strict host boundary**:
+RTFS 2.0 is a **pure functional language** designed to be securely hosted by a governing runtime like CCOS. It operates on a principle of a **strict host boundary**:
 
-- **Pure Kernel**: All RTFS code is referentially transparent
-- **Host Yielding**: Side effects are mediated through CCOS capabilities
-- **Security First**: Mandatory governance and audit trails
-- **Minimal & Extensible**: Small core with powerful extension mechanisms
+- **Pure Kernel**: All RTFS code is referentially transparent. It computes values and has no direct access to the outside world.
+- **Host Interaction**: Side effects and external actions are handled by the host (e.g., CCOS) through a formal `ExecutionOutcome::RequiresHost` mechanism. RTFS yields control, and the host executes the requested action.
+- **Governed Execution**: The host is responsible for security, governance, and auditing of all external effects requested by RTFS code.
+- **Minimal & Extensible**: The language has a small core, but its homoiconic nature allows it to be extended with powerful metaprogramming features.
 
 ## Design Purpose: LLM-Native Task Execution
 
@@ -29,11 +29,12 @@ RTFS 2.0 is architected as a **language designed for LLMs to generate data struc
 - **Type System**: Safety guardrails that catch LLM generation errors while remaining optional
 - **Homoiconic Design**: Code-as-data enables LLMs to analyze and transform their own outputs
 
-### Intent-Based Task Execution
-- **Host Boundary**: Clear separation between reasoning logic and external task actions
-- **Capability System**: Governed access to external services for verifiable task fulfillment
-- **Causal Chain**: Complete audit trail of LLM-generated workflow execution
-- **Governance**: Security validation of generated code against user intent
+### Enabling Governed Task Execution
+RTFS is designed to be a safe execution target for LLM-generated code. Its architecture enables a host system like CCOS to provide:
+- **Clear Host Boundary**: A formal separation between pure computation (RTFS) and external actions (host).
+- **Governed Capabilities**: RTFS code requests actions from the host, which is responsible for governing access to external services.
+- **Auditable Execution**: The host can build a complete audit trail (like CCOS's Causal Chain) of the workflow, as every effectful step is an explicit request from RTFS.
+- **Security Validation**: The host can validate every requested action against security policies before execution.
 
 ### Human-LLM-System Synergy
 - **Humans Specify**: High-level intents in natural language
@@ -62,8 +63,8 @@ Evaluation model, scoping rules, and runtime architecture.
 - Algorithmic type checking specification
 - References to Pierce, Cardelli, Davies & Pfenning
 
-### 04-host-boundary-and-capabilities.md
-Host interaction mechanisms, capability system, and security model.
+### 04-host-boundary.md
+Host interaction mechanisms and the formal model for requesting external actions.
 
 ### 05-macro-system.md
 Compile-time metaprogramming, quasiquote, and hygienic macros.
