@@ -7,6 +7,7 @@
 pub mod canonical_schemas;
 pub mod converters;
 pub mod effects_propagation;
+pub mod error_explainer;
 pub mod errors;
 pub mod extractors;
 pub mod graph_interpreter;
@@ -18,6 +19,7 @@ pub mod validators;
 pub use canonical_schemas::*;
 pub use converters::*;
 pub use effects_propagation::*;
+pub use error_explainer::*;
 pub use errors::*;
 pub use extractors::*;
 pub use graph_interpreter::*;
