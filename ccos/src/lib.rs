@@ -64,5 +64,6 @@ pub use crate::arbiter::delegating_arbiter;
 pub mod ccos_core;
 
 // Re-export the main CCOS system
+pub use crate::ccos_core::PlanAutoRepairOptions;
 pub use crate::ccos_core::CCOS;
 pub use crate::types::ExecutionResult;

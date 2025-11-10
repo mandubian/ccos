@@ -376,6 +376,7 @@ dependencies = [
 name = "ccos"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-recursion",
  "async-trait",
  "atty",
@@ -396,6 +397,7 @@ dependencies = [
  "llama_cpp",
  "log",
  "num_cpus",
+ "once_cell",
  "ordered-float",
  "pretty_assertions",
  "rand",

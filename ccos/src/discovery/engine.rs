@@ -8,9 +8,11 @@ use crate::discovery::introspection_cache::IntrospectionCache;
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::discovery::recursive_synthesizer::RecursiveSynthesizer;
 use crate::intent_graph::IntentGraph;
+use crate::synthesis::primitives::PrimitiveContext;
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
 use regex;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+use serde_json::Value as JsonValue;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -1724,6 +1726,50 @@ impl DiscoveryEngine {
             hints.extend(param_hints);
         }
 
+        if manifest.metadata.get("primitive_kind").is_some() {
+            if let Some(primitive_hint) = manifest.metadata.get("primitive_kind") {
+                hints.push(format!("Synthesized primitive: {}", primitive_hint));
+            }
+
+            let annotations = Self::primitive_annotations_value(manifest);
+            let required_inputs = Self::schema_bindings(manifest.input_schema.as_ref());
+            let expected_outputs = Self::schema_bindings(manifest.output_schema.as_ref());
+
+            if !required_inputs.is_empty()
+                || !expected_outputs.is_empty()
+                || annotations != JsonValue::Null
+            {
+                let primitive_need = CapabilityNeed::new(
+                    manifest.id.clone(),
+                    required_inputs.clone(),
+                    expected_outputs.clone(),
+                    manifest.description.clone(),
+                )
+                .with_annotations(annotations.clone())
+                .with_schemas(
+                    manifest.input_schema.clone(),
+                    manifest.output_schema.clone(),
+                );
+
+                let ctx = PrimitiveContext::from_manifest(&primitive_need, manifest, annotations);
+
+                if !ctx.input_schemas.is_empty() {
+                    let bindings: Vec<String> = ctx
+                        .input_schemas
+                        .keys()
+                        .map(|binding| binding.trim_start_matches(':').to_string())
+                        .collect();
+                    if !bindings.is_empty() {
+                        hints.push(format!("Inputs required: {}", bindings.join(", ")));
+                    }
+                }
+
+                if let Some(metadata) = Self::primitive_metadata_value(manifest) {
+                    hints.extend(Self::primitive_metadata_hints(&metadata));
+                }
+            }
+        }
+
         // Extract any parameter hints from metadata
         if let Some(hint) = manifest.metadata.get("parameter_hints") {
             hints.push(hint.clone());
@@ -1807,6 +1853,17 @@ impl DiscoveryEngine {
     fn extract_parameters_from_manifest(&self, manifest: &CapabilityManifest) -> Vec<String> {
         let mut parameters = Vec::new();
 
+        // Prefer primitive-aware extraction if metadata is available
+        if manifest.metadata.get("primitive_kind").is_some() {
+            if let Some(primitive_params) =
+                self.extract_parameters_from_primitive_manifest(manifest)
+            {
+                if !primitive_params.is_empty() {
+                    return primitive_params;
+                }
+            }
+        }
+
         // Try to extract from input schema if available
         if let Some(ref schema) = manifest.input_schema {
             parameters.extend(self.extract_params_from_type_expr(schema));
@@ -1847,6 +1904,185 @@ impl DiscoveryEngine {
         parameters.retain(|p| seen.insert(p.clone()));
 
         parameters
+    }
+
+    fn extract_parameters_from_primitive_manifest(
+        &self,
+        manifest: &CapabilityManifest,
+    ) -> Option<Vec<String>> {
+        let annotations = Self::primitive_annotations_value(manifest);
+        let required_inputs = Self::schema_bindings(manifest.input_schema.as_ref());
+        let expected_outputs = Self::schema_bindings(manifest.output_schema.as_ref());
+
+        if required_inputs.is_empty()
+            && expected_outputs.is_empty()
+            && annotations == JsonValue::Null
+        {
+            return None;
+        }
+
+        let primitive_need = CapabilityNeed::new(
+            manifest.id.clone(),
+            required_inputs.clone(),
+            expected_outputs.clone(),
+            manifest.description.clone(),
+        )
+        .with_annotations(annotations.clone())
+        .with_schemas(
+            manifest.input_schema.clone(),
+            manifest.output_schema.clone(),
+        );
+
+        let ctx = PrimitiveContext::from_manifest(&primitive_need, manifest, annotations);
+
+        let mut params: Vec<String> = ctx
+            .input_schemas
+            .keys()
+            .map(|binding| binding.trim_start_matches(':').to_string())
+            .collect();
+
+        if params.is_empty() {
+            params = primitive_need.required_inputs.clone();
+        }
+
+        if params.is_empty() {
+            return None;
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        params.retain(|p| seen.insert(p.clone()));
+
+        Some(params)
+    }
+
+    fn primitive_annotations_value(manifest: &CapabilityManifest) -> JsonValue {
+        manifest
+            .metadata
+            .get("primitive_annotations")
+            .and_then(|raw| serde_json::from_str::<JsonValue>(raw).ok())
+            .unwrap_or(JsonValue::Null)
+    }
+
+    fn primitive_metadata_value(manifest: &CapabilityManifest) -> Option<JsonValue> {
+        manifest
+            .metadata
+            .get("primitive_metadata")
+            .and_then(|raw| serde_json::from_str::<JsonValue>(raw).ok())
+    }
+
+    fn primitive_metadata_hints(metadata: &JsonValue) -> Vec<String> {
+        let mut hints = Vec::new();
+
+        if let Some(kind) = metadata.get("primitive").and_then(|v| v.as_str()) {
+            match kind {
+                "filter" => {
+                    if let Some(fields) = metadata.get("search_fields").and_then(|v| v.as_array()) {
+                        if !fields.is_empty() {
+                            let list: Vec<String> = fields
+                                .iter()
+                                .filter_map(|f| f.as_str().map(|s| s.to_string()))
+                                .collect();
+                            if !list.is_empty() {
+                                hints.push(format!("Filter checks fields: {}", list.join(", ")));
+                            }
+                        }
+                    }
+                    if let Some(search_input) =
+                        metadata.get("search_input").and_then(|v| v.as_str())
+                    {
+                        hints.push(format!("Search input binding: {}", search_input));
+                    }
+                }
+                "map" => {
+                    if let Some(mapping) = metadata.get("mapping").and_then(|v| v.as_array()) {
+                        let pairs: Vec<String> = mapping
+                            .iter()
+                            .filter_map(|entry| {
+                                entry.as_array().and_then(|vals| {
+                                    if vals.len() == 2 {
+                                        let to = vals[0].as_str().unwrap_or_default();
+                                        let from = vals[1].as_str().unwrap_or_default();
+                                        if !to.is_empty() && !from.is_empty() {
+                                            Some(format!("{}←{}", to, from))
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                            })
+                            .collect();
+                        if !pairs.is_empty() {
+                            hints.push(format!("Field mapping: {}", pairs.join(", ")));
+                        }
+                    }
+                }
+                "project" => {
+                    if let Some(fields) = metadata.get("fields").and_then(|v| v.as_array()) {
+                        let list: Vec<String> = fields
+                            .iter()
+                            .filter_map(|f| f.as_str().map(|s| s.to_string()))
+                            .collect();
+                        if !list.is_empty() {
+                            hints.push(format!("Project retains fields: {}", list.join(", ")));
+                        }
+                    }
+                }
+                "reduce" => {
+                    if let Some(reducer) = metadata.get("reducer").and_then(|v| v.as_object()) {
+                        if let Some(func) = reducer.get("fn").and_then(|v| v.as_str()) {
+                            hints.push(format!("Reducer function: {}", func));
+                        }
+                        if let Some(field) = reducer
+                            .get("item_field")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                        {
+                            hints.push(format!("Reducer field: {}", field));
+                        }
+                    }
+                }
+                "sort" => {
+                    if let Some(sort_key) = metadata.get("sort_key").and_then(|v| v.as_str()) {
+                        let order = metadata
+                            .get("order")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(":asc");
+                        hints.push(format!("Sort by {} ({})", sort_key, order));
+                    }
+                }
+                "groupBy" => {
+                    if let Some(group_key) = metadata.get("group_key").and_then(|v| v.as_str()) {
+                        hints.push(format!("Group by {}", group_key));
+                    }
+                }
+                "join" => {
+                    if let Some(on) = metadata.get("on").and_then(|v| v.as_array()) {
+                        if on.len() == 2 {
+                            let left = on[0].as_str().unwrap_or_default();
+                            let right = on[1].as_str().unwrap_or_default();
+                            hints.push(format!("Join keys: {} = {}", left, right));
+                        }
+                    }
+                    if let Some(join_type) = metadata.get("type").and_then(|v| v.as_str()) {
+                        hints.push(format!("Join type: {}", join_type));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        hints
+    }
+
+    fn schema_bindings(schema: Option<&rtfs::ast::TypeExpr>) -> Vec<String> {
+        match schema {
+            Some(rtfs::ast::TypeExpr::Map { entries, .. }) => {
+                entries.iter().map(|entry| entry.key.0.clone()).collect()
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// Extract parameter names from a TypeExpr (simple implementation)
@@ -2138,6 +2374,8 @@ impl DiscoveryEngine {
             .unwrap_or_else(|| ":any".to_string());
 
         // Create full capability RTFS file
+        let metadata_block = Self::format_metadata_map(&manifest.metadata);
+
         let capability_rtfs = format!(
             r#";; Synthesized capability: {}
 ;; Generated: {}
@@ -2146,6 +2384,7 @@ impl DiscoveryEngine {
   :version "{}"
   :description "{}"
   :synthesis-method "local_rtfs"
+  {}
   :permissions []
   :effects []
   :input-schema {}
@@ -2160,6 +2399,7 @@ impl DiscoveryEngine {
             manifest.name,
             manifest.version,
             manifest.description,
+            metadata_block,
             input_schema_str,
             output_schema_str,
             rtfs_code
@@ -2171,6 +2411,21 @@ impl DiscoveryEngine {
         })?;
 
         Ok(())
+    }
+
+    fn format_metadata_map(metadata: &std::collections::HashMap<String, String>) -> String {
+        if metadata.is_empty() {
+            "  :metadata nil".to_string()
+        } else {
+            let mut entries: Vec<_> = metadata.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            let mut lines = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                let escaped = value.replace('"', "\\\"");
+                lines.push(format!("    :{} \"{}\"", key, escaped));
+            }
+            format!("  :metadata {{\n{}\n  }}", lines.join("\n"))
+        }
     }
 
     /// Save an MCP capability to disk (similar to synthesized capabilities)

@@ -11,35 +11,155 @@
 //
 // Previous version (without recursive synthesis) is saved as smart_assistant_demo_v1.rs
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
+use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
 use ccos::capabilities::{MCPSessionHandler, SessionPoolManager};
 use ccos::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
 use ccos::discovery::{
-    CapabilityNeed, DiscoveryEngine, DiscoveryHints, DiscoveryResult, FoundCapability,
+    local_synthesizer::LocalSynthesizer, CapabilityNeed, DiscoveryEngine, DiscoveryHints,
+    DiscoveryResult, FoundCapability,
 };
 use ccos::environment::CCOSBuilder;
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::synthesis::schema_serializer::type_expr_to_rtfs_compact;
 use ccos::types::{Intent, Plan, PlanBody};
-use ccos::CCOS;
+use ccos::{PlanAutoRepairOptions, CCOS};
 use chrono::Utc;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use crossterm::style::Stylize;
+use once_cell::sync::Lazy;
 use rtfs::ast::{Expression, Keyword, Literal, MapKey, MapTypeEntry, PrimitiveType, TypeExpr};
 use rtfs::config::profile_selection::expand_profiles;
 use rtfs::config::types::{AgentConfig, LlmProfile};
 use rtfs::parser::parse_expression;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
-use serde_json;
+use serde_json::{self, Value as JsonValue};
 use toml;
+
+const GENERIC_CLASS_PREFIXES: &[&str] = &["general", "core", "default", "misc", "step", "task"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum NormalizationSource {
+    CandidateHint,
+    StepIdSlug,
+    StepNameTokens,
+    DescriptionTokens,
+}
+
+impl NormalizationSource {
+    fn label(self) -> &'static str {
+        match self {
+            NormalizationSource::CandidateHint => "candidate hints",
+            NormalizationSource::StepIdSlug => "step id slug",
+            NormalizationSource::StepNameTokens => "step name tokens",
+            NormalizationSource::DescriptionTokens => "description tokens",
+        }
+    }
+}
+
+impl fmt::Display for NormalizationSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct NormalizationEvent {
+    step_id: String,
+    original_class: String,
+    normalized_class: String,
+    source: NormalizationSource,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PlanNormalizationTelemetry {
+    rewrites: Vec<NormalizationEvent>,
+}
+
+impl PlanNormalizationTelemetry {
+    fn record(&mut self, event: NormalizationEvent) {
+        self.rewrites.push(event);
+    }
+}
+
+static PLAN_NORMALIZATION_TELEMETRY: Lazy<Mutex<PlanNormalizationTelemetry>> =
+    Lazy::new(|| Mutex::new(PlanNormalizationTelemetry::default()));
+
+fn reset_plan_normalization_telemetry() {
+    if let Ok(mut telemetry) = PLAN_NORMALIZATION_TELEMETRY.lock() {
+        telemetry.rewrites.clear();
+    }
+}
+
+fn record_normalization_event(
+    step_id: &str,
+    original_class: &str,
+    normalized_class: &str,
+    source: NormalizationSource,
+) {
+    if let Ok(mut telemetry) = PLAN_NORMALIZATION_TELEMETRY.lock() {
+        telemetry.record(NormalizationEvent {
+            step_id: step_id.to_string(),
+            original_class: original_class.to_string(),
+            normalized_class: normalized_class.to_string(),
+            source,
+        });
+    }
+}
+
+fn print_normalization_telemetry() {
+    let snapshot = {
+        let telemetry = PLAN_NORMALIZATION_TELEMETRY
+            .lock()
+            .expect("normalization telemetry lock poisoned");
+        telemetry.clone()
+    };
+
+    if snapshot.rewrites.is_empty() {
+        return;
+    }
+
+    println!("\n{}", "📈 Capability-class normalization telemetry".bold());
+    println!("   • Total rewrites: {}", snapshot.rewrites.len());
+
+    let mut counts: BTreeMap<NormalizationSource, usize> = BTreeMap::new();
+    for event in &snapshot.rewrites {
+        *counts.entry(event.source).or_insert(0) += 1;
+    }
+    for (source, count) in counts {
+        println!("   • {}: {}", source, count);
+    }
+
+    for event in snapshot.rewrites.iter().take(5) {
+        println!(
+            "     - Step {}: '{}' → '{}' ({})",
+            event.step_id.as_str().cyan(),
+            event.original_class,
+            event.normalized_class,
+            event.source
+        );
+    }
+    if snapshot.rewrites.len() > 5 {
+        println!(
+            "     - {}",
+            format!(
+                "... {} additional normalization(s)",
+                snapshot.rewrites.len() - 5
+            )
+            .dim()
+        );
+    }
+
+    reset_plan_normalization_telemetry();
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -71,6 +191,34 @@ struct Args {
     /// Execute a saved plan by its plan_id instead of generating a new one
     #[arg(long)]
     execute_plan: Option<String>,
+
+    /// Inject a known plan error before execution (for auto-repair demos)
+    #[arg(long, value_enum)]
+    inject_plan_error: Option<InjectPlanError>,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum InjectPlanError {
+    SimpleMapSyntax,
+    ComplexStructure,
+}
+
+fn inject_plan_error_source(original: &str, fixture: InjectPlanError) -> String {
+    match fixture {
+        InjectPlanError::SimpleMapSyntax => {
+            let mut mutated = original.to_string();
+            mutated = mutated.replacen(":username \"mandubian\"", ":username = mandubian", 1);
+            mutated = mutated.replacen(":projects (", ":projects = (", 1);
+            mutated
+        }
+        InjectPlanError::ComplexStructure => {
+            let mut mutated = inject_plan_error_source(original, InjectPlanError::SimpleMapSyntax);
+            if let Some(pos) = mutated.rfind(')') {
+                mutated.remove(pos);
+            }
+            mutated
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +265,80 @@ struct ProposedStep {
     required_inputs: Vec<String>,
     expected_outputs: Vec<String>,
     description: Option<String>,
+    primitive_annotations: Option<JsonValue>,
+}
+
+fn canonicalize_capability_class(step: &mut ProposedStep) {
+    let original = step.capability_class.trim().to_string();
+    let class_lower = original.to_ascii_lowercase();
+    let first_segment = class_lower
+        .split(|c| c == '.' || c == ':')
+        .next()
+        .unwrap_or("");
+    let is_generic_prefix = GENERIC_CLASS_PREFIXES.contains(&first_segment);
+    let is_generic = original.is_empty() || !class_lower.contains('.') || is_generic_prefix;
+
+    if !is_generic {
+        return;
+    }
+
+    let mut source = None;
+
+    if let Some(candidate) = step
+        .candidate_capabilities
+        .iter()
+        .find(|cand| cand.contains('.') || cand.contains(':'))
+    {
+        step.capability_class = candidate.clone();
+        source = Some(NormalizationSource::CandidateHint);
+    } else if step.id.contains('.') || step.id.contains(':') {
+        step.capability_class = step.id.clone();
+        source = Some(NormalizationSource::StepIdSlug);
+    } else if let Some(from_name) = canonicalize_from_text(&step.name) {
+        step.capability_class = from_name;
+        source = Some(NormalizationSource::StepNameTokens);
+    } else if let Some(desc) = &step.description {
+        if let Some(from_desc) = canonicalize_from_text(desc) {
+            step.capability_class = from_desc;
+            source = Some(NormalizationSource::DescriptionTokens);
+        }
+    }
+
+    if step.capability_class != original {
+        let src = source.unwrap_or(NormalizationSource::StepNameTokens);
+        record_normalization_event(&step.id, &original, &step.capability_class, src);
+        println!(
+            "  {} Normalized capability class '{}' → '{}'",
+            "ℹ️".blue(),
+            original,
+            step.capability_class
+        );
+    }
+}
+
+fn canonicalize_from_text(text: &str) -> Option<String> {
+    let mut tokens = Vec::new();
+    let mut seen = HashSet::new();
+
+    for token in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.')) {
+        let tk = token.trim().to_ascii_lowercase();
+        if tk.is_empty() || STOPWORDS.contains(&tk.as_str()) {
+            continue;
+        }
+        if seen.insert(tk.clone()) {
+            tokens.push(tk);
+        }
+    }
+
+    if tokens.len() < 2 {
+        return None;
+    }
+
+    if tokens.len() > 4 {
+        tokens.truncate(4);
+    }
+
+    Some(tokens.join("."))
 }
 
 #[derive(Debug, Clone)]
@@ -636,7 +858,7 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let matches = match_proposed_steps(&ccos, &plan_steps).await?;
+    let mut matches = match_proposed_steps(&ccos, &plan_steps).await?;
     annotate_steps_with_matches(&mut plan_steps, &matches);
 
     // Check for missing capabilities and trigger re-planning if needed
@@ -726,6 +948,7 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
             }
 
             // Parse the new plan steps
+            reset_plan_normalization_telemetry();
             let mut parsed_value = parse_plan_steps_response(&response).map_err(runtime_error)?;
             if let Value::Map(map) = &parsed_value {
                 if let Some(Value::Vector(steps)) = map_get(map, "steps") {
@@ -755,115 +978,17 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
                     let new_matches = match_proposed_steps(&ccos, &plan_steps).await?;
                     annotate_steps_with_matches(&mut plan_steps, &new_matches);
 
-                    // Update matches for resolution
-                    let matches = new_matches;
-
-                    let needs_value = build_needs_capabilities(&plan_steps);
-
-                    // Resolve missing capabilities and build orchestrating agent
-                    let resolved_steps = resolve_and_stub_capabilities(
+                    return build_register_and_execute_plan(
                         &ccos,
-                        &plan_steps,
-                        &matches,
-                        args.interactive,
-                    )
-                    .await?;
-                    let planner_capability_id =
-                        derive_orchestrator_capability_id(&goal, &resolved_steps);
-                    let generated = generate_orchestrator_capability(
+                        &agent_config,
+                        &args,
                         &goal,
-                        &resolved_steps,
-                        &planner_capability_id,
-                    )?;
-                    let orchestrator_rtfs = generated.plan_rtfs.clone();
-
-                    // Register the orchestrator as a reusable capability in the marketplace
-                    register_orchestrator_in_marketplace(
-                        &ccos,
-                        &planner_capability_id,
-                        &orchestrator_rtfs,
+                        &intent,
+                        &answers,
+                        &plan_steps,
+                        &new_matches,
                     )
-                    .await?;
-
-                    // Extract all properties from (plan ...) form before creating the plan
-                    let plan_props = ExtractedPlanProperties {
-                        body: generated.body.clone(),
-                        input_schema: generated.input_schema.clone(),
-                        output_schema: generated.output_schema.clone(),
-                        capabilities_required: generated.capabilities_required.clone(),
-                        annotations: generated.annotations.clone(),
-                    };
-                    let mut plan = Plan::new_with_schemas(
-                        None,
-                        vec![],
-                        PlanBody::Rtfs(plan_props.body),
-                        plan_props.input_schema,
-                        plan_props.output_schema,
-                        HashMap::new(), // policies
-                        plan_props.capabilities_required,
-                        plan_props.annotations,
-                    );
-                    plan.metadata
-                        .insert("needs_capabilities".to_string(), needs_value.clone());
-                    plan.metadata.insert(
-                        "generated_at".to_string(),
-                        Value::String(Utc::now().to_rfc3339()),
-                    );
-                    plan.metadata.insert(
-                        "resolved_steps".to_string(),
-                        build_resolved_steps_metadata(&resolved_steps),
-                    );
-                    plan.metadata.insert(
-                        "orchestrator_capability_id".to_string(),
-                        Value::String(planner_capability_id),
-                    );
-
-                    print_plan_draft(&plan_steps, &matches, &plan);
-
-                    // Print resolution summary
-                    let found_count = resolved_steps
-                        .iter()
-                        .filter(|s| s.resolution_strategy == ResolutionStrategy::Found)
-                        .count();
-                    let synthesized_count = resolved_steps
-                        .iter()
-                        .filter(|s| s.resolution_strategy == ResolutionStrategy::Synthesized)
-                        .count();
-                    let stubbed_count = resolved_steps
-                        .iter()
-                        .filter(|s| s.resolution_strategy == ResolutionStrategy::Stubbed)
-                        .count();
-
-                    println!("\n{}", "📊 Capability Resolution Summary".bold());
-                    println!(
-                        "   • Found: {} capabilities",
-                        found_count.to_string().green()
-                    );
-                    if synthesized_count > 0 {
-                        println!(
-                            "   • {}: {} capabilities (with dependencies)",
-                            "Synthesized".bold(),
-                            synthesized_count.to_string().cyan().bold()
-                        );
-                    }
-                    if stubbed_count > 0 {
-                        println!(
-                            "   • Stubbed: {} capabilities (awaiting implementation)",
-                            stubbed_count.to_string().yellow()
-                        );
-                    }
-
-                    // Display execution graph visualization
-                    print_execution_graph(&resolved_steps, &intent);
-
-                    println!(
-                        "\n{}",
-                        "✅ Orchestrator generated and registered in marketplace"
-                            .bold()
-                            .green()
-                    );
-
-                    return Ok(());
+                    .await;
                 } else {
                     println!("  {} Re-plan failed to generate valid steps, proceeding with original plan", "⚠️".yellow());
                 }
@@ -871,412 +996,17 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let needs_value = build_needs_capabilities(&plan_steps);
-
-    // Resolve missing capabilities and build orchestrating agent
-    let resolved_steps =
-        resolve_and_stub_capabilities(&ccos, &plan_steps, &matches, args.interactive).await?;
-    println!(
-        "[trace] resolve_and_stub_capabilities returned {} step(s)",
-        resolved_steps.len()
-    );
-    let planner_capability_id = derive_orchestrator_capability_id(&goal, &resolved_steps);
-    println!(
-        "[trace] derived orchestrator capability id: {}",
-        planner_capability_id
-    );
-    let generated =
-        generate_orchestrator_capability(&goal, &resolved_steps, &planner_capability_id)?;
-    let orchestrator_rtfs = generated.plan_rtfs.clone();
-    println!(
-        "[trace] generated orchestrator RTFS ({} bytes)",
-        orchestrator_rtfs.len()
-    );
-
-    // Register the orchestrator as a reusable capability in the marketplace
-    register_orchestrator_in_marketplace(&ccos, &planner_capability_id, &orchestrator_rtfs).await?;
-    println!("[trace] registered orchestrator in marketplace");
-
-    // Extract all properties from (plan ...) form before creating the plan
-    let plan_props = ExtractedPlanProperties {
-        body: generated.body.clone(),
-        input_schema: generated.input_schema.clone(),
-        output_schema: generated.output_schema.clone(),
-        capabilities_required: generated.capabilities_required.clone(),
-        annotations: generated.annotations.clone(),
-    };
-    println!("[trace] extracted plan properties without parser");
-    let mut plan = Plan::new_with_schemas(
-        None,
-        vec![],
-        PlanBody::Rtfs(plan_props.body),
-        plan_props.input_schema,
-        plan_props.output_schema,
-        HashMap::new(), // policies
-        plan_props.capabilities_required,
-        plan_props.annotations,
-    );
-    plan.metadata
-        .insert("needs_capabilities".to_string(), needs_value.clone());
-    plan.metadata.insert(
-        "generated_at".to_string(),
-        Value::String(Utc::now().to_rfc3339()),
-    );
-    plan.metadata.insert(
-        "resolved_steps".to_string(),
-        build_resolved_steps_metadata(&resolved_steps),
-    );
-    plan.metadata.insert(
-        "orchestrator_capability_id".to_string(),
-        Value::String(planner_capability_id),
-    );
-
-    print_plan_draft(&plan_steps, &matches, &plan);
-
-    // Print resolution summary
-    let found_count = resolved_steps
-        .iter()
-        .filter(|s| s.resolution_strategy == ResolutionStrategy::Found)
-        .count();
-    let synthesized_count = resolved_steps
-        .iter()
-        .filter(|s| s.resolution_strategy == ResolutionStrategy::Synthesized)
-        .count();
-    let stubbed_count = resolved_steps
-        .iter()
-        .filter(|s| s.resolution_strategy == ResolutionStrategy::Stubbed)
-        .count();
-
-    println!("\n{}", "📊 Capability Resolution Summary".bold());
-    println!(
-        "   • Found: {} capabilities",
-        found_count.to_string().green()
-    );
-    if synthesized_count > 0 {
-        println!(
-            "   • {}: {} capabilities (with dependencies)",
-            "Synthesized".bold(),
-            synthesized_count.to_string().cyan().bold()
-        );
-    }
-    if stubbed_count > 0 {
-        println!(
-            "   • Stubbed: {} capabilities (awaiting implementation)",
-            stubbed_count.to_string().yellow()
-        );
-    }
-
-    // Display execution graph visualization
-    print_execution_graph(&resolved_steps, &intent);
-
-    println!(
-        "\n{}",
-        "✅ Orchestrator generated and registered in marketplace"
-            .bold()
-            .green()
-    );
-
-    // Save the plan to the plan archive
-    let orchestrator = ccos.get_orchestrator();
-    match orchestrator.store_plan(&plan) {
-        Ok(hash) => {
-            let hash_display = hash.clone();
-            println!(
-                "  💾 Saved plan to archive with hash: {}",
-                hash_display.cyan()
-            );
-            // If using file storage, show the file path
-            let plan_archive_path = std::env::var("CCOS_PLAN_ARCHIVE_PATH")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::path::PathBuf::from("demo_storage/plans"));
-            let file_path = plan_archive_path
-                .join(format!("{}/{}", &hash[0..2], &hash[2..4]))
-                .join(format!("{}.json", hash));
-            println!(
-                "     File location: {}",
-                file_path.display().to_string().dim()
-            );
-        }
-        Err(e) => {
-            eprintln!("  ⚠️  Failed to save plan to archive: {}", e);
-        }
-    }
-
-    // Load only the required capabilities into the RTFS environment before execution
-    // Check both generated (synthesized) and discovered (MCP) directories
-    println!("\n{}", "📦 Loading Required Capabilities".bold());
-    println!("{}", "=".repeat(80));
-    let marketplace = ccos.get_capability_marketplace();
-    let generated_dir = std::path::Path::new("capabilities/generated");
-    let discovered_dir = std::path::Path::new("capabilities/discovered");
-
-    if discovered_dir.exists() {
-        match preload_discovered_capabilities(&marketplace, discovered_dir).await {
-            Ok(count) => {
-                if count > 0 {
-                    println!(
-                        "  {} Preloaded {} discovered capability manifest(s)",
-                        "✓".green(),
-                        count
-                    );
-                }
-            }
-            Err(e) => eprintln!(
-                "  {} Failed to preload discovered capabilities: {}",
-                "⚠️".yellow(),
-                e
-            ),
-        }
-    }
-
-    if !plan.capabilities_required.is_empty() {
-        let mut loaded_count = 0usize;
-        let mut missing_caps = Vec::new();
-
-        for cap_id in &plan.capabilities_required {
-            println!(
-                "  {} Checking required capability: {}",
-                "ℹ️".blue(),
-                cap_id.as_str()
-            );
-            // Check if capability is already registered in marketplace
-            if marketplace.has_capability(cap_id).await {
-                println!(
-                    "  {} Capability already available: {}",
-                    "✓".green(),
-                    cap_id.as_str().green()
-                );
-                continue;
-            }
-
-            let mut found = false;
-
-            // Try to load from generated directory (synthesized capabilities)
-            let cap_dir = generated_dir.join(cap_id);
-            let cap_file = cap_dir.join("capability.rtfs");
-
-            if cap_file.exists() {
-                match marketplace
-                    .import_capabilities_from_rtfs_dir(&cap_dir)
-                    .await
-                {
-                    Ok(count) => {
-                        if count > 0 {
-                            loaded_count += count;
-                            println!(
-                                "  {} Loaded from generated: {}",
-                                "✓".green(),
-                                cap_id.as_str().green()
-                            );
-                            found = true;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "  {} Failed to load {} from generated: {}",
-                            "⚠️".yellow(),
-                            cap_id.as_str().yellow(),
-                            e
-                        );
-                    }
-                }
-            }
-
-            // If not found in generated, try discovered directory (MCP capabilities)
-            if !found {
-                // Search discovered directory for matching capabilities
-                // MCP capabilities might have different IDs, so we search by pattern
-                if discovered_dir.exists() {
-                    if let Ok(entries) = std::fs::read_dir(discovered_dir) {
-                        for entry in entries {
-                            if let Ok(entry) = entry {
-                                let path = entry.path();
-                                if path.is_dir() {
-                                    // Try to import from this directory
-                                    match marketplace.import_capabilities_from_rtfs_dir(&path).await
-                                    {
-                                        Ok(count) => {
-                                            if count > 0 {
-                                                // Check if any of the loaded capabilities match what we need
-                                                let all_caps =
-                                                    marketplace.list_capabilities().await;
-                                                if all_caps
-                                                    .iter()
-                                                    .any(|cap| cap.id == cap_id.as_str())
-                                                {
-                                                    loaded_count += count;
-                                                    println!(
-                                                        "  {} Loaded from discovered: {}",
-                                                        "✓".green(),
-                                                        cap_id.as_str().green()
-                                                    );
-                                                    found = true;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        Err(_) => {
-                                            // Continue searching
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // If still not found, search marketplace for capabilities that might match
-            // (e.g., github.issues.list might be registered as mcp.github.github-mcp.list_issues)
-            if !found {
-                let all_caps = marketplace.list_capabilities().await;
-                // Try to find a capability that matches by searching for keywords from the ID
-                let keywords: Vec<&str> = cap_id.split('.').collect();
-                let matching_cap = all_caps.iter().find(|cap| {
-                    // Check if capability ID contains the key parts of the required ID
-                    keywords.iter().all(|kw| cap.id.contains(kw))
-                });
-
-                if let Some(matching) = matching_cap {
-                    println!(
-                        "  {} Found matching capability: {} (registered as {})",
-                        "✓".green(),
-                        cap_id.as_str().green(),
-                        matching.id.as_str().cyan()
-                    );
-
-                    let wrapper_id = cap_id.clone();
-                    let actual_id = matching.id.clone();
-
-                    if wrapper_id.as_str() == actual_id.as_str() {
-                        println!(
-                            "  {} Capability already available under required id: {}",
-                            "✓".green(),
-                            wrapper_id.as_str().green()
-                        );
-                        found = true;
-                    } else {
-                        let mut alias_manifest = matching.clone();
-                        alias_manifest.id = wrapper_id.as_str().to_string();
-                        alias_manifest
-                            .metadata
-                            .insert("alias_of".to_string(), actual_id.as_str().to_string());
-                        alias_manifest.metadata.insert(
-                            "alias_created_by".to_string(),
-                            "smart_assistant_demo".to_string(),
-                        );
-                        alias_manifest.name = format!("{} (alias)", alias_manifest.name)
-                            .chars()
-                            .take(120)
-                            .collect();
-
-                        match marketplace
-                            .register_capability_manifest(alias_manifest)
-                            .await
-                        {
-                            Ok(_) => {
-                                println!(
-                                    "  {} Registered alias capability: {} → {}",
-                                    "✓".green(),
-                                    wrapper_id.as_str().green(),
-                                    actual_id.as_str().cyan()
-                                );
-                                loaded_count += 1;
-                                found = true;
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "  {} Failed to register alias {} → {}: {}",
-                                    "⚠️".yellow(),
-                                    wrapper_id.as_str().yellow(),
-                                    actual_id.as_str().cyan(),
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !found {
-                missing_caps.push(cap_id.clone());
-                println!(
-                    "  {} Not found: {} (checked generated and discovered directories)",
-                    "⚠️".yellow(),
-                    cap_id.as_str().yellow()
-                );
-            }
-        }
-
-        if loaded_count > 0 {
-            println!(
-                "  {} Loaded {} required capability/capabilities",
-                "✓".green(),
-                loaded_count.to_string().green()
-            );
-        }
-        if !missing_caps.is_empty() {
-            println!(
-                "  {} {} capability/capabilities not found or failed to load",
-                "⚠️".yellow(),
-                missing_caps.len().to_string().yellow()
-            );
-            println!(
-                "  {} Tip: These capabilities may be registered with different IDs (e.g., MCP IDs)",
-                "ℹ️".dim()
-            );
-        }
-    } else {
-        println!("  {} No capabilities required by this plan", "ℹ️".dim());
-    }
-
-    // Execute the generated plan
-    println!("\n{}", "🚀 Executing Plan".bold());
-    println!("{}", "=".repeat(80));
-
-    // Create a generic execution context with full permissions
-    let mut context = rtfs::runtime::security::RuntimeContext::full();
-
-    // Extract input values from intent/answers and add them to context
-    // This ensures plan inputs like owner, repository, language are available
-    extract_and_bind_plan_inputs(&mut context, &plan, &intent, &answers);
-
-    if let Err(e) = sample_mcp_outputs(&ccos, &resolved_steps, &context).await {
-        eprintln!(
-            "  {} Failed to sample MCP capability outputs: {}",
-            "⚠️".yellow(),
-            e
-        );
-    }
-
-    // Execute the plan
-    match ccos.validate_and_execute_plan(plan, &context).await {
-        Ok(exec_result) => {
-            if exec_result.success {
-                println!(
-                    "\n{}",
-                    "✅ Plan execution completed successfully!".bold().green()
-                );
-                println!("{}", "Result:".bold());
-                println!("{:?}", exec_result.value);
-            } else {
-                println!(
-                    "\n{}",
-                    "⚠️  Plan execution completed with warnings".bold().yellow()
-                );
-                if let Some(error) = exec_result.metadata.get("error") {
-                    println!("Error: {:?}", error);
-                }
-                println!("Result: {:?}", exec_result.value);
-            }
-        }
-        Err(e) => {
-            println!("\n{}", "❌ Plan execution failed".bold().red());
-            println!("Error: {}", e);
-        }
-    }
-
-    Ok(())
+    build_register_and_execute_plan(
+        &ccos,
+        &agent_config,
+        &args,
+        &goal,
+        &intent,
+        &answers,
+        &plan_steps,
+        &matches,
+    )
+    .await
 }
 
 type DemoResult<T> = Result<T, Box<dyn Error>>;
@@ -1341,6 +1071,36 @@ fn print_architecture_summary(config: &AgentConfig, profile_name: Option<&str>) 
         "IntentGraph".cyan()
     );
 
+    // Show discovery / search configuration
+    let discovery = &config.discovery;
+    println!("\n  {} Discovery/Search Settings:", "3.".bold());
+    if discovery.use_embeddings {
+        let model = discovery
+            .embedding_model
+            .as_deref()
+            .or(discovery.local_embedding_model.as_deref())
+            .unwrap_or("unspecified model");
+        println!(
+            "     • Embedding search: {} ({})",
+            "enabled".green(),
+            model.cyan()
+        );
+    } else {
+        println!(
+            "     • Embedding search: {} (keyword + schema heuristics)",
+            "disabled".yellow()
+        );
+    }
+    println!("     • Match threshold: {:.2}", discovery.match_threshold);
+    println!(
+        "     • Action verb weight / threshold: {:.2} / {:.2}",
+        discovery.action_verb_weight, discovery.action_verb_threshold
+    );
+    println!(
+        "     • Capability class weight: {:.2}",
+        discovery.capability_class_weight
+    );
+
     // Show LLM profile
     if let Some(llm_profiles) = &config.llm_profiles {
         let (profiles, _meta, _why) = expand_profiles(config);
@@ -1351,7 +1111,7 @@ fn print_architecture_summary(config: &AgentConfig, profile_name: Option<&str>) 
 
         if let Some(name) = chosen {
             if let Some(profile) = profiles.iter().find(|p| p.name == name) {
-                println!("\n  {} LLM Configuration:", "3.".bold());
+                println!("\n  {} LLM Configuration:", "4.".bold());
                 println!("     • Profile: {}", name.cyan());
                 println!("     • Provider: {}", profile.provider.as_str().cyan());
                 println!("     • Model: {}", profile.model.as_str().cyan());
@@ -1870,6 +1630,7 @@ mod tests {
         ]
         "#;
 
+        reset_plan_normalization_telemetry();
         let value = parse_plan_steps_response(response).expect("parse JSON plan steps");
         let items = match value {
             Value::Vector(items) => items,
@@ -1938,6 +1699,7 @@ mod tests {
                 required_inputs: vec!["origin".into(), "destination".into(), "dates".into()],
                 expected_outputs: vec!["flight_options".into()],
                 description: None,
+                primitive_annotations: None,
             },
             capability_id: "travel.flights.search".to_string(),
             resolution_strategy: ResolutionStrategy::Found,
@@ -1954,6 +1716,7 @@ mod tests {
                 required_inputs: vec!["destination".into(), "dates".into(), "budget".into()],
                 expected_outputs: vec!["reservation".into()],
                 description: None,
+                primitive_annotations: None,
             },
             capability_id: "travel.lodging.reserve".to_string(),
             resolution_strategy: ResolutionStrategy::Found,
@@ -2038,6 +1801,7 @@ mod tests {
                 required_inputs: vec!["goal".into()],
                 expected_outputs: vec!["prefs".into()],
                 description: None,
+                primitive_annotations: None,
             },
             capability_id: "planning.preferences.aggregate".into(),
             resolution_strategy: ResolutionStrategy::Found,
@@ -2055,6 +1819,7 @@ mod tests {
                 required_inputs: vec!["prefs".into(), "destination".into()],
                 expected_outputs: vec!["activity_plan".into()],
                 description: None,
+                primitive_annotations: None,
             },
             capability_id: "travel.activities.plan".into(),
             resolution_strategy: ResolutionStrategy::Found,
@@ -2336,6 +2101,12 @@ async fn propose_plan_steps(
     prompt.push_str(
 		"Each map must include :id :name :capability-class :required-inputs (vector of strings) :expected-outputs (vector of strings) and optional :candidate-capabilities (vector of capability ids) :description.\n",
 	);
+    prompt.push_str(
+        "The :capability-class MUST be a fully-qualified identifier (e.g. \"github.issues.list\") with a namespace prefix; never emit generic labels such as \"github\" or \"core\".\n",
+    );
+    prompt.push_str(
+        "If you reference a capability shown in the snapshot, reuse its id exactly; otherwise derive a specific, dotted capability-class that reflects the action.\n",
+    );
     prompt.push_str("IMPORTANT: Focus on the GOAL and INTENT below. Generate plan steps that directly address the goal.\n");
     prompt.push_str("If the marketplace snapshot below contains capabilities, use them ONLY if they are relevant to the goal.\n");
     prompt.push_str("If the marketplace snapshot is empty or contains only irrelevant examples, generate steps based on the goal alone.\n");
@@ -2437,6 +2208,7 @@ async fn propose_plan_steps(
     }
     println!("{}", "─".repeat(80));
 
+    reset_plan_normalization_telemetry();
     let mut parsed_value = parse_plan_steps_response(&response).map_err(|e| {
         // The error from parse_plan_steps_response already includes a user-friendly message
         // with the full response, so we just need to convert it to Box<dyn Error>
@@ -2769,8 +2541,12 @@ fn value_to_step(value: &Value) -> Option<ProposedStep> {
         .and_then(value_to_string_vec)
         .unwrap_or_default();
     let description = map_get(map, "description").and_then(value_to_string);
+    let primitive_annotations = map_get(map, "primitive_annotations")
+        .or_else(|| map_get(map, "primitive"))
+        .cloned()
+        .and_then(|v| serde_json::to_value(&v).ok());
 
-    Some(ProposedStep {
+    let mut step = ProposedStep {
         id,
         name,
         capability_class,
@@ -2778,7 +2554,12 @@ fn value_to_step(value: &Value) -> Option<ProposedStep> {
         required_inputs,
         expected_outputs,
         description,
-    })
+        primitive_annotations,
+    };
+
+    canonicalize_capability_class(&mut step);
+
+    Some(step)
 }
 
 fn step_from_free_form(value: &Value, index: usize) -> Option<ProposedStep> {
@@ -2832,7 +2613,33 @@ fn step_from_free_form(value: &Value, index: usize) -> Option<ProposedStep> {
         required_inputs: vec!["goal".to_string()],
         expected_outputs: vec!["notes".to_string()],
         description: Some(cleaned.to_string()),
+        primitive_annotations: None,
     })
+}
+
+fn json_to_rtfs_value(json: &JsonValue) -> Value {
+    match json {
+        JsonValue::Null => Value::Nil,
+        JsonValue::Bool(b) => Value::Boolean(*b),
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Float(f)
+            } else {
+                Value::Nil
+            }
+        }
+        JsonValue::String(s) => Value::String(s.clone()),
+        JsonValue::Array(items) => Value::Vector(items.iter().map(json_to_rtfs_value).collect()),
+        JsonValue::Object(map) => {
+            let mut rtfs_map = HashMap::new();
+            for (k, v) in map {
+                rtfs_map.insert(MapKey::String(k.clone()), json_to_rtfs_value(v));
+            }
+            Value::Map(rtfs_map)
+        }
+    }
 }
 
 fn ensure_question_prompt(text: &str, index: usize) -> String {
@@ -3178,6 +2985,15 @@ fn build_needs_capabilities(steps: &[ProposedStep]) -> Value {
     let entries: Vec<Value> = steps
         .iter()
         .map(|step| {
+            let rationale = step.description.clone().unwrap_or_else(|| {
+                step_name_to_functional_description(&step.name, &step.capability_class)
+            });
+            let inferred_need = CapabilityNeed::new(
+                step.capability_class.clone(),
+                step.required_inputs.clone(),
+                step.expected_outputs.clone(),
+                rationale,
+            );
             let mut map = HashMap::new();
             map.insert(
                 MapKey::String("class".into()),
@@ -3212,6 +3028,16 @@ fn build_needs_capabilities(steps: &[ProposedStep]) -> Value {
                         .collect(),
                 ),
             );
+            if let Some(annotations_json) = step
+                .primitive_annotations
+                .clone()
+                .or_else(|| LocalSynthesizer::infer_primitive_annotations(&inferred_need))
+            {
+                map.insert(
+                    MapKey::String("primitive_annotations".into()),
+                    json_to_rtfs_value(&annotations_json),
+                );
+            }
             Value::Map(map)
         })
         .collect();
@@ -3302,12 +3128,16 @@ fn build_replan_prompt(goal: &str, intent: &Intent, hints: &DiscoveryHints) -> S
     prompt.push_str("  - Option 3: Still include a filtering step - it will be synthesized as a local operation\n");
     prompt.push_str("\nRespond ONLY with an RTFS vector where each element is a map describing a proposed capability step.\n");
     prompt.push_str("Each map must include :id :name :capability-class :required-inputs (vector of strings) :expected-outputs (vector of strings) and optional :candidate-capabilities (vector of capability ids) :description.\n");
+    prompt.push_str(
+        "The :capability-class must be fully-qualified (include the provider namespace, e.g. \"github.issues.list\"); do not emit generic labels such as \"github\".\n",
+    );
     prompt.push_str("When specifying capability calls, use the exact capability IDs from the 'Available Capabilities' section above.\n");
     prompt.push_str("Include parameter values in :required-inputs when they are known (e.g., if filtering is needed, specify the parameter name).\n");
 
     prompt
 }
 
+/// Create an LLM-friendly explanation of a parser/RTFS error with actionable guidance.
 /// Format found capabilities for display
 fn format_found_capabilities(found: &[FoundCapability]) -> String {
     let mut result = String::new();
@@ -3598,16 +3428,24 @@ fn compute_input_bindings_for_step(
             );
 
             for input in &step.required_inputs {
-                let selected =
-                    find_best_input_key(input, &candidate_keys).unwrap_or_else(|| input.clone());
-                bindings.insert(input.clone(), selected);
+                let (base_input, _) = parse_input_assignment(input);
+                let selected = find_best_input_key(&base_input, &candidate_keys)
+                    .unwrap_or_else(|| base_input.clone());
+                bindings.insert(input.clone(), selected.clone());
+                if base_input != *input {
+                    bindings.entry(base_input.clone()).or_insert(selected);
+                }
             }
 
             // Ensure every required input has a binding even if manifest did not specify it
             for input in &step.required_inputs {
+                let (base_input, _) = parse_input_assignment(input);
                 bindings
                     .entry(input.clone())
-                    .or_insert_with(|| input.clone());
+                    .or_insert_with(|| base_input.clone());
+                bindings
+                    .entry(base_input.clone())
+                    .or_insert_with(|| base_input.clone());
             }
 
             return bindings;
@@ -3615,7 +3453,11 @@ fn compute_input_bindings_for_step(
     }
 
     for input in &step.required_inputs {
-        bindings.insert(input.clone(), input.clone());
+        let (base_input, _) = parse_input_assignment(input);
+        bindings.insert(input.clone(), base_input.clone());
+        if base_input != *input {
+            bindings.entry(base_input.clone()).or_insert(base_input);
+        }
     }
 
     bindings
@@ -3634,6 +3476,11 @@ fn compute_output_bindings_for_step(
     for output in &step.expected_outputs {
         if let Some(actual_key) = find_best_input_key(output, &manifest_keys) {
             bindings.insert(output.clone(), OutputBinding::MapKey(actual_key));
+        } else if manifest_keys.len() == 1 {
+            bindings.insert(
+                output.clone(),
+                OutputBinding::MapKey(manifest_keys[0].clone()),
+            );
         } else {
             bindings.insert(output.clone(), OutputBinding::MapKey(output.clone()));
         }
@@ -3644,7 +3491,10 @@ fn compute_output_bindings_for_step(
 
 fn collect_output_keys_from_schema(schema: &TypeExpr) -> Vec<String> {
     match schema {
-        TypeExpr::Map { entries, .. } => entries.iter().map(|entry| entry.key.0.clone()).collect(),
+        TypeExpr::Map { entries, .. } => entries
+            .iter()
+            .map(|entry| entry.key.0.trim_start_matches(':').to_string())
+            .collect(),
         TypeExpr::Vector(inner) | TypeExpr::Optional(inner) => {
             collect_output_keys_from_schema(inner)
         }
@@ -4270,6 +4120,453 @@ struct ExtractedPlanProperties {
     annotations: HashMap<String, rtfs::runtime::values::Value>,
 }
 
+async fn build_register_and_execute_plan(
+    ccos: &Arc<CCOS>,
+    agent_config: &AgentConfig,
+    args: &Args,
+    goal: &str,
+    intent: &Intent,
+    answers: &[AnswerRecord],
+    plan_steps: &[ProposedStep],
+    matches: &[CapabilityMatch],
+) -> DemoResult<()> {
+    let needs_value = build_needs_capabilities(plan_steps);
+
+    // Resolve missing capabilities and build orchestrating agent
+    let mut resolved_steps =
+        resolve_and_stub_capabilities(ccos, plan_steps, matches, args.interactive).await?;
+    println!(
+        "[trace] resolve_and_stub_capabilities returned {} step(s)",
+        resolved_steps.len()
+    );
+    enrich_resolved_steps_with_sampling(ccos, &mut resolved_steps, intent, answers).await;
+    let planner_capability_id = derive_orchestrator_capability_id(goal, &resolved_steps);
+    println!(
+        "[trace] derived orchestrator capability id: {}",
+        planner_capability_id
+    );
+    let generated =
+        generate_orchestrator_capability(goal, &resolved_steps, &planner_capability_id)?;
+    let orchestrator_rtfs = generated.plan_rtfs.clone();
+    println!(
+        "[trace] generated orchestrator RTFS ({} bytes)",
+        orchestrator_rtfs.len()
+    );
+
+    // Register the orchestrator as a reusable capability in the marketplace
+    register_orchestrator_in_marketplace(ccos, &planner_capability_id, &orchestrator_rtfs).await?;
+    println!("[trace] registered orchestrator in marketplace");
+
+    // Extract all properties from (plan ...) form before creating the plan
+    let plan_props = ExtractedPlanProperties {
+        body: generated.body.clone(),
+        input_schema: generated.input_schema.clone(),
+        output_schema: generated.output_schema.clone(),
+        capabilities_required: generated.capabilities_required.clone(),
+        annotations: generated.annotations.clone(),
+    };
+    println!("[trace] extracted plan properties without parser");
+    let mut plan = Plan::new_with_schemas(
+        None,
+        vec![],
+        PlanBody::Rtfs(plan_props.body),
+        plan_props.input_schema,
+        plan_props.output_schema,
+        HashMap::new(), // policies
+        plan_props.capabilities_required,
+        plan_props.annotations,
+    );
+    plan.metadata
+        .insert("needs_capabilities".to_string(), needs_value.clone());
+    plan.metadata.insert(
+        "generated_at".to_string(),
+        Value::String(Utc::now().to_rfc3339()),
+    );
+    plan.metadata.insert(
+        "resolved_steps".to_string(),
+        build_resolved_steps_metadata(&resolved_steps),
+    );
+    plan.metadata.insert(
+        "orchestrator_capability_id".to_string(),
+        Value::String(planner_capability_id.clone()),
+    );
+
+    if let Some(fixture) = args.inject_plan_error {
+        if let PlanBody::Rtfs(ref mut body) = plan.body {
+            let original = body.clone();
+            let mutated = inject_plan_error_source(&original, fixture);
+            if mutated != original {
+                println!(
+                    "\n{} Injecting {:?} plan error to exercise auto-repair",
+                    "⚠️".yellow(),
+                    fixture
+                );
+                plan.metadata.insert(
+                    "injected_plan_error".to_string(),
+                    Value::String(format!("{:?}", fixture)),
+                );
+                plan.metadata.insert(
+                    "injected_plan_error_original".to_string(),
+                    Value::String(original),
+                );
+                *body = mutated;
+            } else {
+                println!(
+                    "\n{} Unable to inject {:?} plan error (pattern not found); continuing with original plan",
+                    "ℹ️".blue(),
+                    fixture
+                );
+            }
+        }
+    }
+
+    print_plan_draft(plan_steps, matches, &plan);
+
+    // Print resolution summary
+    let found_count = resolved_steps
+        .iter()
+        .filter(|s| s.resolution_strategy == ResolutionStrategy::Found)
+        .count();
+    let synthesized_count = resolved_steps
+        .iter()
+        .filter(|s| s.resolution_strategy == ResolutionStrategy::Synthesized)
+        .count();
+    let stubbed_count = resolved_steps
+        .iter()
+        .filter(|s| s.resolution_strategy == ResolutionStrategy::Stubbed)
+        .count();
+
+    println!("\n{}", "📊 Capability Resolution Summary".bold());
+    println!(
+        "   • Found: {} capabilities",
+        found_count.to_string().green()
+    );
+    if synthesized_count > 0 {
+        println!(
+            "   • {}: {} capabilities (with dependencies)",
+            "Synthesized".bold(),
+            synthesized_count.to_string().cyan().bold()
+        );
+    }
+    if stubbed_count > 0 {
+        println!(
+            "   • Stubbed: {} capabilities (awaiting implementation)",
+            stubbed_count.to_string().yellow()
+        );
+    }
+
+    // Display execution graph visualization
+    print_execution_graph(&resolved_steps, intent);
+
+    println!(
+        "\n{}",
+        "✅ Orchestrator generated and registered in marketplace"
+            .bold()
+            .green()
+    );
+
+    // Save the plan to the plan archive
+    let orchestrator = ccos.get_orchestrator();
+    match orchestrator.store_plan(&plan) {
+        Ok(hash) => {
+            let hash_display = hash.clone();
+            println!(
+                "  💾 Saved plan to archive with hash: {}",
+                hash_display.cyan()
+            );
+            // If using file storage, show the file path
+            let plan_archive_path = std::env::var("CCOS_PLAN_ARCHIVE_PATH")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from("demo_storage/plans"));
+            let file_path = plan_archive_path
+                .join(format!("{}/{}", &hash[0..2], &hash[2..4]))
+                .join(format!("{}.json", hash));
+            println!(
+                "     File location: {}",
+                file_path.display().to_string().dim()
+            );
+        }
+        Err(e) => {
+            eprintln!("  ⚠️  Failed to save plan to archive: {}", e);
+        }
+    }
+
+    // Load only the required capabilities into the RTFS environment before execution
+    // Check both generated (synthesized) and discovered (MCP) directories
+    println!("\n{}", "📦 Loading Required Capabilities".bold());
+    println!("{}", "=".repeat(80));
+    let marketplace = ccos.get_capability_marketplace();
+    let generated_dir = std::path::Path::new("capabilities/generated");
+    let discovered_dir = std::path::Path::new("capabilities/discovered");
+
+    if discovered_dir.exists() {
+        match preload_discovered_capabilities(&marketplace, discovered_dir).await {
+            Ok(count) => {
+                if count > 0 {
+                    println!(
+                        "  {} Preloaded {} discovered capability manifest(s)",
+                        "✓".green(),
+                        count
+                    );
+                }
+            }
+            Err(e) => eprintln!(
+                "  {} Failed to preload discovered capabilities: {}",
+                "⚠️".yellow(),
+                e
+            ),
+        }
+    }
+
+    if !plan.capabilities_required.is_empty() {
+        let mut loaded_count = 0usize;
+        let mut missing_caps = Vec::new();
+
+        for cap_id in &plan.capabilities_required {
+            println!(
+                "  {} Checking required capability: {}",
+                "ℹ️".blue(),
+                cap_id.as_str()
+            );
+            // Check if capability is already registered in marketplace
+            if marketplace.has_capability(cap_id).await {
+                println!(
+                    "  {} Capability already available: {}",
+                    "✓".green(),
+                    cap_id.as_str().green()
+                );
+                continue;
+            }
+
+            let mut found = false;
+
+            // Try to load from generated directory (synthesized capabilities)
+            let cap_dir = generated_dir.join(cap_id);
+            let cap_file = cap_dir.join("capability.rtfs");
+
+            if cap_file.exists() {
+                match marketplace
+                    .import_capabilities_from_rtfs_dir(&cap_dir)
+                    .await
+                {
+                    Ok(count) => {
+                        if count > 0 {
+                            loaded_count += count;
+                            println!(
+                                "  {} Loaded from generated: {}",
+                                "✓".green(),
+                                cap_id.as_str().green()
+                            );
+                            found = true;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "  {} Failed to load {} from generated: {}",
+                            "⚠️".yellow(),
+                            cap_id.as_str().yellow(),
+                            e
+                        );
+                    }
+                }
+            }
+
+            // If not found in generated, try discovered directory (MCP capabilities)
+            if !found {
+                if discovered_dir.exists() {
+                    if let Ok(entries) = std::fs::read_dir(discovered_dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.is_dir() {
+                                match marketplace.import_capabilities_from_rtfs_dir(&path).await {
+                                    Ok(count) => {
+                                        if count > 0 {
+                                            let all_caps = marketplace.list_capabilities().await;
+                                            if all_caps.iter().any(|cap| cap.id == cap_id.as_str())
+                                            {
+                                                loaded_count += count;
+                                                println!(
+                                                    "  {} Loaded from discovered: {}",
+                                                    "✓".green(),
+                                                    cap_id.as_str().green()
+                                                );
+                                                found = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
+                                        // Continue searching
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !found {
+                let all_caps = marketplace.list_capabilities().await;
+                let keywords: Vec<&str> = cap_id.split('.').collect();
+                let matching_cap = all_caps.iter().find(|cap| {
+                    keywords.iter().all(|kw| {
+                        cap.id
+                            .to_ascii_lowercase()
+                            .contains(&kw.to_ascii_lowercase())
+                    })
+                });
+
+                if let Some(matching) = matching_cap {
+                    println!(
+                        "  {} Found matching capability: {} (registered as {})",
+                        "✓".green(),
+                        cap_id.as_str().green(),
+                        matching.id.as_str().cyan()
+                    );
+
+                    let wrapper_id = cap_id.clone();
+                    let actual_id = matching.id.clone();
+
+                    if wrapper_id.as_str() == actual_id.as_str() {
+                        println!(
+                            "  {} Capability already available under required id: {}",
+                            "✓".green(),
+                            wrapper_id.as_str().green()
+                        );
+                        found = true;
+                    } else {
+                        let mut alias_manifest = matching.clone();
+                        alias_manifest.id = wrapper_id.as_str().to_string();
+                        alias_manifest
+                            .metadata
+                            .insert("alias_of".to_string(), actual_id.as_str().to_string());
+                        alias_manifest.metadata.insert(
+                            "alias_created_by".to_string(),
+                            "smart_assistant_demo".to_string(),
+                        );
+                        alias_manifest.name = format!("{} (alias)", alias_manifest.name)
+                            .chars()
+                            .take(120)
+                            .collect();
+
+                        match marketplace
+                            .register_capability_manifest(alias_manifest)
+                            .await
+                        {
+                            Ok(_) => {
+                                println!(
+                                    "  {} Registered alias capability: {} → {}",
+                                    "✓".green(),
+                                    wrapper_id.as_str().green(),
+                                    actual_id.as_str().cyan()
+                                );
+                                loaded_count += 1;
+                                found = true;
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "  {} Failed to register alias {} → {}: {}",
+                                    "⚠️".yellow(),
+                                    wrapper_id.as_str().yellow(),
+                                    actual_id.as_str().cyan(),
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !found {
+                missing_caps.push(cap_id.clone());
+                println!(
+                    "  {} Not found: {} (checked generated and discovered directories)",
+                    "⚠️".yellow(),
+                    cap_id.as_str().yellow()
+                );
+            }
+        }
+
+        if loaded_count > 0 {
+            println!(
+                "  {} Loaded {} required capability/capabilities",
+                "✓".green(),
+                loaded_count.to_string().green()
+            );
+        }
+        if !missing_caps.is_empty() {
+            println!(
+                "  {} {} capability/capabilities not found or failed to load",
+                "⚠️".yellow(),
+                missing_caps.len().to_string().yellow()
+            );
+            println!(
+                "  {} Tip: These capabilities may be registered with different IDs (e.g., MCP IDs)",
+                "ℹ️".dim()
+            );
+        }
+    } else {
+        println!("  {} No capabilities required by this plan", "ℹ️".dim());
+    }
+
+    // Execute the generated plan
+    println!("\n{}", "🚀 Executing Plan".bold());
+    println!("{}", "=".repeat(80));
+
+    let mut context = rtfs::runtime::security::RuntimeContext::full();
+    extract_and_bind_plan_inputs(&mut context, intent, answers);
+
+    if let Err(e) = sample_mcp_outputs(ccos, &resolved_steps, &context).await {
+        eprintln!(
+            "  {} Failed to sample MCP capability outputs: {}",
+            "⚠️".yellow(),
+            e
+        );
+    }
+
+    let mut repair_options = PlanAutoRepairOptions::default();
+    let mut context_lines = vec![format!("Goal: {}", goal)];
+    if let Some(fixture) = args.inject_plan_error {
+        context_lines.push(format!("Injected plan error fixture: {:?}", fixture));
+    }
+    repair_options.additional_context = Some(context_lines.join("\n"));
+    repair_options.debug_responses = args.debug_prompts;
+
+    match ccos
+        .validate_and_execute_plan_with_auto_repair(plan, &context, repair_options)
+        .await
+    {
+        Ok(exec_result) => {
+            if exec_result.success {
+                println!(
+                    "\n{}",
+                    "✅ Plan execution completed successfully!".bold().green()
+                );
+                println!("{}", "Result:".bold());
+                println!("{:?}", exec_result.value);
+            } else {
+                println!(
+                    "\n{}",
+                    "⚠️  Plan execution completed with warnings".bold().yellow()
+                );
+                if let Some(error) = exec_result.metadata.get("error") {
+                    println!("Error: {:?}", error);
+                }
+                println!("Result: {:?}", exec_result.value);
+            }
+        }
+        Err(e) => {
+            println!("\n{}", "❌ Plan execution failed".bold().red());
+            println!("Error: {}", e);
+        }
+    }
+
+    println!("\n{}", "🔁 Architecture snapshot after execution".bold());
+    print_architecture_summary(agent_config, args.profile.as_deref());
+
+    Ok(())
+}
+
 /// Extract all plan properties from a (plan ...) form
 fn extract_plan_properties(plan_rtfs: &str) -> DemoResult<ExtractedPlanProperties> {
     // Try to parse as top-level construct to extract properties from (plan ...) form
@@ -4377,7 +4674,6 @@ fn extract_plan_body(plan_rtfs: &str) -> DemoResult<String> {
 /// This ensures plan inputs are available during execution
 fn extract_and_bind_plan_inputs(
     context: &mut rtfs::runtime::security::RuntimeContext,
-    _plan: &Plan,
     intent: &Intent,
     answers: &[AnswerRecord],
 ) {
@@ -4561,6 +4857,33 @@ async fn sample_mcp_outputs(
     }
 
     Ok(())
+}
+
+async fn enrich_resolved_steps_with_sampling(
+    ccos: &Arc<CCOS>,
+    resolved_steps: &mut [ResolvedStep],
+    intent: &Intent,
+    answers: &[AnswerRecord],
+) {
+    let mut sampling_context = rtfs::runtime::security::RuntimeContext::full();
+    extract_and_bind_plan_inputs(&mut sampling_context, intent, answers);
+
+    if let Err(e) = sample_mcp_outputs(ccos, resolved_steps, &sampling_context).await {
+        eprintln!(
+            "  {} Failed to sample MCP capability outputs: {}",
+            "⚠️".yellow(),
+            e
+        );
+    }
+
+    let manifests = ccos.get_capability_marketplace().list_capabilities().await;
+
+    for step in resolved_steps.iter_mut() {
+        if let Some(manifest) = manifests.iter().find(|m| m.id == step.capability_id) {
+            step.input_bindings = compute_input_bindings_for_step(&step.original, Some(manifest));
+            step.output_bindings = compute_output_bindings_for_step(&step.original, Some(manifest));
+        }
+    }
 }
 
 fn build_sample_input_for_manifest(
@@ -4905,6 +5228,10 @@ fn generate_orchestrator_capability(
     for (idx, step) in resolved_steps.iter().enumerate() {
         for out in &step.original.expected_outputs {
             output_to_idx.insert(out.clone(), idx);
+            let trimmed = out.trim();
+            if trimmed != out {
+                output_to_idx.entry(trimmed.to_string()).or_insert(idx);
+            }
         }
     }
     let mut all_outputs: Vec<_> = output_to_idx.keys().cloned().collect();
@@ -4990,6 +5317,10 @@ fn generate_orchestrator_capability(
                 }
                 for out in &prev.original.expected_outputs {
                     prior_outputs.insert(out.clone(), pidx);
+                    let trimmed = out.trim();
+                    if trimmed != out {
+                        prior_outputs.entry(trimmed.to_string()).or_insert(pidx);
+                    }
                 }
             }
             let step_args = build_step_call_args(resolved_steps, idx, &prior_outputs)?;
@@ -5057,6 +5388,56 @@ fn generate_orchestrator_capability(
     })
 }
 
+fn parse_input_assignment(raw: &str) -> (String, Option<String>) {
+    let trimmed = raw.trim();
+    if let Some((name, value)) = trimmed.split_once('=') {
+        let key = name.trim();
+        let val = value.trim();
+        if key.is_empty() {
+            (trimmed.to_string(), None)
+        } else if val.is_empty() {
+            (key.to_string(), None)
+        } else {
+            (key.to_string(), Some(val.to_string()))
+        }
+    } else {
+        (trimmed.to_string(), None)
+    }
+}
+
+fn literal_to_rtfs_literal(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        "\"\"".to_string()
+    } else if trimmed.eq_ignore_ascii_case("true") || trimmed.eq_ignore_ascii_case("false") {
+        trimmed.to_ascii_lowercase()
+    } else if let Ok(int_val) = trimmed.parse::<i64>() {
+        int_val.to_string()
+    } else if trimmed.parse::<f64>().is_ok() && trimmed.contains('.') {
+        trimmed.to_string()
+    } else if trimmed.starts_with(':') {
+        let keyword = trimmed.trim_start_matches(':');
+        format!(":{}", sanitize_keyword(keyword))
+    } else {
+        format!(
+            "\"{}\"",
+            trimmed.replace('\\', "\\\\").replace('\"', "\\\"")
+        )
+    }
+}
+
+fn sanitize_symbol(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        "value".to_string()
+    } else {
+        trimmed
+            .chars()
+            .map(|c| if c.is_whitespace() { '_' } else { c })
+            .collect()
+    }
+}
+
 fn build_step_call_args(
     resolved_steps: &[ResolvedStep],
     current_idx: usize,
@@ -5071,17 +5452,24 @@ fn build_step_call_args(
 
     let mut args_parts = vec!["{".to_string()];
     for (i, input) in step.required_inputs.iter().enumerate() {
-        let manifest_key = resolved
+        let (base_input, literal_value) = parse_input_assignment(input);
+        let manifest_key_raw = resolved
             .input_bindings
             .get(input)
             .cloned()
-            .unwrap_or_else(|| input.clone());
-        if let Some(pidx) = prior_outputs.get(input) {
+            .or_else(|| resolved.input_bindings.get(&base_input).cloned())
+            .unwrap_or_else(|| base_input.clone());
+        let manifest_key = sanitize_keyword(&manifest_key_raw);
+        if let Some(literal) = literal_value {
+            let literal_code = literal_to_rtfs_literal(&literal);
+            args_parts.push(format!("    :{} {}", manifest_key, literal_code));
+        } else if let Some(pidx) = prior_outputs.get(&base_input) {
             let source_step = &resolved_steps[*pidx];
-            let accessor = build_output_accessor(source_step, input, *pidx);
+            let accessor = build_output_accessor(source_step, &base_input, *pidx);
             args_parts.push(format!("    :{} {}", manifest_key, accessor));
         } else {
-            args_parts.push(format!("    :{} {}", manifest_key, input));
+            let symbol = sanitize_symbol(&base_input);
+            args_parts.push(format!("    :{} {}", manifest_key, symbol));
         }
         if i < step.required_inputs.len() - 1 {
             args_parts.push("\n".to_string());
@@ -5464,6 +5852,8 @@ fn print_plan_draft(steps: &[ProposedStep], matches: &[CapabilityMatch], plan: &
     for (key, value) in &plan.metadata {
         println!("   • {} = {}", key.as_str().cyan(), format_value(value));
     }
+
+    print_normalization_telemetry();
 }
 
 /*
