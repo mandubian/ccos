@@ -11,12 +11,22 @@ pub fn create_pure_evaluator() -> Evaluator {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::pure();
     let host = create_pure_host();
-    Evaluator::new(module_registry, security_context, host)
+    Evaluator::new(
+        module_registry,
+        security_context,
+        host,
+        rtfs::compiler::expander::MacroExpander::default(),
+    )
 }
 
 /// Creates a pure RTFS evaluator with custom security context
 pub fn create_pure_evaluator_with_context(security_context: RuntimeContext) -> Evaluator {
     let module_registry = Arc::new(ModuleRegistry::new());
     let host = create_pure_host();
-    Evaluator::new(module_registry, security_context, host)
+    Evaluator::new(
+        module_registry,
+        security_context,
+        host,
+        rtfs::compiler::expander::MacroExpander::default(),
+    )
 }

@@ -549,6 +549,14 @@ impl CCOS {
                                 walk_expr(v, acc);
                             }
                         }
+                        Expression::Quasiquote(inner) => walk_expr(inner, acc),
+                        Expression::Unquote(inner) => walk_expr(inner, acc),
+                        Expression::UnquoteSplicing(inner) => walk_expr(inner, acc),
+                        Expression::Defmacro(defmacro) => {
+                            for expr in &defmacro.body {
+                                walk_expr(expr, acc);
+                            }
+                        }
                         Expression::Literal(_)
                         | Expression::Symbol(_)
                         | Expression::ResourceRef(_) => {}

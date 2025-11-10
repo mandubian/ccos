@@ -81,13 +81,17 @@ pub fn parse_with_enhanced_errors(
 }
 
 /// Parse a single expression (useful for REPL or simple evaluation)
+
+// ...
+
 pub fn parse_expression(input: &str) -> Result<Expression, PestParseError> {
     let pairs = RTFSParser::parse(Rule::expression, input).map_err(PestParseError::from)?;
     let expr_pair = pairs.peek().ok_or_else(|| PestParseError::InvalidInput {
         message: "No expression found".to_string(),
         span: span_from_input(input),
     })?;
-    build_expression(expr_pair)
+    let expression = build_expression(expr_pair)?;
+    Ok(expression)
 }
 
 /// Parse a type expression (useful for type validation and capability schemas)

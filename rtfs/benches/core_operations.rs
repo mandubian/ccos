@@ -55,8 +55,12 @@ fn benchmark_evaluation(c: &mut Criterion) {
         let parsed = parse_expression(expr).unwrap();
         group.bench_with_input(BenchmarkId::from_parameter(name), &parsed, |b, parsed| {
             b.iter(|| {
-                let evaluator =
-                    Evaluator::new(module_registry.clone(), context.clone(), host.clone());
+                let evaluator = Evaluator::new(
+                    module_registry.clone(),
+                    context.clone(),
+                    host.clone(),
+                    rtfs::compiler::expander::MacroExpander::default(),
+                );
                 evaluator.evaluate(black_box(parsed))
             });
         });
@@ -90,8 +94,12 @@ fn benchmark_pattern_matching(c: &mut Criterion) {
         let parsed = parse_expression(expr).unwrap();
         group.bench_with_input(BenchmarkId::from_parameter(name), &parsed, |b, parsed| {
             b.iter(|| {
-                let evaluator =
-                    Evaluator::new(module_registry.clone(), context.clone(), host.clone());
+                let evaluator = Evaluator::new(
+                    module_registry.clone(),
+                    context.clone(),
+                    host.clone(),
+                    rtfs::compiler::expander::MacroExpander::default(),
+                );
                 evaluator.evaluate(black_box(parsed))
             });
         });
@@ -120,8 +128,12 @@ fn benchmark_stdlib(c: &mut Criterion) {
         let parsed = parse_expression(expr).unwrap();
         group.bench_with_input(BenchmarkId::from_parameter(name), &parsed, |b, parsed| {
             b.iter(|| {
-                let evaluator =
-                    Evaluator::new(module_registry.clone(), context.clone(), host.clone());
+                let evaluator = Evaluator::new(
+                    module_registry.clone(),
+                    context.clone(),
+                    host.clone(),
+                    rtfs::compiler::expander::MacroExpander::default(),
+                );
                 evaluator.evaluate(black_box(parsed))
             });
         });

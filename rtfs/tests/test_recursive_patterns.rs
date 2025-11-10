@@ -18,7 +18,12 @@ fn test_mutual_recursion_pattern() {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
-    let evaluator = Evaluator::new(module_registry, security_context, host);
+    let evaluator = Evaluator::new(
+        module_registry,
+        security_context,
+        host,
+        rtfs::compiler::expander::MacroExpander::default(),
+    );
     let outcome = if let TopLevel::Expression(expr) = &parsed[0] {
         evaluator
             .evaluate(expr)
@@ -66,6 +71,7 @@ fn test_nested_recursion_pattern() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
     let outcome = evaluator
         .evaluate(&parsed)
@@ -109,6 +115,7 @@ fn test_higher_order_recursion_pattern() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
     let outcome = evaluator
         .evaluate(&parsed)
@@ -162,6 +169,7 @@ fn test_three_way_recursion_pattern() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
     let outcome = evaluator
         .evaluate(&parsed)
