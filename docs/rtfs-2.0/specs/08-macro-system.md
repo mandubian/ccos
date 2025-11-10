@@ -142,5 +142,3 @@ pi ; -> 3.1415
 ---
 
 This section complements the language-level documentation in `02-syntax-and-grammar.md` and the compilation notes in `12-ir-and-compilation.md` (see the "Macro expansion" subsection added there).
-
-<parameter name="filePath">/home/mandubian/workspaces/mandubian/ccos/docs/rtfs-2.0/specs-new/05-macro-system.md
