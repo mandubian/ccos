@@ -84,7 +84,9 @@ The converter has special handlers for each of the special forms in the RTFS lan
 
 ### 3.5. Built-in Functions
 
-## Macro expansion
+The converter adds the built-in functions to the global scope, so they can be called from anywhere in the program.
+
+## 4. Macro expansion
 
 Before the `IrConverter` runs, RTFS performs a dedicated top-level macro expansion pass. The key properties of this pass are:
 
@@ -94,5 +96,3 @@ Before the `IrConverter` runs, RTFS performs a dedicated top-level macro expansi
 - The compiler captures the `MacroExpander` instance and forwards it to any runtime evaluators that will execute AST fragments, ensuring compile-time and runtime share the same macro registry.
 
 This ordering guarantees the IR is generated from the fully-expanded AST and prevents macro-templating artifacts from leaking into the lower-level representation.
-
-The converter adds the built-in functions to the global scope, so they can be called from anywhere in the program.
