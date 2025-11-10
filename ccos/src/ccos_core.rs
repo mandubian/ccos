@@ -15,12 +15,15 @@ pub use crate::arbiter::delegating_arbiter;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::agent::AgentRegistry; // bring trait into scope for record_feedback
+use crate::arbiter::prompt::{FilePromptStore, PromptStore};
 use crate::arbiter::{Arbiter, DelegatingArbiter};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogEntryKind, CatalogFilter, CatalogHit, CatalogService};
+use crate::rtfs_bridge::RtfsErrorExplainer;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::config::types::AgentConfig;
 use rtfs::runtime::error::RuntimeResult;
@@ -36,6 +39,8 @@ use crate::governance_kernel::GovernanceKernel;
 use crate::intent_graph::{config::IntentGraphConfig, IntentGraph};
 use crate::types::StorableIntent;
 use rtfs::runtime::error::RuntimeError;
+
+use once_cell::sync::Lazy;
 
 use crate::orchestrator::Orchestrator;
 use crate::plan_archive::PlanArchive;
@@ -62,6 +67,127 @@ pub struct CCOS {
     /// Optional debug callback for emitting lifecycle JSON lines (plan generation, execution etc.)
     debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
     catalog: Arc<CatalogService>,
+}
+
+/// Options that control the behaviour of the plan auto-repair pipeline.
+#[derive(Debug, Clone)]
+pub struct PlanAutoRepairOptions {
+    /// Maximum number of repair attempts (each attempt can trigger an LLM call).
+    pub max_attempts: usize,
+    /// Additional natural-language context to append to the repair prompt.
+    pub additional_context: Option<String>,
+    /// Extra grammar hints to provide to the LLM (deduplicated with diagnostics).
+    pub grammar_hints: Vec<String>,
+    /// When true, the raw prompt/response payloads are emitted via the debug callback.
+    pub debug_responses: bool,
+}
+
+impl Default for PlanAutoRepairOptions {
+    fn default() -> Self {
+        Self {
+            max_attempts: 1,
+            additional_context: None,
+            debug_responses: false,
+            grammar_hints: DEFAULT_REPAIR_GRAMMAR_HINTS.clone(),
+        }
+    }
+}
+
+const AUTO_REPAIR_PROMPT_ID: &str = "auto_repair";
+const AUTO_REPAIR_PROMPT_VERSION: &str = "v1";
+
+static DEFAULT_REPAIR_GRAMMAR_HINTS: Lazy<Vec<String>> = Lazy::new(|| {
+    load_grammar_hints_from_prompt_store().unwrap_or_else(|err| {
+        eprintln!(
+            "⚠️  Falling back to built-in auto-repair grammar hints: {}",
+            err
+        );
+        fallback_grammar_hints()
+    })
+});
+
+fn load_grammar_hints_from_prompt_store() -> Result<Vec<String>, String> {
+    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/arbiter");
+    let store = FilePromptStore::new(&base_dir);
+    let template = store
+        .get_template(AUTO_REPAIR_PROMPT_ID, AUTO_REPAIR_PROMPT_VERSION)
+        .map_err(|e| {
+            format!(
+                "failed to load {}/{} prompt: {}",
+                AUTO_REPAIR_PROMPT_ID, AUTO_REPAIR_PROMPT_VERSION, e
+            )
+        })?;
+    let grammar_markdown = template
+        .sections
+        .into_iter()
+        .find(|(name, _)| name == "grammar")
+        .map(|(_, content)| content)
+        .ok_or_else(|| "prompt template did not contain a grammar section".to_string())?;
+
+    let mut hints: Vec<String> = grammar_markdown
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| {
+            if line.starts_with("- ") {
+                Some(line.trim_start_matches("- ").trim().to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|line| !line.is_empty())
+        .collect();
+
+    hints.dedup();
+
+    if hints.is_empty() {
+        Err("grammar section did not yield any bullet entries".to_string())
+    } else {
+        Ok(hints)
+    }
+}
+
+fn fallback_grammar_hints() -> Vec<String> {
+    vec![
+        "RTFS uses prefix notation with parentheses.".to_string(),
+        "Maps are written as `{:keyword value}` pairs without `=` characters.".to_string(),
+        "Strings must be enclosed in double quotes.".to_string(),
+        "Keywords begin with a colon and typically use kebab-case (e.g. `:issues`).".to_string(),
+        "Capability calls use `(call :provider.capability {:param value})`.".to_string(),
+    ]
+}
+
+fn extract_plan_rtfs_from_response(response: &str) -> Option<String> {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(start) = trimmed.find("```") {
+        let after_start = &trimmed[start + 3..];
+        let mut rest = after_start.trim_start();
+        if let Some(idx) = rest.find('\n') {
+            let (first_line, remainder) = rest.split_at(idx);
+            let normalized = first_line.trim().to_ascii_lowercase();
+            rest = if normalized == "rtfs" || normalized == "lisp" || normalized == "scheme" {
+                remainder.trim_start_matches('\n')
+            } else {
+                remainder.trim_start_matches('\n')
+            };
+        }
+        if let Some(end_idx) = rest.find("```") {
+            let code = rest[..end_idx].trim();
+            if code.starts_with("(plan") {
+                return Some(code.to_string());
+            }
+        }
+    }
+
+    let stripped = trimmed.trim_matches('`').trim();
+    if stripped.starts_with("(plan") {
+        return Some(stripped.to_string());
+    }
+    None
 }
 
 #[derive(Clone, Copy)]
@@ -1188,6 +1314,157 @@ impl CCOS {
         }
 
         Ok(result)
+    }
+
+    /// Validate and execute a plan, retrying with LLM-based auto-repair when the RTFS compiler
+    /// rejects the generated code. Requires a delegating arbiter to be configured.
+    pub async fn validate_and_execute_plan_with_auto_repair(
+        &self,
+        plan: crate::types::Plan,
+        context: &RuntimeContext,
+        options: PlanAutoRepairOptions,
+    ) -> RuntimeResult<ExecutionResult> {
+        let mut current_plan = plan.clone();
+        let mut attempts_remaining = options.max_attempts;
+        let mut attempt_index = 0usize;
+
+        loop {
+            let plan_for_execution = current_plan.clone();
+            match self
+                .validate_and_execute_plan(plan_for_execution, context)
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(err) => {
+                    if attempts_remaining == 0 {
+                        return Err(err);
+                    }
+
+                    match self
+                        .try_repair_plan_with_llm(&current_plan, &err, attempt_index, &options)
+                        .await?
+                    {
+                        Some(repaired_plan) => {
+                            current_plan = repaired_plan;
+                            attempts_remaining -= 1;
+                            attempt_index += 1;
+                        }
+                        None => {
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn try_repair_plan_with_llm(
+        &self,
+        plan: &crate::types::Plan,
+        error: &RuntimeError,
+        attempt_index: usize,
+        options: &PlanAutoRepairOptions,
+    ) -> RuntimeResult<Option<crate::types::Plan>> {
+        let delegating = match self.get_delegating_arbiter() {
+            Some(arbiter) => arbiter,
+            None => return Ok(None),
+        };
+
+        let plan_source = match &plan.body {
+            crate::types::PlanBody::Rtfs(source) => source.clone(),
+            _ => return Ok(None),
+        };
+
+        let diagnostics = RtfsErrorExplainer::explain(error);
+        if diagnostics.is_none()
+            && !matches!(
+                error,
+                RuntimeError::Generic(_)
+                    | RuntimeError::InvalidProgram(_)
+                    | RuntimeError::TypeValidationError(_)
+                    | RuntimeError::UndefinedSymbol(_)
+                    | RuntimeError::SymbolNotFound(_)
+            )
+        {
+            return Ok(None);
+        }
+
+        let diag_string = diagnostics
+            .as_ref()
+            .map(RtfsErrorExplainer::format_for_llm)
+            .unwrap_or_else(|| format!("{}", error));
+
+        let mut hints: Vec<String> = diagnostics
+            .as_ref()
+            .map(|d| d.hints.clone())
+            .unwrap_or_default();
+
+        for hint in &options.grammar_hints {
+            if !hints.iter().any(|existing| existing == hint) {
+                hints.push(hint.clone());
+            }
+        }
+
+        let mut prompt = String::new();
+        prompt.push_str("You are an expert RTFS compiler repairing an invalid plan.\n");
+        prompt.push_str("The RTFS compiler produced the following diagnostics:\n");
+        prompt.push_str(&diag_string);
+        prompt.push('\n');
+        if !hints.is_empty() {
+            prompt.push_str("Follow these RTFS rules when fixing the plan:\n");
+            for hint in &hints {
+                prompt.push_str("- ");
+                prompt.push_str(hint);
+                prompt.push('\n');
+            }
+        }
+        if let Some(extra) = &options.additional_context {
+            if !extra.trim().is_empty() {
+                prompt.push_str("\nAdditional context:\n");
+                prompt.push_str(extra);
+                prompt.push('\n');
+            }
+        }
+        prompt.push_str("\nCurrent plan (RTFS):\n```rtfs\n");
+        prompt.push_str(&plan_source);
+        prompt.push_str("\n```\n");
+        prompt.push_str(
+            "Produce ONLY the corrected `(plan ...)` form in valid RTFS syntax. Do not add commentary.\n",
+        );
+
+        let response = delegating.generate_raw_text(&prompt).await.map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to request RTFS plan repair from delegating arbiter: {}",
+                e
+            ))
+        })?;
+
+        if options.debug_responses {
+            if let Some(callback) = &self.debug_callback {
+                callback(format!(
+                    "{{\"auto_repair_prompt\":\"{}\",\"auto_repair_response\":\"{}\"}}",
+                    prompt, response
+                ));
+            }
+        }
+
+        let new_plan_source = match extract_plan_rtfs_from_response(&response) {
+            Some(src) => src,
+            None => return Ok(None),
+        };
+
+        if rtfs::parser::parse(&new_plan_source).is_err() {
+            return Ok(None);
+        }
+
+        let mut repaired_plan = plan.clone();
+        repaired_plan.body = crate::types::PlanBody::Rtfs(new_plan_source);
+        repaired_plan.metadata.insert(
+            "auto_repair_attempts".to_string(),
+            Value::Integer((attempt_index + 1) as i64),
+        );
+
+        Ok(Some(repaired_plan))
     }
 
     /// Analyze the current session's interactions and synthesize new capabilities.
