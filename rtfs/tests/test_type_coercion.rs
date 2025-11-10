@@ -11,7 +11,12 @@ fn create_test_evaluator() -> Evaluator {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::pure();
     let host = create_pure_host();
-    Evaluator::new(module_registry, security_context, host)
+    Evaluator::new(
+        module_registry,
+        security_context,
+        host,
+        rtfs::compiler::expander::MacroExpander::default(),
+    )
 }
 
 #[test]
