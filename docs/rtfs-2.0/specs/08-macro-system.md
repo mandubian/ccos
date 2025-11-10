@@ -125,7 +125,7 @@ RTFS does not attempt full hygienic macro transformations in this release, but s
   `(def ~name ~value))
 
 (def-constant pi 3.1415)
-(pi) ; -> 3.1415
+pi ; -> 3.1415
 ```
 
 ## Migration notes (for integrators)
