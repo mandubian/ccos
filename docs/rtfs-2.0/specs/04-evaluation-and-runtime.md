@@ -7,6 +7,16 @@ RTFS 2.0 uses a **hybrid compile-time/runtime evaluation model** where:
 - **Compile-time**: Macro expansion, type checking, optimization
 - **Runtime**: Pure functional evaluation with host yielding for effects
 
+Important detail (macro integration): the compile-time phase includes a dedicated top-level macro expansion pass that runs before IR conversion or runtime evaluation. The compiler captures the `MacroExpander` instance that was populated during top-level expansion and forwards it to any runtime evaluators. Evaluator construction requires a `MacroExpander` to be provided so runtime evaluators share the same macro registry produced at compile-time.
+
+Example (conceptual):
+
+```rust
+let (expanded_ast, macro_expander) = expand_top_levels(parsed_ast);
+// later, when constructing an evaluator for AST execution
+let eval = Evaluator::new(ctx, host_iface, module_registry, macro_expander.clone());
+```
+
 ## Expression Evaluation
 
 All RTFS constructs are expressions that evaluate to values:
