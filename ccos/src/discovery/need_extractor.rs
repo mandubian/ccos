@@ -1,10 +1,12 @@
 //! Extract capability needs from plans and orchestrator RTFS
 
 use crate::types::Plan;
+use rtfs::ast::TypeExpr;
 use rtfs::runtime::values::Value;
+use serde_json::Value as JsonValue;
 
 /// Represents a needed capability that may not yet exist
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CapabilityNeed {
     /// The capability class/type being requested (e.g., "restaurant.reservation.book")
     pub capability_class: String,
@@ -14,6 +16,12 @@ pub struct CapabilityNeed {
     pub expected_outputs: Vec<String>,
     /// Rationale for why this capability is needed
     pub rationale: String,
+    /// Optional structured annotations (e.g. primitive hints) describing the need.
+    pub annotations: serde_json::Value,
+    /// Optional input schema associated with this need.
+    pub input_schema: Option<TypeExpr>,
+    /// Optional output schema associated with this need.
+    pub output_schema: Option<TypeExpr>,
 }
 
 impl CapabilityNeed {
@@ -29,7 +37,23 @@ impl CapabilityNeed {
             required_inputs,
             expected_outputs,
             rationale,
+            annotations: serde_json::Value::Null,
+            input_schema: None,
+            output_schema: None,
         }
+    }
+
+    /// Attach structured annotations (overwriting previous annotations).
+    pub fn with_annotations(mut self, annotations: serde_json::Value) -> Self {
+        self.annotations = annotations;
+        self
+    }
+
+    /// Attach explicit input/output schemas to this need.
+    pub fn with_schemas(mut self, input: Option<TypeExpr>, output: Option<TypeExpr>) -> Self {
+        self.input_schema = input;
+        self.output_schema = output;
+        self
     }
 }
 
@@ -75,12 +99,28 @@ impl CapabilityNeedExtractor {
                                     format!("Capability needed: {}", capability_class)
                                 });
 
-                        needs.push(CapabilityNeed::new(
-                            capability_class,
-                            required_inputs,
-                            expected_outputs,
-                            rationale,
-                        ));
+                        let annotations = map_get(&map, "primitive_annotations")
+                            .and_then(|value| serde_json::to_value(value).ok())
+                            .unwrap_or(JsonValue::Null);
+
+                        let input_schema = map_get(&map, "input_schema")
+                            .and_then(value_to_string)
+                            .and_then(|schema| TypeExpr::from_str(&schema).ok());
+
+                        let output_schema = map_get(&map, "output_schema")
+                            .and_then(value_to_string)
+                            .and_then(|schema| TypeExpr::from_str(&schema).ok());
+
+                        needs.push(
+                            CapabilityNeed::new(
+                                capability_class,
+                                required_inputs,
+                                expected_outputs,
+                                rationale,
+                            )
+                            .with_annotations(annotations)
+                            .with_schemas(input_schema, output_schema),
+                        );
                     }
                 }
             }
@@ -141,24 +181,30 @@ impl CapabilityNeedExtractor {
                             let rationale =
                                 Self::capability_id_to_functional_description(&capability_id);
 
-                            needs.push(CapabilityNeed::new(
-                                capability_id.clone(),
-                                inputs,
-                                vec!["result".to_string()], // Default output
-                                rationale,
-                            ));
+                            needs.push(
+                                CapabilityNeed::new(
+                                    capability_id.clone(),
+                                    inputs,
+                                    vec!["result".to_string()], // Default output
+                                    rationale,
+                                )
+                                .with_annotations(JsonValue::Null),
+                            );
                         } else {
                             // No arg map found, still create a need with empty inputs
                             // Generate a functional rationale from capability ID
                             let rationale =
                                 Self::capability_id_to_functional_description(&capability_id);
 
-                            needs.push(CapabilityNeed::new(
-                                capability_id.clone(),
-                                vec![],
-                                vec!["result".to_string()],
-                                rationale,
-                            ));
+                            needs.push(
+                                CapabilityNeed::new(
+                                    capability_id.clone(),
+                                    vec![],
+                                    vec!["result".to_string()],
+                                    rationale,
+                                )
+                                .with_annotations(JsonValue::Null),
+                            );
                         }
                     }
                 }
@@ -172,7 +218,7 @@ impl CapabilityNeedExtractor {
     /// Extract a rationale from plan metadata if available
     fn extract_rationale_from_plan_metadata(
         map: &std::collections::HashMap<rtfs::ast::MapKey, Value>,
-        capability_class: &str,
+        _capability_class: &str,
     ) -> Option<String> {
         // Try to find description or name fields
         if let Some(Value::String(desc)) = map_get(map, "description") {

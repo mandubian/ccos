@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
-use ccos::discovery::{CapabilityNeed, DiscoveryEngine};
+use ccos::discovery::{local_synthesizer::LocalSynthesizer, CapabilityNeed, DiscoveryEngine};
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::types::{Intent, Plan};
 use ccos::CCOS;
@@ -24,7 +24,7 @@ use rtfs::config::types::{AgentConfig, LlmProfile};
 use rtfs::parser::parse_expression;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
-use serde_json;
+use serde_json::{self, Value as JsonValue};
 use toml;
 
 #[derive(Parser, Debug)]
@@ -99,6 +99,7 @@ struct ProposedStep {
     required_inputs: Vec<String>,
     expected_outputs: Vec<String>,
     description: Option<String>,
+    primitive_annotations: Option<JsonValue>,
 }
 
 #[derive(Debug, Clone)]
@@ -698,6 +699,7 @@ mod tests {
                 required_inputs: vec!["origin".into(), "destination".into(), "dates".into()],
                 expected_outputs: vec!["flight_options".into()],
                 description: None,
+                primitive_annotations: None,
             },
             capability_id: "travel.flights.search".to_string(),
             resolution_strategy: ResolutionStrategy::Found,
@@ -712,6 +714,7 @@ mod tests {
                 required_inputs: vec!["destination".into(), "dates".into(), "budget".into()],
                 expected_outputs: vec!["reservation".into()],
                 description: None,
+                primitive_annotations: None,
             },
             capability_id: "travel.lodging.reserve".to_string(),
             resolution_strategy: ResolutionStrategy::Found,
@@ -793,6 +796,7 @@ mod tests {
                 required_inputs: vec!["goal".into()],
                 expected_outputs: vec!["prefs".into()],
                 description: None,
+                primitive_annotations: None,
             },
             capability_id: "planning.preferences.aggregate".into(),
             resolution_strategy: ResolutionStrategy::Found,
@@ -808,6 +812,7 @@ mod tests {
                 required_inputs: vec!["prefs".into(), "destination".into()],
                 expected_outputs: vec!["activity_plan".into()],
                 description: None,
+                primitive_annotations: None,
             },
             capability_id: "travel.activities.plan".into(),
             resolution_strategy: ResolutionStrategy::Found,
@@ -1388,6 +1393,10 @@ fn value_to_step(value: &Value) -> Option<ProposedStep> {
         .and_then(value_to_string_vec)
         .unwrap_or_default();
     let description = map_get(map, "description").and_then(value_to_string);
+    let primitive_annotations = map_get(map, "primitive_annotations")
+        .or_else(|| map_get(map, "primitive"))
+        .cloned()
+        .and_then(|v| serde_json::to_value(&v).ok());
 
     Some(ProposedStep {
         id,
@@ -1397,6 +1406,7 @@ fn value_to_step(value: &Value) -> Option<ProposedStep> {
         required_inputs,
         expected_outputs,
         description,
+        primitive_annotations,
     })
 }
 
@@ -1451,7 +1461,33 @@ fn step_from_free_form(value: &Value, index: usize) -> Option<ProposedStep> {
         required_inputs: vec!["goal".to_string()],
         expected_outputs: vec!["notes".to_string()],
         description: Some(cleaned.to_string()),
+        primitive_annotations: None,
     })
+}
+
+fn json_to_rtfs_value(json: &JsonValue) -> Value {
+    match json {
+        JsonValue::Null => Value::Nil,
+        JsonValue::Bool(b) => Value::Boolean(*b),
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Integer(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Float(f)
+            } else {
+                Value::Nil
+            }
+        }
+        JsonValue::String(s) => Value::String(s.clone()),
+        JsonValue::Array(items) => Value::Vector(items.iter().map(json_to_rtfs_value).collect()),
+        JsonValue::Object(map) => {
+            let mut rtfs_map = HashMap::new();
+            for (k, v) in map {
+                rtfs_map.insert(MapKey::String(k.clone()), json_to_rtfs_value(v));
+            }
+            Value::Map(rtfs_map)
+        }
+    }
 }
 
 fn ensure_question_prompt(text: &str, index: usize) -> String {
@@ -1770,6 +1806,7 @@ fn fallback_steps() -> Vec<ProposedStep> {
             required_inputs: vec!["goal".into()],
             expected_outputs: vec!["preferences".into()],
             description: Some("Aggregate clarified inputs".to_string()),
+            primitive_annotations: None,
         },
         ProposedStep {
             id: "search_flights".to_string(),
@@ -1784,6 +1821,7 @@ fn fallback_steps() -> Vec<ProposedStep> {
             ],
             expected_outputs: vec!["flight_options".into()],
             description: Some("Gather flight candidates".to_string()),
+            primitive_annotations: None,
         },
         ProposedStep {
             id: "book_lodging".to_string(),
@@ -1793,6 +1831,7 @@ fn fallback_steps() -> Vec<ProposedStep> {
             required_inputs: vec!["destination".into(), "dates".into(), "budget".into()],
             expected_outputs: vec!["reservation".into()],
             description: Some("Secure accommodations".to_string()),
+            primitive_annotations: None,
         },
         ProposedStep {
             id: "plan_activities".to_string(),
@@ -1802,6 +1841,7 @@ fn fallback_steps() -> Vec<ProposedStep> {
             required_inputs: vec!["destination".into(), "interests".into(), "dates".into()],
             expected_outputs: vec!["activity_plan".into()],
             description: Some("Outline daily experiences".to_string()),
+            primitive_annotations: None,
         },
     ]
 }
@@ -1810,6 +1850,16 @@ fn build_needs_capabilities(steps: &[ProposedStep]) -> Value {
     let entries: Vec<Value> = steps
         .iter()
         .map(|step| {
+            let rationale = step
+                .description
+                .clone()
+                .unwrap_or_else(|| format!("Capability needed: {}", step.name));
+            let inferred_need = CapabilityNeed::new(
+                step.capability_class.clone(),
+                step.required_inputs.clone(),
+                step.expected_outputs.clone(),
+                rationale,
+            );
             let mut map = HashMap::new();
             map.insert(
                 MapKey::String("class".into()),
@@ -1844,6 +1894,16 @@ fn build_needs_capabilities(steps: &[ProposedStep]) -> Value {
                         .collect(),
                 ),
             );
+            if let Some(annotations_json) = step
+                .primitive_annotations
+                .clone()
+                .or_else(|| LocalSynthesizer::infer_primitive_annotations(&inferred_need))
+            {
+                map.insert(
+                    MapKey::String("primitive_annotations".into()),
+                    json_to_rtfs_value(&annotations_json),
+                );
+            }
             Value::Map(map)
         })
         .collect();

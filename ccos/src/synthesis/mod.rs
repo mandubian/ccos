@@ -17,6 +17,7 @@ pub mod mcp_session;
 pub mod missing_capability_resolver;
 pub mod openapi_importer;
 pub mod preference_schema;
+pub mod primitives;
 pub mod registration_flow;
 pub mod schema_builder;
 pub mod schema_serializer;
