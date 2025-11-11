@@ -13,16 +13,15 @@ use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::security::IsolationLevel;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::stubs::{
-    ConflictResolution, ExecutionResultStruct, SimpleAgentCard, SimpleCachePolicy,
+    ConflictResolution, ExecutionResultStruct, SimpleAgentCard,
     SimpleDiscoveryOptions, SimpleDiscoveryQuery,
 };
 use crate::runtime::type_validator::{
     TypeCheckingConfig, TypeValidator, ValidationLevel, VerificationContext,
 };
 use crate::runtime::values::{Arity, BuiltinFunctionWithContext, Function, Value};
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 type SpecialFormHandler =
     fn(&Evaluator, &[Expression], &mut Environment) -> Result<ExecutionOutcome, RuntimeError>;
 
@@ -874,7 +873,7 @@ impl Evaluator {
                 // eval_expr now returns ExecutionOutcome; unwrap Complete(v) to Value
                 match self.eval_expr(expr, env)? {
                     ExecutionOutcome::Complete(v) => Ok(v),
-                    ExecutionOutcome::RequiresHost(hc) => Err(RuntimeError::Generic(
+                    ExecutionOutcome::RequiresHost(_hc) => Err(RuntimeError::Generic(
                         "Host call required in param binding".into(),
                     )),
                 }
@@ -1378,7 +1377,7 @@ impl Evaluator {
         for (rel_index, expr) in args[i..].iter().enumerate() {
             let index = i + rel_index;
             // Begin isolated child context for this branch (also switches into it)
-            let child_id = {
+            let _child_id = {
                 // Enforce isolation policy for isolated branch contexts
                 if !self
                     .security_context
@@ -1647,7 +1646,7 @@ impl Evaluator {
         let step_action_id = self.host.notify_step_started("llm-execute")?;
 
         // Compose final prompt
-        let final_prompt = if let Some(sys) = system_prompt {
+        let _final_prompt = if let Some(sys) = system_prompt {
             format!("System:\n{}\n\nUser:\n{}", sys, prompt)
         } else {
             prompt.clone()

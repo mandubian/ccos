@@ -353,7 +353,7 @@ pub(super) fn build_map(pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>,
 
 fn build_shorthand_fn(pair: Pair<Rule>) -> Result<Expression, PestParseError> {
     // Collect body expressions first
-    let span = pair_to_source_span(&pair);
+    let _span = pair_to_source_span(&pair);
     let mut body_exprs = Vec::new();
     let mut max_index: usize = 0; // Track highest %n encountered
     let mut uses_plain_percent = false;

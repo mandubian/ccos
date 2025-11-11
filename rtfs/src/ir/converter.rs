@@ -3240,7 +3240,7 @@ impl<'a> IrConverter<'a> {
         }
     }
 
-    fn convert_for(&mut self, for_expr: ForExpr) -> IrConversionResult<IrNode> {
+    fn convert_for(&mut self, _for_expr: ForExpr) -> IrConversionResult<IrNode> {
         // For now, return an error indicating for expressions are not supported in IR conversion
         Err(IrConversionError::InvalidSpecialForm {
             form: "for".to_string(),
