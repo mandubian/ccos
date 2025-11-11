@@ -253,7 +253,6 @@ pub struct DelegatingArbiter {
 
 /// Agent registry for managing available agents
 pub struct AgentRegistry {
-    config: AgentRegistryConfig,
     agents: HashMap<String, AgentDefinition>,
 }
 
@@ -267,7 +266,7 @@ impl AgentRegistry {
             agents.insert(agent.agent_id.clone(), agent.clone());
         }
 
-        Self { config, agents }
+        Self { agents }
     }
 
     /// Find agents that match the given capabilities
@@ -529,7 +528,7 @@ impl DelegatingArbiter {
                         }
                         Err(json_err) => {
                             // Generate user-friendly error message with response preview
-                            let response_preview = if response.len() > 500 {
+                            let _response_preview = if response.len() > 500 {
                                 format!(
                                     "{}...\n[truncated, total length: {} chars]",
                                     &response[..500],
@@ -1590,7 +1589,7 @@ Plan:"#,
         let json_response: serde_json::Value =
             serde_json::from_str(&cleaned_response).map_err(|e| {
                 // Generate user-friendly error message with full response preview
-                let response_preview = if response.len() > 500 {
+                let _response_preview = if response.len() > 500 {
                     format!(
                         "{}...\n[truncated, total length: {} chars]",
                         &response[..500],
@@ -2054,7 +2053,7 @@ Plan:"#,
         // If other top-level blocks exist, return the first non-(intent) balanced block.
         if let Some(idx) = response.find('(') {
             let mut collected_intents = Vec::new();
-            let mut found_plan_or_do = false;
+            let mut _found_plan_or_do = false;
             let mut remaining = &response[idx..];
 
             // Collect consecutive top-level balanced blocks
@@ -2064,11 +2063,11 @@ Plan:"#,
                     collected_intents.push(block.clone());
                 } else if trimmed.starts_with("(plan") || trimmed.starts_with("(do") {
                     // Found a plan or do block: prefer returning it
-                    found_plan_or_do = true;
+                    _found_plan_or_do = true;
                     return Ok(block);
                 } else {
                     // Found some other top-level block: return it if no plan/do blocks found yet
-                    if !found_plan_or_do {
+                    if !_found_plan_or_do {
                         return Ok(block);
                     }
                 }

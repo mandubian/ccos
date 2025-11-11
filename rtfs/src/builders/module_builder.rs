@@ -1,5 +1,5 @@
 use super::{BuilderError, ObjectBuilder};
-use crate::ast::{Expression, MapKey, ModuleDefinition, Property, Symbol};
+use crate::ast::{ModuleDefinition, Symbol};
 use std::collections::HashMap;
 
 /// Fluent interface builder for RTFS 2.0 Module objects
@@ -73,13 +73,6 @@ impl ModuleBuilder {
     }
 }
 
-// Helper to convert Vec<Property> to HashMap<MapKey, Expression>
-fn properties_to_map(props: Vec<Property>) -> HashMap<MapKey, Expression> {
-    props
-        .into_iter()
-        .map(|p| (MapKey::Keyword(p.key), p.value))
-        .collect()
-}
 
 impl ObjectBuilder<ModuleDefinition> for ModuleBuilder {
     fn build(self) -> Result<ModuleDefinition, BuilderError> {

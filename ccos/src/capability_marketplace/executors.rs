@@ -276,7 +276,7 @@ impl CapabilityExecutor for RegistryExecutor {
     }
     async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
         if let ProviderType::Registry(registry_cap) = provider {
-            let args = match inputs {
+            let _args = match inputs {
                 Value::List(list) => list.clone(),
                 Value::Vector(vec) => vec.clone(),
                 v => vec![v.clone()],

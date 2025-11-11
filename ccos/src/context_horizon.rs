@@ -275,7 +275,7 @@ impl ContextHorizonManager {
     /// Reduce wisdom to fit within token limit
     fn reduce_wisdom(
         &self,
-        wisdom: DistilledWisdom,
+        _wisdom: DistilledWisdom,
         max_tokens: usize,
     ) -> Result<DistilledWisdom, RuntimeError> {
         let mut reduced = DistilledWisdom::new();
@@ -672,7 +672,7 @@ impl HierarchicalPlanBuilder {
         Self
     }
 
-    pub fn create_abstract_steps(&self, task: &Task) -> Result<Vec<AbstractStep>, RuntimeError> {
+    pub fn create_abstract_steps(&self, _task: &Task) -> Result<Vec<AbstractStep>, RuntimeError> {
         // Placeholder implementation
         // In a real implementation, this would convert concrete plan steps to abstract ones
         Ok(vec![AbstractStep {
@@ -689,7 +689,7 @@ impl DataHandleManager {
         Self
     }
 
-    pub fn create_data_handles(&self, task: &Task) -> Result<Vec<ResourceId>, RuntimeError> {
+    pub fn create_data_handles(&self, _task: &Task) -> Result<Vec<ResourceId>, RuntimeError> {
         // Placeholder implementation
         // In a real implementation, this would identify and create handles for large data
         Ok(vec!["resource-1".to_string()])

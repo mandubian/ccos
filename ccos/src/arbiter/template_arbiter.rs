@@ -18,7 +18,6 @@ use rtfs::runtime::values::Value;
 
 /// Template-based arbiter that uses pattern matching and predefined templates
 pub struct TemplateArbiter {
-    config: TemplateConfig,
     intent_patterns: Vec<IntentPattern>,
     plan_templates: Vec<PlanTemplate>,
     intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
@@ -35,7 +34,6 @@ impl TemplateArbiter {
         let plan_templates = config.plan_templates.clone();
 
         Ok(Self {
-            config,
             intent_patterns,
             plan_templates,
             intent_graph,

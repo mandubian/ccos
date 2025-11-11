@@ -516,7 +516,7 @@ impl ResourceConstraints {
         }
 
         // Check extended resource limits
-        for (name, limit) in &self.extended_limits {
+        for (_name, limit) in &self.extended_limits {
             if let Some(measurement) = usage.resources.get(&limit.resource_type) {
                 if measurement.value > limit.value {
                     violations.push(ResourceViolation {

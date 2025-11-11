@@ -610,15 +610,15 @@ impl Orchestrator {
         expr: &Expression,
     ) -> RuntimeResult<ExecutionOutcome> {
         let current_expr = expr.clone();
-        let mut max_iterations = 1000; // Prevent infinite loops
+        let mut _max_iterations = 1000; // Prevent infinite loops
 
         loop {
-            if max_iterations == 0 {
+            if _max_iterations == 0 {
                 return Err(RuntimeError::Generic(
                     "Maximum execution iterations reached".to_string(),
                 ));
             }
-            max_iterations -= 1;
+            _max_iterations -= 1;
 
             // Execute the current expression
             let result = evaluator.evaluate(&current_expr)?;
@@ -1402,7 +1402,7 @@ impl Orchestrator {
             Ok(ExecutionOutcome::RequiresHost(host_call)) => {
                 // Create a new checkpoint and emit PlanPaused
                 let missing_capabilities = vec![host_call.capability_id.clone()];
-                let (checkpoint_id, _serialized) = self.checkpoint_plan(
+                let (_checkpoint_id, _serialized) = self.checkpoint_plan(
                     &plan_id,
                     &primary_intent_id,
                     &evaluator,

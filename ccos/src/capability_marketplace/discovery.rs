@@ -93,7 +93,7 @@ impl CapabilityDiscovery for FileManifestDiscoveryProvider {
             return Ok(vec![]); // Return empty if file doesn't exist
         }
 
-        let content = fs::read_to_string(&self.manifest_path)
+        let _content = fs::read_to_string(&self.manifest_path)
             .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to read manifest file: {}", e)))?;
 

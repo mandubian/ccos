@@ -280,9 +280,6 @@ fn print_outcome(env: &CCOSEnvironment, outcome: ExecutionOutcome) {
         ExecutionOutcome::RequiresHost(hc) => {
             eprintln!("❌ Execution requires host call: {:?}", hc);
         }
-        _ => {
-            println!("ℹ️  Outcome: {:?}", outcome);
-        }
     }
 }
 

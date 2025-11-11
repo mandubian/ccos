@@ -1022,7 +1022,7 @@ impl MCPDiscoveryProvider {
 
     /// Convert Expression to RTFS text format
     pub fn expression_to_rtfs_text(&self, expr: &Expression, indent: usize) -> String {
-        let indent_str = "  ".repeat(indent);
+        let _indent_str = "  ".repeat(indent);
 
         match expr {
             Expression::Literal(lit) => match lit {

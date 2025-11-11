@@ -33,7 +33,7 @@ impl RtfsSyntaxAnalyzer {
 }
 
 impl StaticAnalyzer for RtfsSyntaxAnalyzer {
-    fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
+    fn analyze(&self, _manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
 
         // Check for basic RTFS syntax issues
@@ -140,7 +140,7 @@ impl SecurityAnalyzer {
 }
 
 impl StaticAnalyzer for SecurityAnalyzer {
-    fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
+    fn analyze(&self, _manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
 
         // Check for dangerous function calls
@@ -232,7 +232,7 @@ impl PerformanceAnalyzer {
 }
 
 impl StaticAnalyzer for PerformanceAnalyzer {
-    fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
+    fn analyze(&self, _manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
 
         // Check nesting depth
@@ -368,7 +368,7 @@ impl DependencyAnalyzer {
 }
 
 impl StaticAnalyzer for DependencyAnalyzer {
-    fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
+    fn analyze(&self, _manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
 
         // Extract all capability dependencies

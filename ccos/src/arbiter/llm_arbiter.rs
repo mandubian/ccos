@@ -466,20 +466,6 @@ Now generate the RTFS graph for this goal:"#;
         Ok(())
     }
 
-    /// Validate plan using LLM provider
-    async fn validate_plan(&self, plan: &Plan) -> Result<bool, RuntimeError> {
-        let plan_content = match &plan.body {
-            crate::types::PlanBody::Rtfs(content) => content,
-            crate::types::PlanBody::Wasm(_) => {
-                return Err(RuntimeError::Generic(
-                    "WASM plans not supported for validation".to_string(),
-                ));
-            }
-        };
-
-        let validation_result = self.llm_provider.validate_plan(plan_content).await?;
-        Ok(validation_result.is_valid)
-    }
 }
 
 #[async_trait(?Send)]

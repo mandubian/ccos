@@ -138,9 +138,9 @@ impl CCOSEnvironment {
         // Bootstrap the marketplace to register default capabilities and apply registry config
         let marketplace_for_bootstrap = marketplace.clone();
         // Note: registry removed during RTFS/CCOS separation
-        let microvm_provider = config.microvm_provider.clone();
-        let http_allow_hosts = config.http_allow_hosts.clone();
-        let http_mocking_enabled = config.http_mocking_enabled;
+        let _microvm_provider = config.microvm_provider.clone();
+        let _http_allow_hosts = config.http_allow_hosts.clone();
+        let _http_mocking_enabled = config.http_mocking_enabled;
 
         let tokio_rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -896,8 +896,8 @@ impl CCOSEnvironment {
 
                         // Extract simple metadata from properties
                         let mut description: Option<String> = None;
-                        let mut version: Option<String> = None;
-                        let mut source_url: Option<String> = None;
+                        let mut _version: Option<String> = None;
+                        let mut _source_url: Option<String> = None;
                         let mut flat_metadata: std::collections::HashMap<String, String> =
                             std::collections::HashMap::new();
                         // Implementation program to execute at call time
@@ -917,14 +917,14 @@ impl CCOSEnvironment {
                                     if let ExecutionOutcome::Complete(Value::String(s)) =
                                         evaluator.evaluate(&prop.value)?
                                     {
-                                        version = Some(s);
+                                        _version = Some(s);
                                     }
                                 }
                                 "source_url" | "source-url" => {
                                     if let ExecutionOutcome::Complete(Value::String(s)) =
                                         evaluator.evaluate(&prop.value)?
                                     {
-                                        source_url = Some(s);
+                                        _source_url = Some(s);
                                     }
                                 }
                                 "metadata" => {
