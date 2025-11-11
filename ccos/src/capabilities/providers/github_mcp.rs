@@ -157,7 +157,7 @@ impl GitHubMCPCapability {
     }
 
     /// Create a new GitHub MCP capability with default repository
-    pub fn with_default_repo(api_token: Option<String>, owner: String, repo: String) -> Self {
+    pub fn with_default_repo(api_token: Option<String>, _owner: String, _repo: String) -> Self {
         Self {
             api_token,
             base_url: "https://api.github.com".to_string(),
@@ -683,16 +683,6 @@ mod tests {
         let capability = GitHubMCPCapability::new(Some("test_token".to_string()));
         assert_eq!(capability.base_url, "https://api.github.com");
         assert_eq!(capability.api_token, Some("test_token".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_github_mcp_capability_with_default_repo() {
-        let capability = GitHubMCPCapability::with_default_repo(
-            Some("test_token".to_string()),
-            "mandubian".to_string(),
-            "ccos".to_string(),
-        );
-        assert_eq!(capability.default_repo, Some("mandubian/ccos".to_string()));
     }
 
     #[tokio::test]

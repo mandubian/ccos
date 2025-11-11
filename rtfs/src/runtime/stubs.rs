@@ -1,8 +1,6 @@
 // Minimal stubs for CCOS types used by RTFS
 // These are placeholders - CCOS provides full implementations
 
-use std::collections::HashMap;
-
 // Note: IsolationLevel is now defined in security.rs as an RTFS-local type
 // This stub enum has been removed - use crate::runtime::security::IsolationLevel instead
 

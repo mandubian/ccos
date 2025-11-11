@@ -1,7 +1,6 @@
 use async_trait::async_trait;
-use crate::capability_marketplace::types::{CapabilityDiscovery, CapabilityManifest, CapabilityProvenance, HttpCapability, LocalCapability, ProviderType};
+use crate::capability_marketplace::types::{CapabilityDiscovery, CapabilityManifest, CapabilityProvenance, LocalCapability, ProviderType};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use rtfs::runtime::values::Value;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -146,7 +145,7 @@ impl NetworkDiscoveryProvider {
         &self,
         page_token: Option<&str>,
     ) -> RuntimeResult<CapabilityRegistryResponse> {
-        let mut url = format!("{}/capabilities", self.config.base_url);
+        let url = format!("{}/capabilities", self.config.base_url);
         
         // Add query parameters
         let mut query_params = vec![("limit".to_string(), "100".to_string())];
@@ -305,6 +304,7 @@ impl NetworkDiscoveryProvider {
             permissions,
             effects,
             metadata,
+            agent_metadata: None,
         })
     }
 }
@@ -423,9 +423,10 @@ impl Default for NetworkDiscoveryBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rtfs::runtime::capability_marketplace::types::{
-        CapabilityManifest, ProviderType, CapabilityAttestation, CapabilityProvenance,
+    use crate::capability_marketplace::types::{
+        CapabilityManifest, ProviderType, CapabilityAttestation, CapabilityProvenance, HttpCapability,
     };
+    use rtfs::runtime::values::Value;
 
     #[test]
     fn test_network_discovery_config_default() {
@@ -475,6 +476,7 @@ mod tests {
             permissions: vec![],
             effects: vec![],
             metadata: HashMap::new(),
+            agent_metadata: None,
         };
 
         assert!(provider.validate_capability_manifest(&valid_manifest).is_ok());
@@ -505,6 +507,7 @@ mod tests {
             permissions: vec![],
             effects: vec![],
             metadata: HashMap::new(),
+            agent_metadata: None,
         };
 
         assert!(provider.validate_capability_manifest(&invalid_manifest).is_err());
