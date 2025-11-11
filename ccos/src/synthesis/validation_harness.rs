@@ -796,7 +796,7 @@ impl ValidationHarness {
     }
 
     /// Create provenance from validation result
-    pub fn create_provenance(&self, validation_result: &ValidationResult) -> CapabilityProvenance {
+    pub fn create_provenance(&self, _validation_result: &ValidationResult) -> CapabilityProvenance {
         CapabilityProvenance {
             version: Some("1.0".to_string()),
             content_hash: "".to_string(), // Will be filled by caller

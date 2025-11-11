@@ -44,7 +44,7 @@ pub fn extract_dependencies(rtfs_code: &str) -> RuntimeResult<DependencyExtracti
         .collect();
 
     let resolved_dependencies = HashSet::new();
-    let mut missing_dependencies = HashSet::new();
+    let missing_dependencies;
 
     // For now, we'll mark all dependencies as missing since we don't have access to marketplace
     // In the full implementation, this would check against the marketplace snapshot

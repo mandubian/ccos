@@ -610,7 +610,7 @@ fn analyze_parameter_flow(schema: &ParamSchema, skills: &[ExtractedSkill]) -> Pa
     };
 
     // Classify parameters based on skills and typical usage patterns
-    for (key, meta) in &schema.params {
+    for (key, _meta) in &schema.params {
         if skills.iter().any(|s| s.category == SkillCategory::Analysis) {
             // Analysis skills suggest parameters flow through processing steps
             if key.contains("input") || key.contains("source") {
@@ -645,7 +645,7 @@ fn skill_to_capability_name(skill: &str) -> String {
 /// Generate RTFS plan based on skills and parameter flow
 fn generate_skill_based_rtfs_plan(
     flow: &ParameterFlow,
-    skills: &[ExtractedSkill],
+    _skills: &[ExtractedSkill],
     constraints: &[String],
     domain: &str,
 ) -> String {
@@ -658,7 +658,7 @@ fn generate_skill_based_rtfs_plan(
             flow.input_params
                 .iter()
                 .enumerate()
-                .map(|(i, param)| format!("{} {}", param.replace("/", "_"), param))
+                .map(|(_i, param)| format!("{} {}", param.replace("/", "_"), param))
                 .collect::<Vec<_>>()
                 .join(" ")
         ));
@@ -686,7 +686,7 @@ fn generate_skill_based_rtfs_plan(
         .output_params
         .iter()
         .enumerate()
-        .map(|(i, param)| format!(":{} {}", param.replace("/", "_"), param.replace("/", "_")))
+        .map(|(_i, param)| format!(":{} {}", param.replace("/", "_"), param.replace("/", "_")))
         .collect();
 
     // Serialize constraints in an RTFS-friendly form. If constraints are expressions, print

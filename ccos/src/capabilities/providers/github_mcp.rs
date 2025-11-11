@@ -535,7 +535,7 @@ impl CapabilityProvider for GitHubMCPCapability {
 
     fn execute_capability(
         &self,
-        capability_id: &str,
+        _capability_id: &str,
         inputs: &RuntimeValue,
         _context: &ExecutionContext,
     ) -> RuntimeResult<RuntimeValue> {

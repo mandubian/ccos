@@ -88,7 +88,7 @@ impl RtfsErrorExplainer {
         }
     }
 
-    fn basic_type_validation_guidance(message: &str) -> RtfsErrorDiagnostics {
+    fn basic_type_validation_guidance(_message: &str) -> RtfsErrorDiagnostics {
         let mut hints = Vec::new();
         hints.push(
             "Ensure capability inputs refer to the correct fields (e.g. `:issues` instead of `:github_issues`)."

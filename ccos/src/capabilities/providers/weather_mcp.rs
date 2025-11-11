@@ -384,7 +384,7 @@ impl CapabilityProvider for WeatherMCPCapability {
         &self,
         capability_id: &str,
         inputs: &RuntimeValue,
-        context: &ExecutionContext,
+        _context: &ExecutionContext,
     ) -> RuntimeResult<RuntimeValue> {
         // Extract tool name from capability ID
         let tool_name = capability_id.strip_prefix("weather_mcp.").ok_or_else(|| {

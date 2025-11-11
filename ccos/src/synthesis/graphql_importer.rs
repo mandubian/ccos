@@ -82,7 +82,7 @@ impl GraphQLImporter {
             return self.get_mock_schema();
         }
 
-        let introspection_query = r#"
+        let _introspection_query = r#"
         query IntrospectionQuery {
             __schema {
                 queryType { name }

@@ -431,9 +431,8 @@ fn extract_schema_fields(schema: Option<&TypeExpr>) -> Vec<String> {
                 return_type,
             } => {
                 for param in param_types {
-                    if let rtfs::ast::ParamType::Simple(inner) = param {
-                        walk(inner, acc);
-                    }
+                    let rtfs::ast::ParamType::Simple(inner) = param;
+                    walk(inner, acc);
                 }
                 if let Some(var) = variadic_param_type {
                     walk(var, acc);

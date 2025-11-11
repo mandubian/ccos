@@ -367,7 +367,7 @@ impl PerformancePolicy {
 }
 
 impl GovernancePolicy for PerformancePolicy {
-    fn check_compliance(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> ValidationResult {
+    fn check_compliance(&self, _manifest: &CapabilityManifest, rtfs_code: &str) -> ValidationResult {
         let mut issues = Vec::new();
 
         // Count external calls
