@@ -1,5 +1,5 @@
 use crate::capability_marketplace::types::CapabilityManifest;
-use crate::synthesis::auth_injector::{AuthInjector, AuthType};
+use crate::synthesis::auth_injector::AuthType;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -46,8 +46,6 @@ pub struct HTTPAPIInfo {
 pub struct HTTPWrapper {
     /// Base URL for the API
     pub base_url: String,
-    /// Auth injector for handling credentials
-    auth_injector: AuthInjector,
     /// Mock mode for testing
     mock_mode: bool,
 }
@@ -57,7 +55,6 @@ impl HTTPWrapper {
     pub fn new(base_url: String) -> Self {
         Self {
             base_url,
-            auth_injector: AuthInjector::new(),
             mock_mode: false,
         }
     }
@@ -66,7 +63,6 @@ impl HTTPWrapper {
     pub fn mock(base_url: String) -> Self {
         Self {
             base_url,
-            auth_injector: AuthInjector::mock(),
             mock_mode: true,
         }
     }

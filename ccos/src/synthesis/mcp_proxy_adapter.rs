@@ -1,6 +1,5 @@
 use crate::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPTool};
 use crate::capability_marketplace::types::CapabilityManifest;
-use crate::synthesis::auth_injector::AuthInjector;
 use rtfs::runtime::error::RuntimeResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -37,8 +36,6 @@ pub struct MCPToolProxy {
 pub struct MCPProxyAdapter {
     /// MCP discovery provider
     discovery_provider: MCPDiscoveryProvider,
-    /// Auth injector for handling credentials
-    auth_injector: AuthInjector,
     /// Server configuration
     config: MCPProxyConfig,
     /// Mock mode for testing
@@ -60,7 +57,6 @@ impl MCPProxyAdapter {
 
         Ok(Self {
             discovery_provider,
-            auth_injector: AuthInjector::new(),
             config,
             mock_mode: false,
         })
@@ -80,7 +76,6 @@ impl MCPProxyAdapter {
 
         Ok(Self {
             discovery_provider,
-            auth_injector: AuthInjector::mock(),
             config,
             mock_mode: true,
         })
