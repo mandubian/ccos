@@ -17,6 +17,8 @@ regex = ["dep:regex"]
 repl = ["dep:rustyline"]
 # Local models with CUDA support
 cuda = []
+# CCOS integration
+ccos-integration = []
 # New effect boundary for typed host calls - now the only way to do stateful operations
 effect-boundary = []
 metrics_exporter = []

@@ -18,7 +18,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::agent::AgentRegistry; // bring trait into scope for record_feedback
 use crate::arbiter::prompt::{FilePromptStore, PromptStore};
 use crate::arbiter::{Arbiter, DelegatingArbiter};
 use crate::capability_marketplace::CapabilityMarketplace;
@@ -59,7 +58,6 @@ pub struct CCOS {
     rtfs_runtime: Arc<Mutex<dyn RTFSRuntime>>,
     // Optional LLM-driven engine
     delegating_arbiter: Option<Arc<DelegatingArbiter>>,
-    agent_registry: Arc<std::sync::RwLock<crate::agent::InMemoryAgentRegistry>>, // M4
     agent_config: Arc<AgentConfig>, // Global agent configuration (future: loaded from RTFS form)
     /// Missing capability resolver for runtime trap functionality
     missing_capability_resolver:
@@ -320,11 +318,6 @@ impl CCOS {
             Arc::clone(&intent_graph),
         ));
 
-        // Initialize AgentRegistry (M4) from agent configuration
-        let agent_registry = Arc::new(std::sync::RwLock::new(
-            crate::agent::InMemoryAgentRegistry::new(),
-        ));
-
         // Allow enabling delegation via environment variable for examples / dev runs
         // If the AgentConfig doesn't explicitly enable delegation, allow an env override.
         let enable_delegation = if let Some(v) = agent_config.delegation.enabled {
@@ -489,7 +482,6 @@ impl CCOS {
                 Arc::new(ModuleRegistry::new()),
             ))),
             delegating_arbiter,
-            agent_registry,
             agent_config,
             missing_capability_resolver: Some(missing_capability_resolver),
             debug_callback: debug_callback.clone(),
@@ -908,16 +900,25 @@ impl CCOS {
                             let _ =
                                 chain.record_delegation_event(&stored.intent_id, "completed", meta);
                         }
-                        // Feedback update (rolling average) via registry
+                        // TODO: Record agent feedback in capability marketplace metadata
+                        // For now, agent feedback is disabled during migration
+                        /*
                         if result.success {
-                            if let Ok(mut reg) = self.agent_registry.write() {
-                                reg.record_feedback(&agent_id, true);
-                            }
+                            // Update agent capability metadata with success
+                            let _ = self.capability_marketplace.update_capability_metadata(
+                                &agent_id, 
+                                "last_success", 
+                                &chrono::Utc::now().to_rfc3339()
+                            ).await;
                         } else {
-                            if let Ok(mut reg) = self.agent_registry.write() {
-                                reg.record_feedback(&agent_id, false);
-                            }
+                            // Update agent capability metadata with failure
+                            let _ = self.capability_marketplace.update_capability_metadata(
+                                &agent_id, 
+                                "last_failure", 
+                                &chrono::Utc::now().to_rfc3339()
+                            ).await;
                         }
+                        */
                     }
                 }
             }
@@ -1065,15 +1066,25 @@ impl CCOS {
                             let _ =
                                 chain.record_delegation_event(&stored.intent_id, "completed", meta);
                         }
+                        // TODO: Record agent feedback in capability marketplace metadata
+                        // For now, agent feedback is disabled during migration
+                        /*
                         if result.success {
-                            if let Ok(mut reg) = self.agent_registry.write() {
-                                reg.record_feedback(&agent_id, true);
-                            }
+                            // Update agent capability metadata with success
+                            let _ = self.capability_marketplace.update_capability_metadata(
+                                &agent_id, 
+                                "last_success", 
+                                &chrono::Utc::now().to_rfc3339()
+                            ).await;
                         } else {
-                            if let Ok(mut reg) = self.agent_registry.write() {
-                                reg.record_feedback(&agent_id, false);
-                            }
+                            // Update agent capability metadata with failure
+                            let _ = self.capability_marketplace.update_capability_metadata(
+                                &agent_id, 
+                                "last_failure", 
+                                &chrono::Utc::now().to_rfc3339()
+                            ).await;
                         }
+                        */
                     }
                 }
             }
@@ -1216,14 +1227,24 @@ impl CCOS {
                                 meta,
                             );
                         }
+                        // TODO: Record agent feedback in capability marketplace metadata
+                        // For now, agent feedback is disabled during migration
+                        /*
                         // Update agent registry
-                        if let Ok(mut reg) = self.agent_registry.write() {
-                            if result.success {
-                                let _ = reg.record_feedback(&agent_id, true);
-                            } else {
-                                let _ = reg.record_feedback(&agent_id, false);
-                            }
+                        if result.success {
+                            let _ = self.capability_marketplace.update_capability_metadata(
+                                &agent_id, 
+                                "last_success", 
+                                &chrono::Utc::now().to_rfc3339()
+                            ).await;
+                        } else {
+                            let _ = self.capability_marketplace.update_capability_metadata(
+                                &agent_id, 
+                                "last_failure", 
+                                &chrono::Utc::now().to_rfc3339()
+                            ).await;
                         }
+                        */
                     }
                 }
             }
@@ -1248,21 +1269,6 @@ impl CCOS {
 
     pub fn get_capability_marketplace(&self) -> Arc<CapabilityMarketplace> {
         Arc::clone(&self.capability_marketplace)
-    }
-
-    pub fn get_agent_registry(
-        &self,
-    ) -> Arc<std::sync::RwLock<crate::agent::InMemoryAgentRegistry>> {
-        Arc::clone(&self.agent_registry)
-    }
-
-    /// Optional-style accessor for symmetry with older code paths that treated
-    /// the registry as optional. Always returns Some but keeps call sites
-    /// forward-compatible if registry becomes optional again.
-    pub fn get_agent_registry_opt(
-        &self,
-    ) -> Option<Arc<std::sync::RwLock<crate::agent::InMemoryAgentRegistry>>> {
-        Some(Arc::clone(&self.agent_registry))
     }
 
     pub fn get_delegating_arbiter(&self) -> Option<Arc<DelegatingArbiter>> {

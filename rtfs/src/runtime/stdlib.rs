@@ -20,7 +20,6 @@ use crate::runtime::evaluator::Evaluator;
 use crate::runtime::secure_stdlib::SecureStandardLibrary;
 use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function, Value};
 use crate::runtime::ExecutionOutcome;
-use std::sync::Arc;
 // Removed RwLock - no longer needed after atom removal
 use crate::ir::core::{IrNode, IrType};
 use crate::runtime::environment::IrEnvironment;
