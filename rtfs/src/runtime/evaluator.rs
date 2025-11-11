@@ -862,7 +862,7 @@ impl Evaluator {
         // step-local bindings (like %params) don't overwrite the parent's bindings
         // permanently. We'll evaluate the body in `body_env` which either
         // references the provided `env` or a newly created child environment.
-        let mut child_env_opt: Option<Environment> = None;
+        let mut _child_env_opt: Option<Environment> = None;
         let body_env: &mut Environment;
         if let Some(param_map) = params_expr_map {
             // adapt param_map to expected type for binder: HashMap<String, Expression>
@@ -890,14 +890,14 @@ impl Evaluator {
                     }
                     let sym = crate::ast::Symbol("%params".to_string());
                     child.define(&sym, Value::Map(map_vals));
-                    child_env_opt = Some(child);
+                    _child_env_opt = Some(child);
                 }
                 Err(e) => {
                     return Err(RuntimeError::from(e));
                 }
             }
             // body_env will refer to the child we created
-            body_env = child_env_opt.as_mut().unwrap();
+            body_env = _child_env_opt.as_mut().unwrap();
         } else {
             // No params supplied; evaluate body in the existing environment
             body_env = env;
@@ -1276,7 +1276,7 @@ impl Evaluator {
         // 2. Parse optional keyword arguments (e.g., :merge-policy :overwrite, :expose-context, :context-keys)
         use crate::ast::Literal as Lit;
         let mut i: usize = 0;
-        let mut merge_policy = ConflictResolution::KeepExisting;
+        let mut _merge_policy = ConflictResolution::KeepExisting;
         let mut expose_override: Option<bool> = None;
         let mut context_keys_override: Option<Vec<String>> = None;
         while i + 1 < args.len() {
@@ -1325,7 +1325,7 @@ impl Evaluator {
 
                     if key == "merge-policy" || key == "merge_policy" {
                         // Map value to ConflictResolution
-                        merge_policy = match val {
+                        _merge_policy = match val {
                             Value::Keyword(crate::ast::Keyword(s)) | Value::String(s) => {
                                 match s.as_str() {
                                     "keep-existing" | "keep_existing" | "parent-wins"
