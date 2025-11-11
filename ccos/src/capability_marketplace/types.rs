@@ -789,7 +789,6 @@ pub struct CapabilityMarketplace {
     pub(crate) discovery_agents: Vec<Box<dyn CapabilityDiscovery>>,
     pub(crate) capability_registry:
         Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
-    pub(crate) network_registry: Option<NetworkRegistryConfig>,
     pub(crate) type_validator: Arc<rtfs::runtime::type_validator::TypeValidator>,
     pub(crate) executor_registry:
         std::collections::HashMap<std::any::TypeId, super::executors::ExecutorVariant>,

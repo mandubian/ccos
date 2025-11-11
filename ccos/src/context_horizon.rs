@@ -485,14 +485,12 @@ impl Default for ContextHorizonConfig {
 /// Intent Graph Virtualization for context horizon management
 pub struct IntentGraphVirtualization {
     semantic_search: SemanticSearchEngine,
-    graph_traversal: GraphTraversalEngine,
 }
 
 impl IntentGraphVirtualization {
     pub fn new() -> Self {
         Self {
             semantic_search: SemanticSearchEngine::new(),
-            graph_traversal: GraphTraversalEngine::new(),
         }
     }
 
@@ -639,7 +637,6 @@ impl WisdomDistiller {
 pub struct PlanAbstraction {
     hierarchical_plans: HierarchicalPlanBuilder,
     data_handles: DataHandleManager,
-    streaming: StreamingDataProcessor,
 }
 
 impl PlanAbstraction {
@@ -647,7 +644,6 @@ impl PlanAbstraction {
         Self {
             hierarchical_plans: HierarchicalPlanBuilder::new(),
             data_handles: DataHandleManager::new(),
-            streaming: StreamingDataProcessor::new(),
         }
     }
 
