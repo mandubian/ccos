@@ -1,6 +1,5 @@
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::synthesis::api_introspector::APIIntrospector;
-use crate::synthesis::auth_injector::AuthInjector;
 use crate::synthesis::mcp_introspector::MCPIntrospector;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -109,8 +108,6 @@ pub struct MultiCapabilitySynthesisResult {
 
 /// LLM Capability Synthesizer with guardrails
 pub struct CapabilitySynthesizer {
-    /// Auth injector for handling credentials
-    auth_injector: AuthInjector,
     /// Mock mode for testing (bypasses LLM calls)
     mock_mode: bool,
     /// Feature flag for enabling synthesis
@@ -121,7 +118,6 @@ impl CapabilitySynthesizer {
     /// Create a new capability synthesizer
     pub fn new() -> Self {
         Self {
-            auth_injector: AuthInjector::new(),
             mock_mode: false,
             synthesis_enabled: true,
         }
@@ -130,7 +126,6 @@ impl CapabilitySynthesizer {
     /// Create in mock mode for testing
     pub fn mock() -> Self {
         Self {
-            auth_injector: AuthInjector::mock(),
             mock_mode: true,
             synthesis_enabled: true,
         }
@@ -139,7 +134,6 @@ impl CapabilitySynthesizer {
     /// Create with feature flag control
     pub fn with_feature_flag(enabled: bool) -> Self {
         Self {
-            auth_injector: AuthInjector::new(),
             mock_mode: false,
             synthesis_enabled: enabled,
         }
