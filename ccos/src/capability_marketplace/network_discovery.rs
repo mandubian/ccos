@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use rtfs::runtime::capability_marketplace::types::{CapabilityDiscovery, CapabilityManifest, CapabilityProvenance, HttpCapability, LocalCapability, ProviderType};
+use crate::capability_marketplace::types::{CapabilityDiscovery, CapabilityManifest, CapabilityProvenance, HttpCapability, LocalCapability, ProviderType};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use serde::{Deserialize, Serialize};
