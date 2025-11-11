@@ -202,23 +202,20 @@ impl IntentSummarizer {
 #[derive(Debug)]
 pub struct IntentPruningEngine {
     importance_threshold: f64,
-    age_threshold_days: u64,
 }
 
 impl Default for IntentPruningEngine {
     fn default() -> Self {
         Self {
             importance_threshold: 0.3,
-            age_threshold_days: 365,
         }
     }
 }
 
 impl IntentPruningEngine {
-    pub fn new(importance_threshold: f64, age_threshold_days: u64) -> Self {
+    pub fn new(importance_threshold: f64) -> Self {
         Self {
             importance_threshold,
-            age_threshold_days,
         }
     }
 

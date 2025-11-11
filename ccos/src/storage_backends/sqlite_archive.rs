@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug)]
 pub struct SqliteArchive {
     conn: Arc<Mutex<Connection>>,
-    db_path: PathBuf,
 }
 
 impl SqliteArchive {
@@ -25,7 +24,6 @@ impl SqliteArchive {
         .map_err(|e| e.to_string())?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
-            db_path,
         })
     }
 }
