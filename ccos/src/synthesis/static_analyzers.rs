@@ -116,7 +116,6 @@ impl StaticAnalyzer for RtfsSyntaxAnalyzer {
 pub struct SecurityAnalyzer {
     name: String,
     dangerous_functions: HashSet<String>,
-    secure_patterns: HashSet<String>,
 }
 
 impl SecurityAnalyzer {
@@ -127,14 +126,9 @@ impl SecurityAnalyzer {
         dangerous_functions.insert("system".to_string());
         dangerous_functions.insert("shell".to_string());
 
-        let mut secure_patterns = HashSet::new();
-        secure_patterns.insert("https://".to_string());
-        secure_patterns.insert(":ccos.auth.inject".to_string());
-
         Self {
             name: "Security Analyzer".to_string(),
             dangerous_functions,
-            secure_patterns,
         }
     }
 }
@@ -218,7 +212,6 @@ impl StaticAnalyzer for SecurityAnalyzer {
 pub struct PerformanceAnalyzer {
     name: String,
     max_nested_depth: usize,
-    max_loop_iterations: u32,
 }
 
 impl PerformanceAnalyzer {
@@ -226,7 +219,6 @@ impl PerformanceAnalyzer {
         Self {
             name: "Performance Analyzer".to_string(),
             max_nested_depth: 10,
-            max_loop_iterations: 1000,
         }
     }
 }

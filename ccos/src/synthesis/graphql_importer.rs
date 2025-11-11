@@ -1,5 +1,4 @@
 use crate::capability_marketplace::types::CapabilityManifest;
-use crate::synthesis::auth_injector::AuthInjector;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -51,8 +50,6 @@ pub struct GraphQLSchema {
 pub struct GraphQLImporter {
     /// GraphQL endpoint URL
     pub endpoint_url: String,
-    /// Auth injector for handling credentials
-    auth_injector: AuthInjector,
     /// Mock mode for testing
     mock_mode: bool,
 }
@@ -62,7 +59,6 @@ impl GraphQLImporter {
     pub fn new(endpoint_url: String) -> Self {
         Self {
             endpoint_url,
-            auth_injector: AuthInjector::new(),
             mock_mode: false,
         }
     }
@@ -71,7 +67,6 @@ impl GraphQLImporter {
     pub fn mock(endpoint_url: String) -> Self {
         Self {
             endpoint_url,
-            auth_injector: AuthInjector::mock(),
             mock_mode: true,
         }
     }

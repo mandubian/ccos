@@ -2,7 +2,6 @@ use crate::capability_marketplace::types::{
     CapabilityManifest, CapabilityProvenance, OpenApiAuth, OpenApiCapability, OpenApiOperation,
     ProviderType,
 };
-use crate::synthesis::auth_injector::AuthInjector;
 use chrono::Utc;
 use rtfs::ast::TypeExpr;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
@@ -175,8 +174,6 @@ pub struct RTFSParameter {
 pub struct OpenAPIImporter {
     /// Base URL for the API
     pub base_url: String,
-    /// Auth injector for handling credentials
-    auth_injector: AuthInjector,
     /// Mock mode for testing
     mock_mode: bool,
     /// Storage directory for capabilities
@@ -192,7 +189,6 @@ impl OpenAPIImporter {
 
         Self {
             base_url,
-            auth_injector: AuthInjector::new(),
             mock_mode: false,
             storage_dir,
         }
@@ -202,7 +198,6 @@ impl OpenAPIImporter {
     pub fn mock(base_url: String) -> Self {
         Self {
             base_url,
-            auth_injector: AuthInjector::mock(),
             mock_mode: true,
             storage_dir: PathBuf::from("/tmp/ccos_capabilities"),
         }

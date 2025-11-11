@@ -305,7 +305,6 @@ impl RegistrationFlow {
         let dependent_capabilities = self.find_dependent_capabilities(capability_id).await?;
 
         let mut issues = vec![];
-        let mut updated_capabilities = vec![];
 
         for dependent_id in dependent_capabilities {
             // Check if the dependent capability can now be resolved
@@ -337,7 +336,6 @@ impl RegistrationFlow {
                         self.marketplace
                             .register_capability_manifest(updated_cap.clone())
                             .await?;
-                        updated_capabilities.push(dependent_id);
                     } else {
                         issues.push(format!(
                             "Capability {} still missing dependencies: {:?}",
@@ -350,7 +348,6 @@ impl RegistrationFlow {
 
         Ok(IntegrationResult {
             issues,
-            updated_capabilities,
         })
     }
 
@@ -464,7 +461,6 @@ impl RegistrationFlow {
 #[derive(Debug, Clone)]
 struct IntegrationResult {
     issues: Vec<String>,
-    updated_capabilities: Vec<String>,
 }
 
 /// Test result for end-to-end testing
