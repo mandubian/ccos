@@ -93,7 +93,7 @@ impl CapabilityDiscovery for FileManifestDiscoveryProvider {
             return Ok(vec![]); // Return empty if file doesn't exist
         }
 
-        let content = fs::read_to_string(&self.manifest_path)
+        let _content = fs::read_to_string(&self.manifest_path)
             .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to read manifest file: {}", e)))?;
 
@@ -118,14 +118,12 @@ impl CapabilityDiscovery for FileManifestDiscoveryProvider {
 /// Network discovery provider (placeholder for future implementation)
 pub struct NetworkDiscoveryProvider {
     endpoint_url: String,
-    timeout_seconds: u64,
 }
 
 impl NetworkDiscoveryProvider {
-    pub fn new(endpoint_url: String, timeout_seconds: u64) -> Self {
+    pub fn new(config: super::network_discovery::NetworkDiscoveryConfig) -> Self {
         Self {
-            endpoint_url,
-            timeout_seconds,
+            endpoint_url: config.base_url,
         }
     }
 }

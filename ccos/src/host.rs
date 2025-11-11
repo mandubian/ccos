@@ -202,7 +202,7 @@ impl RuntimeHost {
         }
     }
 
-    fn get_causal_chain(&self) -> RuntimeResult<MutexGuard<CausalChain>> {
+    fn get_causal_chain(&self) -> RuntimeResult<MutexGuard<'_, CausalChain>> {
         self.causal_chain
             .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))
@@ -295,7 +295,7 @@ impl HostInterface for RuntimeHost {
                 snapshot,
             );
         }
-        let capability_args = Value::Map(call_map);
+        let _capability_args = Value::Map(call_map);
 
         // 2. Create and log the CapabilityCall action
         let action = Action::new(

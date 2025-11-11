@@ -77,7 +77,7 @@ impl RegistrationFlow {
         let validation_result = self.validate_capability(&manifest, rtfs_code)?;
 
         // Step 2: Apply governance policies
-        let governance_result = self.apply_governance_policies(&manifest, rtfs_code)?;
+        let _governance_result = self.apply_governance_policies(&manifest, rtfs_code)?;
 
         // Step 3: Generate version and attestation
         let version = self.generate_version(&manifest, &validation_result)?;
@@ -201,7 +201,7 @@ impl RegistrationFlow {
     /// Create attestation for the capability
     fn create_attestation(
         &self,
-        manifest: &CapabilityManifest,
+        _manifest: &CapabilityManifest,
         validation_result: &ValidationResult,
     ) -> RuntimeResult<CapabilityAttestation> {
         Ok(self
@@ -212,7 +212,7 @@ impl RegistrationFlow {
     /// Create provenance for the capability
     fn create_provenance(
         &self,
-        manifest: &CapabilityManifest,
+        _manifest: &CapabilityManifest,
         validation_result: &ValidationResult,
     ) -> RuntimeResult<CapabilityProvenance> {
         Ok(self.validation_harness.create_provenance(validation_result))
@@ -305,7 +305,6 @@ impl RegistrationFlow {
         let dependent_capabilities = self.find_dependent_capabilities(capability_id).await?;
 
         let mut issues = vec![];
-        let mut updated_capabilities = vec![];
 
         for dependent_id in dependent_capabilities {
             // Check if the dependent capability can now be resolved
@@ -337,7 +336,6 @@ impl RegistrationFlow {
                         self.marketplace
                             .register_capability_manifest(updated_cap.clone())
                             .await?;
-                        updated_capabilities.push(dependent_id);
                     } else {
                         issues.push(format!(
                             "Capability {} still missing dependencies: {:?}",
@@ -350,7 +348,6 @@ impl RegistrationFlow {
 
         Ok(IntegrationResult {
             issues,
-            updated_capabilities,
         })
     }
 
@@ -453,7 +450,7 @@ impl RegistrationFlow {
     }
 
     /// Generate test inputs based on capability schema
-    fn generate_test_inputs(&self, capability: &CapabilityManifest) -> RuntimeResult<Value> {
+    fn generate_test_inputs(&self, _capability: &CapabilityManifest) -> RuntimeResult<Value> {
         // For now, generate simple test inputs
         // TODO: Parse input schema and generate appropriate test data
         Ok(Value::Map(HashMap::new()))
@@ -464,7 +461,6 @@ impl RegistrationFlow {
 #[derive(Debug, Clone)]
 struct IntegrationResult {
     issues: Vec<String>,
-    updated_capabilities: Vec<String>,
 }
 
 /// Test result for end-to-end testing

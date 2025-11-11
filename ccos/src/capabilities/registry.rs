@@ -1725,13 +1725,13 @@ impl CapabilityRegistry {
             .and_then(|(_, v)| v.as_string())
             .ok_or_else(|| RuntimeError::Generic(":tool-name required".to_string()))?;
 
-        let arguments = pairs
+        let _arguments = pairs
             .iter()
             .find(|(k, _)| k == "arguments")
             .map(|(_, v)| v.clone())
             .unwrap_or(Value::Map(std::collections::HashMap::new()));
 
-        let auth_token = pairs
+        let _auth_token = pairs
             .iter()
             .find(|(k, _)| k == "auth-token")
             .and_then(|(_, v)| v.as_string());

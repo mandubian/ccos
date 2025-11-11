@@ -24,13 +24,11 @@ use rtfs::runtime::error::RuntimeError;
 
 /// Represents the system's constitution, a set of human-authored rules.
 // TODO: This should be loaded from a secure, signed configuration file.
-pub struct Constitution {
-    rules: Vec<String>,
-}
+pub struct Constitution {}
 
 impl Default for Constitution {
     fn default() -> Self {
-        Self { rules: vec![] }
+        Self {}
     }
 }
 
@@ -39,7 +37,6 @@ impl Default for Constitution {
 pub struct GovernanceKernel {
     orchestrator: Arc<Orchestrator>,
     intent_graph: Arc<Mutex<IntentGraph>>,
-    constitution: Constitution,
 }
 
 impl GovernanceKernel {
@@ -48,7 +45,6 @@ impl GovernanceKernel {
         Self {
             orchestrator,
             intent_graph,
-            constitution: Constitution::default(),
         }
     }
 

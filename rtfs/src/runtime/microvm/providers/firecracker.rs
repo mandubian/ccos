@@ -1378,7 +1378,7 @@ impl FirecrackerMicroVMProvider {
         let resource_usage = vm.get_resource_usage();
 
         // Get security context
-        let security_context = vm.get_security_context();
+        let _security_context = vm.get_security_context();
 
         // Get performance metrics
         let performance_metrics = vm.get_performance_metrics();
@@ -1388,7 +1388,7 @@ impl FirecrackerMicroVMProvider {
         let cpu_time = performance_metrics.execution_latency;
 
         // Get monitoring stats
-        let monitoring_stats = self.get_monitoring_stats()?;
+        let _monitoring_stats = self.get_monitoring_stats()?;
 
         Ok(ExecutionMetadata {
             duration,

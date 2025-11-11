@@ -2,7 +2,6 @@ use super::errors::RtfsBridgeError;
 use crate::types::{Intent, Plan};
 use rtfs::ast::TypeExpr;
 use rtfs::runtime::values::Value;
-use std::collections::HashMap;
 
 /// Validates a CCOS Intent extracted from RTFS
 pub fn validate_intent(intent: &Intent) -> Result<(), RtfsBridgeError> {
@@ -268,6 +267,7 @@ mod tests {
     use super::*;
     use rtfs::ast::{Keyword, MapKey};
     use rtfs::runtime::values::Value;
+    use std::collections::HashMap;
 
     #[test]
     fn test_validate_type_expr_schema_with_keywords() {

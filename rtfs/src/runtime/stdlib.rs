@@ -20,7 +20,6 @@ use crate::runtime::evaluator::Evaluator;
 use crate::runtime::secure_stdlib::SecureStandardLibrary;
 use crate::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function, Value};
 use crate::runtime::ExecutionOutcome;
-use std::sync::Arc;
 // Removed RwLock - no longer needed after atom removal
 use crate::ir::core::{IrNode, IrType};
 use crate::runtime::environment::IrEnvironment;
@@ -89,7 +88,7 @@ impl StandardLibrary {
     /// These functions provide access to external resources like the file system,
     /// network, and system clock. They are considered "impure" because they
     /// can have side-effects.
-    fn load_tool_functions(env: &mut Environment) {
+    fn load_tool_functions(_env: &mut Environment) {
         // Note: RTFS stdlib is pure. Effectful helpers previously registered here
         // (e.g., tool/open-file, http-fetch, tool/log, time-ms, file-exists?, get-env,
         // println, thread/sleep, read-lines, step, kv/*!) have been moved to the CCOS prelude.
@@ -324,7 +323,7 @@ impl StandardLibrary {
                         });
                     }
 
-                    let function = &args[0];
+                    let _function = &args[0];
                     let collection = &args[1];
 
                     match collection {
@@ -339,7 +338,7 @@ impl StandardLibrary {
                         }
                         Value::Map(m) => {
                             let mut result = Vec::new();
-                            for (k, v) in m {
+                            for (k, _v) in m {
                                 // For maps, we can iterate over key-value pairs
                                 let mut pair = HashMap::new();
                                 pair.insert(

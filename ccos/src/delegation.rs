@@ -12,7 +12,6 @@ use std::sync::{Arc, RwLock};
 
 use crate::caching::l1_delegation::{DelegationPlan, L1DelegationCache};
 use crate::caching::CacheStats;
-use crate::delegation_keys::intent;
 
 /// Where the evaluator should send the execution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -456,6 +455,7 @@ impl ModelRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delegation_keys::intent;
 
     #[test]
     fn static_map_override() {

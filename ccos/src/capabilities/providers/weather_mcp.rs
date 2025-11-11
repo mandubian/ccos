@@ -17,10 +17,6 @@ use rtfs::runtime::{RuntimeError, RuntimeResult, Value as RuntimeValue};
 /// Provides weather information tools following MCP protocol standards
 #[derive(Debug, Clone)]
 pub struct WeatherMCPCapability {
-    /// API key for OpenWeatherMap (in real implementation)
-    api_key: Option<String>,
-    /// Base URL for weather API
-    base_url: String,
     /// Cache for recent weather queries
     cache: HashMap<String, CachedWeatherData>,
 }
@@ -106,8 +102,6 @@ impl WeatherMCPCapability {
     /// Create a new Weather MCP capability
     pub fn new() -> Self {
         Self {
-            api_key: std::env::var("OPENWEATHER_API_KEY").ok(),
-            base_url: "https://api.openweathermap.org/data/2.5".to_string(),
             cache: HashMap::new(),
         }
     }
@@ -384,7 +378,7 @@ impl CapabilityProvider for WeatherMCPCapability {
         &self,
         capability_id: &str,
         inputs: &RuntimeValue,
-        context: &ExecutionContext,
+        _context: &ExecutionContext,
     ) -> RuntimeResult<RuntimeValue> {
         // Extract tool name from capability ID
         let tool_name = capability_id.strip_prefix("weather_mcp.").ok_or_else(|| {

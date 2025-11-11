@@ -1,6 +1,5 @@
-use crate::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPTool};
+use crate::capability_marketplace::mcp_discovery::MCPTool;
 use crate::capability_marketplace::types::CapabilityManifest;
-use crate::synthesis::auth_injector::AuthInjector;
 use rtfs::runtime::error::RuntimeResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -35,10 +34,6 @@ pub struct MCPToolProxy {
 
 /// MCP Proxy Adapter for exposing MCP tools as CCOS capabilities
 pub struct MCPProxyAdapter {
-    /// MCP discovery provider
-    discovery_provider: MCPDiscoveryProvider,
-    /// Auth injector for handling credentials
-    auth_injector: AuthInjector,
     /// Server configuration
     config: MCPProxyConfig,
     /// Mock mode for testing
@@ -48,19 +43,7 @@ pub struct MCPProxyAdapter {
 impl MCPProxyAdapter {
     /// Create a new MCP proxy adapter
     pub fn new(config: MCPProxyConfig) -> RuntimeResult<Self> {
-        let mcp_config = crate::capability_marketplace::mcp_discovery::MCPServerConfig {
-            name: config.server_name.clone(),
-            endpoint: config.server_url.clone(),
-            auth_token: config.auth_token.clone(),
-            timeout_seconds: config.timeout_seconds,
-            protocol_version: "2024-11-05".to_string(),
-        };
-
-        let discovery_provider = MCPDiscoveryProvider::new(mcp_config)?;
-
         Ok(Self {
-            discovery_provider,
-            auth_injector: AuthInjector::new(),
             config,
             mock_mode: false,
         })
@@ -68,19 +51,7 @@ impl MCPProxyAdapter {
 
     /// Create in mock mode for testing
     pub fn mock(config: MCPProxyConfig) -> RuntimeResult<Self> {
-        let mcp_config = crate::capability_marketplace::mcp_discovery::MCPServerConfig {
-            name: config.server_name.clone(),
-            endpoint: config.server_url.clone(),
-            auth_token: config.auth_token.clone(),
-            timeout_seconds: config.timeout_seconds,
-            protocol_version: "2024-11-05".to_string(),
-        };
-
-        let discovery_provider = MCPDiscoveryProvider::new(mcp_config)?;
-
         Ok(Self {
-            discovery_provider,
-            auth_injector: AuthInjector::mock(),
             config,
             mock_mode: true,
         })

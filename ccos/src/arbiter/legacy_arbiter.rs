@@ -22,8 +22,6 @@ use crate::types::{Intent, Plan};
 pub struct Arbiter {
     /// Intent graph for managing intent lifecycle.
     intent_graph: Arc<Mutex<IntentGraph>>,
-    /// Configuration for the LLM kernel.
-    config: ArbiterConfig,
     // TODO: Add reference to ContextHorizon and WorkingMemory for context-aware planning.
 }
 
@@ -37,10 +35,9 @@ pub struct ArbiterConfig {
 
 impl Arbiter {
     /// Create a new Arbiter with a given configuration.
-    pub fn new(config: ArbiterConfig, intent_graph: Arc<Mutex<IntentGraph>>) -> Self {
+    pub fn new(_config: ArbiterConfig, intent_graph: Arc<Mutex<IntentGraph>>) -> Self {
         Self {
             intent_graph,
-            config,
         }
     }
 

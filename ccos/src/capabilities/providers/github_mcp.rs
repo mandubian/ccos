@@ -22,17 +22,6 @@ pub struct GitHubMCPCapability {
     api_token: Option<String>,
     /// Base URL for GitHub API
     base_url: String,
-    /// Default repository (owner/repo format)
-    default_repo: Option<String>,
-    /// Cache for recent API calls
-    cache: HashMap<String, CachedGitHubData>,
-}
-
-/// Cached GitHub data to reduce API calls
-#[derive(Debug, Clone)]
-struct CachedGitHubData {
-    data: Value,
-    timestamp: std::time::SystemTime,
 }
 
 /// GitHub Issue structure
@@ -164,18 +153,14 @@ impl GitHubMCPCapability {
         Self {
             api_token,
             base_url: "https://api.github.com".to_string(),
-            default_repo: None,
-            cache: HashMap::new(),
         }
     }
 
     /// Create a new GitHub MCP capability with default repository
-    pub fn with_default_repo(api_token: Option<String>, owner: String, repo: String) -> Self {
+    pub fn with_default_repo(api_token: Option<String>, _owner: String, _repo: String) -> Self {
         Self {
             api_token,
             base_url: "https://api.github.com".to_string(),
-            default_repo: Some(format!("{}/{}", owner, repo)),
-            cache: HashMap::new(),
         }
     }
 
@@ -535,7 +520,7 @@ impl CapabilityProvider for GitHubMCPCapability {
 
     fn execute_capability(
         &self,
-        capability_id: &str,
+        _capability_id: &str,
         inputs: &RuntimeValue,
         _context: &ExecutionContext,
     ) -> RuntimeResult<RuntimeValue> {
@@ -698,16 +683,6 @@ mod tests {
         let capability = GitHubMCPCapability::new(Some("test_token".to_string()));
         assert_eq!(capability.base_url, "https://api.github.com");
         assert_eq!(capability.api_token, Some("test_token".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_github_mcp_capability_with_default_repo() {
-        let capability = GitHubMCPCapability::with_default_repo(
-            Some("test_token".to_string()),
-            "mandubian".to_string(),
-            "ccos".to_string(),
-        );
-        assert_eq!(capability.default_repo, Some("mandubian/ccos".to_string()));
     }
 
     #[tokio::test]

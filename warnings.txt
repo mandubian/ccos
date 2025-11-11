@@ -1,0 +1,90 @@
+warning: unexpected `cfg` condition value: `ccos-integration`
+warning: unexpected `cfg` condition value: `ccos-integration`
+warning: unexpected `cfg` condition value: `ccos-integration`
+warning: unused import: `std::sync::Mutex`
+warning: unused import: `providers::*`
+warning: unused import: `SimpleCachePolicy`
+warning: unused import: `std::cell::RefCell`
+warning: unused import: `Mutex`
+warning: unused import: `Sha256`
+warning: unexpected `cfg` condition value: `ccos-integration`
+warning: unused import: `std::sync::Arc`
+warning: unused import: `std::collections::HashMap`
+warning: unexpected `cfg` condition value: `ccos-integration`
+warning: unexpected `cfg` condition value: `ccos-integration`
+warning: unused import: `Digest`
+warning: unused variable: `for_expr`
+warning: unused variable: `span`
+warning: unused variable: `positives`
+warning: value assigned to `child_env_opt` is never read
+warning: unused variable: `hc`
+warning: variable `merge_policy` is assigned to, but never used
+warning: value assigned to `merge_policy` is never read
+warning: unused variable: `child_id`
+warning: unused variable: `final_prompt`
+warning: unused variable: `security_context`
+warning: unused variable: `monitoring_stats`
+warning: unused variable: `runtime_path`
+warning: unused variable: `env`
+warning: unused variable: `function`
+warning: unused variable: `v`
+warning: unused variable: `input_schema`
+warning: unused variable: `output_schema`
+warning: struct `IrStrategy` is never constructed
+warning: associated function `new` is never used
+warning: fields `type_aliases` and `constraints` are never read
+warning: fields `type_context` and `capture_analysis` are never read
+warning: field `max_inline_depth` is never read
+warning: function `create_example_ast` is never used
+warning: function `print_ast_simplified` is never used
+warning: field `max_inline_depth` is never read
+warning: function `values_equivalent` is never used
+warning: multiple methods are never used
+warning: method `get_or_create_persistent_env` is never used
+warning: fields `config` and `rtfs_runtime_path` are never read
+warning: methods `create_container`, `start_container`, `execute_in_container`, `deploy_rtfs_runtime`, `execute_rtfs_in_container`, and `get_container` are never used
+warning: method `create_simple_wasm_module` is never used
+warning: multiple associated functions are never used
+warning: `rtfs` (lib) generated 47 warnings (run `cargo fix --lib -p rtfs` to apply 8 suggestions)
+warning: field `last_ir` is never read
+warning: `rtfs` (bin "rtfs-repl") generated 1 warning
+warning: unused import: `std::collections::HashMap`
+warning: unused import: `crate::delegation_keys::intent`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unexpected `cfg` condition value: `cuda`
+warning: unused import: `HttpCapability`
+warning: unused import: `rtfs::runtime::values::Value`
+warning: use of deprecated struct `agent::registry::InMemoryAgentRegistry`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated trait `agent::registry::AgentRegistry`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `agent::registry::InMemoryAgentRegistry`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentRegistryConfig`: Use CapabilityMarketplace configuration instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentRegistryConfig`: Use CapabilityMarketplace configuration instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentRegistryConfig`: Use CapabilityMarketplace configuration instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentRegistryConfig`: Use CapabilityMarketplace configuration instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentRegistryConfig`: Use CapabilityMarketplace configuration instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated trait `agent::registry::AgentRegistry`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `agent::registry::InMemoryAgentRegistry`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `agent::registry::InMemoryAgentRegistry`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `arbiter::arbiter_config::AgentRegistryConfig`: Use CapabilityMarketplace configuration instead
+warning: use of deprecated struct `agent::registry::InMemoryAgentRegistry`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: use of deprecated struct `agent::registry::InMemoryAgentRegistry`: Use CapabilityMarketplace with :kind :agent capabilities instead
+warning: `ccos` (lib) generated 41 warnings (2 duplicates)

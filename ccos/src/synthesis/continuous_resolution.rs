@@ -213,7 +213,7 @@ impl ContinuousResolutionLoop {
     async fn assess_risk(
         &self,
         capability_id: &str,
-        context: Option<&str>,
+        _context: Option<&str>,
     ) -> RuntimeResult<RiskAssessment> {
         let mut risk_factors = Vec::new();
         let mut security_concerns = Vec::new();
@@ -416,7 +416,7 @@ impl ContinuousResolutionLoop {
     /// Try a specific resolution method
     async fn try_resolution_method(
         &self,
-        capability_id: &str,
+        _capability_id: &str,
         method: &ResolutionMethod,
     ) -> RuntimeResult<()> {
         match method {

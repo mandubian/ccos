@@ -7,17 +7,11 @@ use rtfs::runtime::error::RuntimeError;
 
 /// Subconscious system for background analysis and optimization
 pub struct SubconsciousV1 {
-    analysis_engine: AnalysisEngine,
-    optimization_engine: OptimizationEngine,
-    pattern_recognizer: PatternRecognizer,
 }
 
 impl SubconsciousV1 {
     pub fn new() -> Result<Self, RuntimeError> {
         Ok(Self {
-            analysis_engine: AnalysisEngine::new(),
-            optimization_engine: OptimizationEngine::new(),
-            pattern_recognizer: PatternRecognizer::new(),
         })
     }
 

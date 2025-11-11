@@ -12,7 +12,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Virtualization layer for context horizon management and large graph optimization
 #[derive(Debug)]
 pub struct IntentGraphVirtualization {
-    context_manager: ContextWindowManager,
     semantic_search: SemanticSearchEngine,
     graph_traversal: GraphTraversalEngine,
     summarizer: IntentSummarizer,
@@ -22,11 +21,10 @@ pub struct IntentGraphVirtualization {
 impl IntentGraphVirtualization {
     pub fn new() -> Self {
         Self {
-            context_manager: ContextWindowManager::new(),
             semantic_search: SemanticSearchEngine::new(),
             graph_traversal: GraphTraversalEngine::new(),
             summarizer: IntentSummarizer::new(1000), // Max 1000 chars per summary
-            pruning_engine: IntentPruningEngine::new(0.3, 30), // 30% importance threshold, 30 days age
+            pruning_engine: IntentPruningEngine::new(0.3), // 30% importance threshold
         }
     }
 

@@ -354,6 +354,10 @@ mod tests {
             MapKey::String(":description".to_string()),
             Value::String("A test capability".to_string()),
         );
+        cap_map.insert(
+            MapKey::String(":language".to_string()),
+            Value::String("rust".to_string()),
+        );
 
         assert!(CanonicalCapabilitySchema::validate(&cap_map).is_ok());
     }

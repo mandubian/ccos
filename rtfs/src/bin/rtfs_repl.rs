@@ -10,7 +10,6 @@ use std::time::Instant;
 extern crate rtfs;
 use rtfs::{
     ast::TopLevel, // Add TopLevel for RTFS 2.0 objects
-    bytecode::BytecodeBackend,
     input_handling::{read_input_content, validate_input_args, InputConfig, InputSource},
     ir::converter::IrConverter, // Fix import path
     ir::enhanced_optimizer::{EnhancedOptimizationPipeline, OptimizationLevel},
@@ -379,7 +378,7 @@ fn process_rtfs_input_with_state(
                                 }
 
                                 // Optimize
-                                let optimized_ir = optimizer.optimize(ir_node);
+                                let _optimized_ir = optimizer.optimize(ir_node);
 
                                 // Execute
                                 match runtime.run(expr) {
@@ -501,7 +500,7 @@ fn process_rtfs_input_with_state(
 fn handle_repl_command(
     cmd: &str,
     state: &mut ReplState,
-    runtime: &mut Runtime,
+    _runtime: &mut Runtime,
     ir_converter: &mut IrConverter,
     optimizer: &mut EnhancedOptimizationPipeline,
 ) {
@@ -755,7 +754,7 @@ fn show_ast_friendly(input: &str) {
     println!("└────────────────────────────────────────────────────────┘\n");
 }
 
-fn print_ast_tree(item: &TopLevel, prefix: &str, is_last: bool) {
+fn print_ast_tree(item: &TopLevel, prefix: &str, _is_last: bool) {
     use rtfs::ast::Expression;
 
     match item {
@@ -1152,7 +1151,7 @@ fn format_toplevel_friendly(item: &TopLevel) -> String {
 
 fn format_expression_friendly(expr: &rtfs::ast::Expression, indent: usize) -> String {
     use rtfs::ast::Expression;
-    let ind = "  ".repeat(indent);
+    let _ind = "  ".repeat(indent);
 
     match expr {
         Expression::Literal(lit) => format!("{:?}", lit),

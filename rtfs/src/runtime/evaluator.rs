@@ -13,16 +13,15 @@ use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::security::IsolationLevel;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::stubs::{
-    ConflictResolution, ExecutionResultStruct, SimpleAgentCard, SimpleCachePolicy,
+    ConflictResolution, ExecutionResultStruct, SimpleAgentCard,
     SimpleDiscoveryOptions, SimpleDiscoveryQuery,
 };
 use crate::runtime::type_validator::{
     TypeCheckingConfig, TypeValidator, ValidationLevel, VerificationContext,
 };
 use crate::runtime::values::{Arity, BuiltinFunctionWithContext, Function, Value};
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 type SpecialFormHandler =
     fn(&Evaluator, &[Expression], &mut Environment) -> Result<ExecutionOutcome, RuntimeError>;
 
@@ -42,21 +41,6 @@ pub struct Evaluator {
     pub type_validator: Arc<TypeValidator>,
     /// Type checking configuration for optimization
     pub type_config: TypeCheckingConfig,
-}
-
-// Helper function to check if two values are in equivalent
-// This is a simplified version for the fixpoint algorithm
-fn values_equivalent(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Nil, Value::Nil) => true,
-        (Value::Function(Function::Closure(c1)), Value::Function(Function::Closure(c2))) => {
-            c1.body == c2.body
-        }
-        (Value::Function(Function::Builtin(b1)), Value::Function(Function::Builtin(b2))) => {
-            b1.name == b2.name
-        }
-        _ => false, // Different types or can't compare
-    }
 }
 
 impl Evaluator {
@@ -863,7 +847,7 @@ impl Evaluator {
         // step-local bindings (like %params) don't overwrite the parent's bindings
         // permanently. We'll evaluate the body in `body_env` which either
         // references the provided `env` or a newly created child environment.
-        let mut child_env_opt: Option<Environment> = None;
+        let mut _child_env_opt: Option<Environment> = None;
         let body_env: &mut Environment;
         if let Some(param_map) = params_expr_map {
             // adapt param_map to expected type for binder: HashMap<String, Expression>
@@ -874,7 +858,7 @@ impl Evaluator {
                 // eval_expr now returns ExecutionOutcome; unwrap Complete(v) to Value
                 match self.eval_expr(expr, env)? {
                     ExecutionOutcome::Complete(v) => Ok(v),
-                    ExecutionOutcome::RequiresHost(hc) => Err(RuntimeError::Generic(
+                    ExecutionOutcome::RequiresHost(_hc) => Err(RuntimeError::Generic(
                         "Host call required in param binding".into(),
                     )),
                 }
@@ -891,14 +875,14 @@ impl Evaluator {
                     }
                     let sym = crate::ast::Symbol("%params".to_string());
                     child.define(&sym, Value::Map(map_vals));
-                    child_env_opt = Some(child);
+                    _child_env_opt = Some(child);
                 }
                 Err(e) => {
                     return Err(RuntimeError::from(e));
                 }
             }
             // body_env will refer to the child we created
-            body_env = child_env_opt.as_mut().unwrap();
+            body_env = _child_env_opt.as_mut().unwrap();
         } else {
             // No params supplied; evaluate body in the existing environment
             body_env = env;
@@ -1277,7 +1261,7 @@ impl Evaluator {
         // 2. Parse optional keyword arguments (e.g., :merge-policy :overwrite, :expose-context, :context-keys)
         use crate::ast::Literal as Lit;
         let mut i: usize = 0;
-        let mut merge_policy = ConflictResolution::KeepExisting;
+        let mut _merge_policy = ConflictResolution::KeepExisting;
         let mut expose_override: Option<bool> = None;
         let mut context_keys_override: Option<Vec<String>> = None;
         while i + 1 < args.len() {
@@ -1326,7 +1310,7 @@ impl Evaluator {
 
                     if key == "merge-policy" || key == "merge_policy" {
                         // Map value to ConflictResolution
-                        merge_policy = match val {
+                        _merge_policy = match val {
                             Value::Keyword(crate::ast::Keyword(s)) | Value::String(s) => {
                                 match s.as_str() {
                                     "keep-existing" | "keep_existing" | "parent-wins"
@@ -1378,7 +1362,7 @@ impl Evaluator {
         for (rel_index, expr) in args[i..].iter().enumerate() {
             let index = i + rel_index;
             // Begin isolated child context for this branch (also switches into it)
-            let child_id = {
+            let _child_id = {
                 // Enforce isolation policy for isolated branch contexts
                 if !self
                     .security_context
@@ -1647,7 +1631,7 @@ impl Evaluator {
         let step_action_id = self.host.notify_step_started("llm-execute")?;
 
         // Compose final prompt
-        let final_prompt = if let Some(sys) = system_prompt {
+        let _final_prompt = if let Some(sys) = system_prompt {
             format!("System:\n{}\n\nUser:\n{}", sys, prompt)
         } else {
             prompt.clone()

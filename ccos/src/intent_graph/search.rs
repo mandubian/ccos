@@ -7,16 +7,11 @@ use std::collections::{HashMap, HashSet};
 
 /// Enhanced semantic search engine with keyword and pattern matching
 #[derive(Debug)]
-pub struct SemanticSearchEngine {
-    /// Cache for search results
-    search_cache: HashMap<String, Vec<IntentId>>,
-}
+pub struct SemanticSearchEngine {}
 
 impl SemanticSearchEngine {
     pub fn new() -> Self {
-        Self {
-            search_cache: HashMap::new(),
-        }
+        Self {}
     }
 
     /// Search intents using enhanced semantic matching

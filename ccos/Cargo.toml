@@ -77,6 +77,10 @@ tower-http = { version = "0.5", features = ["fs"] }
 [features]
 default = ["repl"]
 repl = ["dep:rustyline", "rtfs/repl"]
+# CCOS integration features
+ccos-integration = []
+# CUDA support for local models
+cuda = ["llama_cpp"]
 
 [[bin]]
 name = "rtfs-ccos-repl"

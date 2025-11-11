@@ -479,7 +479,7 @@ async fn handle_monitor(
 }
 
 async fn handle_validate(
-    resolver: &Arc<MissingCapabilityResolver>,
+    _resolver: &Arc<MissingCapabilityResolver>,
     capability_id: &str,
     security_level: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -502,7 +502,7 @@ async fn handle_validate(
 }
 
 async fn handle_search(
-    resolver: &Arc<MissingCapabilityResolver>,
+    _resolver: &Arc<MissingCapabilityResolver>,
     query: &str,
     source: &str,
     limit: usize,
@@ -624,7 +624,7 @@ async fn handle_info(
 }
 
 async fn handle_cleanup(
-    resolver: &Arc<MissingCapabilityResolver>,
+    _resolver: &Arc<MissingCapabilityResolver>,
     days: u32,
     dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {

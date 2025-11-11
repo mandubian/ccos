@@ -87,8 +87,6 @@ pub struct MissingCapabilityQueue {
     in_progress: HashSet<String>,
     /// Failed resolutions with retry information
     failed_resolutions: HashMap<String, (MissingCapabilityRequest, std::time::SystemTime)>,
-    /// Maximum number of resolution attempts per capability
-    max_attempts: u32,
 }
 
 impl MissingCapabilityQueue {
@@ -97,7 +95,6 @@ impl MissingCapabilityQueue {
             queue: VecDeque::new(),
             in_progress: HashSet::new(),
             failed_resolutions: HashMap::new(),
-            max_attempts: 3,
         }
     }
 

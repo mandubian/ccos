@@ -271,7 +271,6 @@ impl CapabilityMarketplace {
             capabilities: Arc::new(RwLock::new(HashMap::new())),
             discovery_agents: Vec::new(),
             capability_registry,
-            network_registry: None,
             type_validator: Arc::new(TypeValidator::new()),
             executor_registry: HashMap::new(),
             isolation_policy: CapabilityIsolationPolicy::default(),

@@ -275,7 +275,7 @@ impl ContextHorizonManager {
     /// Reduce wisdom to fit within token limit
     fn reduce_wisdom(
         &self,
-        wisdom: DistilledWisdom,
+        _wisdom: DistilledWisdom,
         max_tokens: usize,
     ) -> Result<DistilledWisdom, RuntimeError> {
         let mut reduced = DistilledWisdom::new();
@@ -485,14 +485,12 @@ impl Default for ContextHorizonConfig {
 /// Intent Graph Virtualization for context horizon management
 pub struct IntentGraphVirtualization {
     semantic_search: SemanticSearchEngine,
-    graph_traversal: GraphTraversalEngine,
 }
 
 impl IntentGraphVirtualization {
     pub fn new() -> Self {
         Self {
             semantic_search: SemanticSearchEngine::new(),
-            graph_traversal: GraphTraversalEngine::new(),
         }
     }
 
@@ -639,7 +637,6 @@ impl WisdomDistiller {
 pub struct PlanAbstraction {
     hierarchical_plans: HierarchicalPlanBuilder,
     data_handles: DataHandleManager,
-    streaming: StreamingDataProcessor,
 }
 
 impl PlanAbstraction {
@@ -647,7 +644,6 @@ impl PlanAbstraction {
         Self {
             hierarchical_plans: HierarchicalPlanBuilder::new(),
             data_handles: DataHandleManager::new(),
-            streaming: StreamingDataProcessor::new(),
         }
     }
 
@@ -672,7 +668,7 @@ impl HierarchicalPlanBuilder {
         Self
     }
 
-    pub fn create_abstract_steps(&self, task: &Task) -> Result<Vec<AbstractStep>, RuntimeError> {
+    pub fn create_abstract_steps(&self, _task: &Task) -> Result<Vec<AbstractStep>, RuntimeError> {
         // Placeholder implementation
         // In a real implementation, this would convert concrete plan steps to abstract ones
         Ok(vec![AbstractStep {
@@ -689,7 +685,7 @@ impl DataHandleManager {
         Self
     }
 
-    pub fn create_data_handles(&self, task: &Task) -> Result<Vec<ResourceId>, RuntimeError> {
+    pub fn create_data_handles(&self, _task: &Task) -> Result<Vec<ResourceId>, RuntimeError> {
         // Placeholder implementation
         // In a real implementation, this would identify and create handles for large data
         Ok(vec!["resource-1".to_string()])
