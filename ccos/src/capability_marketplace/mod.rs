@@ -2,6 +2,7 @@ pub mod discovery;
 pub mod executors;
 pub mod marketplace;
 pub mod mcp_discovery;
+pub mod network_discovery;
 pub mod resource_monitor;
 pub mod types;
 

@@ -1,13 +1,5 @@
 use super::types::*;
 use async_trait::async_trait;
-use chrono::Utc;
-use rtfs::runtime::error::RuntimeError;
-use rtfs::runtime::values::Value;
-use serde_json::Value as JsonValue;
-use std::any::Any;
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
 use tokio::fs;
 
 /// Enhanced discovery providers for different capability sources
@@ -118,14 +110,12 @@ impl CapabilityDiscovery for FileManifestDiscoveryProvider {
 /// Network discovery provider (placeholder for future implementation)
 pub struct NetworkDiscoveryProvider {
     endpoint_url: String,
-    timeout_seconds: u64,
 }
 
 impl NetworkDiscoveryProvider {
-    pub fn new(endpoint_url: String, timeout_seconds: u64) -> Self {
+    pub fn new(config: super::network_discovery::NetworkDiscoveryConfig) -> Self {
         Self {
-            endpoint_url,
-            timeout_seconds,
+            endpoint_url: config.base_url,
         }
     }
 }
