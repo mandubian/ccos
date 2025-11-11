@@ -302,7 +302,7 @@ impl ParserError {
     /// Detect special form specific errors (let, if, fn, etc.)
     fn detect_special_form_errors(
         current_line: &str,
-        positives: &[Rule],
+        _positives: &[Rule],
     ) -> Option<(String, Vec<ErrorHint>)> {
         let trimmed = current_line.trim();
 

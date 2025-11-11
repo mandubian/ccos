@@ -10,7 +10,6 @@ use crate::ir::converter::{BindingInfo, BindingKind, IrConverter};
 use crate::ir::core::{IrNode, IrType};
 use crate::runtime::error::RuntimeResult;
 use crate::runtime::{IrEnvironment, IrRuntime, RuntimeError, Value};
-use sha2::{Digest, Sha256};
 
 /// Module registry that manages all loaded modules
 #[derive(Debug)]

@@ -307,7 +307,7 @@ fi
         container_id: &str,
         program: &Program,
     ) -> RuntimeResult<Value> {
-        let runtime_path = format!("/tmp/rtfs-runtime-{}.sh", container_id);
+        let _runtime_path = format!("/tmp/rtfs-runtime-{}.sh", container_id);
 
         match program {
             Program::RtfsSource(source) => {

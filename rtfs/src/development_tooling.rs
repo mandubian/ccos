@@ -12,7 +12,6 @@ use crate::runtime::{
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::sync::Mutex;
 
 // Placeholder IrStrategy implementation until the actual one is available
 #[derive(Debug)]
