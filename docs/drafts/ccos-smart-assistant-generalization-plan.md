@@ -72,8 +72,29 @@ The demo now runs end-to-end, but several pieces are too specific to the GitHub 
 - Deliverables:
   - Structured tracing for strategies, bindings, rewrite decisions.
   - Typed auth-required errors with env-var guidance; policy to skip/continue.
+  - Planner loop enforces capability schema compliance and feeds corrective prompts when bindings are invalid.
+  - Structured timeline demo (`smart_assistant_viz`) renders collapsible discovery events with MCP/LLM details for easier triage.
 - Acceptance:
   - Demo output is concise but debuggable; CI can assert on typed errors.
+
+### Planner Visualization Workstream (smart_assistant_planner_viz.rs)
+
+**Status**
+- Capability catalog preloading & menu rendering wired to `smart_assistant_planner_viz`.
+- Planner now validates LLM-proposed steps against capability schemas (required/optional inputs) and re-prompts with corrective feedback (max 3 attempts).
+- Architecture summary appended to planner output for quick diagnostics.
+
+**Open Tasks**
+- Extend schema validation to check basic type compatibility (string vs vector) to prevent label/filters mismatches.
+- Incorporate override metadata (aliases, heuristics) into menu display so the LLM sees canonical parameters.
+- Add negative tests ensuring invalid plans fail gracefully and log corrective feedback.
+- Capture successful plans into plan archive and surface them in catalog for reuse.
+- Evaluate fallback flow for empty menus: prompt LLM to request capability synthesis or broaden search tokens.
+
+**Next Steps**
+1. Harden capability menu entries with manifest metadata (auth requirements, rate limits).
+2. Teach planner to fall back to local primitives (e.g., filter) when remote capability lacks required parameters.
+3. Instrument the schema validator with structured telemetry for tracing pipeline decisions.
 
 9) Test suite
 - Deliverables:

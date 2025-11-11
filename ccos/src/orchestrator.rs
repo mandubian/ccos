@@ -1105,9 +1105,7 @@ impl Orchestrator {
                             plan_def.properties.iter().find(|p| p.key.0 == "body")
                         {
                             // Format the body expression as RTFS string
-                            super::rtfs_bridge::extractors::expression_to_rtfs_string(
-                                &body_prop.value,
-                            )
+                            crate::rtfs_bridge::expression_to_rtfs_string(&body_prop.value)
                         } else {
                             raw_body // No :body property found, use as-is
                         }

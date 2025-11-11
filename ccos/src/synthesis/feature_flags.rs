@@ -3,6 +3,7 @@
 //! This module provides feature flags and configuration options to control
 //! the behavior of the missing capability resolution system in production.
 
+use rtfs::config::types::AgentConfig;
 use serde::{Deserialize, Serialize};
 
 /// Feature flags for missing capability resolution
@@ -115,6 +116,32 @@ impl MissingCapabilityFeatureFlags {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolSelectionConfig {
+    /// Enable LLM-assisted tool selection when discovery heuristics fail
+    pub enabled: bool,
+    /// Prompt bundle identifier (folder name under assets/prompts/arbiter)
+    pub prompt_id: String,
+    /// Prompt bundle version
+    pub prompt_version: String,
+    /// Maximum number of candidate tools passed to the selector
+    pub max_tools: usize,
+    /// Maximum characters for each tool description snippet
+    pub max_description_chars: usize,
+}
+
+impl Default for ToolSelectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            prompt_id: "tool_selection".to_string(),
+            prompt_version: "v1".to_string(),
+            max_tools: 25,
+            max_description_chars: 320,
+        }
+    }
+}
+
 /// Configuration options for missing capability resolution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MissingCapabilityConfig {
@@ -150,6 +177,8 @@ pub struct MissingCapabilityConfig {
 
     /// Web search configuration
     pub web_search_config: WebSearchConfig,
+    /// LLM tool selection configuration
+    pub tool_selection_config: ToolSelectionConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +312,7 @@ impl Default for MissingCapabilityConfig {
                 timeout_seconds: 15,
                 allowed_search_engines: vec!["duckduckgo".to_string(), "bing".to_string()],
             },
+            tool_selection_config: ToolSelectionConfig::default(),
         }
     }
 }
@@ -354,6 +384,38 @@ impl MissingCapabilityConfig {
                 .collect();
         }
 
+        if let Ok(selector_enabled) = std::env::var("CCOS_TOOL_SELECTOR_ENABLED") {
+            config.tool_selection_config.enabled = selector_enabled.parse().unwrap_or(true);
+        }
+
+        if let Ok(prompt_id) = std::env::var("CCOS_TOOL_SELECTOR_PROMPT_ID") {
+            if !prompt_id.is_empty() {
+                config.tool_selection_config.prompt_id = prompt_id;
+            }
+        }
+
+        if let Ok(prompt_version) = std::env::var("CCOS_TOOL_SELECTOR_PROMPT_VERSION") {
+            if !prompt_version.is_empty() {
+                config.tool_selection_config.prompt_version = prompt_version;
+            }
+        }
+
+        if let Ok(max_tools) = std::env::var("CCOS_TOOL_SELECTOR_MAX_TOOLS") {
+            if let Ok(value) = max_tools.parse::<usize>() {
+                if value > 0 {
+                    config.tool_selection_config.max_tools = value.min(100);
+                }
+            }
+        }
+
+        if let Ok(max_desc) = std::env::var("CCOS_TOOL_SELECTOR_MAX_DESCRIPTION_CHARS") {
+            if let Ok(value) = max_desc.parse::<usize>() {
+                if value > 0 {
+                    config.tool_selection_config.max_description_chars = value.min(2000);
+                }
+            }
+        }
+
         // Load MCP Registry configuration
         if let Ok(base_url) = std::env::var("CCOS_MCP_REGISTRY_BASE_URL") {
             config.mcp_registry_config.base_url = base_url;
@@ -361,6 +423,71 @@ impl MissingCapabilityConfig {
 
         if let Ok(timeout) = std::env::var("CCOS_MCP_REGISTRY_TIMEOUT_SECONDS") {
             config.mcp_registry_config.timeout_seconds = timeout.parse().unwrap_or(10);
+        }
+
+        config
+    }
+
+    /// Merge environment defaults with agent configuration overrides.
+    pub fn from_agent_config(agent_config: Option<&AgentConfig>) -> Self {
+        let mut config = Self::from_env();
+
+        if let Some(agent) = agent_config {
+            let mc = &agent.missing_capabilities;
+
+            if let Some(enabled) = mc.enabled {
+                config.feature_flags.enabled = enabled;
+            }
+
+            if let Some(runtime_detection) = mc.runtime_detection {
+                config.feature_flags.runtime_detection = runtime_detection;
+            }
+
+            if let Some(auto_resolution) = mc.auto_resolution {
+                config.feature_flags.auto_resolution = auto_resolution;
+            }
+
+            if let Some(llm_synthesis) = mc.llm_synthesis {
+                config.feature_flags.llm_synthesis_enabled = llm_synthesis;
+            }
+
+            if let Some(web_search) = mc.web_search {
+                config.feature_flags.web_search_enabled = web_search;
+            }
+
+            if let Some(human_approval) = mc.human_approval_required {
+                config.feature_flags.human_approval_required = human_approval;
+            }
+
+            if let Some(max_attempts) = mc.max_attempts {
+                config.max_resolution_attempts = max_attempts;
+            }
+
+            let selector_cfg = &mc.tool_selector;
+            if let Some(enabled) = selector_cfg.enabled {
+                config.tool_selection_config.enabled = enabled;
+            }
+            if let Some(ref prompt_id) = selector_cfg.prompt_id {
+                if !prompt_id.is_empty() {
+                    config.tool_selection_config.prompt_id = prompt_id.clone();
+                }
+            }
+            if let Some(ref prompt_version) = selector_cfg.prompt_version {
+                if !prompt_version.is_empty() {
+                    config.tool_selection_config.prompt_version = prompt_version.clone();
+                }
+            }
+            if let Some(max_tools) = selector_cfg.max_tools {
+                if max_tools > 0 {
+                    config.tool_selection_config.max_tools = (max_tools as usize).min(100);
+                }
+            }
+            if let Some(max_desc) = selector_cfg.max_description_chars {
+                if max_desc > 0 {
+                    config.tool_selection_config.max_description_chars =
+                        (max_desc as usize).min(2000);
+                }
+            }
         }
 
         config
@@ -442,6 +569,22 @@ impl MissingCapabilityConfig {
             }
         }
 
+        if self.tool_selection_config.max_tools == 0 {
+            return Err("Tool selector max_tools must be greater than 0".to_string());
+        }
+
+        if self.tool_selection_config.max_description_chars == 0 {
+            return Err("Tool selector max_description_chars must be greater than 0".to_string());
+        }
+
+        if self.tool_selection_config.prompt_id.trim().is_empty() {
+            return Err("Tool selector prompt_id cannot be empty".to_string());
+        }
+
+        if self.tool_selection_config.prompt_version.trim().is_empty() {
+            return Err("Tool selector prompt_version cannot be empty".to_string());
+        }
+
         Ok(())
     }
 
@@ -517,6 +660,14 @@ impl FeatureFlagChecker {
 
     pub fn is_cli_tooling_enabled(&self) -> bool {
         self.config.feature_flags.cli_tooling_enabled
+    }
+
+    pub fn is_tool_selector_enabled(&self) -> bool {
+        self.is_enabled() && self.config.tool_selection_config.enabled
+    }
+
+    pub fn tool_selection_config(&self) -> &ToolSelectionConfig {
+        &self.config.tool_selection_config
     }
 
     pub fn get_config(&self) -> &MissingCapabilityConfig {

@@ -27,7 +27,14 @@ use ccos::discovery::{
     DiscoveryResult, FoundCapability,
 };
 use ccos::environment::CCOSBuilder;
+use ccos::examples_common::capability_helpers::{
+    count_token_matches, minimum_token_matches, parse_simple_mcp_rtfs,
+    preload_discovered_capabilities, score_manifest_against_tokens, tokenize_identifier,
+};
 use ccos::intent_graph::config::IntentGraphConfig;
+use ccos::synthesis::missing_capability_resolver::{
+    MissingCapabilityRequest, MissingCapabilityResolver, ResolutionResult,
+};
 use ccos::synthesis::schema_serializer::type_expr_to_rtfs_compact;
 use ccos::types::{Intent, Plan, PlanBody};
 use ccos::{PlanAutoRepairOptions, CCOS};
@@ -42,6 +49,7 @@ use rtfs::parser::parse_expression;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use serde_json::{self, Value as JsonValue};
+use std::time::SystemTime;
 use toml;
 
 const GENERIC_CLASS_PREFIXES: &[&str] = &["general", "core", "default", "misc", "step", "task"];
@@ -364,218 +372,6 @@ struct StubCapabilitySpec {
     expected_outputs: &'static [&'static str],
 }
 
-/// Recursively collect directories that contain RTFS capability manifests.
-/// Returns true if the provided path or any descendant contains at least one `.rtfs` file.
-fn collect_rtfs_directories(path: &Path, dirs: &mut HashSet<PathBuf>) -> io::Result<bool> {
-    if !path.is_dir() {
-        return Ok(false);
-    }
-
-    let mut has_local_rtfs = false;
-    let mut has_rtfs_in_children = false;
-
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        let child = entry.path();
-        if child.is_dir() {
-            if collect_rtfs_directories(&child, dirs)? {
-                has_rtfs_in_children = true;
-            }
-        } else if child
-            .extension()
-            .and_then(|ext| if ext == "rtfs" { Some(()) } else { None })
-            .is_some()
-        {
-            has_local_rtfs = true;
-        }
-    }
-
-    if has_local_rtfs {
-        dirs.insert(path.to_path_buf());
-    }
-
-    Ok(has_local_rtfs || has_rtfs_in_children)
-}
-
-/// Import all RTFS capability manifests found in the discovered directory tree.
-async fn preload_discovered_capabilities(
-    marketplace: &Arc<ccos::capability_marketplace::CapabilityMarketplace>,
-    root: &Path,
-) -> RuntimeResult<usize> {
-    let mut dirs = HashSet::new();
-    if let Err(e) = collect_rtfs_directories(root, &mut dirs) {
-        return Err(RuntimeError::Generic(format!(
-            "Failed to scan discovered capabilities: {}",
-            e
-        )));
-    }
-
-    let mut dirs_vec: Vec<PathBuf> = dirs.into_iter().collect();
-    dirs_vec.sort();
-
-    if dirs_vec.is_empty() {
-        println!(
-            "  {} No RTFS capability files found under {}",
-            "ℹ️".blue(),
-            root.display()
-        );
-    } else {
-        println!(
-            "  {} Discovered RTFS capability directories: {:?}",
-            "ℹ️".blue(),
-            dirs_vec
-        );
-    }
-
-    let mut total_loaded = 0usize;
-    for dir in dirs_vec {
-        let mut loaded_from_dir = 0usize;
-        match marketplace.import_capabilities_from_rtfs_dir(&dir).await {
-            Ok(count) => {
-                loaded_from_dir += count;
-                println!(
-                    "  {} Imported {} manifest(s) from {}",
-                    if count > 0 {
-                        "✓".green()
-                    } else {
-                        "ℹ️".blue()
-                    }
-                    .to_string(),
-                    count,
-                    dir.display()
-                );
-            }
-            Err(e) => {
-                eprintln!(
-                    "  {} Failed to import capabilities from {}: {}",
-                    "⚠️".yellow(),
-                    dir.display(),
-                    e
-                );
-            }
-        }
-
-        if loaded_from_dir == 0 {
-            // Fallback: parse simple MCP RTFS exports `(capability "id" ...)`
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path
-                        .extension()
-                        .and_then(|ext| if ext == "rtfs" { Some(()) } else { None })
-                        .is_none()
-                    {
-                        continue;
-                    }
-                    if let Some(manifest) = parse_simple_mcp_rtfs(&path)? {
-                        marketplace.register_capability_manifest(manifest).await?;
-                        loaded_from_dir += 1;
-                        println!(
-                            "  {} Fallback-registered MCP manifest from {}",
-                            "✓".green(),
-                            path.display()
-                        );
-                    }
-                }
-            }
-        }
-
-        total_loaded += loaded_from_dir;
-    }
-
-    Ok(total_loaded)
-}
-
-fn parse_simple_mcp_rtfs(path: &Path) -> RuntimeResult<Option<CapabilityManifest>> {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            return Err(RuntimeError::Generic(format!(
-                "Failed to read RTFS file {}: {}",
-                path.display(),
-                e
-            )))
-        }
-    };
-
-    let extract_quoted = |needle: &str| -> Option<String> {
-        content.find(needle).and_then(|pos| {
-            let after = &content[pos + needle.len()..];
-            let q1 = after.find('"')?;
-            let rest = &after[q1 + 1..];
-            let q2 = rest.find('"')?;
-            Some(rest[..q2].to_string())
-        })
-    };
-
-    let id = extract_quoted("(capability \"").or_else(|| extract_quoted(":id \""));
-    let name = extract_quoted(":name \"");
-    let description = extract_quoted(":description \"");
-    let server_url = extract_quoted(":server_url \"").or_else(|| extract_quoted(":server-url \""));
-    let tool_name = extract_quoted(":tool_name \"").or_else(|| extract_quoted(":tool-name \""));
-    let requires_session =
-        extract_quoted(":requires_session \"").or_else(|| extract_quoted(":requires-session \""));
-    let auth_env_var =
-        extract_quoted(":auth_env_var \"").or_else(|| extract_quoted(":auth-env-var \""));
-
-    let id = match id {
-        Some(id) => id,
-        None => return Ok(None),
-    };
-
-    let name = name.unwrap_or_else(|| id.split('.').last().unwrap_or(&id).to_string());
-    let description = description.unwrap_or_else(|| "".to_string());
-    let version = extract_quoted(":version \"").unwrap_or_else(|| "1.0.0".to_string());
-
-    let server_url = match server_url {
-        Some(url) => url,
-        None => return Ok(None),
-    };
-
-    let tool_name = match tool_name {
-        Some(name) => name,
-        None => return Ok(None),
-    };
-
-    let mut manifest = CapabilityManifest::new(
-        id.clone(),
-        name,
-        description.clone(),
-        ProviderType::MCP(MCPCapability {
-            server_url: server_url.clone(),
-            tool_name: tool_name.clone(),
-            timeout_ms: 30_000,
-        }),
-        version,
-    );
-
-    if let Some(req) = requires_session {
-        manifest
-            .metadata
-            .insert("mcp_requires_session".to_string(), req);
-    }
-    if let Some(auth) = auth_env_var {
-        manifest
-            .metadata
-            .insert("mcp_auth_env_var".to_string(), auth);
-    }
-    manifest
-        .metadata
-        .insert("mcp_server_url".to_string(), server_url);
-    manifest
-        .metadata
-        .insert("mcp_tool_name".to_string(), tool_name);
-    manifest.metadata.insert(
-        "capability_source".to_string(),
-        "discovered_rtfs".to_string(),
-    );
-    manifest
-        .metadata
-        .insert("original_description".to_string(), description);
-
-    Ok(Some(manifest))
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
@@ -587,7 +383,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
-
 async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     let agent_config = load_agent_config(&args.config)?;
     apply_llm_profile(&agent_config, args.profile.as_deref())?;
@@ -620,6 +415,8 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         .await
         .map_err(runtime_error)?,
     );
+
+    let missing_capability_resolver = ccos.get_missing_capability_resolver();
 
     configure_session_pool(&ccos).await?;
 
@@ -980,6 +777,7 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
 
                     return build_register_and_execute_plan(
                         &ccos,
+                        missing_capability_resolver.clone(),
                         &agent_config,
                         &args,
                         &goal,
@@ -998,6 +796,7 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
 
     build_register_and_execute_plan(
         &ccos,
+        missing_capability_resolver,
         &agent_config,
         &args,
         &goal,
@@ -1277,7 +1076,6 @@ fn print_intent_summary(intent: &Intent) {
         println!("   • Success criteria: {}", format_value(success).dim());
     }
 }
-
 async fn generate_clarifying_questions(
     delegating: &DelegatingArbiter,
     goal: &str,
@@ -1990,7 +1788,6 @@ async fn auto_answer_with_llm(
         source: AnswerSource::DelegatingAsk,
     })
 }
-
 async fn conduct_interview(
     _ccos: &Arc<CCOS>,
     delegating: &DelegatingArbiter,
@@ -2789,7 +2586,6 @@ fn parse_answer_kind(label: &str) -> Option<AnswerKind> {
         _ => None,
     }
 }
-
 fn parse_answer_value(kind: AnswerKind, raw: &str) -> Value {
     match kind {
         AnswerKind::Text => Value::String(raw.to_string()),
@@ -3162,6 +2958,7 @@ fn format_found_capabilities(found: &[FoundCapability]) -> String {
 /// Uses recursive synthesis to automatically generate missing capabilities and their dependencies.
 async fn resolve_and_stub_capabilities(
     ccos: &Arc<CCOS>,
+    missing_capability_resolver: Option<Arc<MissingCapabilityResolver>>,
     steps: &[ProposedStep],
     matches: &[CapabilityMatch],
     interactive: bool,
@@ -3170,6 +2967,7 @@ async fn resolve_and_stub_capabilities(
     let marketplace = ccos.get_capability_marketplace();
     let intent_graph = ccos.get_intent_graph();
     let delegating_arbiter = ccos.get_delegating_arbiter();
+    let resolver_ref = missing_capability_resolver.as_ref();
     let manifests = marketplace.list_capabilities().await;
 
     for step in steps {
@@ -3225,6 +3023,106 @@ async fn resolve_and_stub_capabilities(
                     output_bindings,
                 });
                 continue;
+            }
+        }
+
+        if let Some(resolver) = resolver_ref {
+            let mut context_map = HashMap::new();
+            context_map.insert("step_id".to_string(), step.id.clone());
+            context_map.insert("step_name".to_string(), step.name.clone());
+            context_map.insert(
+                "capability_class".to_string(),
+                step.capability_class.clone(),
+            );
+            if let Some(desc) = &step.description {
+                context_map.insert("step_description".to_string(), desc.clone());
+            }
+            context_map.insert("source".to_string(), "smart_assistant_demo".to_string());
+            if !step.required_inputs.is_empty() {
+                context_map.insert(
+                    "required_inputs".to_string(),
+                    step.required_inputs.join(","),
+                );
+            }
+            if !step.expected_outputs.is_empty() {
+                context_map.insert(
+                    "expected_outputs".to_string(),
+                    step.expected_outputs.join(","),
+                );
+            }
+
+            let request = MissingCapabilityRequest {
+                capability_id: step.capability_class.clone(),
+                arguments: Vec::new(),
+                context: context_map,
+                requested_at: SystemTime::now(),
+                attempt_count: 0,
+            };
+
+            match resolver
+                .resolve_capability(&request)
+                .await
+                .map_err(runtime_error)?
+            {
+                ResolutionResult::Resolved {
+                    capability_id,
+                    resolution_method,
+                    ..
+                } => {
+                    if let Some(manifest) =
+                        fetch_manifest_for_step(&marketplace, &capability_id, step).await
+                    {
+                        let input_bindings = compute_input_bindings_for_step(step, Some(&manifest));
+                        let output_bindings =
+                            compute_output_bindings_for_step(step, Some(&manifest));
+                        resolved.push(ResolvedStep {
+                            original: step.clone(),
+                            capability_id: manifest.id.clone(),
+                            resolution_strategy: ResolutionStrategy::Found,
+                            input_bindings,
+                            output_bindings,
+                        });
+                        println!(
+                            "  ✅ [resolver:{}] Resolved '{}' as '{}'",
+                            resolution_method, step.capability_class, manifest.id
+                        );
+                        continue;
+                    } else if let Some(manifest) = marketplace.get_capability(&capability_id).await
+                    {
+                        let input_bindings = compute_input_bindings_for_step(step, Some(&manifest));
+                        let output_bindings =
+                            compute_output_bindings_for_step(step, Some(&manifest));
+                        resolved.push(ResolvedStep {
+                            original: step.clone(),
+                            capability_id: manifest.id.clone(),
+                            resolution_strategy: ResolutionStrategy::Found,
+                            input_bindings,
+                            output_bindings,
+                        });
+                        println!(
+                            "  ✅ [resolver:{}] Registered '{}' for '{}'",
+                            resolution_method, manifest.id, step.capability_class
+                        );
+                        continue;
+                    } else {
+                        eprintln!(
+                            "  ⚠️  Resolver reported '{}' resolved via {}, but manifest not found in marketplace",
+                            capability_id, resolution_method
+                        );
+                    }
+                }
+                ResolutionResult::Failed { reason, .. } => {
+                    eprintln!(
+                        "  ⚠️  Resolver failed for {}: {}",
+                        step.capability_class, reason
+                    );
+                }
+                ResolutionResult::PermanentlyFailed { reason, .. } => {
+                    eprintln!(
+                        "  ❌  Resolver permanently failed for {}: {}",
+                        step.capability_class, reason
+                    );
+                }
             }
         }
 
@@ -3412,6 +3310,10 @@ fn compute_input_bindings_for_step(
     manifest: Option<&CapabilityManifest>,
 ) -> HashMap<String, String> {
     let mut bindings = HashMap::new();
+    let input_remap: HashMap<String, String> = manifest
+        .and_then(|m| m.metadata.get("mcp_input_remap"))
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default();
 
     if let Some(manifest) = manifest {
         if let Some(TypeExpr::Map { entries, .. }) = &manifest.input_schema {
@@ -3429,8 +3331,14 @@ fn compute_input_bindings_for_step(
 
             for input in &step.required_inputs {
                 let (base_input, _) = parse_input_assignment(input);
-                let selected = find_best_input_key(&base_input, &candidate_keys)
-                    .unwrap_or_else(|| base_input.clone());
+                let selected = input_remap
+                    .get(&base_input)
+                    .or_else(|| input_remap.get(input))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        find_best_input_key(&base_input, &candidate_keys)
+                            .unwrap_or_else(|| base_input.clone())
+                    });
                 bindings.insert(input.clone(), selected.clone());
                 if base_input != *input {
                     bindings.entry(base_input.clone()).or_insert(selected);
@@ -3462,7 +3370,6 @@ fn compute_input_bindings_for_step(
 
     bindings
 }
-
 fn compute_output_bindings_for_step(
     step: &ProposedStep,
     manifest: Option<&CapabilityManifest>,
@@ -3510,6 +3417,35 @@ const STOPWORDS: &[&str] = &[
     "a", "an", "and", "for", "from", "in", "of", "on", "the", "to", "with",
 ];
 
+fn manifest_is_incomplete(manifest: &CapabilityManifest) -> bool {
+    if manifest
+        .metadata
+        .get("status")
+        .map(|status| {
+            status.eq_ignore_ascii_case("incomplete") || status.eq_ignore_ascii_case("stub")
+        })
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    let local_rtfs_synth = manifest
+        .metadata
+        .get("synthesis_method")
+        .or_else(|| manifest.metadata.get("synthesis-method"))
+        .map(|method| method.eq_ignore_ascii_case("local_rtfs"))
+        .unwrap_or(false);
+    if local_rtfs_synth && !LocalSynthesizer::is_safe_local_prefix(&manifest.id) {
+        return true;
+    }
+
+    manifest.version.to_ascii_lowercase().contains("incomplete")
+        || manifest
+            .name
+            .to_ascii_lowercase()
+            .starts_with("[incomplete]")
+}
+
 fn find_manifest_for_step(
     step: &ProposedStep,
     manifests: &[CapabilityManifest],
@@ -3517,7 +3453,11 @@ fn find_manifest_for_step(
     if let Some(manifest) = step
         .candidate_capabilities
         .iter()
-        .filter_map(|candidate| manifests.iter().find(|m| m.id == *candidate))
+        .filter_map(|candidate| {
+            manifests
+                .iter()
+                .find(|m| m.id == *candidate && !manifest_is_incomplete(m))
+        })
         .next()
     {
         return Some(manifest.clone());
@@ -3530,6 +3470,7 @@ fn find_manifest_for_step(
 
     manifests
         .iter()
+        .filter(|manifest| !manifest_is_incomplete(manifest))
         .filter_map(|manifest| {
             let score = score_manifest_against_tokens(manifest, &tokens);
             if score == 0 {
@@ -3562,81 +3503,6 @@ fn collect_step_tokens(step: &ProposedStep) -> Vec<String> {
         set.extend(tokenize_identifier(candidate));
     }
     set.into_iter().filter(|token| token.len() > 1).collect()
-}
-
-fn tokenize_identifier(text: &str) -> Vec<String> {
-    text.split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|segment| !segment.is_empty())
-        .map(|segment| segment.to_ascii_lowercase())
-        .collect()
-}
-
-fn score_manifest_against_tokens(manifest: &CapabilityManifest, tokens: &[String]) -> usize {
-    if tokens.is_empty() {
-        return 0;
-    }
-
-    let id = manifest.id.to_ascii_lowercase();
-    let name = manifest.name.to_ascii_lowercase();
-    let description = manifest.description.to_ascii_lowercase();
-
-    let metadata_values: Vec<String> = manifest
-        .metadata
-        .values()
-        .map(|value| value.to_ascii_lowercase())
-        .collect();
-
-    let mut score = 0usize;
-    for token in tokens {
-        if id.contains(token) {
-            score += 6;
-        }
-        if name.contains(token) {
-            score += 3;
-        }
-        if description.contains(token) {
-            score += 1;
-        }
-        if metadata_values.iter().any(|value| value.contains(token)) {
-            score += 1;
-        }
-    }
-
-    score
-}
-
-fn count_token_matches(manifest: &CapabilityManifest, tokens: &[String]) -> usize {
-    if tokens.is_empty() {
-        return 0;
-    }
-
-    let id = manifest.id.to_ascii_lowercase();
-    let name = manifest.name.to_ascii_lowercase();
-    let description = manifest.description.to_ascii_lowercase();
-    let metadata_values: Vec<String> = manifest
-        .metadata
-        .values()
-        .map(|value| value.to_ascii_lowercase())
-        .collect();
-
-    tokens
-        .iter()
-        .filter(|token| {
-            id.contains(*token)
-                || name.contains(*token)
-                || description.contains(*token)
-                || metadata_values.iter().any(|value| value.contains(*token))
-        })
-        .count()
-}
-
-fn minimum_token_matches(token_count: usize) -> usize {
-    match token_count {
-        0 => 0,
-        1 => 1,
-        2..=3 => 2,
-        _ => 3,
-    }
 }
 
 fn derive_capability_class_hint(step: &ProposedStep) -> String {
@@ -4119,9 +3985,9 @@ struct ExtractedPlanProperties {
     capabilities_required: Vec<String>,
     annotations: HashMap<String, rtfs::runtime::values::Value>,
 }
-
 async fn build_register_and_execute_plan(
     ccos: &Arc<CCOS>,
+    missing_capability_resolver: Option<Arc<MissingCapabilityResolver>>,
     agent_config: &AgentConfig,
     args: &Args,
     goal: &str,
@@ -4133,8 +3999,14 @@ async fn build_register_and_execute_plan(
     let needs_value = build_needs_capabilities(plan_steps);
 
     // Resolve missing capabilities and build orchestrating agent
-    let mut resolved_steps =
-        resolve_and_stub_capabilities(ccos, plan_steps, matches, args.interactive).await?;
+    let mut resolved_steps = resolve_and_stub_capabilities(
+        ccos,
+        missing_capability_resolver.clone(),
+        plan_steps,
+        matches,
+        args.interactive,
+    )
+    .await?;
     println!(
         "[trace] resolve_and_stub_capabilities returned {} step(s)",
         resolved_steps.len()
@@ -4584,9 +4456,7 @@ fn extract_plan_properties(plan_rtfs: &str) -> DemoResult<ExtractedPlanPropertie
                 for prop in &plan_def.properties {
                     match prop.key.0.as_str() {
                         "body" => {
-                            body = Some(ccos::rtfs_bridge::extractors::expression_to_rtfs_string(
-                                &prop.value,
-                            ));
+                            body = Some(ccos::rtfs_bridge::expression_to_rtfs_string(&prop.value));
                         }
                         "input-schema" | "input_schema" => {
                             // Convert expression to Value using normalizer
@@ -4885,7 +4755,6 @@ async fn enrich_resolved_steps_with_sampling(
         }
     }
 }
-
 fn build_sample_input_for_manifest(
     manifest: &CapabilityManifest,
     context: &rtfs::runtime::security::RuntimeContext,
@@ -5606,30 +5475,56 @@ fn build_resolved_steps_metadata(resolved_steps: &[ResolvedStep]) -> Value {
 }
 
 fn derive_orchestrator_capability_id(goal: &str, steps: &[ResolvedStep]) -> String {
-    // Collect ordered, deduplicated capability classes (fallback to ids)
-    let mut parts: Vec<String> = Vec::new();
+    const MAX_CLASS_PARTS: usize = 2;
+
+    let goal_sig = sanitize_identifier_for_id(&derive_goal_signature(goal));
+
     let mut seen = std::collections::HashSet::new();
+    let mut class_parts: Vec<String> = Vec::new();
     for step in steps {
-        let class = step.original.capability_class.trim();
-        let part = if class.is_empty() {
-            step.capability_id.as_str()
-        } else {
-            class
-        };
-        let norm = sanitize_identifier_for_id(part);
-        if !norm.is_empty() && seen.insert(norm.clone()) {
-            parts.push(norm);
+        if class_parts.len() >= MAX_CLASS_PARTS {
+            break;
+        }
+        let token = abbreviate_capability_class_for_id(
+            step.original.capability_class.trim(),
+            step.capability_id.as_str(),
+        );
+        if !token.is_empty() && seen.insert(token.clone()) {
+            class_parts.push(token);
         }
     }
-    if parts.is_empty() {
-        parts.push("pipeline".to_string());
+
+    let base = if class_parts.is_empty() {
+        format!("orchestrator.{}", goal_sig)
+    } else {
+        format!("orchestrator.{}.{}", goal_sig, class_parts.join("-"))
+    };
+
+    limit_id_length(&base, 120)
+}
+
+fn abbreviate_capability_class_for_id(class: &str, fallback: &str) -> String {
+    let source = if class.is_empty() { fallback } else { class };
+    let segments: Vec<&str> = source.split('.').filter(|s| !s.trim().is_empty()).collect();
+
+    if segments.is_empty() {
+        return sanitize_identifier_for_id(fallback);
     }
 
-    // Derive a compact goal signature to improve uniqueness and searchability
-    let goal_sig = derive_goal_signature(goal);
+    let mut tokens = Vec::new();
+    tokens.push(segments[0]);
+    if segments.len() > 1 {
+        let mut tail = segments[segments.len() - 1];
+        if tail == segments[0] && segments.len() > 2 {
+            tail = segments[segments.len() - 2];
+        }
+        if tail != segments[0] {
+            tokens.push(tail);
+        }
+    }
 
-    let base = format!("orchestrator.{}.{}", parts.join("__"), goal_sig);
-    limit_id_length(&base, 120)
+    let abbreviated = tokens.join(".");
+    sanitize_identifier_for_id(&abbreviated)
 }
 
 fn sanitize_identifier_for_id(value: &str) -> String {
@@ -5650,7 +5545,6 @@ fn sanitize_identifier_for_id(value: &str) -> String {
         .trim_matches('-')
         .to_string()
 }
-
 fn derive_goal_signature(goal: &str) -> String {
     // Keep only the most salient tokens (alnum), drop common stopwords, join with dots
     const STOP: &[&str] = &[
@@ -6428,7 +6322,6 @@ impl StepExecutionResult {
         })
     }
 }
-
 struct DemoCapabilities;
 
 impl DemoCapabilities {
@@ -7219,7 +7112,6 @@ fn persist_plan(id: &str, plan_code: &str) -> Result<(), Box<dyn std::error::Err
     fs::write(file_path, plan_code.as_bytes())?;
     Ok(())
 }
-
 async fn run_application_phase(
     ccos: &Arc<CCOS>,
     scenario: &DemoScenario,
@@ -7430,8 +7322,6 @@ fn set_api_key(provider: &str, key: &str) {
         _ => std::env::set_var("OPENAI_API_KEY", key),
     }
 }
-
-*/
 
 /// Test a synthesized capability with dummy data and correct it if it fails
 async fn test_and_correct_capability(
@@ -7698,3 +7588,5 @@ fn extract_capability_code_from_response(response: &str) -> String {
     // Fallback: return the whole response trimmed
     response.trim().to_string()
 }
+
+*/

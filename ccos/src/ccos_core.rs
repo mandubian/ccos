@@ -461,15 +461,42 @@ impl CCOS {
         // Initialize checkpoint archive
         let checkpoint_archive = Arc::new(crate::checkpoint_archive::CheckpointArchive::new());
 
+        let mut missing_capability_config =
+            crate::synthesis::feature_flags::MissingCapabilityConfig::from_agent_config(Some(
+                agent_config.as_ref(),
+            ));
+
+        if let Err(err) = missing_capability_config.validate() {
+            eprintln!(
+                "⚠️  Missing capability configuration invalid: {}. Falling back to environment defaults.",
+                err
+            );
+            missing_capability_config =
+                crate::synthesis::feature_flags::MissingCapabilityConfig::from_env();
+        }
+
+        let resolver_config = crate::synthesis::missing_capability_resolver::ResolverConfig {
+            max_attempts: missing_capability_config.max_resolution_attempts,
+            auto_resolve: missing_capability_config.feature_flags.auto_resolution,
+            verbose_logging: agent_config
+                .missing_capabilities
+                .verbose_logging
+                .unwrap_or(false),
+        };
+
         // Initialize missing capability resolver
         let missing_capability_resolver = Arc::new(
             crate::synthesis::missing_capability_resolver::MissingCapabilityResolver::new(
                 Arc::clone(&capability_marketplace),
                 Arc::clone(&checkpoint_archive),
-                crate::synthesis::missing_capability_resolver::ResolverConfig::default(),
-                crate::synthesis::feature_flags::MissingCapabilityConfig::from_env(),
+                resolver_config,
+                missing_capability_config,
             ),
         );
+
+        if let Some(delegating) = delegating_arbiter.clone() {
+            missing_capability_resolver.set_delegating_arbiter(Some(delegating));
+        }
 
         // Set the resolver in the capability registry
         {
@@ -1248,6 +1275,13 @@ impl CCOS {
 
     pub fn get_capability_marketplace(&self) -> Arc<CapabilityMarketplace> {
         Arc::clone(&self.capability_marketplace)
+    }
+
+    /// Access the missing capability resolver if configured.
+    pub fn get_missing_capability_resolver(
+        &self,
+    ) -> Option<Arc<crate::synthesis::missing_capability_resolver::MissingCapabilityResolver>> {
+        self.missing_capability_resolver.as_ref().map(Arc::clone)
     }
 
     pub fn get_agent_registry(

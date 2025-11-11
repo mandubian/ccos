@@ -92,6 +92,20 @@ plan_min_score = 0.65
 # Minimum keyword score required to reuse a catalog plan hit
 keyword_min_score = 1.0
 
+[missing_capabilities]
+# Enable runtime detection of missing capabilities; falls back to env CCOS_MISSING_CAPABILITY_ENABLED when unset
+enabled = true
+runtime_detection = true
+# Allow the resolver to auto-attempt repairs instead of deferring to the user
+auto_resolution = true
+# Let the resolver call the promptstore-backed LLM synthesis flow
+llm_synthesis = true
+# Optional guardrails
+human_approval_required = false
+# Tweak attempt/verbosity knobs (env overrides still win)
+max_attempts = 3
+verbose_logging = false
+
 [llm_profiles]
 default = "openrouter_free:balanced"
 
