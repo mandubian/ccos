@@ -43,21 +43,6 @@ pub struct Evaluator {
     pub type_config: TypeCheckingConfig,
 }
 
-// Helper function to check if two values are in equivalent
-// This is a simplified version for the fixpoint algorithm
-fn values_equivalent(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Nil, Value::Nil) => true,
-        (Value::Function(Function::Closure(c1)), Value::Function(Function::Closure(c2))) => {
-            c1.body == c2.body
-        }
-        (Value::Function(Function::Builtin(b1)), Value::Function(Function::Builtin(b2))) => {
-            b1.name == b2.name
-        }
-        _ => false, // Different types or can't compare
-    }
-}
-
 impl Evaluator {
     fn default_special_forms() -> HashMap<String, SpecialFormHandler> {
         let mut special_forms: HashMap<String, SpecialFormHandler> = HashMap::new();
