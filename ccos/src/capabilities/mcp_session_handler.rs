@@ -16,7 +16,6 @@ struct MCPSession {
     session_id: String,
     server_url: String,
     auth_token: Option<String>,
-    created_at: std::time::Instant,
 }
 
 /// MCP Session Handler
@@ -302,7 +301,6 @@ impl SessionHandler for MCPSessionHandler {
             session_id: session_id.clone(),
             server_url,
             auth_token,
-            created_at: std::time::Instant::now(),
         };
 
         let mut sessions = self.sessions.lock().unwrap();
