@@ -22,17 +22,6 @@ pub struct GitHubMCPCapability {
     api_token: Option<String>,
     /// Base URL for GitHub API
     base_url: String,
-    /// Default repository (owner/repo format)
-    default_repo: Option<String>,
-    /// Cache for recent API calls
-    cache: HashMap<String, CachedGitHubData>,
-}
-
-/// Cached GitHub data to reduce API calls
-#[derive(Debug, Clone)]
-struct CachedGitHubData {
-    data: Value,
-    timestamp: std::time::SystemTime,
 }
 
 /// GitHub Issue structure
@@ -164,8 +153,6 @@ impl GitHubMCPCapability {
         Self {
             api_token,
             base_url: "https://api.github.com".to_string(),
-            default_repo: None,
-            cache: HashMap::new(),
         }
     }
 
@@ -174,8 +161,6 @@ impl GitHubMCPCapability {
         Self {
             api_token,
             base_url: "https://api.github.com".to_string(),
-            default_repo: Some(format!("{}/{}", owner, repo)),
-            cache: HashMap::new(),
         }
     }
 
