@@ -1,4 +1,4 @@
-use super::rtfs_bridge::extractors::expression_to_rtfs_string;
+use super::rtfs_bridge::expression_to_rtfs_string;
 use super::storage::Archivable;
 use super::types::{Action, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent};
 use rtfs::utils::format_rtfs_value_pretty;

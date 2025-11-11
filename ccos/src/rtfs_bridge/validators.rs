@@ -205,10 +205,23 @@ fn validate_type_expr_schema(schema: &Value, schema_name: &str) -> Result<(), Rt
             // Nil schema means no schema (accepts anything) - this is valid
             Ok(())
         }
-        _ => {
+        Value::Vector(vec) => {
+            // Treat raw RTFS type expressions (e.g. [:map [:field :int] ...]) as valid.
+            if vec.is_empty() {
+                Err(RtfsBridgeError::ValidationFailed {
+                    message: format!(
+                        "Schema {} cannot be an empty type expression vector",
+                        schema_name
+                    ),
+                })
+            } else {
+                Ok(())
+            }
+        }
+        other => {
             // For non-map schemas, try to parse as a type expression string
             // This handles cases where schema is stored as a string representation
-            if let Value::String(s) = schema {
+            if let Value::String(s) = other {
                 TypeExpr::from_str(s).map_err(|e| RtfsBridgeError::ValidationFailed {
                     message: format!("Invalid type expression in {}: {}", schema_name, e),
                 })?;
@@ -217,7 +230,7 @@ fn validate_type_expr_schema(schema: &Value, schema_name: &str) -> Result<(), Rt
                 Err(RtfsBridgeError::ValidationFailed {
                     message: format!(
                         "Schema {} must be a map or string, got: {:?}",
-                        schema_name, schema
+                        schema_name, other
                     ),
                 })
             }

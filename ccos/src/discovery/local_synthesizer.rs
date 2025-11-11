@@ -68,6 +68,12 @@ impl LocalSynthesizer {
         if class_lower.contains("reduce") || class_lower.contains(".reduce") {
             return SimpleOperation::Reduce;
         }
+        if class_lower.contains("find_max")
+            || (class_lower.contains("find") && class_lower.contains("max"))
+            || class_lower.contains("most_starred")
+        {
+            return SimpleOperation::Reduce;
+        }
         if class_lower.contains("group") && class_lower.contains("by") {
             return SimpleOperation::GroupBy;
         }
@@ -105,13 +111,28 @@ impl LocalSynthesizer {
         if rationale_lower.contains("join") {
             return SimpleOperation::Join;
         }
+        if rationale_lower.contains("most starred")
+            || rationale_lower.contains("highest")
+            || rationale_lower.contains("max")
+        {
+            return SimpleOperation::Reduce;
+        }
 
         SimpleOperation::Unknown
     }
 
     /// Check if a capability can be synthesized locally
     pub fn can_synthesize_locally(need: &CapabilityNeed) -> bool {
-        Self::detect_simple_operation(need) != SimpleOperation::Unknown
+        let operation = Self::detect_simple_operation(need);
+        if operation == SimpleOperation::Unknown {
+            return false;
+        }
+
+        if !Self::is_safe_local_prefix(&need.capability_class) {
+            return false;
+        }
+
+        true
     }
 
     /// Infer default primitive annotations for a capability need when we can recognize
@@ -130,8 +151,35 @@ impl LocalSynthesizer {
         }
     }
 
+    pub fn is_safe_local_prefix(capability_class: &str) -> bool {
+        let prefix = capability_class
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        matches!(
+            prefix.as_str(),
+            "core"
+                | "local"
+                | "general"
+                | "display"
+                | "filter"
+                | "text"
+                | "language"
+                | "presentation"
+                | "logic"
+        )
+    }
+
     /// Synthesize a simple operation as a local RTFS capability
     pub fn synthesize_locally(need: &CapabilityNeed) -> RuntimeResult<CapabilityManifest> {
+        if !Self::is_safe_local_prefix(&need.capability_class) {
+            return Err(RuntimeError::Generic(format!(
+                "Capability '{}' is not eligible for local synthesis (non-local prefix)",
+                need.capability_class
+            )));
+        }
+
         let operation = Self::detect_simple_operation(need);
 
         match operation {

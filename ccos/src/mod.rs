@@ -41,6 +41,7 @@ pub mod caching;
 pub mod capabilities;
 pub mod capability_marketplace;
 pub mod environment;
+pub mod examples_common;
 pub mod host;
 pub mod observability;
 pub mod prelude;
@@ -1154,6 +1155,13 @@ impl CCOS {
     /// Get access to the capability marketplace for advanced operations
     pub fn get_capability_marketplace(&self) -> Arc<CapabilityMarketplace> {
         Arc::clone(&self.capability_marketplace)
+    }
+
+    /// Access the missing capability resolver if configured.
+    pub fn get_missing_capability_resolver(
+        &self,
+    ) -> Option<Arc<crate::synthesis::missing_capability_resolver::MissingCapabilityResolver>> {
+        self.missing_capability_resolver.as_ref().map(Arc::clone)
     }
 
     /// Validate and execute a pre-built Plan via the Governance Kernel.

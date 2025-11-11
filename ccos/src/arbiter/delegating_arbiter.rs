@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::arbiter::arbiter_config::{
-    AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig,
+    AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig, RetryConfig,
 };
 use crate::arbiter::arbiter_engine::ArbiterEngine;
 use crate::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
@@ -2453,7 +2453,7 @@ mod tests {
             max_tokens: Some(1000),
             temperature: Some(0.7),
             timeout_seconds: Some(30),
-            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+            retry_config: RetryConfig::default(),
             prompts: None,
         };
 
