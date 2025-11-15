@@ -83,6 +83,8 @@ The demo now runs end-to-end, but several pieces are too specific to the GitHub 
 - Capability catalog preloading & menu rendering wired to `smart_assistant_planner_viz`.
 - Planner now validates LLM-proposed steps against capability schemas (required/optional inputs) and re-prompts with corrective feedback (max 3 attempts).
 - Architecture summary appended to planner output for quick diagnostics.
+- Coverage analyzer integrated: checks `GoalSignals`-derived requirements against proposed steps and classifies gaps (missing / incomplete / pending capabilities).
+- Requirement resolver wired to the `MissingCapabilityResolver` pipeline with structured outcomes (`CapabilitiesDiscovered`, `AwaitingExternal`, `Failed`); capability readiness is tracked on requirements.
 
 **Open Tasks**
 - Extend schema validation to check basic type compatibility (string vs vector) to prevent label/filters mismatches.
@@ -90,11 +92,55 @@ The demo now runs end-to-end, but several pieces are too specific to the GitHub 
 - Add negative tests ensuring invalid plans fail gracefully and log corrective feedback.
 - Capture successful plans into plan archive and surface them in catalog for reuse.
 - Evaluate fallback flow for empty menus: prompt LLM to request capability synthesis or broaden search tokens.
+- Treat unknown `capability_id`s in LLM plans as `MustCallCapability` requirements instead of hard errors; feed them into the coverage + resolver pipeline.
+- Enhance planner feedback so LLM is explicitly told which requirements remain unmet and which capabilities are missing/incomplete/pending.
 
 **Next Steps**
 1. Harden capability menu entries with manifest metadata (auth requirements, rate limits).
 2. Teach planner to fall back to local primitives (e.g., filter) when remote capability lacks required parameters.
 3. Instrument the schema validator with structured telemetry for tracing pipeline decisions.
+4. Refine the “unknown capability” workflow so the planner can trigger discovery/synthesis instead of failing early.
+
+### Planner Modularization & Cognitive Plan Representation
+
+**Context**
+- Goal-driven planning should remain LLM-led, but CCOS needs reusable, schema-aware modules that we can compose into RTFS plans/capabilities.
+- The current `smart_assistant_planner_viz` loop mixes discovery, validation, prompting, and feedback. We want explicit stages that the orchestrator—or even other agents—can reuse.
+
+**Target Modules (each exportable as RTFS capability)**
+- **`planner.extract_goal_signals`**: consolidate goal text, intent constraints, clarifying answers, and derived “must satisfy” requirements. Emits a typed struct describing required outcomes and known parameters. *(Now registered as RTFS capability `planner.extract_goal_signals`.)*
+- **`planner.build_capability_menu`**: transforms catalog results plus signals into menu entries, injecting synthetic stubs (e.g., `filter.list`, `summarise.text`) when coverage gaps appear. Annotates entries with provenance (catalog, override, synthetic) and capability readiness (identified, incomplete, pending, available).
+- **`planner.synthesize_plan_steps`**: orchestrates LLM prompting with retries. Accepts signals + menu; returns a candidate plan (JSON/RTFS) alongside raw LLM trace.
+- **`planner.validate_plan`**: runs schema compliance (existing validator) plus new goal-coverage checks, returning success or structured feedback + a list of unmet requirements and capability gaps (including unknown capability IDs promoted to `MustCallCapability` requirements).
+- **`planner.materialize_plan`**: converts validated steps into canonical RTFS `(plan ...)` form, registers artifacts, and reports capability dependencies. Optional: publish as `planner.generate_plan`.
+- **`planner.resolve_capability_gaps`**: given a `CoverageCheck` and `GoalSignals`, drives the `MissingCapabilityResolver` (discovery, introspection, or synthesis) and updates capability readiness + marketplace manifests.
+
+**Execution Flow (future RTFS plan)**
+1. `extract_goal_signals`
+2. `build_capability_menu`
+3. Loop: `synthesize_plan_steps` → `validate_plan`; if invalid because of unmet requirements or capability gaps, call `resolve_capability_gaps` and then:
+   - if new capabilities are discovered or synthesized, rebuild menu and continue;
+   - if capabilities are pending/incomplete, update feedback so LLM knows which tools are conceptual only.
+4. `materialize_plan` to produce the execution plan artifact.
+
+**Why This Matters**
+- Each module can be wired into CCOS as a capability, enabling oversight, delegation, and checkpoint/resume per spec 017.
+- Diagnostics/telemetry become structured events (goal signals, menu provenance, validation failures, corrective prompts).
+- The planner pipeline itself becomes a RTFS plan, making cognitive processes and autonomous capability evolution first-class citizens in CCOS.
+
+**Work Items**
+1. Design Rust data structures for `GoalSignals`, `CoverageCheck`, and `CapabilityMenuEntry` (with provenance enum).
+2. Extract the existing menu builder/validator logic into dedicated modules, expose them behind traits so RTFS wrappers can call them.
+3. Implement goal-coverage validator (ensuring each constraint/preference is satisfied by at least one step).
+4. Introduce synthetic capability injection when coverage fails; integrate with missing-capability resolver for follow-up synthesis.
+5. Implement capability readiness tracking on `GoalRequirement`s (identified, incomplete, pending external, available).
+6. Add RTFS capability wrappers for each module (including `planner.resolve_capability_gaps`); create an orchestrator plan (`planner.generate_plan`) that composes them.
+7. Update `smart_assistant_planner_viz` to use the modular pipeline, maintaining debug output while consuming the new APIs and rendering capability readiness in the menu.
+
+**Acceptance**
+- Planner demo uses modular pipeline end-to-end and logs structured events for each module.
+- We can invoke `planner.generate_plan` from RTFS and receive the same plan artifact that the demo produces.
+- Goal coverage validator blocks plans that omit explicit user constraints, and retry loop leverages structured feedback.
 
 9) Test suite
 - Deliverables:
