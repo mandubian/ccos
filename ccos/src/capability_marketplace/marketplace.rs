@@ -2525,12 +2525,15 @@ impl CapabilityMarketplace {
             };
 
             // Extract basic fields
-            let id = extract_quoted(":id", &content).or_else(|| {
-                // fallback to filename-based id
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_string())
-            });
+            // First try (capability "id" format (standard RTFS)
+            let id = extract_quoted("(capability \"", &content)
+                .or_else(|| extract_quoted(":id \"", &content))
+                .or_else(|| {
+                    // fallback to filename-based id
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_string())
+                });
             let name = extract_quoted(":name", &content).unwrap_or_else(|| "".to_string());
             let description =
                 extract_quoted(":description", &content).unwrap_or_else(|| "".to_string());
