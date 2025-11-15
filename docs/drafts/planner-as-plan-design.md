@@ -84,11 +84,99 @@ Final plan produced (also tracked)
 4. **Consistency**: Planner follows same execution model as regular plans
 5. **Replay**: Can replay entire planner execution from causal chain
 
+## Execution Model: Criticality-Based Execution
+
+### Problem
+Some actions are critical and should not execute automatically (e.g., payments, data deletion, irreversible operations). We need:
+1. **Criticality-based execution** - Detect critical actions and require explicit approval
+2. **Dry-run mode** - Validate execution without performing critical actions
+3. **Human-in-the-loop** - Pause for approval before critical operations
+
+### Design
+
+#### Action Criticality Levels
+```rust
+pub enum ActionCriticality {
+    Safe,        // Read-only operations, can auto-execute
+    Moderate,    // Write operations, requires validation
+    Critical,    // Payments, deletions, irreversible - requires explicit approval
+    Dangerous,   // System-level changes - requires human approval
+}
+```
+
+#### Execution Modes
+1. **Full Execution** (`--execute-plan`): Execute all actions including critical ones
+2. **Dry-Run** (`--dry-run`): Validate plan without executing critical actions
+3. **Safe-Only** (default): Execute only safe actions, pause for critical ones
+
+#### Dry-Run Behavior
+- Execute all non-critical capabilities normally
+- For critical capabilities:
+  - Log `CapabilityCall` action with `dry_run: true`
+  - Skip actual execution
+  - Return simulated result based on capability schema
+  - Continue plan execution with simulated results
+
+#### Criticality Detection
+Capabilities should declare their criticality level:
+```rust
+pub struct CapabilityManifest {
+    // ...
+    pub criticality: Option<ActionCriticality>,
+    pub requires_approval: bool,
+    pub irreversible: bool,
+}
+```
+
+Or detect from capability ID patterns:
+- `payment.*`, `billing.*`, `charge.*` → Critical
+- `delete.*`, `remove.*`, `destroy.*` → Critical  
+- `write.*`, `create.*`, `update.*` → Moderate
+- `read.*`, `get.*`, `list.*` → Safe
+
+## Testing Execution in Current Planner
+
+### How to Test
+```bash
+# Generate plan only (no execution)
+cargo run --example smart_assistant_planner_viz -- \
+  --goal "List all GitHub issues"
+
+# Generate and execute plan
+cargo run --example smart_assistant_planner_viz -- \
+  --goal "List all GitHub issues" \
+  --execute-plan
+
+# Export plan for review before execution
+cargo run --example smart_assistant_planner_viz -- \
+  --goal "List all GitHub issues" \
+  --export-plan-rtfs plan.rtfs \
+  --export-plan-json plan.json
+
+# Then execute separately after review
+```
+
+### Current Execution Flow
+1. Planner generates plan → stored in `plan` variable
+2. If `--execute-plan` flag is set:
+   - Creates `RuntimeContext` with plan inputs
+   - Calls `ccos.validate_and_execute_plan(plan, context)`
+   - All steps logged to causal chain
+   - Results displayed and exported
+
+### Issues with Current Approach
+- **No criticality detection** - All actions execute equally
+- **No dry-run** - Must fully execute to validate
+- **No approval gates** - Critical actions execute automatically if flag is set
+
 ## Next Steps
 
 1. Implement missing `planner.*` capabilities
 2. Create `PlannerMetaPlanGenerator`
 3. Add arbiter rewriting hook
-4. Update `smart_assistant_planner_viz.rs` to use planner-as-plan
-5. Verify all steps logged in causal chain
+4. **Add criticality detection system**
+5. **Implement dry-run mode**
+6. **Add human-in-the-loop approval gates**
+7. Update `smart_assistant_planner_viz.rs` to use planner-as-plan
+8. Verify all steps logged in causal chain
 
