@@ -359,29 +359,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 }
                                             }
                                         }
-                                        // println!("[DEBUG] About to call orchestrator.execute_intent_graph");
-                                        let exec_result = orchestrator.execute_intent_graph(&st_owned.intent_id, &ctx).await;
-                                        // println!("[DEBUG] Returned from orchestrator.execute_intent_graph");
-                                        // If orchestration ran but reported no plans executed (or failed), fall back
-                                        // to executing the generated plan directly so headless mirrors interactive behavior.
-                                        match exec_result {
-                                            Ok(_exec) if _exec.success => {
+                                        // Execute plan through governance-enforced interface
+                                        match ccos.validate_and_execute_plan(res.plan, &ctx).await {
+                                            Ok(_exec) => {
                                                 // let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": _exec.success, "value": format!("{}", _exec.value)});
                                                 // println!("{}", msg.to_string());
                                             }
-                                            _ => {
-                                                // Either orchestration failed or executed nothing; try direct execution
-                                                // println!("[DEBUG] Orchestration did not execute plans or failed; falling back to direct execution");
-                                                match ccos.validate_and_execute_plan(res.plan, &ctx).await {
-                                                    Ok(_exec) => {
-                                                        // let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": _exec.success, "value": format!("{}", _exec.value)});
-                                                        // println!("{}", msg.to_string());
-                                                    }
-                                                    Err(_e) => {
-                                                        // let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed after orchestration fallback: {}", _e)});
-                                                        // println!("{}", msg.to_string());
-                                                    }
-                                                }
+                                            Err(_e) => {
+                                                // let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed: {}", _e)});
+                                                // println!("{}", msg.to_string());
                                             }
                                         }
                                         // Allow background callbacks / logs to flush before exiting headless run
@@ -424,24 +410,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 if let Err(e) = orchestrator.store_plan(&plan) {
                                                     eprintln!("Warning: failed to store fallback plan in orchestrator: {}", e);
                                                 }
-                                                let exec_result = orchestrator.execute_intent_graph(&st_owned.intent_id, &ctx).await;
-                                                match exec_result {
-                                                    Ok(exec) if exec.success => {
+                                                // Execute plan through governance-enforced interface
+                                                match ccos.validate_and_execute_plan(plan, &ctx).await {
+                                                    Ok(exec) => {
                                                         let _msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{}", exec.value)});
                                                         // println!("{}", _msg.to_string());
                                                     }
-                                                    _ => {
-                                                        // println!("[DEBUG] Orchestration fallback plan did not execute; falling back to direct execution of fallback plan");
-                                                        match ccos.validate_and_execute_plan(plan, &ctx).await {
-                                                            Ok(exec) => {
-                                                                let _msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{}", exec.value)});
-                                                                // println!("{}", _msg.to_string());
-                                                            }
-                                                            Err(e) => {
-                                                                let _msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed after orchestration fallback: {}", e)});
-                                                                // println!("{}", _msg.to_string());
-                                                            }
-                                                        }
+                                                    Err(e) => {
+                                                        let _msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed: {}", e)});
+                                                        // println!("{}", _msg.to_string());
                                                     }
                                                 }
                                             } else {
@@ -480,24 +457,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 if let Err(e3) = orchestrator.store_plan(&fallback_plan) {
                                                     eprintln!("Warning: failed to store synthesized plan: {}", e3);
                                                 }
-                                                let exec_result = orchestrator.execute_intent_graph(&st_owned.intent_id, &ctx).await;
-                                                match exec_result {
-                                                    Ok(exec) if exec.success => {
+                                                // Execute plan through governance-enforced interface
+                                                match ccos.validate_and_execute_plan(fallback_plan, &ctx).await {
+                                                    Ok(exec) => {
                                                         let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{}", exec.value)});
                                                         println!("{}", msg.to_string());
                                                     }
-                                                    _ => {
-                                                        println!("[DEBUG] Orchestration synthesized fallback did not execute; falling back to direct execution of synthesized plan");
-                                                        match ccos.validate_and_execute_plan(fallback_plan, &ctx).await {
-                                                            Ok(exec) => {
-                                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": exec.success, "value": format!("{}", exec.value)});
-                                                                println!("{}", msg.to_string());
-                                                            }
-                                                            Err(e) => {
-                                                                let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed after orchestration fallback: {}", e)});
-                                                                println!("{}", msg.to_string());
-                                                            }
-                                                        }
+                                                    Err(e) => {
+                                                        let msg = serde_json::json!({"type":"EXEC_RESULT","intent_id": st_owned.intent_id.clone(), "success": false, "value": format!("Execution failed: {}", e)});
+                                                        println!("{}", msg.to_string());
                                                     }
                                                 }
                                             } else {

@@ -596,7 +596,11 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     /// Creates a new Orchestrator.
-    pub fn new(
+    ///
+    /// # Security Note
+    /// This constructor is only available for internal CCOS use.
+    /// External code should use the governance-enforced interface through GovernanceKernel.
+    pub(crate) fn new(
         causal_chain: Arc<Mutex<CausalChain>>,
         intent_graph: Arc<Mutex<IntentGraph>>,
         capability_marketplace: Arc<CapabilityMarketplace>,
@@ -670,7 +674,11 @@ impl Orchestrator {
 
     /// Executes a given `Plan` within a specified `RuntimeContext`.
     /// This is the main entry point for the Orchestrator.
-    pub async fn execute_plan(
+    ///
+    /// # Security Note
+    /// This method is restricted to internal CCOS use only.
+    /// External code must use the governance-enforced interface through GovernanceKernel.
+    pub(crate) async fn execute_plan(
         &self,
         plan: &Plan,
         context: &RuntimeContext,
@@ -884,7 +892,11 @@ impl Orchestrator {
 
     /// Execute an entire intent graph with cross-plan parameter merging
     /// This method orchestrates the execution of child intents and manages shared context
-    pub async fn execute_intent_graph(
+    ///
+    /// # Security Note
+    /// This method is restricted to internal CCOS use only.
+    /// External code must use the governance-enforced interface through GovernanceKernel.
+    pub(crate) async fn execute_intent_graph(
         &self,
         root_intent_id: &str,
         initial_context: &RuntimeContext,
@@ -1686,6 +1698,12 @@ impl Orchestrator {
             .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))?;
         chain.append(&action)
+    }
+
+    /// Get the plan archive for governance use.
+    /// This method is restricted to governance contexts only.
+    pub(crate) fn get_plan_archive(&self) -> &Arc<PlanArchive> {
+        &self.plan_archive
     }
 }
 
