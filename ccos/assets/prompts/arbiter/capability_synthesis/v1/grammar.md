@@ -15,7 +15,17 @@
   - maps/records: `[:map [:field <type>] [:other <type>] ...]`
   - unions: `[:union <type-a> <type-b> ...]`
   - tuples: `[:tuple <type-a> <type-b> ...]`
+- Use `(let [bindings] body)` for local bindings. Example: `(let [x (get input :field) y (+ x 1)] y)` binds `x` and `y`, then returns `y`.
 - Arithmetic and predicates stay prefix: `(+ a b)`, `(/ numerator denominator)`, `(zero? value)`.
 - Guard unsafe operations (`/`, `get`, etc.) with `(if ...)` or `(match ...)`, returning error maps when necessary.
 - Avoid `(call ...)`, `tool/...`, host I/O, or side-effectful helpers in the implementation.
+- Example implementation pattern:
+  ```rtfs
+  (fn [input]
+    (let [field1 (get input :field1)
+          field2 (get input :field2)]
+      (if (and (string? field1) (number? field2))
+        {:result (concat field1 (str field2))}
+        {:error "Invalid input types"})))
+  ```
 
