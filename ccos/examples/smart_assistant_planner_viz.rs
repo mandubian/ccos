@@ -3424,56 +3424,54 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 planner_audit.log_json("plan_execution_result", &execution_result_to_json(&result));
 
                 // Export and summarize causal chain for audit/replay
-                {
-                    let causal_chain = ccos.get_causal_chain();
-                    if let Ok(chain_guard) = causal_chain.lock() {
-                        // Export plan actions for replay
-                        let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
-                        println!(
-                            "\n{} {} actions logged to causal chain",
-                            "📋 Causal Chain:".bold().cyan(),
-                            plan_actions.len()
-                        );
+                let causal_chain_arc = ccos.get_causal_chain();
+                if let Ok(chain_guard) = causal_chain_arc.lock() {
+                    // Export plan actions for replay
+                    let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+                    println!(
+                        "\n{} {} actions logged to causal chain",
+                        "📋 Causal Chain:".bold().cyan(),
+                        plan_actions.len()
+                    );
 
-                        // Verify chain integrity
-                        match chain_guard.verify_and_summarize() {
-                            Ok((is_valid, total_actions, first_ts, last_ts)) => {
-                                if is_valid {
-                                    println!("  ✅ Chain integrity verified");
-                                } else {
-                                    eprintln!("  ⚠️ Chain integrity check failed");
-                                }
-                                println!("  📊 Total actions in chain: {}", total_actions);
-                                if let (Some(first), Some(last)) = (first_ts, last_ts) {
-                                    let duration_ms = last.saturating_sub(first);
-                                    println!("  ⏱️ Duration: {}ms", duration_ms);
-                                }
+                    // Verify chain integrity
+                    match chain_guard.verify_and_summarize() {
+                        Ok((is_valid, total_actions, first_ts, last_ts)) => {
+                            if is_valid {
+                                println!("  ✅ Chain integrity verified");
+                            } else {
+                                eprintln!("  ⚠️ Chain integrity check failed");
+                            }
+                            println!("  📊 Total actions in chain: {}", total_actions);
+                            if let (Some(first), Some(last)) = (first_ts, last_ts) {
+                                let duration_ms = last.saturating_sub(first);
+                                println!("  ⏱️ Duration: {}ms", duration_ms);
+                            }
 
-                                // Log plan trace for audit
-                                let trace = chain_guard.get_plan_execution_trace(&plan.plan_id);
-                                planner_audit.log_json(
-                                    "plan_execution_trace",
-                                    &json!({
-                                        "plan_id": plan.plan_id,
-                                        "action_count": trace.len(),
-                                        "actions": trace.iter().map(|a| json!({
-                                            "action_id": a.action_id,
-                                            "type": format!("{:?}", a.action_type),
-                                            "function_name": a.function_name,
-                                            "timestamp": a.timestamp,
-                                            "parent_action_id": a.parent_action_id,
-                                            "success": a.result.as_ref().map(|r| r.success),
-                                        })).collect::<Vec<_>>(),
-                                    }),
-                                );
-                            }
-                            Err(err) => {
-                                eprintln!("  ⚠️ Failed to verify chain: {}", err);
-                            }
+                            // Log plan trace for audit
+                            let trace = chain_guard.get_plan_execution_trace(&plan.plan_id);
+                            planner_audit.log_json(
+                                "plan_execution_trace",
+                                &json!({
+                                    "plan_id": plan.plan_id,
+                                    "action_count": trace.len(),
+                                    "actions": trace.iter().map(|a| json!({
+                                        "action_id": a.action_id,
+                                        "type": format!("{:?}", a.action_type),
+                                        "function_name": a.function_name,
+                                        "timestamp": a.timestamp,
+                                        "parent_action_id": a.parent_action_id,
+                                        "success": a.result.as_ref().map(|r| r.success),
+                                    })).collect::<Vec<_>>(),
+                                }),
+                            );
                         }
-                    } else {
-                        eprintln!("⚠️ Failed to lock causal chain for export");
+                        Err(err) => {
+                            eprintln!("  ⚠️ Failed to verify chain: {}", err);
+                        }
                     }
+                } else {
+                    eprintln!("⚠️ Failed to lock causal chain for export");
                 }
             }
             Err(err) => {
