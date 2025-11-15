@@ -17,6 +17,7 @@ pub mod intent_graph;
 pub mod intent_storage;
 pub mod orchestrator;
 pub mod plan_archive;
+pub mod planner;
 pub mod rtfs_bridge;
 pub mod security_policies;
 pub mod storage;

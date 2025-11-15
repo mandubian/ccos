@@ -12,7 +12,9 @@ use crate::capability_marketplace::types::{
 };
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::checkpoint_archive::CheckpointArchive;
-use crate::discovery::capability_matcher::calculate_description_match_score;
+use crate::discovery::capability_matcher::{
+    calculate_action_verb_match_score, calculate_description_match_score, extract_action_verbs,
+};
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::rtfs_bridge::expression_to_pretty_rtfs_string;
 use crate::rtfs_bridge::expression_to_rtfs_string;
@@ -633,6 +635,19 @@ impl MissingCapabilityResolver {
             score += 1.0;
         }
 
+        // Use discovery module's action verb matching for synonym handling
+        // This handles synonyms like get/list/fetch/retrieve, create/add, etc.
+        let capability_verbs = extract_action_verbs(&capability_last);
+        let tool_verbs = extract_action_verbs(&tool_lower);
+        let action_verb_score = calculate_action_verb_match_score(&capability_verbs, &tool_verbs);
+        
+        // Boost score if action verbs match well (synonyms count as 0.8, exact as 1.0)
+        if action_verb_score > 0.0 {
+            // Scale the action verb score to add meaningful boost
+            // Exact match (1.0) -> +2.0, synonym match (0.8) -> +1.5, no match (0.0) -> +0.0
+            score += action_verb_score * 2.0;
+        }
+
         score
     }
 
@@ -1223,33 +1238,50 @@ impl MissingCapabilityResolver {
         }
 
         // Try to find similar capabilities using marketplace discovery
-        quiet_eprintln!(
+        // Always log discovery start (not suppressed) so user knows discovery is happening
+        eprintln!(
             "🔍 DISCOVERY: Starting discovery for capability '{}'",
             capability_id_normalized
         );
         let discovery_result = self
             .discover_capability(&capability_id_normalized, request)
             .await?;
-        quiet_eprintln!(
-            "🔍 DISCOVERY: Discovery result for '{}': {:?}",
-            capability_id_normalized,
-            discovery_result.is_some()
-        );
+        if discovery_result.is_some() {
+            eprintln!(
+                "✅ DISCOVERY: Successfully discovered capability '{}'",
+                capability_id_normalized
+            );
+        } else {
+            eprintln!(
+                "❌ DISCOVERY: No capability found for '{}' after discovery attempts",
+                capability_id_normalized
+            );
+        }
 
         match discovery_result {
             Some(manifest) => {
+                let actual_capability_id = manifest.id.clone();
+                eprintln!(
+                    "✅ DISCOVERY: Successfully discovered capability '{}' -> registered as '{}'",
+                    capability_id_normalized,
+                    actual_capability_id
+                );
                 quiet_eprintln!(
                     "✅ DISCOVERY: Successfully discovered capability '{}'",
                     capability_id_normalized
                 );
-                // Register the discovered capability
+                // Register the discovered capability under its actual ID
                 self.marketplace
                     .register_capability_manifest(manifest.clone())
                     .await?;
 
-                // Trigger auto-resume for any checkpoints waiting for this capability
+                // Trigger auto-resume for both the requested ID and the actual ID
                 self.trigger_auto_resume_for_capability(&capability_id_normalized)
                     .await?;
+                if actual_capability_id != capability_id_normalized {
+                    self.trigger_auto_resume_for_capability(&actual_capability_id)
+                        .await?;
+                }
 
                 self.emit_event(
                     &capability_id_normalized,
@@ -1258,8 +1290,10 @@ impl MissingCapabilityResolver {
                     manifest.metadata.get("mcp_tool_name").cloned(),
                 );
 
+                // Return the ACTUAL manifest ID, not the requested ID
+                // This ensures the lookup in the example code will find it
                 Ok(ResolutionResult::Resolved {
-                    capability_id: capability_id_normalized.clone(),
+                    capability_id: actual_capability_id.clone(),
                     resolution_method: "marketplace_discovery".to_string(),
                     provider_info: Some(format!("{:?}", manifest.provider)),
                 })
@@ -1848,22 +1882,34 @@ impl MissingCapabilityResolver {
         // Try multiple discovery methods in order of preference
 
         // 1. Exact match in marketplace (race condition check)
+        eprintln!("🔍 DISCOVERY: Trying exact match in marketplace for '{}'", capability_id);
         if let Some(manifest) = self.discover_exact_match(capability_id).await? {
+            eprintln!("✅ DISCOVERY: Found exact match in marketplace: '{}'", capability_id);
             return Ok(Some(manifest));
         }
 
-        // 2. Partial name matching in marketplace
-        if let Some(manifest) = self.discover_partial_match(capability_id).await? {
-            return Ok(Some(manifest));
+        // 2. Partial name matching in marketplace (skip for MCP capabilities - use discovery instead)
+        if !capability_id.starts_with("mcp.") {
+            eprintln!("🔍 DISCOVERY: Trying partial match in marketplace for '{}'", capability_id);
+            if let Some(manifest) = self.discover_partial_match(capability_id).await? {
+                eprintln!("✅ DISCOVERY: Found partial match in marketplace: '{}'", capability_id);
+                return Ok(Some(manifest));
+            }
+        } else {
+            eprintln!("🔍 DISCOVERY: Skipping partial match for MCP capability '{}' (will try MCP discovery)", capability_id);
         }
 
         // 3. Local manifest scanning
+        eprintln!("🔍 DISCOVERY: Trying local manifest scan for '{}'", capability_id);
         if let Some(manifest) = self.discover_local_manifests(capability_id).await? {
+            eprintln!("✅ DISCOVERY: Found in local manifests: '{}'", capability_id);
             return Ok(Some(manifest));
         }
 
         // 4. MCP server discovery
+        eprintln!("🔍 DISCOVERY: Trying MCP server discovery for '{}'", capability_id);
         if let Some(manifest) = self.discover_mcp_servers(capability_id, request).await? {
+            eprintln!("✅ DISCOVERY: Found via MCP server discovery: '{}'", capability_id);
             return Ok(Some(manifest));
         }
 
@@ -1971,22 +2017,36 @@ impl MissingCapabilityResolver {
 
     /// Check if two capability IDs are partial matches
     fn is_partial_match(&self, requested: &str, available: &str) -> bool {
-        // Simple partial matching logic
-        // This could be enhanced with more sophisticated algorithms
-
-        // Check if one is a prefix of the other
-        if requested.starts_with(available) || available.starts_with(requested) {
-            return true;
+        // Skip partial matching for MCP capabilities - we have discovery infrastructure for those
+        // Partial matching should only be used for non-MCP capabilities where we need fuzzy matching
+        if requested.starts_with("mcp.") || available.starts_with("mcp.") {
+            return false;
         }
 
-        // Check if they share common segments (e.g., "travel.flights" vs "travel.hotels")
+        // Simple partial matching logic for non-MCP capabilities
+        // Check if one is a prefix of the other (only if last segments match)
         let requested_segments: Vec<&str> = requested.split('.').collect();
         let available_segments: Vec<&str> = available.split('.').collect();
 
-        if requested_segments.len() >= 2 && available_segments.len() >= 2 {
-            // Check if domain matches (first segment)
-            if requested_segments[0] == available_segments[0] {
-                return true;
+        // Require at least the last segment to match for a partial match
+        // This prevents "get_me" from matching "get_issues"
+        if !requested_segments.is_empty() && !available_segments.is_empty() {
+            let requested_last = requested_segments.last().unwrap();
+            let available_last = available_segments.last().unwrap();
+            
+            // Last segments must match exactly or one must be a prefix of the other
+            if requested_last == available_last 
+                || (requested_last.len() >= 3 && available_last.starts_with(requested_last))
+                || (available_last.len() >= 3 && requested_last.starts_with(available_last))
+            {
+                // Also check that previous segments match
+                if requested_segments.len() > 1 && available_segments.len() > 1 {
+                    let req_domain = &requested_segments[..requested_segments.len() - 1];
+                    let avail_domain = &available_segments[..available_segments.len() - 1];
+                    if req_domain == avail_domain {
+                        return true;
+                    }
+                }
             }
         }
 
@@ -2026,6 +2086,11 @@ impl MissingCapabilityResolver {
         capability_id: &str,
         request: &MissingCapabilityRequest,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
+        // Always log MCP discovery attempts (not suppressed)
+        eprintln!(
+            "🔍 MCP DISCOVERY: Querying MCP Registry and overrides for '{}'",
+            capability_id
+        );
         if self.config.verbose_logging {
             quiet_eprintln!(
                 "🔍 DISCOVERY: Querying MCP Registry for '{}'",
@@ -2060,23 +2125,35 @@ impl MissingCapabilityResolver {
 
         // Augment with curated overrides provided by the user (if any)
         let curated = self.load_curated_overrides_for(capability_id)?;
+        // Clone curated server names for auto-approval before extending servers (curated is moved below)
+        let curated_server_names: HashSet<String> = curated
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        let curated_len = curated.len();
         if !curated.is_empty() {
+            eprintln!(
+                "📦 MCP DISCOVERY: Loaded {} curated MCP server override(s) for '{}'",
+                curated_len,
+                capability_id
+            );
             if self.config.verbose_logging {
-                eprintln!(
+                quiet_eprintln!(
                     "📦 DISCOVERY: Loaded {} curated MCP server override(s) for '{}'",
-                    curated.len(),
+                    curated_len,
                     capability_id
                 );
             }
             servers.extend(curated);
-        } else if self.config.verbose_logging {
-            eprintln!(
-                "ℹ️  DISCOVERY: No curated overrides found (capabilities/mcp/overrides.json)."
-            );
         }
 
+        eprintln!(
+            "🔍 MCP DISCOVERY: Found {} MCP server candidate(s) for '{}'",
+            servers.len(),
+            capability_id
+        );
         if self.config.verbose_logging {
-            eprintln!(
+            quiet_eprintln!(
                 "🔍 DISCOVERY: Found {} MCP servers for '{}'",
                 servers.len(),
                 capability_id
@@ -2142,6 +2219,8 @@ impl MissingCapabilityResolver {
             return Ok(None);
         }
 
+        // curated_server_names was already created above when loading curated overrides
+
         // Convert ranked servers to candidates for trust-based selection
         let candidates: Vec<ServerCandidate> = ranked_servers
             .iter()
@@ -2164,8 +2243,23 @@ impl MissingCapabilityResolver {
             })
             .collect();
 
-        // Use trust-based server selection
-        let mut selection_handler = ServerSelectionHandler::new(self.trust_registry.clone());
+        // Auto-approve servers from overrides in the trust registry before selection
+        let mut trust_registry = self.trust_registry.clone();
+        for candidate in &candidates {
+            let candidate_domain = &candidate.domain;
+            if curated_server_names.iter().any(|name| {
+                self.extract_domain_from_server_name(name) == *candidate_domain
+            }) {
+                trust_registry.approve_server(candidate_domain);
+                eprintln!(
+                    "✅ AUTO-APPROVE: Server '{}' from overrides.json (user-curated)",
+                    candidate.domain
+                );
+            }
+        }
+
+        // Use trust-based server selection (servers from overrides are already approved)
+        let mut selection_handler = ServerSelectionHandler::new(trust_registry);
         let selection_result = selection_handler
             .select_server(capability_id, candidates)
             .await?;
@@ -2205,6 +2299,10 @@ impl MissingCapabilityResolver {
         let remotes = if let Some(remotes) = &selected_server.remotes {
             remotes
         } else {
+            eprintln!(
+                "⚠️ MCP DISCOVERY: Server '{}' has no remotes; cannot introspect tools",
+                selected_server.name
+            );
             if self.config.verbose_logging {
                 quiet_eprintln!(
                     "⚠️ DISCOVERY: Server '{}' has no remotes; cannot introspect tools",
@@ -2220,6 +2318,10 @@ impl MissingCapabilityResolver {
             ) {
             url
         } else {
+            eprintln!(
+                "⚠️ MCP DISCOVERY: No usable remote URL for server '{}'",
+                selected_server.name
+            );
             if self.config.verbose_logging {
                 quiet_eprintln!(
                     "⚠️ DISCOVERY: No usable remote URL for server '{}'",
@@ -2228,6 +2330,11 @@ impl MissingCapabilityResolver {
             }
             return Ok(None);
         };
+
+        eprintln!(
+            "🔍 MCP DISCOVERY: Introspecting server '{}' at '{}' for capability '{}'",
+            selected_server.name, server_url, capability_id
+        );
 
         self.emit_event(
             capability_id,
@@ -2247,7 +2354,36 @@ impl MissingCapabilityResolver {
             .await?;
 
         let mut manifests = introspector.create_capabilities_from_mcp(&introspection)?;
+        
+        // Optionally introspect output schemas by calling tools once (if authorized)
+        // This requires auth_headers to be present (indicates we're authorized)
+        if auth_headers.is_some() && self.feature_checker.is_output_schema_introspection_enabled() {
+            eprintln!("🔍 Attempting output schema introspection for discovered tools...");
+            for manifest in &mut manifests {
+                if let Some(tool_name) = manifest.metadata.get("mcp_tool_name") {
+                    // Find the corresponding tool from introspection
+                    if let Some(tool) = introspection.tools.iter().find(|t| t.tool_name == *tool_name) {
+                        if let Ok(Some(output_schema)) = introspector
+                            .introspect_output_schema(
+                                tool,
+                                &server_url,
+                                &selected_server.name,
+                                auth_headers.clone(),
+                            )
+                            .await
+                        {
+                            manifest.output_schema = Some(output_schema);
+                            eprintln!("✅ Updated output schema for '{}'", manifest.id);
+                        }
+                    }
+                }
+            }
+        }
         if manifests.is_empty() {
+            eprintln!(
+                "⚠️ MCP DISCOVERY: Server '{}' returned no tools during introspection (might need MCP_AUTH_TOKEN)",
+                selected_server.name
+            );
             if self.config.verbose_logging {
                 quiet_eprintln!(
                     "⚠️ DISCOVERY: Server '{}' returned no tools during introspection",
@@ -2262,6 +2398,12 @@ impl MissingCapabilityResolver {
             );
             return Ok(None);
         }
+
+        eprintln!(
+            "✅ MCP DISCOVERY: Introspection found {} tool(s) from '{}'",
+            manifests.len(),
+            selected_server.name
+        );
 
         self.emit_event(
             capability_id,
@@ -2302,6 +2444,11 @@ impl MissingCapabilityResolver {
         }
 
         if candidates.is_empty() {
+            eprintln!(
+                "⚠️ MCP DISCOVERY: No tool candidates matched for '{}' from server '{}'",
+                capability_id,
+                selected_server.name
+            );
             if self.config.verbose_logging {
                 eprintln!(
                     "⚠️ DISCOVERY: No tool metadata available for '{}'",
@@ -2311,14 +2458,37 @@ impl MissingCapabilityResolver {
             return Ok(None);
         }
 
+        eprintln!(
+            "🔍 MCP DISCOVERY: Found {} tool candidate(s) from '{}', scoring against '{}'",
+            candidates.len(),
+            selected_server.name,
+            capability_id
+        );
+
         candidates.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        // Log top candidates for debugging
+        if self.config.verbose_logging {
+            for (i, candidate) in candidates.iter().take(3).enumerate() {
+                eprintln!(
+                    "  {}. {} (score: {:.2})",
+                    i + 1,
+                    candidate.tool_name,
+                    candidate.score
+                );
+            }
+        }
+
         if let Some(best) = candidates.first() {
             let overlap = Self::keyword_overlap(capability_id, &best.tool_name);
+            eprintln!(
+                "🔍 MCP DISCOVERY: Best match '{}' (score: {:.2}, overlap: {:.2}, threshold: >=3.0 or >=0.75)",
+                best.tool_name, best.score, overlap
+            );
             if best.score >= 3.0 || overlap >= 0.75 {
                 if self.config.verbose_logging {
                     eprintln!(
@@ -2410,6 +2580,97 @@ impl MissingCapabilityResolver {
             }
         }
 
+        // Fallback: If LLM returned nil, find the best match considering domain keywords
+        // This handles cases where LLM is too strict (e.g., rejects "list" for "get")
+        // We look for a tool that shares domain keywords (like "issues") even if action verbs differ
+        let capability_last = capability_id
+            .split('.')
+            .last()
+            .unwrap_or(capability_id)
+            .to_ascii_lowercase();
+        
+        // Find the best match prioritizing domain keywords over action verbs
+        let mut best_fallback: Option<&ToolPromptCandidate> = None;
+        let mut best_fallback_score = 0.0;
+        
+        for candidate in &candidates {
+            let overlap = Self::keyword_overlap(capability_id, &candidate.tool_name);
+            let tool_lower = candidate.tool_name.to_ascii_lowercase();
+            
+            // Extract domain keywords (non-verbs) from capability and tool
+            let capability_tokens: HashSet<String> = capability_last
+                .split(|c: char| !c.is_alphabetic())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_lowercase())
+                .collect();
+            let tool_tokens: HashSet<String> = tool_lower
+                .split(|c: char| !c.is_alphabetic())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_lowercase())
+                .collect();
+            
+            // Find shared domain keywords (excluding common action verbs)
+            let action_verbs = ["get", "list", "fetch", "retrieve", "create", "add", "update", "delete", "remove"];
+            let shared_keywords: Vec<&String> = capability_tokens
+                .intersection(&tool_tokens)
+                .filter(|token| !action_verbs.contains(&token.as_str()))
+                .collect();
+            
+            // Score based on: base score + keyword overlap + shared domain keywords
+            let domain_match = !shared_keywords.is_empty();
+            let fallback_score = candidate.score + (overlap * 2.0) + (if domain_match { 1.0 } else { 0.0 });
+            
+            // Require reasonable match: score >= 2.0 and either good overlap or domain match
+            let reasonable_match = candidate.score >= 2.0 && (overlap >= 0.5 || domain_match);
+            
+            if reasonable_match && fallback_score > best_fallback_score {
+                best_fallback = Some(candidate);
+                best_fallback_score = fallback_score;
+            }
+        }
+        
+        if let Some(best) = best_fallback {
+            let overlap = Self::keyword_overlap(capability_id, &best.tool_name);
+            eprintln!(
+                "🔄 FALLBACK: LLM returned nil, but using best semantic match '{}' (score: {:.2}, overlap: {:.2}, fallback_score: {:.2})",
+                best.tool_name, best.score, overlap, best_fallback_score
+            );
+            let mut manifest = manifests.swap_remove(best.index);
+            self.attach_resolution_metadata(
+                &mut manifest,
+                &selected_server.name,
+                &server_url,
+                "fallback_semantic_match",
+                None,
+            );
+            if let Err(err) = self.persist_discovered_mcp_capability(&manifest) {
+                if self.config.verbose_logging {
+                    quiet_eprintln!(
+                        "⚠️  Failed to persist MCP capability '{}': {}",
+                        manifest.id,
+                        err
+                    );
+                }
+            }
+            self.persist_alias(ToolAliasRecord {
+                capability_pattern: capability_id.to_string(),
+                server_name: selected_server.name.clone(),
+                server_url: server_url.clone(),
+                tool_name: best.tool_name.clone(),
+                input_remap: HashMap::new(),
+            });
+            self.emit_event(
+                capability_id,
+                "fallback_match",
+                format!(
+                    "Selected '{}' via fallback (LLM returned nil but semantic match exists)",
+                    best.tool_name
+                ),
+                None,
+            );
+            return Ok(Some(manifest));
+        }
+        
         if self.config.verbose_logging {
             quiet_eprintln!(
                 "⚠️ DISCOVERY: No suitable tool selected for '{}' after heuristics and LLM selector",
