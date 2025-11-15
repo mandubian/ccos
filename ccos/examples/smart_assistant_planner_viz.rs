@@ -3414,6 +3414,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .cross_plan_params
                 .insert(key.clone(), Value::String(value.clone()));
         }
+        let causal_chain_arc = ccos.get_causal_chain();
         match ccos.validate_and_execute_plan(plan.clone(), &context).await {
             Ok(result) => {
                 println!(
@@ -3424,7 +3425,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 planner_audit.log_json("plan_execution_result", &execution_result_to_json(&result));
 
                 // Export and summarize causal chain for audit/replay
-                let causal_chain_arc = ccos.get_causal_chain();
                 if let Ok(chain_guard) = causal_chain_arc.lock() {
                     // Export plan actions for replay
                     let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
@@ -3479,21 +3479,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 planner_audit.log_text("plan_execution_error", &err.to_string());
 
                 // Still export what we have in the causal chain
-                let causal_chain = ccos.get_causal_chain();
-                let chain_guard = match causal_chain.lock() {
-                    Ok(guard) => guard,
-                    Err(_) => {
-                        eprintln!("⚠️ Failed to lock causal chain for export after failure");
-                        return Ok(());
+                if let Ok(chain_guard) = causal_chain_arc.lock() {
+                    let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+                    if !plan_actions.is_empty() {
+                        println!(
+                            "\n{} {} actions logged before failure",
+                            "📋 Causal Chain:".bold().cyan(),
+                            plan_actions.len()
+                        );
                     }
-                };
-                let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
-                if !plan_actions.is_empty() {
-                    println!(
-                        "\n{} {} actions logged before failure",
-                        "📋 Causal Chain:".bold().cyan(),
-                        plan_actions.len()
-                    );
+                } else {
+                    eprintln!("⚠️ Failed to lock causal chain for export after failure");
                 }
             }
         }
