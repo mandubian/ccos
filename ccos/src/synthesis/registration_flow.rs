@@ -454,9 +454,46 @@ impl RegistrationFlow {
 
     /// Generate test inputs based on capability schema
     fn generate_test_inputs(&self, capability: &CapabilityManifest) -> RuntimeResult<Value> {
-        // For now, generate simple test inputs
-        // TODO: Parse input schema and generate appropriate test data
-        Ok(Value::Map(HashMap::new()))
+        if let Some(input_schema) = &capability.input_schema {
+            self.generate_test_value_from_type_expr(input_schema)
+        } else {
+            // No schema - return empty map
+            Ok(Value::Map(HashMap::new()))
+        }
+    }
+
+    /// Generate a test value from a TypeExpr
+    fn generate_test_value_from_type_expr(&self, type_expr: &rtfs::ast::TypeExpr) -> RuntimeResult<Value> {
+        use rtfs::ast::{PrimitiveType, TypeExpr};
+        
+        match type_expr {
+            TypeExpr::Primitive(prim) => match prim {
+                PrimitiveType::String => Ok(Value::String("test".to_string())),
+                PrimitiveType::Int => Ok(Value::Integer(0)),
+                PrimitiveType::Float => Ok(Value::Float(0.0)),
+                PrimitiveType::Bool => Ok(Value::Boolean(false)),
+                PrimitiveType::Nil => Ok(Value::Nil),
+                _ => Ok(Value::String("test".to_string())), // Fallback
+            },
+            TypeExpr::Vector(inner) => {
+                // Generate a single-element array for testing
+                let element = self.generate_test_value_from_type_expr(inner)?;
+                Ok(Value::Vector(vec![element]))
+            }
+            TypeExpr::Map { entries, wildcard: _ } => {
+                use rtfs::ast::MapKey;
+                let mut map = HashMap::new();
+                for entry in entries {
+                    let key = MapKey::Keyword(entry.key.clone());
+                    let value = self.generate_test_value_from_type_expr(&entry.value_type)?;
+                    map.insert(key, value);
+                }
+                Ok(Value::Map(map))
+            }
+            TypeExpr::Any => Ok(Value::String("test".to_string())), // Fallback for :any
+            TypeExpr::Never => Ok(Value::Nil), // :never - use nil as fallback
+            _ => Ok(Value::String("test".to_string())), // Fallback for other types
+        }
     }
 }
 
