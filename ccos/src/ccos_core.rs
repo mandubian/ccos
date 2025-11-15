@@ -277,9 +277,9 @@ impl CCOS {
 
         let capability_marketplace = Arc::new(capability_marketplace);
 
-        let catalog = Arc::new(CatalogService::new());
+        let catalog_service = Arc::new(CatalogService::new());
         capability_marketplace
-            .set_catalog_service(Arc::clone(&catalog))
+            .set_catalog_service(Arc::clone(&catalog_service))
             .await;
 
         // Use provided AgentConfig or default
@@ -291,6 +291,11 @@ impl CCOS {
 
         // Register built-in capabilities required by default plans (await using ambient runtime)
         crate::capabilities::register_default_capabilities(&capability_marketplace).await?;
+        crate::planner::capabilities::register_planner_capabilities(
+            Arc::clone(&capability_marketplace),
+            Arc::clone(&catalog_service),
+        )
+        .await?;
 
         // 2. Initialize architectural components, injecting dependencies
         let plan_archive = Arc::new(match plan_archive_path {
@@ -299,10 +304,10 @@ impl CCOS {
             })?,
             None => PlanArchive::new(),
         });
-        plan_archive.set_catalog(Arc::clone(&catalog));
+        plan_archive.set_catalog(Arc::clone(&catalog_service));
 
-        catalog.ingest_marketplace(&capability_marketplace).await;
-        catalog.ingest_plan_archive(&plan_archive);
+        catalog_service.ingest_marketplace(&capability_marketplace).await;
+        catalog_service.ingest_plan_archive(&plan_archive);
         let orchestrator = Arc::new(Orchestrator::new(
             Arc::clone(&causal_chain),
             Arc::clone(&intent_graph),
@@ -520,7 +525,7 @@ impl CCOS {
             agent_config,
             missing_capability_resolver: Some(missing_capability_resolver),
             debug_callback: debug_callback.clone(),
-            catalog,
+            catalog: Arc::clone(&catalog_service),
         })
     }
 

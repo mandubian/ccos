@@ -2307,6 +2307,58 @@ impl CapabilityMarketplace {
                 }
             };
 
+            let extract_type_expr_block = |key: &str, src: &str| -> Option<String> {
+                let pos = src.find(key)?;
+                let mut idx = pos + key.len();
+                let bytes = src.as_bytes();
+                while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+                    idx += 1;
+                }
+                if idx >= bytes.len() {
+                    return None;
+                }
+                let start = idx;
+                let first = bytes[idx] as char;
+                if first == '[' || first == '(' || first == '{' {
+                    let mut depth = 0isize;
+                    let mut end = idx;
+                    while end < bytes.len() {
+                        let ch = bytes[end] as char;
+                        match ch {
+                            '[' | '(' | '{' => depth += 1,
+                            ']' | ')' | '}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    end += 1;
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        end += 1;
+                    }
+                    if end > start {
+                        Some(src[start..end].to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    let mut end = idx;
+                    while end < bytes.len()
+                        && !bytes[end].is_ascii_whitespace()
+                        && bytes[end] != b','
+                        && bytes[end] != b')'
+                    {
+                        end += 1;
+                    }
+                    if end > start {
+                        Some(src[start..end].to_string())
+                    } else {
+                        None
+                    }
+                }
+            };
+
             let extract_provider_meta = |src: &str| -> HashMap<String, String> {
                 let mut map = HashMap::new();
                 if let Some(pos) = src.find(":provider-meta") {
@@ -2501,68 +2553,25 @@ impl CapabilityMarketplace {
             let mut metadata_map = extract_metadata(&content);
 
             // parse schemas
-            let input_schema_opt = if let Some(s) = extract_keyword(":input-schema", &content) {
-                let s_trim = s.trim();
-                if s_trim == "nil" || s_trim == ":any" || s_trim == "nil," {
-                    None
-                } else {
-                    // If the schema token is complex (starts with '[' or '('), we try to extract whole bracketed expr from content
-                    // Simple heuristic: find the substring ":input-schema" and take remainder of that line
-                    if let Some(pos) = content.find(":input-schema") {
-                        if let Some(line_end) = content[pos..].find('\n') {
-                            let line = content[pos..pos + line_end].to_string();
-                            // remove key
-                            if let Some(idx) = line.find(":input-schema") {
-                                let remainder = line[idx + ":input-schema".len()..].trim();
-                                let expr =
-                                    remainder.trim().trim_end_matches(',').trim().to_string();
-                                match TypeExpr::from_str(&expr) {
-                                    Ok(texpr) => Some(texpr),
-                                    Err(_) => None,
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
+            let input_schema_opt =
+                extract_type_expr_block(":input-schema", &content).and_then(|expr| {
+                    let trimmed = expr.trim().trim_end_matches(',').trim();
+                    if trimmed.is_empty() || trimmed == "nil" || trimmed == ":any" {
                         None
+                    } else {
+                        TypeExpr::from_str(trimmed).ok()
                     }
-                }
-            } else {
-                None
-            };
+                });
 
-            let output_schema_opt = if let Some(s) = extract_keyword(":output-schema", &content) {
-                let s_trim = s.trim();
-                if s_trim == "nil" || s_trim == ":any" || s_trim == "nil," {
-                    None
-                } else {
-                    if let Some(pos) = content.find(":output-schema") {
-                        if let Some(line_end) = content[pos..].find('\n') {
-                            let line = content[pos..pos + line_end].to_string();
-                            if let Some(idx) = line.find(":output-schema") {
-                                let remainder = line[idx + ":output-schema".len()..].trim();
-                                let expr =
-                                    remainder.trim().trim_end_matches(',').trim().to_string();
-                                match TypeExpr::from_str(&expr) {
-                                    Ok(texpr) => Some(texpr),
-                                    Err(_) => None,
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
+            let output_schema_opt =
+                extract_type_expr_block(":output-schema", &content).and_then(|expr| {
+                    let trimmed = expr.trim().trim_end_matches(',').trim();
+                    if trimmed.is_empty() || trimmed == "nil" || trimmed == ":any" {
                         None
+                    } else {
+                        TypeExpr::from_str(trimmed).ok()
                     }
-                }
-            } else {
-                None
-            };
+                });
 
             // Build provider
             let provider = if provider_token.contains(":http") || provider_token == ":http" {

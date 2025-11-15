@@ -1,7 +1,7 @@
 {
   "entries": [
     {
-      "capability": "github.issues.list",
+      "capability": "ccos.github.issues.list",
       "server_name": "github/github-mcp",
       "server_url": "https://api.githubcopilot.com/mcp/",
       "tool_name": "list_issues",
@@ -15,7 +15,28 @@
       "input_remap": {}
     },
     {
-      "capability": "ccos.github.issues.list",
+      "capability": "github.issues.list",
+      "server_name": "github/github-mcp",
+      "server_url": "https://api.githubcopilot.com/mcp/",
+      "tool_name": "list_issues",
+      "input_remap": {}
+    },
+    {
+      "capability": "mcp.github.github-mcp.get_issues",
+      "server_name": "github/github-mcp",
+      "server_url": "https://api.githubcopilot.com/mcp/",
+      "tool_name": "list_issues",
+      "input_remap": {}
+    },
+    {
+      "capability": "mcp.github.github-mcp.get_repository_issues",
+      "server_name": "github/github-mcp",
+      "server_url": "https://api.githubcopilot.com/mcp/",
+      "tool_name": "list_issues",
+      "input_remap": {}
+    },
+    {
+      "capability": "mcp.github.github-mcp.list_issues",
       "server_name": "github/github-mcp",
       "server_url": "https://api.githubcopilot.com/mcp/",
       "tool_name": "list_issues",

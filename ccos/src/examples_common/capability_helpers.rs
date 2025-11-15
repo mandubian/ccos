@@ -3,7 +3,6 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use crate::capability_marketplace::types::{CapabilityManifest, ProviderType};
 use crate::capability_marketplace::CapabilityMarketplace;
@@ -251,6 +250,10 @@ fn extract_type_expr(content: &str, key: &str) -> Option<TypeExpr> {
     expr = expr.trim_end_matches(',').trim().to_string();
     if expr.is_empty() {
         return None;
+    }
+
+    if std::env::var("CCOS_DEBUG_SCHEMA").is_ok() {
+        eprintln!("Parsing type expression '{}' for key {}", expr, key);
     }
 
     match TypeExpr::from_str(&expr) {
