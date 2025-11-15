@@ -759,6 +759,7 @@ async fn refresh_capability_menu(
         
         // Discover capabilities that match the goal/intent
         let mut discovered_count = 0;
+        let mut discovered_capability_ids = Vec::new();
         for hint in hints_to_use {
             eprintln!("🔍 Discovering capabilities matching: {}", hint);
             let need = CapabilityNeed::new(
@@ -773,10 +774,12 @@ async fn refresh_capability_menu(
                 Ok(ccos::discovery::DiscoveryResult::Found(manifest)) => {
                     eprintln!("✅ Discovered capability: {}", manifest.id);
                     discovered_count += 1;
+                    discovered_capability_ids.push(manifest.id.clone());
                 }
                 Ok(ccos::discovery::DiscoveryResult::Incomplete(manifest)) => {
                     eprintln!("⚠️ Discovered incomplete capability: {}", manifest.id);
                     discovered_count += 1;
+                    discovered_capability_ids.push(manifest.id.clone());
                 }
                 Ok(ccos::discovery::DiscoveryResult::NotFound) => {
                     eprintln!("❌ No capability found for: {}", hint);
@@ -787,12 +790,51 @@ async fn refresh_capability_menu(
             }
         }
         
-        eprintln!("📊 Discovery summary: {} capability(ies) discovered", discovered_count);
+        eprintln!("📊 Discovery summary: {} capability(ies) discovered: {:?}", discovered_count, discovered_capability_ids);
         
         // Re-ingest marketplace after discovery
         let marketplace_count_after = marketplace.list_capabilities().await.len();
         catalog.ingest_marketplace(marketplace.as_ref()).await;
         eprintln!("📊 Marketplace now contains {} capability(ies)", marketplace_count_after);
+        
+        // Build menu from catalog first
+        let mut menu =
+            build_capability_menu_from_catalog(catalog.clone(), marketplace.clone(), goal, intent, limit).await?;
+        
+        // CRITICAL: Also add all discovered capabilities to the menu, even if catalog search didn't match them
+        // This ensures discovered capabilities (like filter) are available even if they don't match the search query
+        let mut seen_ids: std::collections::HashSet<String> = menu.iter().map(|e| e.id.clone()).collect();
+        for capability_id in discovered_capability_ids {
+            if seen_ids.contains(&capability_id) {
+                continue; // Already in menu
+            }
+            
+            // Filter out meta-capabilities
+            if capability_id.starts_with("planner.") || capability_id.starts_with("ccos.") {
+                continue;
+            }
+            
+            if let Some(manifest) = marketplace.get_capability(&capability_id).await {
+                let trimmed = manifest.id.trim();
+                if trimmed.is_empty() || !trimmed.contains('.') {
+                    continue;
+                }
+                let mut entry = menu_entry_from_manifest(&manifest, Some(0.8)); // High score for discovered capabilities
+                apply_input_overrides(&mut entry);
+                menu.push(entry);
+                seen_ids.insert(capability_id.clone());
+                eprintln!("   ➕ Added discovered capability to menu: {}", capability_id);
+            }
+        }
+        
+        // Re-sort menu by score after adding discovered capabilities
+        menu.sort_by(compare_entries_by_score_desc);
+        if menu.len() > limit {
+            menu.truncate(limit);
+        }
+        
+        annotate_menu_with_readiness(signals, &mut menu);
+        return Ok(menu);
     }
     
     let mut menu =
