@@ -687,12 +687,30 @@ async fn refresh_capability_menu(
 ) -> RuntimeResult<Vec<CapabilityMenuEntry>> {
     catalog.ingest_marketplace(marketplace.as_ref()).await;
     
-    // Check if marketplace is empty - if so, trigger MCP discovery based on goal/intent
-    let marketplace_count_before = marketplace.list_capabilities().await.len();
-    eprintln!("📊 Marketplace state: {} capability(ies) before discovery", marketplace_count_before);
+    // Check if marketplace is empty OR only contains meta-capabilities (planner.*, ccos.*)
+    // Meta-capabilities are internal system capabilities that shouldn't appear in execution plans
+    let all_capabilities_before = marketplace.list_capabilities().await;
+    let executable_capabilities: Vec<_> = all_capabilities_before
+        .iter()
+        .filter(|manifest| {
+            !manifest.id.starts_with("planner.") && !manifest.id.starts_with("ccos.")
+        })
+        .collect();
     
-    if marketplace_count_before == 0 {
-        eprintln!("🔍 Marketplace is empty - triggering MCP discovery based on goal/intent");
+    let marketplace_count_before = all_capabilities_before.len();
+    let executable_count_before = executable_capabilities.len();
+    
+    eprintln!("📊 Marketplace state: {} total capability(ies), {} executable (non-meta) capability(ies) before discovery", 
+        marketplace_count_before, executable_count_before);
+    
+    // Trigger discovery if marketplace is empty OR only has meta-capabilities
+    if executable_count_before == 0 {
+        if marketplace_count_before > 0 {
+            eprintln!("🔍 Marketplace only contains meta-capabilities ({} total, {} executable) - triggering MCP discovery", 
+                marketplace_count_before, executable_count_before);
+        } else {
+            eprintln!("🔍 Marketplace is empty - triggering MCP discovery based on goal/intent");
+        }
         eprintln!("   Goal: {}", goal);
         
         // Extract capability hints from goal/intent
