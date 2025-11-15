@@ -693,6 +693,7 @@ async fn refresh_capability_menu(
         );
         
         // Discover capabilities that match the goal/intent
+        let mut discovered_count = 0;
         for hint in capability_hints {
             eprintln!("🔍 Discovering capabilities matching: {}", hint);
             let need = CapabilityNeed::new(
@@ -703,15 +704,30 @@ async fn refresh_capability_menu(
             );
             
             // Try to discover via MCP registry
-            if let Ok(ccos::discovery::DiscoveryResult::Found(_manifest)) = 
-                discovery_engine.discover_capability(&need).await 
-            {
-                eprintln!("✅ Discovered capability: {}", hint);
+            match discovery_engine.discover_capability(&need).await {
+                Ok(ccos::discovery::DiscoveryResult::Found(manifest)) => {
+                    eprintln!("✅ Discovered capability: {}", manifest.id);
+                    discovered_count += 1;
+                }
+                Ok(ccos::discovery::DiscoveryResult::Incomplete(manifest)) => {
+                    eprintln!("⚠️ Discovered incomplete capability: {}", manifest.id);
+                    discovered_count += 1;
+                }
+                Ok(ccos::discovery::DiscoveryResult::NotFound) => {
+                    eprintln!("❌ No capability found for: {}", hint);
+                }
+                Err(e) => {
+                    eprintln!("⚠️ Discovery error for '{}': {}", hint, e);
+                }
             }
         }
         
+        eprintln!("📊 Discovery summary: {} capability(ies) discovered", discovered_count);
+        
         // Re-ingest marketplace after discovery
+        let marketplace_count_after = marketplace.list_capabilities().await.len();
         catalog.ingest_marketplace(marketplace.as_ref()).await;
+        eprintln!("📊 Marketplace now contains {} capability(ies)", marketplace_count_after);
     }
     
     let mut menu =
