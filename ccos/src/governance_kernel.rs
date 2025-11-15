@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
+use rtfs::runtime::values::Value;
 
 use super::orchestrator::Orchestrator;
 
@@ -61,8 +62,9 @@ impl GovernanceKernel {
     ) -> RuntimeResult<ExecutionResult> {
         // --- 1. Intent Sanitization (SEP-012) ---
         // For capability-internal plans, intent may be None. Only sanitize if present.
-        if let Some(intent) = self.get_intent(&plan)? {
-            self.sanitize_intent(&intent, &plan)?;
+        let intent_opt = self.get_intent(&plan)?;
+        if let Some(ref intent) = intent_opt {
+            self.sanitize_intent(intent, &plan)?;
         }
 
         // --- 2. Plan Scaffolding (SEP-012) ---
@@ -71,13 +73,28 @@ impl GovernanceKernel {
         // --- 3. Constitution Validation (SEP-010) ---
         self.validate_against_constitution(&safe_plan)?;
 
-        // --- 4. Attestation Verification (SEP-011) ---
+        // --- 4. Execution Mode Detection (Criticality-Based Execution) ---
+        // Read execution mode from plan policies or intent constraints
+        // This determines how critical actions should be handled
+        let execution_mode = self.detect_execution_mode(&safe_plan, intent_opt.as_ref())?;
+        
+        // Validate execution mode is compatible with plan security requirements
+        self.validate_execution_mode(&safe_plan, intent_opt.as_ref(), &execution_mode)?;
+
+        // --- 5. Attestation Verification (SEP-011) ---
         // TODO: Verify the cryptographic attestations of all capabilities
         // called within the plan.
 
-        // --- 5. Execution ---
+        // Store execution mode in context for RuntimeHost to access
+        let mut context_with_mode = context.clone();
+        context_with_mode
+            .cross_plan_params
+            .insert("execution_mode".to_string(), Value::String(execution_mode.clone()));
+
+        // --- 6. Execution ---
         // If all checks pass, delegate execution to the Orchestrator.
-        self.orchestrator.execute_plan(&safe_plan, context).await
+        // Execution mode is passed via context cross_plan_params for RuntimeHost to use
+        self.orchestrator.execute_plan(&safe_plan, &context_with_mode).await
     }
 
     /// Retrieves the primary intent associated with the plan, if present.
@@ -197,5 +214,172 @@ impl GovernanceKernel {
             ));
         }
         Ok(())
+    }
+
+    // ---------------------------------------------------------------------
+    // Execution Mode Detection (Criticality-Based Execution)
+    // ---------------------------------------------------------------------
+
+    /// Detect execution mode from plan policies or intent constraints
+    /// Precedence: Plan policy > Intent constraint > Default (full)
+    /// 
+    /// Execution modes:
+    /// - "full": Execute all actions (default)
+    /// - "dry-run": Validate plan without executing critical actions
+    /// - "safe-only": Execute only safe actions, pause for critical ones
+    /// - "require-approval": Pause and request approval for each critical action
+    pub fn detect_execution_mode(
+        &self,
+        plan: &Plan,
+        intent: Option<&StorableIntent>,
+    ) -> RuntimeResult<String> {
+        // Check plan policies first (highest precedence)
+        // Plan policies are HashMap<String, Value>
+        if let Some(execution_mode_value) = plan.policies.get("execution_mode") {
+            if let Value::String(mode) = execution_mode_value {
+                return Ok(mode.clone());
+            }
+        }
+
+        // Check intent constraints (second precedence)
+        // StorableIntent constraints are HashMap<String, String> (RTFS source expressions)
+        // For execution-mode, we expect a simple string value like ":dry-run" or "dry-run"
+        if let Some(intent) = intent {
+            if let Some(constraint_str) = intent.constraints.get("execution-mode") {
+                // Parse RTFS keyword or string value
+                let mode = constraint_str
+                    .trim()
+                    .trim_start_matches(':')  // Remove RTFS keyword prefix if present
+                    .trim_matches('"')        // Remove quotes if present
+                    .to_string();
+                if !mode.is_empty() {
+                    return Ok(mode);
+                }
+            }
+        }
+
+        // Default: full execution
+        Ok("full".to_string())
+    }
+
+    /// Validate that execution mode is compatible with plan and intent security requirements
+    fn validate_execution_mode(
+        &self,
+        plan: &Plan,
+        intent: Option<&StorableIntent>,
+        execution_mode: &str,
+    ) -> RuntimeResult<()> {
+        // Check if plan has critical capabilities that require special handling
+        let has_critical_capabilities = plan
+            .capabilities_required
+            .iter()
+            .any(|cap_id| self.detect_security_level(cap_id) == "critical");
+
+        // If plan has critical capabilities but execution mode is "full",
+        // warn but allow (user explicitly requested full execution)
+        if has_critical_capabilities && execution_mode == "full" {
+            // Log warning but don't block - user may have explicitly set this
+            eprintln!(
+                "⚠️ Plan contains critical capabilities but execution mode is 'full' - \
+                 consider using 'dry-run' or 'require-approval' for safety"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Detect security level for a capability based on ID patterns or manifest metadata
+    /// Returns: "low", "medium", "high", or "critical"
+    /// 
+    /// This implements pattern-based detection as fallback when capabilities
+    /// don't declare security levels in their manifest metadata.
+    pub fn detect_security_level(&self, capability_id: &str) -> String {
+        let id_lower = capability_id.to_lowercase();
+
+        // Critical operations: payments, billing, charges, transfers
+        if id_lower.contains("payment")
+            || id_lower.contains("billing")
+            || id_lower.contains("charge")
+            || id_lower.contains("transfer")
+            || id_lower.contains("refund")
+        {
+            return "critical".to_string();
+        }
+
+        // Critical operations: deletions, removals, destructive operations
+        if id_lower.contains("delete")
+            || id_lower.contains("remove")
+            || id_lower.contains("destroy")
+            || id_lower.contains("drop")
+            || id_lower.contains("truncate")
+        {
+            return "critical".to_string();
+        }
+
+        // High-risk operations: system-level changes
+        if id_lower.contains("exec")
+            || id_lower.contains("shell")
+            || id_lower.contains("system")
+            || id_lower.contains("admin")
+            || id_lower.contains("root")
+        {
+            return "high".to_string();
+        }
+
+        // Moderate operations: writes, creates, updates
+        if id_lower.contains("write")
+            || id_lower.contains("create")
+            || id_lower.contains("update")
+            || id_lower.contains("modify")
+            || id_lower.contains("edit")
+        {
+            return "medium".to_string();
+        }
+
+        // Default: read operations are safe
+        "low".to_string()
+    }
+
+    /// Check if a capability requires approval based on execution mode and security level
+    pub fn requires_approval(
+        &self,
+        capability_id: &str,
+        execution_mode: &str,
+    ) -> bool {
+        let security_level = self.detect_security_level(capability_id);
+
+        match execution_mode {
+            "require-approval" => {
+                // Require approval for medium, high, or critical operations
+                security_level == "medium" || security_level == "high" || security_level == "critical"
+            }
+            "safe-only" => {
+                // Require approval for high or critical operations
+                security_level == "high" || security_level == "critical"
+            }
+            "dry-run" => {
+                // No approval needed in dry-run (will be simulated)
+                false
+            }
+            "full" => {
+                // No approval needed in full execution mode
+                false
+            }
+            _ => {
+                // Unknown mode - default to requiring approval for critical operations
+                security_level == "critical"
+            }
+        }
+    }
+
+    /// Check if a capability should be simulated in dry-run mode
+    pub fn should_simulate_in_dry_run(&self, capability_id: &str, execution_mode: &str) -> bool {
+        if execution_mode != "dry-run" {
+            return false;
+        }
+
+        let security_level = self.detect_security_level(capability_id);
+        // Simulate high and critical operations in dry-run
+        security_level == "high" || security_level == "critical"
     }
 }
