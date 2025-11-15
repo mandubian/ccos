@@ -7,10 +7,206 @@ use std::collections::HashMap;
 
 // AST Node Imports - Ensure all used AST nodes are listed here
 use crate::ast::{
-    CatchClause, CatchPattern, DefExpr, DefnExpr, DefstructExpr, DefstructField, DelegationHint,
-    DoExpr, FnExpr, IfExpr, LetBinding, LetExpr, LogStepExpr, MatchClause, MatchExpr,
-    ParallelBinding, ParallelExpr, ParamDef, Pattern, TryCatchExpr, TypeExpr, WithResourceExpr,
+    CatchClause, CatchPattern, DefExpr, DefmacroExpr, DefnExpr, DefstructExpr, DefstructField,
+    DelegationHint, DoExpr, FnExpr, IfExpr, LetBinding, LetExpr, LogStepExpr, MatchClause,
+    MatchExpr, ParallelBinding, ParallelExpr, ParamDef, Pattern, TryCatchExpr, TypeExpr,
+    WithResourceExpr,
 };
+
+// ...
+
+pub(super) fn build_defmacro_expr(
+    defmacro_expr_pair: Pair<Rule>,
+) -> Result<DefmacroExpr, PestParseError> {
+    let defmacro_span = pair_to_source_span(&defmacro_expr_pair);
+    let mut pairs = defmacro_expr_pair.clone().into_inner();
+
+    // Consume defmacro_keyword if present
+    if let Some(p) = pairs.peek() {
+        if p.as_rule() == Rule::defmacro_keyword {
+            pairs.next();
+        }
+    }
+
+    // Skip whitespace/comments before symbol name
+    while let Some(p) = pairs.peek() {
+        if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+            pairs.next();
+        } else {
+            break;
+        }
+    }
+
+    let symbol_pair = pairs.next().ok_or_else(|| {
+        PestParseError::InvalidInput {
+            message: "defmacro requires a symbol (macro name)".to_string(),
+            span: Some(defmacro_span.clone()),
+        }
+    })?;
+    if symbol_pair.as_rule() != Rule::symbol {
+        return Err(PestParseError::InvalidInput {
+            message: format!(
+                "Expected symbol for defmacro name, found {:?}",
+                symbol_pair.as_rule()
+            ),
+            span: Some(pair_to_source_span(&symbol_pair)),
+        });
+    }
+    let name = build_symbol(symbol_pair.clone())?;
+
+    // Skip whitespace/comments before parameter list
+    while let Some(p) = pairs.peek() {
+        if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+            pairs.next();
+        } else {
+            break;
+        }
+    }
+
+    let params_pair = pairs.next().unwrap();
+    if params_pair.as_rule() != Rule::fn_param_list {
+        return Err(PestParseError::InvalidInput {
+            message: format!(
+                "Expected fn_param_list for defmacro, found {:?}",
+                params_pair.as_rule()
+            ),
+            span: Some(pair_to_source_span(&params_pair)),
+        });
+    }
+
+    let mut params: Vec<ParamDef> = Vec::new();
+    let mut variadic_param: Option<ParamDef> = None;
+    let mut params_inner = params_pair.clone().into_inner().peekable();
+
+    while let Some(param_item_peek) = params_inner.peek() {
+        if param_item_peek.as_rule() == Rule::WHITESPACE
+            || param_item_peek.as_rule() == Rule::COMMENT
+        {
+            params_inner.next();
+            continue;
+        }
+        if param_item_peek.as_rule() == Rule::AMPERSAND {
+            let ampersand_pair = params_inner.next().unwrap();
+            while let Some(p) = params_inner.peek() {
+                if p.as_rule() == Rule::WHITESPACE {
+                    params_inner.next();
+                } else {
+                    break;
+                }
+            }
+            let rest_sym_pair =
+                params_inner
+                    .next()
+                    .ok_or_else(|| PestParseError::InvalidInput {
+                        message: "defmacro: & requires symbol".to_string(),
+                        span: Some(pair_to_source_span(&ampersand_pair)),
+                    })?;
+            if rest_sym_pair.as_rule() != Rule::symbol {
+                return Err(PestParseError::InvalidInput {
+                    message: format!(
+                        "Expected symbol after &, found {:?}",
+                        rest_sym_pair.as_rule()
+                    ),
+                    span: Some(pair_to_source_span(&rest_sym_pair)),
+                });
+            }
+            let rest_sym = build_symbol(rest_sym_pair.clone())?;
+            let mut rest_type: Option<TypeExpr> = None;
+            if let Some(peek_colon) = params_inner.peek() {
+                if peek_colon.as_rule() == Rule::COLON {
+                    let colon_for_variadic_type_pair = params_inner.next().unwrap();
+                    while let Some(p) = params_inner.peek() {
+                        if p.as_rule() == Rule::WHITESPACE {
+                            params_inner.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    let type_pair =
+                        params_inner
+                            .next()
+                            .ok_or_else(|| PestParseError::InvalidInput {
+                                message: "Expected type_expr after ':' for variadic parameter"
+                                    .to_string(),
+                                span: Some(pair_to_source_span(&colon_for_variadic_type_pair)),
+                            })?;
+                    rest_type = Some(build_type_expr(type_pair)?);
+                }
+            }
+            variadic_param = Some(ParamDef {
+                pattern: Pattern::Symbol(rest_sym),
+                type_annotation: rest_type,
+            });
+            break;
+        }
+        let param_def_pair = params_inner.next().unwrap();
+        let param_def_span = pair_to_source_span(&param_def_pair);
+
+        if param_def_pair.as_rule() != Rule::param_def {
+            return Err(PestParseError::InvalidInput {
+                message: format!("Expected param_def, found {:?}", param_def_pair.as_rule()),
+                span: Some(param_def_span.clone()),
+            });
+        }
+
+        let mut param_def_inner = param_def_pair.clone().into_inner();
+
+        let binding_pattern_pair =
+            param_def_inner
+                .next()
+                .ok_or_else(|| PestParseError::InvalidInput {
+                    message: "param_def missing binding_pattern".to_string(),
+                    span: Some(param_def_span.clone()),
+                })?;
+        let pattern = build_pattern(binding_pattern_pair)?;
+
+        let mut type_ann = None;
+        if let Some(colon_candidate_pair) = param_def_inner.next() {
+            if colon_candidate_pair.as_rule() == Rule::COLON {
+                let type_pair =
+                    param_def_inner
+                        .next()
+                        .ok_or_else(|| PestParseError::InvalidInput {
+                            message: "Expected type_expr after ':' in param_def".to_string(),
+                            span: Some(pair_to_source_span(&colon_candidate_pair)),
+                        })?;
+                type_ann = Some(build_type_expr(type_pair)?);
+            } else {
+                return Err(PestParseError::InvalidInput {
+                    message: format!(
+                        "Expected COLON in param_def, found {:?}",
+                        colon_candidate_pair.as_rule()
+                    ),
+                    span: Some(pair_to_source_span(&colon_candidate_pair)),
+                });
+            }
+        }
+        params.push(ParamDef {
+            pattern,
+            type_annotation: type_ann,
+        });
+    }
+
+    let body = pairs
+        .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
+        .map(build_expression)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if body.is_empty() {
+        return Err(PestParseError::InvalidInput {
+            message: "defmacro requires at least one body expression".to_string(),
+            span: Some(defmacro_span),
+        });
+    }
+
+    Ok(DefmacroExpr {
+        name,
+        params,
+        variadic_param,
+        body,
+    })
+}
+
 
 // Builder function imports from sibling modules
 // CORRECTED IMPORT: build_keyword_from_pair -> build_keyword

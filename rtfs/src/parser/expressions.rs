@@ -1,9 +1,10 @@
 use super::common::{build_literal, build_map_key, build_symbol};
 use super::errors::{pair_to_source_span, PestParseError};
 use super::special_forms::{
-    build_def_expr, build_defn_expr, build_defstruct_expr, build_discover_agents_expr,
-    build_do_expr, build_fn_expr, build_if_expr, build_let_expr, build_log_step_expr,
-    build_match_expr, build_parallel_expr, build_try_catch_expr, build_with_resource_expr,
+    build_def_expr, build_defmacro_expr, build_defn_expr, build_defstruct_expr,
+    build_discover_agents_expr, build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
+    build_log_step_expr, build_match_expr, build_parallel_expr, build_try_catch_expr,
+    build_with_resource_expr,
 };
 use super::utils::unescape;
 use super::Rule;
@@ -77,6 +78,24 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
             let atom_symbol = Expression::Symbol(Symbol(atom_name.to_string()));
             Ok(Expression::Deref(Box::new(atom_symbol)))
         }
+        Rule::quasiquote => {
+            let mut inner = pair.into_inner();
+            let expr_pair = inner.next().unwrap();
+            let expr = build_expression(expr_pair)?;
+            Ok(Expression::Quasiquote(Box::new(expr)))
+        }
+        Rule::unquote => {
+            let mut inner = pair.into_inner();
+            let expr_pair = inner.next().unwrap();
+            let expr = build_expression(expr_pair)?;
+            Ok(Expression::Unquote(Box::new(expr)))
+        }
+        Rule::unquote_splicing => {
+            let mut inner = pair.into_inner();
+            let expr_pair = inner.next().unwrap();
+            let expr = build_expression(expr_pair)?;
+            Ok(Expression::UnquoteSplicing(Box::new(expr)))
+        }
 
         Rule::vector => Ok(Expression::Vector(
             pair.into_inner()
@@ -104,6 +123,7 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::fn_expr => Ok(Expression::Fn(build_fn_expr(pair)?)),
         Rule::def_expr => Ok(Expression::Def(Box::new(build_def_expr(pair)?))),
         Rule::defn_expr => Ok(Expression::Defn(Box::new(build_defn_expr(pair)?))),
+        Rule::defmacro_expr => Ok(Expression::Defmacro(Box::new(build_defmacro_expr(pair)?))),
         Rule::defstruct_expr => Ok(Expression::Defstruct(Box::new(build_defstruct_expr(pair)?))),
         Rule::parallel_expr => Ok(Expression::Parallel(build_parallel_expr(pair)?)),
         Rule::with_resource_expr => Ok(Expression::WithResource(build_with_resource_expr(pair)?)),
@@ -466,6 +486,11 @@ fn scan_for_placeholders(expr: &Expression, max_index: &mut usize, uses_plain_pe
                 scan_for_placeholders(e, max_index, uses_plain_percent);
             }
         }
+        Expression::Defmacro(defmacro_expr) => {
+            for e in &defmacro_expr.body {
+                scan_for_placeholders(e, max_index, uses_plain_percent);
+            }
+        }
         Expression::TryCatch(tc) => {
             for e in &tc.try_body {
                 scan_for_placeholders(e, max_index, uses_plain_percent);
@@ -581,6 +606,14 @@ fn rewrite_placeholders(expr: Expression, uses_plain_percent: bool) -> Expressio
                 .map(|e| rewrite_placeholders(e, uses_plain_percent))
                 .collect();
             Expression::Defn(dn)
+        }
+        Expression::Defmacro(mut dm) => {
+            dm.body = dm
+                .body
+                .into_iter()
+                .map(|e| rewrite_placeholders(e, uses_plain_percent))
+                .collect();
+            Expression::Defmacro(dm)
         }
         Expression::TryCatch(mut tc) => {
             tc.try_body = tc

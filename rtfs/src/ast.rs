@@ -570,6 +570,9 @@ pub enum Expression {
     List(#[validate(nested)] Vec<Expression>),
     Vector(#[validate(nested)] Vec<Expression>),
     Map(HashMap<MapKey, Expression>),
+    Quasiquote(#[validate(nested)] Box<Expression>),
+    Unquote(#[validate(nested)] Box<Expression>),
+    UnquoteSplicing(#[validate(nested)] Box<Expression>),
     FunctionCall {
         #[validate(nested)]
         callee: Box<Expression>, // Added this field
@@ -582,6 +585,7 @@ pub enum Expression {
     Fn(#[validate] FnExpr),
     Def(#[validate] Box<DefExpr>),   // Added for def as an expression
     Defn(#[validate] Box<DefnExpr>), // Added for defn as an expression
+    Defmacro(#[validate] Box<DefmacroExpr>),
     Defstruct(#[validate] Box<DefstructExpr>), // Added for defstruct as an expression
     DiscoverAgents(#[validate] DiscoverAgentsExpr),
     LogStep(#[validate] Box<LogStepExpr>),
@@ -610,6 +614,9 @@ impl Validate for Expression {
                 }
                 Ok(())
             }
+            Expression::Quasiquote(expr) => expr.validate(),
+            Expression::Unquote(expr) => expr.validate(),
+            Expression::UnquoteSplicing(expr) => expr.validate(),
             Expression::FunctionCall { callee, arguments } => {
                 callee.validate()?;
                 for arg in arguments {
@@ -623,6 +630,7 @@ impl Validate for Expression {
             Expression::Fn(expr) => expr.validate(),
             Expression::Def(expr) => expr.validate(),
             Expression::Defn(expr) => expr.validate(),
+            Expression::Defmacro(expr) => expr.validate(),
             Expression::Defstruct(expr) => expr.validate(),
             Expression::DiscoverAgents(expr) => expr.validate(),
             Expression::LogStep(expr) => expr.validate(),
@@ -724,6 +732,16 @@ pub struct DefnExpr {
     pub body: Vec<Expression>,
     pub delegation_hint: Option<DelegationHint>,
     pub metadata: Option<HashMap<MapKey, Expression>>, // General metadata like ^{:doc "..."}
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[schemars(rename_all = "camelCase")]
+pub struct DefmacroExpr {
+    pub name: Symbol,
+    pub params: Vec<ParamDef>,
+    pub variadic_param: Option<ParamDef>,
+    #[validate(nested)]
+    pub body: Vec<Expression>,
 }
 
 // Defstruct is syntactic sugar for (def name refined-map-type)

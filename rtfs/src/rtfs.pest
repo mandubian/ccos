@@ -6,6 +6,8 @@ COMMENT    = _{ (";" | ";;") ~ (!"\n" ~ ANY)* | "#|" ~ (!"|#" ~ ANY)* ~ "|#" }
 COLON = @{ ":" }
 AMPERSAND = @{ "&" }
 CARET = @{ "^" }
+TILDE = @{ "~" }
+BACKTICK = @{ "`" }
 
 // --- Grammar Entry Point ---
 // Note: task_definition is removed in favor of RTFS 2.0 objects.
@@ -17,7 +19,7 @@ program = { SOI ~ (module_definition | expression)* ~ EOI }
 // Include anonymous and shorthand function forms before other possibilities so they capture '#(' sequences
 // and method-call style tokens ('.method'). Keep explicit order for precedence.
 // Ensure task_context_access (e.g., "@plan-id") takes precedence over generic symbols
-expression = _{ shorthand_fn | anon_fn | method_call_expr | keyword | task_context_access | atom_deref | literal | symbol | resource_ref | special_form | metadata | list | vector | map }
+expression = _{ shorthand_fn | anon_fn | method_call_expr | keyword | task_context_access | atom_deref | quasiquote | unquote | unquote_splicing | literal | symbol | resource_ref | special_form | metadata | list | vector | map }
 
 // --- Basic Values ---
 
@@ -98,6 +100,10 @@ map       = { "{" ~ map_entry* ~ "}" }
 map_entry = { map_key ~ expression }
 // Allowing keywords, strings, or integers as map keys for now (as per grammar_spec)
 map_key = { keyword | string | integer }
+
+quasiquote = { "`" ~ expression }
+unquote = { "~" ~ expression }
+unquote_splicing = { "~@" ~ expression }
 
 // Shorthand anonymous function using Clojure-style reader macro: #( ... ) with % %1 %2 ...
 // Parses as its own rule; later transformed into a normal fn expression in parser.
@@ -246,7 +252,7 @@ binding_pattern = _{ wildcard | symbol | map_destructuring_pattern | vector_dest
 // --- Special Forms ---
 log_step_expr = { "(" ~ log_step_keyword ~ keyword? ~ expression* ~ ")" }
 
-special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | defstruct_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr | discover_agents_expr | for_expr }
+special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | defmacro_expr | defstruct_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr | discover_agents_expr | for_expr }
 // Removed module_definition, import_definition, and task_definition as they are top-level, not expressions.
 
 do_keyword = @{ "do" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) }
@@ -271,6 +277,7 @@ param_def = { binding_pattern ~ (COLON ~ type_expr)? }
 
 def_expr  = { "(" ~ def_keyword ~ symbol ~ (COLON ~ type_expr)? ~ expression ~ ")" } // Use def_keyword
 defn_expr = { "(" ~ defn_keyword ~ WHITESPACE* ~ metadata* ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Metadata comes after defn keyword and before symbol
+defmacro_expr = { "(" ~ defmacro_keyword ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ fn_param_list ~ expression+ ~ ")" }
 
 // defstruct rule for ergonomic struct definitions
 defstruct_expr = { "(" ~ defstruct_keyword ~ symbol ~ defstruct_field* ~ ")" }
@@ -315,6 +322,7 @@ import_keyword = @{ "import" }
 fn_keyword = @{ "fn" | "λ" }
 def_keyword = @{ "def" }
 defn_keyword = @{ "defn" }
+defmacro_keyword = @{ "defmacro" }
 defstruct_keyword = @{ "defstruct" }
 // let_keyword is already defined
 // if_keyword is not needed as "if" is not ambiguous with symbols in the same way

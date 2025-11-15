@@ -56,6 +56,7 @@ fn test_l4_cache_wasm_execution() -> RuntimeResult<()> {
         Arc::new(module_registry),
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
     let symbol_add = Symbol("add".to_string());
     // Create a dummy closure that won't actually be executed when delegation takes L4 path.
@@ -128,6 +129,7 @@ fn test_l4_cache_with_local_definition() -> RuntimeResult<()> {
         Arc::new(module_registry),
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
 
     let code = "(do (defn add [x y] nil) (add 1 2))";

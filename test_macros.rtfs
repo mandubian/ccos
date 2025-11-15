@@ -1,0 +1,33 @@
+(defmacro when [condition & body]
+  `(if ~condition (do ~@body) nil))
+
+(defmacro unless [condition & body]
+  `(if (not ~condition) (do ~@body) nil))
+
+(defmacro -> [x & forms]
+  (if (empty? forms)
+    x
+    (let [form (first forms)]
+      (if (seq? form)
+        `(~(first form) ~x ~@(rest form))
+        `(~form ~x)))))
+
+(defmacro ->> [x & forms]
+  (if (empty? forms)
+    x
+    (let [form (first forms)]
+      (if (seq? form)
+        `(~(first form) ~@(rest form) ~x)
+        `(~form ~x)))))
+
+;; Test the macros
+(when true
+  (println "when macro works!")
+  (+ 1 2))
+
+(unless false
+  (println "unless macro works!")
+  (* 3 4))
+
+(-> 5 (+ 10) (* 2))
+(->> 5 (+ 10) (* 2))

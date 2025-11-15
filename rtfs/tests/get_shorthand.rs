@@ -75,7 +75,11 @@ fn test_get_shorthand_and_builtin_get() -> Result<(), rtfs::runtime::error::Runt
     // prepare evaluator
     let module_registry = Arc::new(ModuleRegistry::new());
     let host = Arc::new(StubHost);
-    let mut ev = Evaluator::new_with_defaults(module_registry, host);
+    let mut ev = Evaluator::new_with_defaults(
+        module_registry,
+        host,
+        rtfs::compiler::expander::MacroExpander::default(),
+    );
 
     // Test shorthand get with host capabilities (set! removed in migration)
     let set_prog = "(do (step \"set\" (call :ccos.state.kv.put {:key \"k\" :value \"v\"})))";

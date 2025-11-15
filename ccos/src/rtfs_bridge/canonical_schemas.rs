@@ -274,21 +274,22 @@ impl CanonicalCapabilitySchema {
             }
         }
 
-        // Validate that local capabilities have :language
-        let provider = cap_map
-            .get(&MapKey::String(":provider".to_string()))
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.clone()),
-                Value::Keyword(k) => Some(format!(":{}", k.0)),
-                Value::Symbol(rtfs::ast::Symbol(s)) => Some(s.clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| "Local".to_string());
+        // Validate that local capabilities have :language, but only if the
+        // :provider field is explicitly present and set to "Local". Do not
+        // assume a missing provider implies Local.
+        if let Some(provider_val) = cap_map.get(&MapKey::String(":provider".to_string())) {
+            let provider = match provider_val {
+                Value::String(s) => s.clone(),
+                Value::Keyword(k) => format!(":{}", k.0),
+                Value::Symbol(rtfs::ast::Symbol(s)) => s.clone(),
+                _ => "".to_string(),
+            };
 
-        if provider.to_lowercase() == "local" {
-            use super::language_utils::validate_local_capability_has_language;
-            if let Err(e) = validate_local_capability_has_language(cap_map) {
-                return Err(format!("Local capability validation failed: {}", e));
+            if provider.to_lowercase() == "local" {
+                use super::language_utils::validate_local_capability_has_language;
+                if let Err(e) = validate_local_capability_has_language(cap_map) {
+                    return Err(format!("Local capability validation failed: {}", e));
+                }
             }
         }
 

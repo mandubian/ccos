@@ -512,6 +512,13 @@ impl From<Expression> for Value {
                 }
                 Value::Map(result_map)
             }
+            // Macro-related expressions should have been expanded before evaluation
+            Expression::Quasiquote(_) |
+            Expression::Unquote(_) |
+            Expression::UnquoteSplicing(_) |
+            Expression::Defmacro(_) => {
+                Value::String("#<macro-expression>".to_string())
+            }
         }
     }
 }

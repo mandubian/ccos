@@ -247,7 +247,12 @@ fn test_merge_policy_keyword_overwrite_in_step_parallel() -> RuntimeResult<()> {
         capability_marketplace,
         RuntimeContext::pure(),
     ));
-    let evaluator = Evaluator::new(module_registry, RuntimeContext::pure(), host);
+    let evaluator = Evaluator::new(
+        module_registry,
+        RuntimeContext::pure(),
+        host,
+        rtfs::compiler::expander::MacroExpander::default(),
+    );
 
     // Initialize root context and set parent value :k = "parent"
     {

@@ -12,7 +12,12 @@ fn test_missing_stdlib_functions() {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
-    let evaluator = Evaluator::new(module_registry, security_context, host);
+    let evaluator = Evaluator::new(
+        module_registry,
+        security_context,
+        host,
+        rtfs::compiler::expander::MacroExpander::default(),
+    );
 
     // Test empty?
     let expr = parse_expression("(empty? [])").expect("Parse failed");
