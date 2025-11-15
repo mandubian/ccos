@@ -779,7 +779,7 @@ impl CausalChain {
 
     /// Export all actions for a given plan as a serializable format for replay/audit
     /// Returns actions in chronological order with full context needed for replay
-    /// 
+    ///
     /// Actions are logged in real-time as events occur during plan execution.
     /// This function ensures chronological order by sorting by timestamp.
     pub fn export_plan_actions(&self, plan_id: &PlanId) -> Vec<&Action> {
@@ -790,7 +790,7 @@ impl CausalChain {
 
     /// Export all actions for a given intent as a serializable format for replay/audit
     /// Returns actions in chronological order with full context needed for replay
-    /// 
+    ///
     /// Actions are logged in real-time as events occur during intent execution.
     /// This function ensures chronological order by sorting by timestamp.
     pub fn export_intent_actions(&self, intent_id: &IntentId) -> Vec<&Action> {
@@ -801,7 +801,7 @@ impl CausalChain {
 
     /// Export all actions in chronological order for full chain replay
     /// This preserves the complete immutable audit trail
-    /// 
+    ///
     /// Actions are logged in real-time as events occur, so the ledger's Vec insertion
     /// order should match chronological order. This function sorts by timestamp to
     /// guarantee chronological correctness even if there are edge cases.
@@ -816,7 +816,7 @@ impl CausalChain {
 
     /// Export actions matching a query in chronological order
     /// Useful for selective replay of specific event types or time ranges
-    /// 
+    ///
     /// Actions are logged in real-time as events occur, preserving chronological order.
     /// This function ensures chronological order by sorting by timestamp.
     pub fn export_actions(&self, query: &CausalQuery) -> Vec<&Action> {
@@ -827,7 +827,7 @@ impl CausalChain {
 
     /// Get execution trace for a plan - ordered sequence of actions with parent-child relationships
     /// Returns a tree-structured representation suitable for replay
-    /// 
+    ///
     /// Actions are logged in real-time during plan execution, preserving chronological order.
     /// This function ensures actions are sorted by timestamp for guaranteed chronological correctness.
     pub fn get_plan_execution_trace(&self, plan_id: &PlanId) -> Vec<&Action> {
@@ -1077,10 +1077,18 @@ mod tests {
         // Create actions with varying timestamps (simulate real-time logging)
         let action1 = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let action2 = Action::new(ActionType::CapabilityCall, plan_id.clone(), intent_id.clone())
-            .with_name("test.capability");
+        let action2 = Action::new(
+            ActionType::CapabilityCall,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_name("test.capability");
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let action3 = Action::new(ActionType::PlanCompleted, plan_id.clone(), intent_id.clone());
+        let action3 = Action::new(
+            ActionType::PlanCompleted,
+            plan_id.clone(),
+            intent_id.clone(),
+        );
 
         // Append actions (not in chronological order to test sorting)
         chain.append(&action3).unwrap();
@@ -1103,7 +1111,11 @@ mod tests {
         let plan_id = "plan-intent-export".to_string();
         let intent_id = "intent-export-test-2".to_string();
 
-        let action1 = Action::new(ActionType::IntentCreated, plan_id.clone(), intent_id.clone());
+        let action1 = Action::new(
+            ActionType::IntentCreated,
+            plan_id.clone(),
+            intent_id.clone(),
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
         let action2 = Action::new(
             ActionType::IntentStatusChanged,
@@ -1130,7 +1142,11 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         let action2 = Action::new(ActionType::PlanStarted, plan_id2.clone(), intent_id.clone());
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let action3 = Action::new(ActionType::PlanCompleted, plan_id1.clone(), intent_id.clone());
+        let action3 = Action::new(
+            ActionType::PlanCompleted,
+            plan_id1.clone(),
+            intent_id.clone(),
+        );
 
         // Append out of order
         chain.append(&action3).unwrap();
@@ -1158,12 +1174,20 @@ mod tests {
         let action1 = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
         std::thread::sleep(std::time::Duration::from_millis(10));
         let action2_id = format!("action-{}", uuid::Uuid::new_v4());
-        let action2 = Action::new(ActionType::CapabilityCall, plan_id.clone(), intent_id.clone())
-            .with_parent(Some(action1.action_id.clone()))
-            .with_name("test.capability");
+        let action2 = Action::new(
+            ActionType::CapabilityCall,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_parent(Some(action1.action_id.clone()))
+        .with_name("test.capability");
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let action3 = Action::new(ActionType::PlanCompleted, plan_id.clone(), intent_id.clone())
-            .with_parent(Some(action2.action_id.clone()));
+        let action3 = Action::new(
+            ActionType::PlanCompleted,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_parent(Some(action2.action_id.clone()));
 
         chain.append(&action3).unwrap();
         chain.append(&action1).unwrap();
@@ -1193,8 +1217,7 @@ mod tests {
 
         chain.record_result(action, result).unwrap();
 
-        let (is_valid, total_actions, first_ts, last_ts) =
-            chain.verify_and_summarize().unwrap();
+        let (is_valid, total_actions, first_ts, last_ts) = chain.verify_and_summarize().unwrap();
 
         assert!(is_valid);
         assert!(total_actions > 0);
@@ -1211,8 +1234,12 @@ mod tests {
 
         let action1 = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let action2 = Action::new(ActionType::CapabilityCall, plan_id.clone(), intent_id.clone())
-            .with_name("test.capability");
+        let action2 = Action::new(
+            ActionType::CapabilityCall,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_name("test.capability");
         std::thread::sleep(std::time::Duration::from_millis(10));
         let action3 = Action::new(ActionType::InternalStep, plan_id.clone(), intent_id.clone());
 
