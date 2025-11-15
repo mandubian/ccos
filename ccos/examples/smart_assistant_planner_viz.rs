@@ -597,20 +597,61 @@ async fn build_capability_menu_from_catalog(
         }
     }
 
+    // Final fallback: if menu is still empty, try to get any capabilities from marketplace
+    // (bypassing catalog search - this handles the case where discovery found capabilities
+    // but catalog search didn't match them)
     if menu.is_empty() {
-        if let Some(manifest) = marketplace
-            .get_capability("mcp.github.github-mcp.list_issues")
-            .await
-        {
-            let mut entry = menu_entry_from_manifest(&manifest, Some(1.0));
-            apply_input_overrides(&mut entry);
-            menu.push(entry);
+        eprintln!("⚠️ Catalog search returned no capabilities - falling back to marketplace listing");
+        
+        // Try specific common capabilities first
+        let common_capability_ids = vec![
+            "mcp.github.github-mcp.list_issues",
+            "mcp.core.filter",
+            "mcp.filter.filter",
+        ];
+        
+        for capability_id in common_capability_ids {
+            if let Some(manifest) = marketplace.get_capability(capability_id).await {
+                // Filter out meta-capabilities
+                if manifest.id.starts_with("planner.") || manifest.id.starts_with("ccos.") {
+                    continue;
+                }
+                let trimmed = manifest.id.trim();
+                if trimmed.is_empty() || !trimmed.contains('.') {
+                    continue;
+                }
+                let mut entry = menu_entry_from_manifest(&manifest, Some(1.0));
+                apply_input_overrides(&mut entry);
+                menu.push(entry);
+                eprintln!("✅ Added capability from marketplace fallback: {}", capability_id);
+            }
+        }
+        
+        // If still empty, try to get ANY capabilities from marketplace (last resort)
+        if menu.is_empty() {
+            eprintln!("⚠️ Trying to list all marketplace capabilities as last resort");
+            for manifest in marketplace.list_capabilities().await {
+                // Filter out meta-capabilities
+                if manifest.id.starts_with("planner.") || manifest.id.starts_with("ccos.") {
+                    continue;
+                }
+                let trimmed = manifest.id.trim();
+                if trimmed.is_empty() || !trimmed.contains('.') {
+                    continue;
+                }
+                let mut entry = menu_entry_from_manifest(&manifest, Some(0.5));
+                apply_input_overrides(&mut entry);
+                menu.push(entry);
+                if menu.len() >= limit {
+                    break;
+                }
+            }
         }
     }
 
     if menu.is_empty() {
         Err(RuntimeError::Generic(
-            "Catalog query returned no capabilities".to_string(),
+            "Catalog query returned no capabilities and marketplace is empty. Try running with MCP discovery enabled or restoring capabilities.".to_string(),
         ))
     } else {
         Ok(menu)
