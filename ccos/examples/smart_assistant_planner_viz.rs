@@ -669,12 +669,28 @@ async fn refresh_capability_menu(
     catalog.ingest_marketplace(marketplace.as_ref()).await;
     
     // Check if marketplace is empty - if so, trigger MCP discovery based on goal/intent
-    let marketplace_empty = marketplace.list_capabilities().await.is_empty();
-    if marketplace_empty {
+    let marketplace_count_before = marketplace.list_capabilities().await.len();
+    eprintln!("📊 Marketplace state: {} capability(ies) before discovery", marketplace_count_before);
+    
+    if marketplace_count_before == 0 {
         eprintln!("🔍 Marketplace is empty - triggering MCP discovery based on goal/intent");
+        eprintln!("   Goal: {}", goal);
         
         // Extract capability hints from goal/intent
         let capability_hints = extract_capability_hints_from_goal(goal, intent);
+        eprintln!("   Extracted {} capability hint(s): {:?}", capability_hints.len(), capability_hints);
+        
+        if capability_hints.is_empty() {
+            eprintln!("⚠️ No capability hints extracted from goal - trying generic discovery");
+            // Add generic hints as fallback
+            let generic_hints = vec![
+                "github.list_issues".to_string(),
+                "list_issues".to_string(),
+                "filter".to_string(),
+            ];
+            eprintln!("   Using generic hints: {:?}", generic_hints);
+            // Continue with generic hints instead of returning
+        }
         
         // Create discovery engine to trigger MCP introspection
         use ccos::discovery::engine::DiscoveryEngine;
@@ -682,6 +698,7 @@ async fn refresh_capability_menu(
         use ccos::intent_graph::IntentGraph;
         use std::sync::Mutex;
         
+        eprintln!("   Creating discovery engine...");
         let intent_graph = Arc::new(Mutex::new(
             IntentGraph::new_async(IntentGraphConfig::default())
                 .await
@@ -692,9 +709,20 @@ async fn refresh_capability_menu(
             intent_graph,
         );
         
+        // Use generic hints if no hints were extracted
+        let hints_to_use = if capability_hints.is_empty() {
+            vec![
+                "github.list_issues".to_string(),
+                "list_issues".to_string(),
+                "filter".to_string(),
+            ]
+        } else {
+            capability_hints
+        };
+        
         // Discover capabilities that match the goal/intent
         let mut discovered_count = 0;
-        for hint in capability_hints {
+        for hint in hints_to_use {
             eprintln!("🔍 Discovering capabilities matching: {}", hint);
             let need = CapabilityNeed::new(
                 hint.clone(),
