@@ -104,7 +104,7 @@ impl RequirementResolver {
 
         // Collect provision targets from coverage
         let mut provision_targets = coverage.provision_targets();
-        
+
         // Also check signals for capabilities with Identified readiness that aren't in coverage
         // (e.g., unknown capabilities added during plan validation)
         // These are capabilities that were identified as needed but haven't been resolved yet
@@ -114,7 +114,9 @@ impl RequirementResolver {
                 // If this capability is Identified and not already in provision targets or other lists
                 if requirement.readiness == RequirementReadiness::Identified
                     && !provision_targets.contains(&capability_id_str)
-                    && !coverage.incomplete_capabilities.contains(&capability_id_str)
+                    && !coverage
+                        .incomplete_capabilities
+                        .contains(&capability_id_str)
                     && !coverage.pending_capabilities.contains(&capability_id_str)
                 {
                     // Even if it's in missing_capabilities, we still want to try to provision it
@@ -123,7 +125,7 @@ impl RequirementResolver {
                 }
             }
         }
-        
+
         if provision_targets.is_empty() {
             return Ok(RequirementResolutionOutcome::NoAction);
         }

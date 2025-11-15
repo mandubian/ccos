@@ -105,14 +105,14 @@ impl DefaultGoalCoverageAnalyzer {
                 let step_exists = plan
                     .iter()
                     .any(|step| step.capability_id.as_deref() == Some(capability_id.as_str()));
-                
+
                 // For a capability to be satisfied, it must both:
                 // 1. Be available in the menu (not just referenced in plan)
                 // 2. Be invoked by a step in the plan
                 if capability_available && step_exists {
                     return Ok(());
                 }
-                
+
                 // If capability is not in menu, it's missing even if referenced in plan
                 if !capability_available {
                     let missing_capability = RequirementGap {
@@ -124,7 +124,7 @@ impl DefaultGoalCoverageAnalyzer {
                     };
                     return Err(missing_capability);
                 }
-                
+
                 // Capability is available but not used in plan
                 let missing_capability = RequirementGap {
                     requirement: requirement.clone(),

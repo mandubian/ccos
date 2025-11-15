@@ -306,7 +306,9 @@ impl CCOS {
         });
         plan_archive.set_catalog(Arc::clone(&catalog_service));
 
-        catalog_service.ingest_marketplace(&capability_marketplace).await;
+        catalog_service
+            .ingest_marketplace(&capability_marketplace)
+            .await;
         catalog_service.ingest_plan_archive(&plan_archive);
         let orchestrator = Arc::new(Orchestrator::new(
             Arc::clone(&causal_chain),

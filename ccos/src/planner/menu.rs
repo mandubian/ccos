@@ -79,7 +79,7 @@ impl CapabilityMenuEntry {
     pub fn is_synthetic(&self) -> bool {
         matches!(self.provenance, CapabilityProvenance::Synthetic)
     }
-    
+
     /// Extract function parameter names (those marked with "(function - cannot be passed directly)")
     pub fn function_parameters(&self) -> Vec<String> {
         let mut func_params = Vec::new();
@@ -183,17 +183,17 @@ fn insert_entry(
     parent_optional: bool,
 ) {
     let key = entry.key.0.clone();
-    
+
     // Check if this is a function type (indicated by :fn keyword or Function variant)
     let is_function_type = is_function_type_expr(entry.value_type.as_ref());
-    
+
     // Annotate function types with a warning suffix
     let annotated_key = if is_function_type {
         format!("{} (function - cannot be passed directly)", key)
     } else {
         key.clone()
     };
-    
+
     let is_optional =
         entry.optional || parent_optional || type_expr_is_optional(entry.value_type.as_ref());
     if is_optional {
@@ -216,9 +216,10 @@ fn is_function_type_expr(expr: &TypeExpr) -> bool {
             kw.0 == "fn" || kw.0 == ":fn" || kw.0.contains("fn")
         }
         // Check inside Optional/Refined
-        TypeExpr::Optional(inner) | TypeExpr::Refined { base_type: inner, .. } => {
-            is_function_type_expr(inner)
-        }
+        TypeExpr::Optional(inner)
+        | TypeExpr::Refined {
+            base_type: inner, ..
+        } => is_function_type_expr(inner),
         // Check unions
         TypeExpr::Union(options) => options.iter().any(is_function_type_expr),
         _ => false,

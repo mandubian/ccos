@@ -11,10 +11,17 @@
 - **Do NOT** mix step ID strings with step indices - use numeric indices consistently.
 
 - **Do NOT** forget keyword format for outputs - use `:output` not `"output"` or `output`.
+- **Do NOT** keep spaces or camelCase in output names - convert to lowercase slug so the final keyword is valid (e.g., `"Filtered Items"` → `filtered-items` → `:filtered-items`).
 
 - **Do NOT** forget `(get step_N :output)` - must extract from step bindings, not reference directly.
 
 - **Do NOT** use capability IDs as strings - convert to keywords: `:capability.id` not `"capability.id"`.
+
+- **Do NOT** use strings for map keys - always use keywords: `{:key value}` not `{"key" value}`.
+
+- **Do NOT** use strings for capability IDs in calls - always use keywords: `(call :capability.id {...})` not `(call "capability.id" {...})`.
+
+- **Do NOT** use strings for output keys in `(get ...)` - always use keywords: `(get step_0 :output)` not `(get step_0 "output")`.
 
 - **Do NOT** call `clojure.*`, `common-lisp.*`, or any host-language library. Only RTFS forms and SecureStandardLibrary helpers are permitted.
 
