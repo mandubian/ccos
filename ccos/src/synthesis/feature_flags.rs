@@ -50,6 +50,9 @@ pub struct MissingCapabilityFeatureFlags {
 
     /// Enable CLI tooling and observability features
     pub cli_tooling_enabled: bool,
+
+    /// Enable output schema introspection by calling MCP tools once (requires auth)
+    pub output_schema_introspection_enabled: bool,
 }
 
 impl Default for MissingCapabilityFeatureFlags {
@@ -70,6 +73,7 @@ impl Default for MissingCapabilityFeatureFlags {
             audit_logging_enabled: true,   // Always enable audit logging
             validation_enabled: true,      // Always enable validation
             cli_tooling_enabled: true,     // Safe to enable
+            output_schema_introspection_enabled: false, // Disabled by default (requires auth)
         }
     }
 }
@@ -92,6 +96,7 @@ impl MissingCapabilityFeatureFlags {
             audit_logging_enabled: true,
             validation_enabled: true,
             cli_tooling_enabled: true,
+            output_schema_introspection_enabled: true, // Enabled in dev (if auth available)
         }
     }
 
@@ -112,6 +117,7 @@ impl MissingCapabilityFeatureFlags {
             audit_logging_enabled: true,    // Enable audit logging for tests
             validation_enabled: true,       // Enable validation for tests
             cli_tooling_enabled: true,      // Enable CLI for tests
+            output_schema_introspection_enabled: false, // Disabled in tests (use mocks)
         }
     }
 }
@@ -660,6 +666,10 @@ impl FeatureFlagChecker {
 
     pub fn is_cli_tooling_enabled(&self) -> bool {
         self.config.feature_flags.cli_tooling_enabled
+    }
+
+    pub fn is_output_schema_introspection_enabled(&self) -> bool {
+        self.config.feature_flags.enabled && self.config.feature_flags.output_schema_introspection_enabled
     }
 
     pub fn is_tool_selector_enabled(&self) -> bool {
