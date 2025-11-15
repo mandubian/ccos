@@ -1067,4 +1067,170 @@ mod tests {
         let guard = received.lock().unwrap();
         assert!(guard.iter().any(|id| id == &action.action_id));
     }
+
+    #[test]
+    fn test_export_plan_actions_chronological_order() {
+        let mut chain = CausalChain::new().unwrap();
+        let plan_id = "plan-export-test".to_string();
+        let intent_id = "intent-export-test".to_string();
+
+        // Create actions with varying timestamps (simulate real-time logging)
+        let action1 = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action2 = Action::new(ActionType::CapabilityCall, plan_id.clone(), intent_id.clone())
+            .with_name("test.capability");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action3 = Action::new(ActionType::PlanCompleted, plan_id.clone(), intent_id.clone());
+
+        // Append actions (not in chronological order to test sorting)
+        chain.append(&action3).unwrap();
+        chain.append(&action1).unwrap();
+        chain.append(&action2).unwrap();
+
+        // Export and verify chronological order
+        let exported = chain.export_plan_actions(&plan_id);
+        assert_eq!(exported.len(), 3);
+        assert!(exported[0].timestamp <= exported[1].timestamp);
+        assert!(exported[1].timestamp <= exported[2].timestamp);
+        assert_eq!(exported[0].action_type, ActionType::PlanStarted);
+        assert_eq!(exported[1].action_type, ActionType::CapabilityCall);
+        assert_eq!(exported[2].action_type, ActionType::PlanCompleted);
+    }
+
+    #[test]
+    fn test_export_intent_actions_chronological_order() {
+        let mut chain = CausalChain::new().unwrap();
+        let plan_id = "plan-intent-export".to_string();
+        let intent_id = "intent-export-test-2".to_string();
+
+        let action1 = Action::new(ActionType::IntentCreated, plan_id.clone(), intent_id.clone());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action2 = Action::new(
+            ActionType::IntentStatusChanged,
+            plan_id.clone(),
+            intent_id.clone(),
+        );
+
+        chain.append(&action2).unwrap();
+        chain.append(&action1).unwrap();
+
+        let exported = chain.export_intent_actions(&intent_id);
+        assert_eq!(exported.len(), 2);
+        assert!(exported[0].timestamp <= exported[1].timestamp);
+    }
+
+    #[test]
+    fn test_export_all_actions_chronological_order() {
+        let mut chain = CausalChain::new().unwrap();
+        let plan_id1 = "plan-1".to_string();
+        let plan_id2 = "plan-2".to_string();
+        let intent_id = "intent-all".to_string();
+
+        let action1 = Action::new(ActionType::PlanStarted, plan_id1.clone(), intent_id.clone());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action2 = Action::new(ActionType::PlanStarted, plan_id2.clone(), intent_id.clone());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action3 = Action::new(ActionType::PlanCompleted, plan_id1.clone(), intent_id.clone());
+
+        // Append out of order
+        chain.append(&action3).unwrap();
+        chain.append(&action1).unwrap();
+        chain.append(&action2).unwrap();
+
+        let exported = chain.export_all_actions();
+        assert_eq!(exported.len(), 3);
+        // Verify chronological order
+        for i in 0..(exported.len() - 1) {
+            assert!(
+                exported[i].timestamp <= exported[i + 1].timestamp,
+                "Actions not in chronological order at index {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_plan_execution_trace() {
+        let mut chain = CausalChain::new().unwrap();
+        let plan_id = "plan-trace-test".to_string();
+        let intent_id = "intent-trace".to_string();
+
+        let action1 = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action2_id = format!("action-{}", uuid::Uuid::new_v4());
+        let action2 = Action::new(ActionType::CapabilityCall, plan_id.clone(), intent_id.clone())
+            .with_parent(Some(action1.action_id.clone()))
+            .with_name("test.capability");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action3 = Action::new(ActionType::PlanCompleted, plan_id.clone(), intent_id.clone())
+            .with_parent(Some(action2.action_id.clone()));
+
+        chain.append(&action3).unwrap();
+        chain.append(&action1).unwrap();
+        chain.append(&action2).unwrap();
+
+        let trace = chain.get_plan_execution_trace(&plan_id);
+        assert_eq!(trace.len(), 3);
+        // Verify chronological order
+        assert!(trace[0].timestamp <= trace[1].timestamp);
+        assert!(trace[1].timestamp <= trace[2].timestamp);
+        // Verify parent-child relationships are preserved
+        assert_eq!(trace[0].action_type, ActionType::PlanStarted);
+        assert_eq!(trace[1].parent_action_id, Some(trace[0].action_id.clone()));
+    }
+
+    #[test]
+    fn test_verify_and_summarize() {
+        let mut chain = CausalChain::new().unwrap();
+        let intent = Intent::new("Test summarize".to_string());
+        let action = chain.create_action(intent, None).unwrap();
+
+        let result = ExecutionResult {
+            success: true,
+            value: Value::Nil,
+            metadata: HashMap::new(),
+        };
+
+        chain.record_result(action, result).unwrap();
+
+        let (is_valid, total_actions, first_ts, last_ts) =
+            chain.verify_and_summarize().unwrap();
+
+        assert!(is_valid);
+        assert!(total_actions > 0);
+        assert!(first_ts.is_some());
+        assert!(last_ts.is_some());
+        assert!(first_ts.unwrap() <= last_ts.unwrap());
+    }
+
+    #[test]
+    fn test_export_actions_with_query() {
+        let mut chain = CausalChain::new().unwrap();
+        let plan_id = "plan-query".to_string();
+        let intent_id = "intent-query".to_string();
+
+        let action1 = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action2 = Action::new(ActionType::CapabilityCall, plan_id.clone(), intent_id.clone())
+            .with_name("test.capability");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action3 = Action::new(ActionType::InternalStep, plan_id.clone(), intent_id.clone());
+
+        chain.append(&action1).unwrap();
+        chain.append(&action2).unwrap();
+        chain.append(&action3).unwrap();
+
+        // Query for only CapabilityCall actions
+        let query = CausalQuery {
+            intent_id: None,
+            plan_id: Some(plan_id.clone()),
+            action_type: Some(ActionType::CapabilityCall),
+            time_range: None,
+            parent_action_id: None,
+        };
+
+        let exported = chain.export_actions(&query);
+        assert_eq!(exported.len(), 1);
+        assert_eq!(exported[0].action_type, ActionType::CapabilityCall);
+    }
 }
