@@ -630,29 +630,48 @@ async fn build_capability_menu_from_catalog(
         // If still empty, try to get ANY capabilities from marketplace (last resort)
         if menu.is_empty() {
             eprintln!("⚠️ Trying to list all marketplace capabilities as last resort");
-            for manifest in marketplace.list_capabilities().await {
+            let all_capabilities = marketplace.list_capabilities().await;
+            eprintln!("   Found {} total capability(ies) in marketplace", all_capabilities.len());
+            
+            let mut filtered_count = 0;
+            for manifest in all_capabilities {
                 // Filter out meta-capabilities
                 if manifest.id.starts_with("planner.") || manifest.id.starts_with("ccos.") {
+                    filtered_count += 1;
+                    eprintln!("   ⏭️  Filtered out meta-capability: {}", manifest.id);
                     continue;
                 }
                 let trimmed = manifest.id.trim();
                 if trimmed.is_empty() || !trimmed.contains('.') {
+                    filtered_count += 1;
+                    eprintln!("   ⏭️  Filtered out invalid capability ID: '{}'", manifest.id);
                     continue;
                 }
                 let mut entry = menu_entry_from_manifest(&manifest, Some(0.5));
                 apply_input_overrides(&mut entry);
                 menu.push(entry);
+                eprintln!("   ✅ Added capability to menu: {}", manifest.id);
                 if menu.len() >= limit {
                     break;
                 }
             }
+            eprintln!("   📊 Filtered out {} capability(ies), added {} to menu", filtered_count, menu.len());
         }
     }
 
     if menu.is_empty() {
-        Err(RuntimeError::Generic(
-            "Catalog query returned no capabilities and marketplace is empty. Try running with MCP discovery enabled or restoring capabilities.".to_string(),
-        ))
+        // More accurate error message
+        let marketplace_count = marketplace.list_capabilities().await.len();
+        if marketplace_count > 0 {
+            Err(RuntimeError::Generic(format!(
+                "Catalog query returned no capabilities and all {} marketplace capability(ies) were filtered out (likely all meta-capabilities: planner.* or ccos.*). Try running with MCP discovery enabled or restoring capabilities.",
+                marketplace_count
+            )))
+        } else {
+            Err(RuntimeError::Generic(
+                "Catalog query returned no capabilities and marketplace is empty. Try running with MCP discovery enabled or restoring capabilities.".to_string(),
+            ))
+        }
     } else {
         Ok(menu)
     }
