@@ -164,6 +164,7 @@ impl MCPIntrospector {
 
         // MCP tools typically don't declare output schemas explicitly
         // We can infer basic structure or leave as :any
+        // TODO: Optionally call the tool once with safe inputs to infer output schema
         let output_schema = None;
 
         Ok(DiscoveredMCPTool {
@@ -244,6 +245,195 @@ impl MCPIntrospector {
         }
 
         Ok(capabilities)
+    }
+
+    /// Introspect output schema by calling the MCP tool once with safe/dummy inputs
+    /// This is only done if authorized (auth_headers provided) and safe to do so
+    pub async fn introspect_output_schema(
+        &self,
+        tool: &DiscoveredMCPTool,
+        server_url: &str,
+        server_name: &str,
+        auth_headers: Option<HashMap<String, String>>,
+    ) -> RuntimeResult<Option<TypeExpr>> {
+        // Only introspect if we have auth (indicates we're authorized to make calls)
+        if auth_headers.is_none() {
+            return Ok(None);
+        }
+
+        // Only introspect for read-only operations (safe to call)
+        // Skip for operations that might modify data (create, update, delete, etc.)
+        let tool_name_lower = tool.tool_name.to_lowercase();
+        let unsafe_verbs = ["create", "update", "delete", "remove", "add", "modify", "write", "post", "put", "patch"];
+        if unsafe_verbs.iter().any(|verb| tool_name_lower.contains(verb)) {
+            eprintln!("⚠️ Skipping output schema introspection for '{}' (potentially unsafe operation)", tool.tool_name);
+            return Ok(None);
+        }
+
+        eprintln!("🔍 Introspecting output schema for '{}' by calling it once with safe inputs", tool.tool_name);
+
+        // Generate safe test inputs from input schema
+        let test_inputs = self.generate_safe_test_inputs(tool)?;
+
+        // Create session manager
+        let session_manager = MCPSessionManager::new(auth_headers);
+        let client_info = MCPServerInfo {
+            name: "ccos-introspector".to_string(),
+            version: "1.0.0".to_string(),
+        };
+
+        // Initialize session
+        let session = match session_manager.initialize_session(server_url, &client_info).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("⚠️ Failed to initialize session for output schema introspection: {}", e);
+                return Ok(None);
+            }
+        };
+
+        // Call the tool with test inputs
+        let response = match session_manager
+            .make_request(&session, "tools/call", serde_json::json!({
+                "name": tool.tool_name,
+                "arguments": test_inputs
+            }))
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("⚠️ Failed to call tool for output schema introspection: {}", e);
+                let _ = session_manager.terminate_session(&session).await;
+                return Ok(None);
+            }
+        };
+
+        // Terminate session
+        let _ = session_manager.terminate_session(&session).await;
+
+        // Extract result from response
+        if let Some(result) = response.get("result") {
+            // Infer output schema from the actual response
+            let output_schema = self.infer_type_from_json_value(result)?;
+            eprintln!("✅ Inferred output schema for '{}': {}", tool.tool_name, type_expr_to_rtfs_compact(&output_schema));
+            Ok(Some(output_schema))
+        } else {
+            eprintln!("⚠️ No result in response for output schema introspection");
+            Ok(None)
+        }
+    }
+
+    /// Generate safe test inputs from input schema
+    fn generate_safe_test_inputs(&self, tool: &DiscoveredMCPTool) -> RuntimeResult<serde_json::Value> {
+        let mut inputs = serde_json::Map::new();
+
+        if let Some(input_schema_json) = &tool.input_schema_json {
+            if let Some(properties) = input_schema_json.get("properties").and_then(|p| p.as_object()) {
+                let required: Vec<String> = input_schema_json
+                    .get("required")
+                    .and_then(|r| r.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|s| s.as_str())
+                            .map(|s| s.to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                for (key, prop_schema) in properties {
+                    // Only include required fields or fields with safe defaults
+                    if required.contains(key) {
+                        let default_value = self.generate_safe_default_value(prop_schema);
+                        inputs.insert(key.clone(), default_value);
+                    }
+                }
+            }
+        }
+
+        Ok(serde_json::Value::Object(inputs))
+    }
+
+    /// Generate a safe default value for a JSON schema property
+    fn generate_safe_default_value(&self, schema: &serde_json::Value) -> serde_json::Value {
+        if let Some(type_str) = schema.get("type").and_then(|t| t.as_str()) {
+            match type_str {
+                "string" => {
+                    // Use empty string or a safe default from enum if available
+                    if let Some(enum_vals) = schema.get("enum").and_then(|e| e.as_array()) {
+                        if let Some(first) = enum_vals.first().and_then(|v| v.as_str()) {
+                            return serde_json::Value::String(first.to_string());
+                        }
+                    }
+                    // For string fields, use empty string or a safe placeholder
+                    serde_json::Value::String("".to_string())
+                }
+                "integer" | "number" => {
+                    // Use 0 or minimum value if specified
+                    if let Some(min) = schema.get("minimum").and_then(|m| m.as_i64()) {
+                        serde_json::Value::Number(serde_json::Number::from(min))
+                    } else {
+                        serde_json::Value::Number(serde_json::Number::from(0))
+                    }
+                }
+                "boolean" => serde_json::Value::Bool(false),
+                "array" => serde_json::Value::Array(vec![]),
+                "object" => serde_json::Value::Object(serde_json::Map::new()),
+                _ => serde_json::Value::Null,
+            }
+        } else {
+            serde_json::Value::Null
+        }
+    }
+
+    /// Infer RTFS TypeExpr from a JSON value by analyzing its structure
+    fn infer_type_from_json_value(&self, value: &serde_json::Value) -> RuntimeResult<TypeExpr> {
+        match value {
+            serde_json::Value::Null => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Nil)),
+            serde_json::Value::Bool(_) => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Bool)),
+            serde_json::Value::Number(n) => {
+                if n.is_i64() {
+                    Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Int))
+                } else {
+                    Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Float))
+                }
+            }
+            serde_json::Value::String(_) => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
+            serde_json::Value::Array(arr) => {
+                if arr.is_empty() {
+                    // Empty array - can't infer element type, use :any
+                    Ok(TypeExpr::Vector(Box::new(TypeExpr::Any)))
+                } else {
+                    // Infer element type from first element (or union if different types)
+                    let first_type = self.infer_type_from_json_value(&arr[0])?;
+                    // Check if all elements have the same type
+                    let all_same = arr.iter().all(|item| {
+                        self.infer_type_from_json_value(item)
+                            .map(|t| t == first_type)
+                            .unwrap_or(false)
+                    });
+                    if all_same {
+                        Ok(TypeExpr::Vector(Box::new(first_type)))
+                    } else {
+                        // Mixed types - use :any for element type
+                        Ok(TypeExpr::Vector(Box::new(TypeExpr::Any)))
+                    }
+                }
+            }
+            serde_json::Value::Object(obj) => {
+                let mut entries = Vec::new();
+                for (key, val) in obj {
+                    let value_type = self.infer_type_from_json_value(val)?;
+                    entries.push(MapTypeEntry {
+                        key: Keyword(key.clone()),
+                        value_type: Box::new(value_type),
+                        optional: false, // Can't determine optionality from a single sample
+                    });
+                }
+                Ok(TypeExpr::Map {
+                    entries,
+                    wildcard: None,
+                })
+            }
+        }
     }
 
     /// Create a single capability from an MCP tool
