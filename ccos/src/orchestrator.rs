@@ -1233,13 +1233,14 @@ impl Orchestrator {
     /// Reconstruct full execution context from causal chain for replay
     /// Returns actions with their associated Plans and Intents
     pub fn reconstruct_replay_context(&self, plan_id: &PlanId) -> RuntimeResult<ReplayContext> {
-        // Get all actions for this plan
-        let causal_chain = self
-            .causal_chain
-            .lock()
-            .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))?;
-        let actions = causal_chain.export_plan_actions(plan_id);
-        drop(causal_chain);
+        // Get all actions for this plan (clone to own the data)
+        let actions = {
+            let causal_chain = self
+                .causal_chain
+                .lock()
+                .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))?;
+            causal_chain.export_plan_actions(plan_id).into_iter().cloned().collect::<Vec<_>>()
+        };
 
         // Get the plan
         let plan = self.get_plan_by_id(plan_id)?.ok_or_else(|| {
@@ -1286,7 +1287,7 @@ impl Orchestrator {
         Ok(ReplayContext {
             plan,
             intents,
-            actions: actions.into_iter().cloned().collect(),
+            actions,
         })
     }
 
