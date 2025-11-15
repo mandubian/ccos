@@ -5,7 +5,7 @@
 //! 2. Converting them to structured RTFS intents using AI
 //! 3. Discovering available MCP capabilities dynamically
 //! 4. Generating executable RTFS plans based on intents + capabilities
-//! 5. Executing plans through the CCOS runtime
+//! 5. Executing plans through the CCOS runtime with governance enforcement
 //! 6. Presenting results and demonstrating the full pipeline
 //!
 //! Usage:
@@ -16,30 +16,14 @@
 use clap::Parser;
 use serde_json;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use tokio::sync::RwLock;
+use std::sync::Arc;
 
-// Re-export for shared modules
-pub mod shared;
+mod shared;
 
-// Core CCOS + RTFS imports
-use ccos::capability_marketplace::CapabilityMarketplace;
+use ccos::types::{Intent, Plan, PlanBody};
 use ccos::delegation::ModelRegistry;
-use ccos::types::{Intent, Plan, StorableIntent};
-use rtfs::ast::TopLevel;
-use rtfs::parser;
-use rtfs::runtime::capabilities::registry::CapabilityRegistry;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
-// format_rtfs_value_pretty not available
-
-// CCOS subsystems we wire directly for the demo
-use ccos::causal_chain::CausalChain;
-use ccos::event_sink::CausalChainIntentEventSink;
-use ccos::intent_graph::IntentGraph;
-use ccos::orchestrator::Orchestrator;
-use ccos::plan_archive::PlanArchive;
-use ccos::types::PlanBody;
 
 use shared::CustomOpenRouterModel;
 
@@ -55,10 +39,6 @@ struct Args {
     #[arg(long)]
     goal: Option<String>,
 
-    /// MCP server URL for capability discovery
-    #[arg(long, default_value = "http://localhost:3000")]
-    mcp_server: String,
-
     /// Skip AI generation and use predefined examples
     #[arg(long, default_value_t = false)]
     demo_mode: bool,
@@ -71,16 +51,12 @@ struct Args {
 #[allow(dead_code)]
 struct DemoContext {
     model_registry: ModelRegistry,
-    // CCOS subsystems for persistence, auditing, and execution
-    causal_chain: Arc<Mutex<CausalChain>>,
-    intent_graph: Arc<Mutex<IntentGraph>>,
-    capability_marketplace: Arc<CapabilityMarketplace>,
-    orchestrator: Arc<Orchestrator>,
-    mcp_server_url: String,
+    // CCOS system for governance-enforced execution
+    ccos: Arc<ccos::CCOS>,
 }
 
 impl DemoContext {
-    async fn new(mcp_server_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         println!("🚀 Initializing CCOS + RTFS Demo Context...");
 
         // 1. Set up AI model registry
@@ -100,66 +76,24 @@ impl DemoContext {
             println!("⚠️  No OPENROUTER_API_KEY found - AI calls will fail gracefully");
         }
 
-        // 2. Build CCOS subsystems: CausalChain, IntentGraph (with event sink), CapabilityMarketplace, Orchestrator
-        let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
-        let sink = Arc::new(CausalChainIntentEventSink::new(Arc::clone(&causal_chain)));
-        let intent_graph = Arc::new(Mutex::new(IntentGraph::with_event_sink(sink)?));
-
-        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
-        let capability_marketplace = CapabilityMarketplace::with_causal_chain(
-            Arc::clone(&registry),
-            Some(Arc::clone(&causal_chain)),
-        );
-        // Bootstrap marketplace and register std capabilities
-        capability_marketplace.bootstrap().await?;
-        let capability_marketplace = Arc::new(capability_marketplace);
-        // Default capabilities registered in bootstrap()
-        let plan_archive = Arc::new(PlanArchive::new());
-
-        // Orchestrator that will execute plans and update graph/chain
-        let orchestrator = Arc::new(Orchestrator::new(
-            Arc::clone(&causal_chain),
-            Arc::clone(&intent_graph),
-            Arc::clone(&capability_marketplace),
-            Arc::clone(&plan_archive),
-        ));
+        // 2. Create CCOS system with governance enforcement
+        let ccos = Arc::new(ccos::CCOS::new().await?);
 
         println!("✅ Demo context initialized");
 
         Ok(DemoContext {
             model_registry,
-            causal_chain,
-            intent_graph,
-            capability_marketplace,
-            orchestrator,
-            mcp_server_url: mcp_server_url.to_string(),
+            ccos,
         })
     }
 
-    /// Store the generated intent into the IntentGraph so Governance/Orchestrator can reference it
-    fn persist_intent(&self, intent: &Intent) -> Result<(), Box<dyn std::error::Error>> {
-        let mut st = StorableIntent::new(intent.goal.clone());
-        st.intent_id = intent.intent_id.clone();
-        st.name = intent.name.clone();
-        st.original_request = intent.original_request.clone();
-        // Keep RTFS-specific fields empty for now; constraints/preferences could be round-tripped later
-        st.status = ccos::types::IntentStatus::Active;
-        let mut graph = self
-            .intent_graph
-            .lock()
-            .map_err(|_| "Failed to lock IntentGraph for store")?;
-        graph.store_intent(st)?;
-        Ok(())
-    }
-
-    /// Step 1: Discover available MCP capabilities
+    /// Step 1: Discover available capabilities (mock for demo)
     async fn discover_capabilities(
         &self,
     ) -> Result<Vec<DiscoveredCapability>, Box<dyn std::error::Error>> {
         println!("\n🔍 Step 1: Discovering Available Capabilities");
         println!("=============================================");
 
-        // For demo purposes, skip HTTP calls and use mock capabilities
         println!("📡 Using mock capabilities for demo");
         let capabilities = self.get_mock_capabilities();
 
@@ -369,8 +303,8 @@ Focus on being specific and actionable."#,
                 let intent_block = &ai_response[intent_start..intent_start + intent_end + 1];
 
                 // Parse the intent using RTFS parser
-                let parsed = parser::parse(intent_block)?;
-                if let Some(TopLevel::Expression(expr)) = parsed.first() {
+                let parsed = rtfs::parser::parse(intent_block)?;
+                if let Some(rtfs::ast::TopLevel::Expression(expr)) = parsed.first() {
                     // Convert expression to intent
                     return self.expression_to_intent(expr);
                 }
@@ -559,16 +493,16 @@ Focus on being specific and actionable."#,
         None
     }
 
-    /// Step 4: Execute the plan via the Orchestrator with audited updates and status transitions
+    /// Step 4: Execute the plan through CCOS with governance enforcement
     async fn execute_plan(&self, plan: &Plan) -> Result<Value, Box<dyn std::error::Error>> {
-        println!("\n⚡ Step 4: Executing RTFS Plan");
-        println!("============================");
+        println!("\n⚡ Step 4: Executing RTFS Plan with Governance");
+        println!("=============================================");
 
         println!(
             "🚀 Executing plan: {}",
             plan.name.as_deref().unwrap_or("unnamed")
         );
-        println!("📋 Executing RTFS plan through Orchestrator...");
+        println!("📋 Executing RTFS plan through GovernanceKernel...");
 
         // Security context: allow built-in demo capabilities
         let context = RuntimeContext {
@@ -584,11 +518,11 @@ Focus on being specific and actionable."#,
             println!("🔄 RTFS code: {}", code);
         }
 
-        // Execute and let the orchestrator update the IntentGraph and CausalChain
-        let exec = self.orchestrator.execute_plan(plan, &context).await?;
+        // Execute through CCOS with governance enforcement
+        let exec = self.ccos.validate_and_execute_plan(plan.clone(), &context).await?;
 
         if exec.success {
-            println!("✅ Plan execution completed!");
+            println!("✅ Plan execution completed through governance!");
         } else {
             println!("⚠️  Plan execution failed");
         }
@@ -617,7 +551,7 @@ Focus on being specific and actionable."#,
         println!("{}", self.format_value(result));
 
         // Show a brief audit tail from the CausalChain
-        if let Ok(chain) = self.causal_chain.lock() {
+        if let Ok(chain) = self.ccos.get_causal_chain().lock() {
             let recent = chain.get_all_actions();
             println!("\n🧾 Audit Trail (last {} actions):", recent.len().min(5));
             for action in recent.iter().rev().take(5).rev() {
@@ -634,13 +568,12 @@ Focus on being specific and actionable."#,
         println!("1. ✅ Natural Language → Structured Intent");
         println!("2. ✅ Dynamic Capability Discovery");
         println!("3. ✅ Intent → Executable Plan Generation");
-        println!("4. ✅ Plan Execution with Runtime (audited)");
+        println!("4. ✅ Plan Execution with Governance Enforcement");
         println!("5. ✅ Results Presentation");
     }
 
     fn format_value(&self, value: &Value) -> String {
-        // Use the utility function for consistent RTFS formatting with pretty printing
-        format!("{:?}", value) // format_rtfs_value_pretty not available
+        format!("{:?}", value)
     }
 }
 
@@ -687,14 +620,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🎯 User Request: \"{}\"", user_request);
 
     // Initialize demo context
-    let context = DemoContext::new(&args.mcp_server).await?;
+    let context = DemoContext::new().await?;
 
     // Execute the complete pipeline
     let capabilities = context.discover_capabilities().await?;
     let intent = context.generate_intent(&user_request).await?;
-
-    // Persist the intent into the IntentGraph for audited lifecycle
-    context.persist_intent(&intent)?;
 
     let plan = context.generate_plan(&intent, &capabilities).await?;
     let result = context.execute_plan(&plan).await?;
