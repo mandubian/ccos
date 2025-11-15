@@ -262,6 +262,10 @@ impl MCPSessionHandler {
 
         // Extract result from JSON-RPC response
         if let Some(result) = json.get("result") {
+            // Debug: Log the actual MCP response structure for troubleshooting
+            if let Ok(result_str) = serde_json::to_string_pretty(result) {
+                eprintln!("📦 MCP response result structure:\n{}", result_str);
+            }
             // Convert JSON to RTFS Value
             Ok(json_to_rtfs_value(result))
         } else if let Some(error) = json.get("error") {
