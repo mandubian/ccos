@@ -31,7 +31,7 @@ use ccos::examples_common::capability_helpers::{
 };
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::planner::coverage::{
-    CoverageCheck, CoverageStatus, DefaultGoalCoverageAnalyzer, GoalCoverageAnalyzer,
+    CoverageStatus, DefaultGoalCoverageAnalyzer, GoalCoverageAnalyzer,
     PlanStepSummary,
 };
 use ccos::planner::menu::{menu_entry_from_manifest, CapabilityMenuEntry};
@@ -626,10 +626,82 @@ async fn refresh_capability_menu(
     limit: usize,
 ) -> RuntimeResult<Vec<CapabilityMenuEntry>> {
     catalog.ingest_marketplace(marketplace.as_ref()).await;
+    
+    // Check if marketplace is empty - if so, trigger MCP discovery based on goal/intent
+    let marketplace_empty = marketplace.list_capabilities().await.is_empty();
+    if marketplace_empty {
+        eprintln!("🔍 Marketplace is empty - triggering MCP discovery based on goal/intent");
+        
+        // Extract capability hints from goal/intent
+        let capability_hints = extract_capability_hints_from_goal(goal, intent);
+        
+        // Create discovery engine to trigger MCP introspection
+        use ccos::discovery::engine::DiscoveryEngine;
+        use ccos::discovery::need_extractor::CapabilityNeed;
+        use ccos::intent_graph::IntentGraph;
+        use std::sync::Mutex;
+        
+        let intent_graph = Arc::new(Mutex::new(
+            IntentGraph::new_async(IntentGraphConfig::default())
+                .await
+                .map_err(|e| RuntimeError::Generic(format!("Failed to create IntentGraph: {}", e)))?
+        ));
+        let discovery_engine = DiscoveryEngine::new(
+            Arc::clone(&marketplace),
+            intent_graph,
+        );
+        
+        // Discover capabilities that match the goal/intent
+        for hint in capability_hints {
+            eprintln!("🔍 Discovering capabilities matching: {}", hint);
+            let need = CapabilityNeed::new(
+                hint.clone(),
+                Vec::new(), // No specific inputs required
+                Vec::new(), // No specific outputs required
+                format!("Need for goal: {}", goal),
+            );
+            
+            // Try to discover via MCP registry
+            if let Ok(ccos::discovery::DiscoveryResult::Found(_manifest)) = 
+                discovery_engine.discover_capability(&need).await 
+            {
+                eprintln!("✅ Discovered capability: {}", hint);
+            }
+        }
+        
+        // Re-ingest marketplace after discovery
+        catalog.ingest_marketplace(marketplace.as_ref()).await;
+    }
+    
     let mut menu =
         build_capability_menu_from_catalog(catalog, marketplace, goal, intent, limit).await?;
     annotate_menu_with_readiness(signals, &mut menu);
     Ok(menu)
+}
+
+/// Extract capability hints from goal and intent to guide discovery
+fn extract_capability_hints_from_goal(goal: &str, intent: &Intent) -> Vec<String> {
+    let mut hints = Vec::new();
+    let goal_lower = goal.to_lowercase();
+    
+    // Extract common capability patterns from goal
+    if goal_lower.contains("list") || goal_lower.contains("github") || goal_lower.contains("issue") {
+        hints.push("github.issues.list".to_string());
+        hints.push("mcp.github.list_issues".to_string());
+    }
+    
+    if goal_lower.contains("filter") {
+        hints.push("filter".to_string());
+        hints.push("mcp.core.filter".to_string());
+    }
+    
+    // Extract from intent constraints
+    if let Some(project) = intent.constraints.get("project") {
+        let project_str = value_to_string_repr(project);
+        hints.push(format!("github.{}.list_issues", project_str));
+    }
+    
+    hints
 }
 
 fn annotate_menu_with_readiness(signals: &GoalSignals, entries: &mut [CapabilityMenuEntry]) {
