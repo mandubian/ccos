@@ -2526,15 +2526,32 @@ impl CapabilityMarketplace {
 
             // Extract basic fields
             // First try (capability "id" format (standard RTFS)
-            let id = extract_quoted("(capability \"", &content)
-                .or_else(|| extract_quoted(":id \"", &content))
-                .or_else(|| {
-                    // fallback to filename-based id
-                    path.file_stem()
-                        .and_then(|s| s.to_str())
-                        .map(|s| s.to_string())
-                });
-            let name = extract_quoted(":name", &content).unwrap_or_else(|| "".to_string());
+            // The format is: (capability "id" ...)
+            // Extract the quoted string immediately after "(capability "
+            let id = if let Some(cap_pos) = content.find("(capability ") {
+                // Find the opening quote after "(capability "
+                let after_cap = &content[cap_pos + "(capability ".len()..];
+                if let Some(quote_start) = after_cap.find('"') {
+                    let after_quote = &after_cap[quote_start + 1..];
+                    if let Some(quote_end) = after_quote.find('"') {
+                        Some(after_quote[..quote_end].to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+            .or_else(|| extract_quoted(":id \"", &content))
+            .or_else(|| {
+                // fallback to filename-based id
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+            });
+            let name = extract_quoted(":name \"", &content).unwrap_or_else(|| "".to_string());
             let description =
                 extract_quoted(":description", &content).unwrap_or_else(|| "".to_string());
             let version =
