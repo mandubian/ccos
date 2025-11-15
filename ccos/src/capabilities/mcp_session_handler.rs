@@ -266,7 +266,30 @@ impl MCPSessionHandler {
             if let Ok(result_str) = serde_json::to_string_pretty(result) {
                 eprintln!("📦 MCP response result structure:\n{}", result_str);
             }
-            // Convert JSON to RTFS Value
+            
+            // MCP protocol returns results in a "content" array with text blocks
+            // If the result has a "content" array with a text block containing JSON,
+            // extract and parse the JSON to return the actual structured data
+            if let Some(content_array) = result.get("content").and_then(|c| c.as_array()) {
+                if let Some(first_block) = content_array.first() {
+                    if let Some(text_content) = first_block.get("text").and_then(|t| t.as_str()) {
+                        // Try to parse the text content as JSON
+                        if let Ok(parsed_json) = serde_json::from_str::<serde_json::Value>(text_content) {
+                            eprintln!("✅ Extracted structured data from MCP content text block");
+                            // Return the parsed JSON structure instead of the MCP wrapper
+                            return Ok(json_to_rtfs_value(&parsed_json));
+                        }
+                    }
+                }
+            }
+            
+            // Fallback: Check for structuredContent field (if MCP server provides it)
+            if let Some(structured) = result.get("structuredContent") {
+                eprintln!("✅ Using MCP structuredContent field");
+                return Ok(json_to_rtfs_value(structured));
+            }
+            
+            // Default: Convert JSON to RTFS Value as-is
             Ok(json_to_rtfs_value(result))
         } else if let Some(error) = json.get("error") {
             Err(RuntimeError::Generic(format!("MCP error: {}", error)))
