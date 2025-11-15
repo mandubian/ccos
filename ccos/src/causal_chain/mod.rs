@@ -772,6 +772,88 @@ impl CausalChain {
     ) -> &crate::causal_chain::metrics::WmIngestLatencyMetrics {
         self.metrics.get_wm_ingest_latency_metrics()
     }
+
+    // ---------------------------------------------------------------------
+    // Export and Replay Support
+    // ---------------------------------------------------------------------
+
+    /// Export all actions for a given plan as a serializable format for replay/audit
+    /// Returns actions in chronological order with full context needed for replay
+    /// 
+    /// Actions are logged in real-time as events occur during plan execution.
+    /// This function ensures chronological order by sorting by timestamp.
+    pub fn export_plan_actions(&self, plan_id: &PlanId) -> Vec<&Action> {
+        let mut actions = self.get_actions_for_plan(plan_id);
+        actions.sort_by_key(|a| a.timestamp);
+        actions
+    }
+
+    /// Export all actions for a given intent as a serializable format for replay/audit
+    /// Returns actions in chronological order with full context needed for replay
+    /// 
+    /// Actions are logged in real-time as events occur during intent execution.
+    /// This function ensures chronological order by sorting by timestamp.
+    pub fn export_intent_actions(&self, intent_id: &IntentId) -> Vec<&Action> {
+        let mut actions = self.get_actions_for_intent(intent_id);
+        actions.sort_by_key(|a| a.timestamp);
+        actions
+    }
+
+    /// Export all actions in chronological order for full chain replay
+    /// This preserves the complete immutable audit trail
+    /// 
+    /// Actions are logged in real-time as events occur, so the ledger's Vec insertion
+    /// order should match chronological order. This function sorts by timestamp to
+    /// guarantee chronological correctness even if there are edge cases.
+    pub fn export_all_actions(&self) -> Vec<&Action> {
+        let actions = self.get_all_actions();
+        // Actions are appended to Vec in real-time as events occur, preserving
+        // insertion order. We sort by timestamp to guarantee chronological order.
+        let mut sorted: Vec<&Action> = actions.iter().collect();
+        sorted.sort_by_key(|a| a.timestamp);
+        sorted
+    }
+
+    /// Export actions matching a query in chronological order
+    /// Useful for selective replay of specific event types or time ranges
+    /// 
+    /// Actions are logged in real-time as events occur, preserving chronological order.
+    /// This function ensures chronological order by sorting by timestamp.
+    pub fn export_actions(&self, query: &CausalQuery) -> Vec<&Action> {
+        let mut actions = self.query_actions(query);
+        actions.sort_by_key(|a| a.timestamp);
+        actions
+    }
+
+    /// Get execution trace for a plan - ordered sequence of actions with parent-child relationships
+    /// Returns a tree-structured representation suitable for replay
+    /// 
+    /// Actions are logged in real-time during plan execution, preserving chronological order.
+    /// This function ensures actions are sorted by timestamp for guaranteed chronological correctness.
+    pub fn get_plan_execution_trace(&self, plan_id: &PlanId) -> Vec<&Action> {
+        // Get all plan actions (already in insertion order, which should match chronological)
+        let mut all_actions = self.get_actions_for_plan(plan_id);
+
+        // Sort by timestamp to guarantee chronological order
+        all_actions.sort_by_key(|a| a.timestamp);
+
+        all_actions
+    }
+
+    /// Verify chain integrity and return diagnostic information
+    /// Returns (is_valid, total_actions, first_timestamp, last_timestamp)
+    pub fn verify_and_summarize(
+        &self,
+    ) -> Result<(bool, usize, Option<u64>, Option<u64>), RuntimeError> {
+        let is_valid = self.verify_integrity()?;
+        let total_actions = self.get_action_count();
+        let actions = self.get_all_actions();
+
+        let first_timestamp = actions.first().map(|a| a.timestamp);
+        let last_timestamp = actions.last().map(|a| a.timestamp);
+
+        Ok((is_valid, total_actions, first_timestamp, last_timestamp))
+    }
 }
 
 #[cfg(test)]

@@ -6,8 +6,8 @@
   - A final map `{...}` with keyword outputs extracted from steps
 
 - Step bindings format: `step_N (call :capability.id {arguments})`
-  - Use `:capability.id` (keyword format) for capability IDs
-  - Arguments are a map `{:param1 value1 :param2 value2}`
+  - Use `:capability.id` (keyword format) for capability IDs - **NEVER use strings like `"capability.id"`**
+  - Arguments are a map `{:param1 value1 :param2 value2}` - **ALL map keys must be keywords, not strings**
   - Values can be: literals, symbols (variables), or `(get step_N :output)` expressions
 
 - Value types in arguments:
@@ -20,6 +20,7 @@
 
 - Final output map format: `{:output_name (get step_N :output_name) ...}`
   - Use keywords (`:output`) for map keys
+  - Output names must be lowercase/digit/`-`/`_` slugs so they convert cleanly to RTFS keywords
   - Extract from steps using `(get step_N :output)` 
   - Sort outputs alphabetically by keyword name
 

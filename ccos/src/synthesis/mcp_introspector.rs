@@ -264,13 +264,25 @@ impl MCPIntrospector {
         // Only introspect for read-only operations (safe to call)
         // Skip for operations that might modify data (create, update, delete, etc.)
         let tool_name_lower = tool.tool_name.to_lowercase();
-        let unsafe_verbs = ["create", "update", "delete", "remove", "add", "modify", "write", "post", "put", "patch"];
-        if unsafe_verbs.iter().any(|verb| tool_name_lower.contains(verb)) {
-            eprintln!("⚠️ Skipping output schema introspection for '{}' (potentially unsafe operation)", tool.tool_name);
+        let unsafe_verbs = [
+            "create", "update", "delete", "remove", "add", "modify", "write", "post", "put",
+            "patch",
+        ];
+        if unsafe_verbs
+            .iter()
+            .any(|verb| tool_name_lower.contains(verb))
+        {
+            eprintln!(
+                "⚠️ Skipping output schema introspection for '{}' (potentially unsafe operation)",
+                tool.tool_name
+            );
             return Ok(None);
         }
 
-        eprintln!("🔍 Introspecting output schema for '{}' by calling it once with safe inputs", tool.tool_name);
+        eprintln!(
+            "🔍 Introspecting output schema for '{}' by calling it once with safe inputs",
+            tool.tool_name
+        );
 
         // Generate safe test inputs from input schema
         let test_inputs = self.generate_safe_test_inputs(tool)?;
@@ -283,25 +295,38 @@ impl MCPIntrospector {
         };
 
         // Initialize session
-        let session = match session_manager.initialize_session(server_url, &client_info).await {
+        let session = match session_manager
+            .initialize_session(server_url, &client_info)
+            .await
+        {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("⚠️ Failed to initialize session for output schema introspection: {}", e);
+                eprintln!(
+                    "⚠️ Failed to initialize session for output schema introspection: {}",
+                    e
+                );
                 return Ok(None);
             }
         };
 
         // Call the tool with test inputs
         let response = match session_manager
-            .make_request(&session, "tools/call", serde_json::json!({
-                "name": tool.tool_name,
-                "arguments": test_inputs
-            }))
+            .make_request(
+                &session,
+                "tools/call",
+                serde_json::json!({
+                    "name": tool.tool_name,
+                    "arguments": test_inputs
+                }),
+            )
             .await
         {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("⚠️ Failed to call tool for output schema introspection: {}", e);
+                eprintln!(
+                    "⚠️ Failed to call tool for output schema introspection: {}",
+                    e
+                );
                 let _ = session_manager.terminate_session(&session).await;
                 return Ok(None);
             }
@@ -314,7 +339,11 @@ impl MCPIntrospector {
         if let Some(result) = response.get("result") {
             // Infer output schema from the actual response
             let output_schema = self.infer_type_from_json_value(result)?;
-            eprintln!("✅ Inferred output schema for '{}': {}", tool.tool_name, type_expr_to_rtfs_compact(&output_schema));
+            eprintln!(
+                "✅ Inferred output schema for '{}': {}",
+                tool.tool_name,
+                type_expr_to_rtfs_compact(&output_schema)
+            );
             Ok(Some(output_schema))
         } else {
             eprintln!("⚠️ No result in response for output schema introspection");
@@ -323,11 +352,17 @@ impl MCPIntrospector {
     }
 
     /// Generate safe test inputs from input schema
-    fn generate_safe_test_inputs(&self, tool: &DiscoveredMCPTool) -> RuntimeResult<serde_json::Value> {
+    fn generate_safe_test_inputs(
+        &self,
+        tool: &DiscoveredMCPTool,
+    ) -> RuntimeResult<serde_json::Value> {
         let mut inputs = serde_json::Map::new();
 
         if let Some(input_schema_json) = &tool.input_schema_json {
-            if let Some(properties) = input_schema_json.get("properties").and_then(|p| p.as_object()) {
+            if let Some(properties) = input_schema_json
+                .get("properties")
+                .and_then(|p| p.as_object())
+            {
                 let required: Vec<String> = input_schema_json
                     .get("required")
                     .and_then(|r| r.as_array())
@@ -396,7 +431,9 @@ impl MCPIntrospector {
                     Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Float))
                 }
             }
-            serde_json::Value::String(_) => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
+            serde_json::Value::String(_) => {
+                Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String))
+            }
             serde_json::Value::Array(arr) => {
                 if arr.is_empty() {
                     // Empty array - can't infer element type, use :any

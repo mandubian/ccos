@@ -3,6 +3,7 @@ use std::cmp::{min, Ordering};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::Write as _;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -14,38 +15,44 @@ use rtfs::ast::{Keyword, MapKey};
 use rtfs::config::profile_selection::expand_profiles;
 use rtfs::config::types::{AgentConfig, LlmProfile};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 
 use ccos::arbiter::arbiter_config::LlmProviderType;
+use ccos::arbiter::prompt::{FilePromptStore, PromptManager};
 use ccos::arbiter::ArbiterEngine;
 use ccos::capabilities::{MCPSessionHandler, SessionPoolManager};
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::catalog::{CatalogEntryKind, CatalogFilter, CatalogService};
+use ccos::causal_chain::CausalChain;
 use ccos::examples_common::capability_helpers::{
     count_token_matches, load_override_parameters, minimum_token_matches,
     preload_discovered_capabilities, score_manifest_against_tokens, tokenize_identifier,
 };
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::planner::coverage::{
-    CoverageStatus, DefaultGoalCoverageAnalyzer, GoalCoverageAnalyzer, PlanStepSummary,
+    CoverageCheck, CoverageStatus, DefaultGoalCoverageAnalyzer, GoalCoverageAnalyzer,
+    PlanStepSummary,
 };
 use ccos::planner::menu::{menu_entry_from_manifest, CapabilityMenuEntry};
 use ccos::planner::resolution::{
     CapabilityProvisionAction, CapabilityProvisionFn, PendingCapabilityRequest,
     RequirementResolutionOutcome, RequirementResolver, ResolvedCapabilityInfo,
 };
-use ccos::planner::signals::{CapabilityProvisionSource, GoalRequirement, GoalRequirementKind, GoalSignalSource, GoalSignals, RequirementPriority, RequirementReadiness};
+use ccos::planner::signals::{
+    CapabilityProvisionSource, GoalRequirement, GoalRequirementKind, GoalSignalSource, GoalSignals,
+    RequirementPriority, RequirementReadiness,
+};
 use ccos::synthesis::missing_capability_resolver::{
     MissingCapabilityRequest, ResolutionEvent, ResolutionObserver, ResolutionResult,
 };
-use ccos::types::Plan;
-use ccos::types::{Intent, PlanBody};
+use ccos::types::{Action, ActionType, ExecutionResult, Intent, Plan, PlanBody};
 use ccos::CCOS;
-use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
-use ccos::arbiter::prompt::{FilePromptStore, PromptManager};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map as JsonMap, Value as JsonValue};
+use uuid::Uuid;
 
 static PLAN_CONVERSION_PROMPT_MANAGER: Lazy<PromptManager<FilePromptStore>> = Lazy::new(|| {
     let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/arbiter");
@@ -97,6 +104,41 @@ struct Args {
     /// Stream resolver's own logs (noisy). Off by default; use --trace to see them.
     #[arg(long, default_value_t = false)]
     trace: bool,
+
+    /// Maximum number of plan synthesis attempts before giving up
+    #[arg(long, default_value_t = 3)]
+    max_attempts: usize,
+
+    /// Execute the synthesized plan via the orchestrator once generated
+    #[arg(long, default_value_t = false)]
+    execute_plan: bool,
+
+    /// Export the final JSON plan steps to a file
+    #[arg(long)]
+    export_plan_json: Option<String>,
+
+    /// Export the final RTFS plan body to a file
+    #[arg(long)]
+    export_plan_rtfs: Option<String>,
+
+    /// Provide additional plan input bindings (key=value). Repeat flag to add multiple inputs.
+    #[arg(long = "plan-input", value_parser = parse_plan_input, action = ArgAction::Append)]
+    plan_inputs: Vec<(String, String)>,
+}
+
+fn parse_plan_input(raw: &str) -> Result<(String, String), String> {
+    let mut parts = raw.splitn(2, '=');
+    let key = parts
+        .next()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .ok_or_else(|| "plan-input entries must use key=value syntax".to_string())?;
+    let value = parts
+        .next()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| "plan-input entries require a non-empty value".to_string())?;
+    Ok((key.to_string(), value.to_string()))
 }
 
 #[allow(dead_code)]
@@ -206,7 +248,10 @@ struct PlanStep {
 enum StepInputBinding {
     Literal(String),
     Variable(String),
-    StepOutput { step_id: String, output: String },
+    StepOutput {
+        step_id: String,
+        output: String,
+    },
     /// RTFS code to be embedded directly (for function parameters)
     RtfsCode(String),
 }
@@ -237,6 +282,220 @@ struct UnknownCapabilityUsage {
 struct PlanValidationOutcome {
     schema_errors: Vec<String>,
     unknown_capabilities: Vec<UnknownCapabilityUsage>,
+}
+
+#[derive(Debug, Clone)]
+enum CapabilityDiscoveryStatus {
+    Synthesized,
+    Discovered,
+    PendingExternal,
+    Failed,
+}
+
+#[derive(Debug, Clone)]
+struct CapabilityDiscoveryEvent {
+    capability_id: String,
+    capability_name: Option<String>,
+    status: CapabilityDiscoveryStatus,
+    source: Option<String>,
+    resolution_method: Option<String>,
+    request_id: Option<String>,
+    notes: Vec<String>,
+}
+
+impl CapabilityDiscoveryEvent {
+    fn status_label(&self) -> &'static str {
+        match self.status {
+            CapabilityDiscoveryStatus::Synthesized => "Synthesized",
+            CapabilityDiscoveryStatus::Discovered => "Discovered",
+            CapabilityDiscoveryStatus::PendingExternal => "Pending",
+            CapabilityDiscoveryStatus::Failed => "Failed",
+        }
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        json!({
+            "capability_id": self.capability_id,
+            "capability_name": self.capability_name,
+            "status": self.status_label(),
+            "source": self.source,
+            "resolution_method": self.resolution_method,
+            "request_id": self.request_id,
+            "notes": self.notes,
+        })
+    }
+}
+
+#[derive(Clone)]
+struct PlannerAuditRecorder {
+    chain: Option<Arc<Mutex<CausalChain>>>,
+    plan_id: String,
+    intent_id: String,
+}
+
+impl PlannerAuditRecorder {
+    fn new(
+        chain: Option<Arc<Mutex<CausalChain>>>,
+        plan_id: impl Into<String>,
+        intent_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            chain,
+            plan_id: plan_id.into(),
+            intent_id: intent_id.into(),
+        }
+    }
+
+    fn log_json(&self, stage: &str, payload: &serde_json::Value) {
+        if let Ok(serialized) = serde_json::to_string(payload) {
+            self.log_internal(stage, Some(serialized), None);
+        } else {
+            self.log_internal(
+                stage,
+                None,
+                Some("⚠️ Failed to serialize payload for planner audit"),
+            );
+        }
+    }
+
+    fn log_text(&self, stage: &str, text: &str) {
+        self.log_internal(stage, None, Some(text));
+    }
+
+    fn log_internal(&self, stage: &str, payload_json: Option<String>, note: Option<&str>) {
+        let Some(chain) = &self.chain else {
+            return;
+        };
+
+        let mut action = Action::new(
+            ActionType::InternalStep,
+            self.plan_id.clone(),
+            self.intent_id.clone(),
+        )
+        .with_name(&format!("planner.{}", stage));
+        action.metadata.insert(
+            "planner_stage".to_string(),
+            Value::String(stage.to_string()),
+        );
+        if let Some(payload) = payload_json {
+            action
+                .metadata
+                .insert("payload_json".to_string(), Value::String(payload));
+        }
+        if let Some(text) = note {
+            action
+                .metadata
+                .insert("note".to_string(), Value::String(text.to_string()));
+        }
+
+        if let Ok(mut guard) = chain.lock() {
+            if let Err(err) = guard.append(&action) {
+                eprintln!("⚠️  Failed to append planner audit action: {}", err);
+            }
+        }
+    }
+}
+
+fn render_capability_discovery_summary(events: &[CapabilityDiscoveryEvent]) {
+    if events.is_empty() {
+        return;
+    }
+
+    println!("\n{}", "Capability Discovery Summary".bold().cyan());
+    for event in events {
+        let label = match event.status {
+            CapabilityDiscoveryStatus::Synthesized => "🛠 synthesized".green(),
+            CapabilityDiscoveryStatus::Discovered => "✨ discovered".green(),
+            CapabilityDiscoveryStatus::PendingExternal => "⏳ pending".yellow(),
+            CapabilityDiscoveryStatus::Failed => "❌ failed".red(),
+        };
+        let name = event
+            .capability_name
+            .as_ref()
+            .map(|n| format!(" ({})", n))
+            .unwrap_or_default();
+        println!(
+            "  {} {}{}",
+            label,
+            event.capability_id.as_str().bold(),
+            name.dim()
+        );
+        if let Some(source) = &event.source {
+            println!("     source: {}", source);
+        }
+        if let Some(method) = &event.resolution_method {
+            println!("     method: {}", method);
+        }
+        if let Some(request_id) = &event.request_id {
+            println!("     request id: {}", request_id);
+        }
+        for note in &event.notes {
+            println!("     - {}", note);
+        }
+    }
+}
+
+fn discovery_events_to_json(events: &[CapabilityDiscoveryEvent]) -> serde_json::Value {
+    serde_json::Value::Array(events.iter().map(|event| event.to_json()).collect())
+}
+
+fn serialize_plan_steps_for_logging(steps: &[PlanStep]) -> serde_json::Value {
+    let mut serialized = Vec::with_capacity(steps.len());
+    for step in steps {
+        let mut inputs = JsonMap::new();
+        for (key, binding) in &step.inputs {
+            inputs.insert(key.clone(), binding_to_json(binding));
+        }
+        serialized.push(json!({
+            "id": step.id,
+            "name": step.name,
+            "capability_id": step.capability_id,
+            "inputs": inputs,
+            "outputs": step.outputs,
+            "notes": step.notes,
+        }));
+    }
+    serde_json::Value::Array(serialized)
+}
+
+fn binding_to_json(binding: &StepInputBinding) -> serde_json::Value {
+    match binding {
+        StepInputBinding::Literal(value) => json!({ "literal": value }),
+        StepInputBinding::Variable(name) => json!({ "var": name }),
+        StepInputBinding::StepOutput { step_id, output } => {
+            json!({ "step": step_id, "output": output })
+        }
+        StepInputBinding::RtfsCode(code) => json!({ "rtfs": code }),
+    }
+}
+
+fn constraint_map_to_json(values: &HashMap<String, Value>) -> serde_json::Value {
+    let mut map = JsonMap::new();
+    for (key, value) in values {
+        map.insert(
+            key.clone(),
+            serde_json::Value::String(value_to_string_repr(value)),
+        );
+    }
+    serde_json::Value::Object(map)
+}
+
+fn write_text_file(path: &str, contents: &str) -> std::io::Result<()> {
+    let file_path = Path::new(path);
+    if let Some(parent) = file_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(file_path, contents)
+}
+
+fn execution_result_to_json(result: &ExecutionResult) -> serde_json::Value {
+    json!({
+        "success": result.success,
+        "value": value_to_string_repr(&result.value),
+        "metadata": constraint_map_to_json(&result.metadata),
+    })
 }
 
 async fn build_capability_menu_from_catalog(
@@ -561,7 +820,7 @@ async fn preload_discovered_capabilities_if_needed(
 /// Extract notes from partially parsed JSON, even if some fields are missing
 fn extract_notes_from_partial_json(response: &str) -> Option<String> {
     let json_block = extract_json_block(response)?;
-    
+
     // Try to parse as a generic JSON array
     if let Ok(Value::Vector(items)) = serde_json::from_str::<Value>(json_block) {
         let mut notes = Vec::new();
@@ -610,14 +869,18 @@ async fn propose_plan_steps_with_menu_and_capture(
             value_to_string_repr(success)
         ));
     }
-    
+
     // Include extracted requirements in the initial prompt (especially MustFilter)
     if let Some(signals) = signals {
         let mut requirement_lines = Vec::new();
         for req in &signals.requirements {
             match &req.kind {
-                GoalRequirementKind::MustFilter { field, expected_value } => {
-                    let mut req_desc = "REQUIRED: The plan must include a filtering step".to_string();
+                GoalRequirementKind::MustFilter {
+                    field,
+                    expected_value,
+                } => {
+                    let mut req_desc =
+                        "REQUIRED: The plan must include a filtering step".to_string();
                     if let Some(value) = expected_value {
                         let value_str = match value {
                             Value::String(s) => s.clone(),
@@ -640,10 +903,8 @@ async fn propose_plan_steps_with_menu_and_capture(
                     ));
                 }
                 GoalRequirementKind::MustProduceOutput { key } => {
-                    requirement_lines.push(format!(
-                        "REQUIRED: The plan must produce output '{}'",
-                        key
-                    ));
+                    requirement_lines
+                        .push(format!("REQUIRED: The plan must produce output '{}'", key));
                 }
                 _ => {}
             }
@@ -652,7 +913,7 @@ async fn propose_plan_steps_with_menu_and_capture(
             context_lines.push(format!("Requirements:\n{}", requirement_lines.join("\n")));
         }
     }
-    
+
     let additional_context = if context_lines.is_empty() {
         String::new()
     } else {
@@ -661,7 +922,7 @@ async fn propose_plan_steps_with_menu_and_capture(
     let feedback_block = feedback
         .map(|text| format!("\nPrevious attempt feedback:\n{}\n", text))
         .unwrap_or_default();
-    
+
     let previous_plan_block = previous_plan
         .map(|plan| format!("\nPrevious plan attempt (for reference):\n{}\n", plan))
         .unwrap_or_default();
@@ -889,7 +1150,9 @@ fn plan_step_from_json(raw: PlanStepJson) -> RuntimeResult<PlanStep> {
                         let mut chars = word.chars();
                         match chars.next() {
                             None => String::new(),
-                            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                            Some(first) => {
+                                first.to_uppercase().collect::<String>() + chars.as_str()
+                            }
                         }
                     })
                     .collect::<Vec<_>>()
@@ -931,6 +1194,14 @@ fn looks_like_rtfs_code(s: &str) -> bool {
         || trimmed.contains("λ")
 }
 
+fn looks_like_keyword_identifier(name: &str) -> bool {
+    let trimmed = name.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
 fn validate_plan_steps_against_menu(
     steps: &[PlanStep],
     menu: &[CapabilityMenuEntry],
@@ -968,10 +1239,9 @@ fn validate_plan_steps_against_menu(
             .collect::<HashSet<_>>();
 
         // Normalize parameter names by stripping annotations (e.g., "predicate (function - cannot be passed directly)" -> "predicate")
-        let normalize_param_name = |name: &str| -> String {
-            name.split(" (function").next().unwrap_or(name).to_string()
-        };
-        
+        let normalize_param_name =
+            |name: &str| -> String { name.split(" (function").next().unwrap_or(name).to_string() };
+
         // Build set of allowed parameter names (base names without annotation)
         let mut allowed_inputs_base = HashSet::new();
         for key in &entry.required_inputs {
@@ -982,12 +1252,10 @@ fn validate_plan_steps_against_menu(
             let base = normalize_param_name(key);
             allowed_inputs_base.insert(base);
         }
-        
+
         // Build set of function parameter names (without the annotation suffix)
-        let function_param_names: HashSet<String> = entry
-            .function_parameters()
-            .into_iter()
-            .collect();
+        let function_param_names: HashSet<String> =
+            entry.function_parameters().into_iter().collect();
 
         // Check for missing required inputs (compare using normalized names)
         for required in &entry.required_inputs {
@@ -996,7 +1264,7 @@ fn validate_plan_steps_against_menu(
                 let provided_base = normalize_param_name(provided);
                 provided_base == required_base
             });
-            
+
             if !is_provided {
                 outcome.schema_errors.push(format!(
                     "Step '{}' using '{}' is missing required input '{}' (required: {}; optional: {})",
@@ -1039,10 +1307,15 @@ fn validate_plan_steps_against_menu(
                 ));
             } else {
                 // Check if RTFS code is used for non-function parameters
-                if let Some(binding) = step.inputs.iter().find(|(name, _)| normalize_param_name(name) == provided_base).map(|(_, b)| b) {
+                if let Some(binding) = step
+                    .inputs
+                    .iter()
+                    .find(|(name, _)| normalize_param_name(name) == provided_base)
+                    .map(|(_, b)| b)
+                {
                     // Use the normalized base name
                     let base_name = provided_base;
-                    
+
                     // Check for explicit RTFS code binding
                     if let StepInputBinding::RtfsCode(_) = binding {
                         if !function_param_names.contains(&base_name) {
@@ -1056,7 +1329,8 @@ fn validate_plan_steps_against_menu(
                     }
                     // Check for string literals that look like RTFS code
                     else if let StepInputBinding::Literal(text) = binding {
-                        if looks_like_rtfs_code(text) && !function_param_names.contains(&base_name) {
+                        if looks_like_rtfs_code(text) && !function_param_names.contains(&base_name)
+                        {
                             outcome.schema_errors.push(format!(
                                 "Step '{}' using '{}' provided a string value that looks like RTFS code for parameter '{}', but this parameter is NOT a function type. Parameters must receive values matching their declared type (string, number, etc.). If you need filtering or transformation, use a separate step with a capability that accepts function parameters.",
                                 step.id,
@@ -1066,6 +1340,16 @@ fn validate_plan_steps_against_menu(
                         }
                     }
                 }
+            }
+        }
+
+        for output in &step.outputs {
+            if !looks_like_keyword_identifier(output) {
+                outcome.schema_errors.push(format!(
+                    "Step '{}' output '{}' cannot be converted to an RTFS keyword. Use lowercase letters, digits, '-' or '_' only.",
+                    step.id,
+                    output
+                ));
             }
         }
     }
@@ -1084,7 +1368,7 @@ fn interpret_binding(value: &JsonValue) -> Option<StepInputBinding> {
         JsonValue::Number(n) => Some(StepInputBinding::Literal(n.to_string())),
         JsonValue::Bool(b) => Some(StepInputBinding::Literal(b.to_string())),
         JsonValue::Null => None,
-        
+
         // Objects encode variable or step references
         JsonValue::Object(obj) => {
             // Variable reference: {"var": "user"}
@@ -1093,7 +1377,7 @@ fn interpret_binding(value: &JsonValue) -> Option<StepInputBinding> {
                     return Some(StepInputBinding::Variable(var_name.to_string()));
                 }
             }
-            
+
             // Step output reference: {"step": "step_1", "output": "issues"}
             if let (Some(step_id_val), Some(output_val)) = (obj.get("step"), obj.get("output")) {
                 if let (Some(step_id), Some(output)) = (step_id_val.as_str(), output_val.as_str()) {
@@ -1105,20 +1389,20 @@ fn interpret_binding(value: &JsonValue) -> Option<StepInputBinding> {
                     }
                 }
             }
-            
+
             // RTFS code for function parameters: {"rtfs": "(fn [item] (...))"}
             if let Some(rtfs_code) = obj.get("rtfs").and_then(|v| v.as_str()) {
                 if !rtfs_code.trim().is_empty() {
                     return Some(StepInputBinding::RtfsCode(rtfs_code.to_string()));
                 }
             }
-            
+
             // Unknown object structure - try to serialize as JSON string literal
             serde_json::to_string(value)
                 .ok()
                 .map(StepInputBinding::Literal)
         }
-        
+
         // Arrays are serialized as JSON string literals
         JsonValue::Array(_) => serde_json::to_string(value)
             .ok()
@@ -1270,6 +1554,7 @@ fn format_binding(binding: &StepInputBinding) -> String {
 async fn assemble_plan_from_steps(
     steps: &[PlanStep],
     intent: &Intent,
+    plan_id_override: Option<&str>,
     delegating: Option<&ccos::arbiter::delegating_arbiter::DelegatingArbiter>,
 ) -> RuntimeResult<Plan> {
     let mut step_index = HashMap::new();
@@ -1338,12 +1623,15 @@ async fn assemble_plan_from_steps(
     let use_llm = std::env::var("CCOS_USE_LLM_PLAN_CONVERSION")
         .map(|v| v == "1" || v.to_lowercase() == "true")
         .unwrap_or(true);
-    
+
     let body = if use_llm && delegating.is_some() {
         match render_plan_body_with_llm(steps, intent, delegating.unwrap()).await {
             Ok(rtfs) => rtfs,
             Err(e) => {
-                eprintln!("⚠️  LLM plan conversion failed: {}. Falling back to manual conversion.", e);
+                eprintln!(
+                    "⚠️  LLM plan conversion failed: {}. Falling back to manual conversion.",
+                    e
+                );
                 render_plan_body(steps, &step_index)?
             }
         }
@@ -1402,6 +1690,9 @@ async fn assemble_plan_from_steps(
         HashMap::new(),
     );
     plan.capabilities_required = capabilities_required;
+    if let Some(plan_id) = plan_id_override {
+        plan.plan_id = plan_id.to_string();
+    }
     plan.metadata.insert(
         "planning.pipeline".to_string(),
         Value::String("planner_viz_v2".to_string()),
@@ -1420,13 +1711,11 @@ async fn render_plan_body_with_llm(
     let mut plan_variables = HashSet::new();
     let mut step_dependencies = Vec::new();
 
-    for (idx, step) in steps.iter().enumerate() {
+    for step in steps {
         let mut inputs = HashMap::new();
         for (name, binding) in &step.inputs {
             let value = match binding {
-                StepInputBinding::Literal(text) => {
-                    JsonValue::String(text.clone())
-                }
+                StepInputBinding::Literal(text) => JsonValue::String(text.clone()),
                 StepInputBinding::Variable(var) => {
                     plan_variables.insert(var.clone());
                     serde_json::json!({"var": var})
@@ -1481,16 +1770,17 @@ async fn render_plan_body_with_llm(
     vars.insert("intent_id".to_string(), intent.intent_id.clone());
     vars.insert(
         "intent_name".to_string(),
-        intent.name.as_deref().unwrap_or("unnamed_intent").to_string(),
+        intent
+            .name
+            .as_deref()
+            .unwrap_or("unnamed_intent")
+            .to_string(),
     );
-    vars.insert(
-        "plan_variables".to_string(),
-        {
-            let mut vars: Vec<String> = plan_variables.into_iter().collect();
-            vars.sort();
-            vars.join(", ")
-        },
-    );
+    vars.insert("plan_variables".to_string(), {
+        let mut vars: Vec<String> = plan_variables.into_iter().collect();
+        vars.sort();
+        vars.join(", ")
+    });
     vars.insert(
         "step_dependencies".to_string(),
         if step_dependencies.is_empty() {
@@ -1536,9 +1826,7 @@ async fn render_plan_body_with_llm(
             }
         })
         .ok_or_else(|| {
-            RuntimeError::Generic(
-                "LLM response did not contain RTFS plan code".to_string(),
-            )
+            RuntimeError::Generic("LLM response did not contain RTFS plan code".to_string())
         })?;
 
     Ok(rtfs_code)
@@ -1746,6 +2034,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .map_err(runtime_error)?;
 
+    let plan_run_id = format!("planviz-{}", Uuid::new_v4());
+    let planner_audit = PlannerAuditRecorder::new(
+        Some(ccos.get_causal_chain()),
+        &plan_run_id,
+        &intent.intent_id,
+    );
+    planner_audit.log_json(
+        "intent_initialized",
+        &json!({
+            "goal": goal,
+            "intent_id": intent.intent_id,
+            "plan_id": plan_run_id,
+        }),
+    );
+
     let marketplace = ccos.get_capability_marketplace();
     preload_discovered_capabilities_if_needed(marketplace.as_ref())
         .await
@@ -1754,6 +2057,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let catalog = ccos.get_catalog();
     let mut signals = GoalSignals::from_goal_and_intent(&goal, &intent);
     signals.apply_catalog_search(&catalog, 0.5, 10);
+    if let Ok(signals_json) = serde_json::to_value(&signals) {
+        planner_audit.log_json("signals_initialized", &signals_json);
+    }
     let marketplace_for_resolver = marketplace.clone();
     let resolver_available = ccos.get_missing_capability_resolver().is_some();
     if !resolver_available {
@@ -1763,7 +2069,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         eprintln!("✅ MissingCapabilityResolver is available - capability discovery is enabled");
     }
-    
+
     let resolver_adapter = ccos.get_missing_capability_resolver().map(|resolver| {
         let resolver = resolver.clone();
         let marketplace = marketplace_for_resolver.clone();
@@ -1863,6 +2169,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .await
     .map_err(runtime_error)?;
+    if let Ok(menu_json) = serde_json::to_value(&menu) {
+        planner_audit.log_json("menu_refreshed", &menu_json);
+    }
 
     println!("\n{}", "Capability Menu".bold().cyan());
     for entry in &menu {
@@ -1883,7 +2192,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    const MAX_PLAN_ATTEMPTS: usize = 3;
+    let max_plan_attempts = args.max_attempts.clamp(1, 10);
     let mut attempt = 0usize;
     let mut feedback: Option<String> = None;
     let mut previous_plan: Option<String> = None;
@@ -1891,6 +2200,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let steps = loop {
         attempt += 1;
         let known_inputs = signals.constraints_map();
+        planner_audit.log_json(
+            &format!("plan_attempt_{}_inputs", attempt),
+            &json!({
+                "attempt": attempt,
+                "known_inputs": constraint_map_to_json(&known_inputs),
+            }),
+        );
         let (raw_response, steps_result) = match propose_plan_steps_with_menu_and_capture(
             delegating,
             &goal,
@@ -1907,15 +2223,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Ok((raw, steps)) => {
                 // Store the successfully parsed plan for next iteration
                 previous_plan = Some(raw.clone());
+                planner_audit.log_text(&format!("plan_attempt_{}_raw_response", attempt), &raw);
                 (Some(raw), Ok(steps))
             }
-            Err((raw, err)) => (raw, Err(err)),
+            Err((raw, err)) => {
+                if let Some(ref raw_text) = raw {
+                    planner_audit
+                        .log_text(&format!("plan_attempt_{}_raw_response", attempt), raw_text);
+                }
+                (raw, Err(err))
+            }
         };
-        
+
         let mut steps = match steps_result {
             Ok(steps) => steps,
             Err(err) => {
                 let err_msg = err.to_string();
+                planner_audit.log_text(&format!("plan_attempt_{}_parse_error", attempt), &err_msg);
                 println!(
                     "\n{}",
                     "Plan synthesis failed to produce valid JSON steps:"
@@ -1924,7 +2248,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 );
                 println!("  - {}", err_msg.as_str().red());
 
-                if attempt >= MAX_PLAN_ATTEMPTS {
+                if attempt >= max_plan_attempts {
                     return Err(runtime_error(err));
                 }
 
@@ -1956,7 +2280,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 feedback = Some(feedback_parts.join("\n"));
                 previous_plan = raw_response;
-                
+
                 println!(
                     "{}",
                     "Retrying plan synthesis with corrective feedback...".yellow()
@@ -1964,11 +2288,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 continue;
             }
         };
+        let steps_snapshot = serialize_plan_steps_for_logging(&steps);
+        planner_audit.log_json(
+            &format!("plan_attempt_{}_steps", attempt),
+            &json!({
+                "attempt": attempt,
+                "steps": steps_snapshot,
+            }),
+        );
 
         // Note: previous_plan is already stored in the Ok branch above
         let validation = validate_plan_steps_against_menu(&steps, &menu);
 
         if !validation.schema_errors.is_empty() {
+            planner_audit.log_json(
+                &format!("plan_attempt_{}_validation_failed", attempt),
+                &json!({
+                    "attempt": attempt,
+                    "errors": validation.schema_errors,
+                }),
+            );
             println!(
                 "\n{}",
                 "Schema validation failed for the proposed steps:"
@@ -1979,7 +2318,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("  - {}", message.as_str().red());
             }
 
-            if attempt >= MAX_PLAN_ATTEMPTS {
+            if attempt >= max_plan_attempts {
                 let summary = validation.schema_errors.join("; ");
                 return Err(runtime_error(RuntimeError::Generic(format!(
                     "Planner could not produce schema-compliant steps after {} attempt(s): {}",
@@ -1993,21 +2332,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .map(|msg| format!("- {}", msg))
                 .collect::<Vec<_>>()
                 .join("\n");
-            
+
             // Check if any errors are about RTFS code misuse
-            let has_rtfs_misuse = validation.schema_errors.iter().any(|e| e.contains("RTFS code") || e.contains("looks like RTFS code"));
-            
+            let has_rtfs_misuse = validation
+                .schema_errors
+                .iter()
+                .any(|e| e.contains("RTFS code") || e.contains("looks like RTFS code"));
+
             let mut feedback_parts = vec![format!(
                 "Schema validation errors:\n{}\nEnsure you only use the required/optional inputs listed for each capability and provide every required field.",
                 summary
             )];
-            
+
             if has_rtfs_misuse {
                 feedback_parts.push(
                     "IMPORTANT: Do NOT pass code or function-like syntax as string values to regular parameters. Parameters must receive values matching their declared type:\n  - String parameters expect plain text (e.g., \"label1\", \"RTFS\")\n  - Number parameters expect numbers (e.g., 100, 1)\n  - Array parameters expect JSON arrays (e.g., [\"item1\", \"item2\"])\n  - Function parameters (marked as \"(function - cannot be passed directly)\") can accept RTFS code via {\"rtfs\": \"...\"}\nIf you need filtering or transformation, use a separate step with a capability that accepts function parameters.".to_string()
                 );
             }
-            
+
             // Include previous plan for context
             if let Some(ref prev) = previous_plan {
                 feedback_parts.push(format!(
@@ -2015,7 +2357,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     prev
                 ));
             }
-            
+
             feedback = Some(feedback_parts.join("\n"));
             println!(
                 "{}",
@@ -2033,7 +2375,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         signals.requirements.retain(|req| {
             if let Some(cap_id) = req.capability_id() {
                 // Keep requirement if capability is in current plan OR if it's not a MustCallCapability
-                plan_capability_ids.contains(cap_id) || !matches!(req.kind, GoalRequirementKind::MustCallCapability { .. })
+                plan_capability_ids.contains(cap_id)
+                    || !matches!(req.kind, GoalRequirementKind::MustCallCapability { .. })
             } else {
                 // Keep non-capability requirements (filter, class, etc.)
                 true
@@ -2089,6 +2432,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let plan_summaries = summarize_plan_steps(&steps);
         let coverage = analyzer.evaluate(&signals, &plan_summaries, &menu);
+        if let Ok(coverage_json) = serde_json::to_value(&coverage) {
+            planner_audit.log_json(
+                &format!("plan_attempt_{}_coverage", attempt),
+                &coverage_json,
+            );
+        }
 
         if matches!(coverage.status, CoverageStatus::Satisfied) {
             break steps;
@@ -2107,36 +2456,41 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let mut feedback_messages = Vec::new();
         if !coverage.unmet_requirements.is_empty() {
-            let mut detailed_feedback = format!(
-                "Goal requirements remain unmet:\n{}",
-                coverage_summary
-            );
-            
+            let mut detailed_feedback =
+                format!("Goal requirements remain unmet:\n{}", coverage_summary);
+
             // Add specific hints for MustFilter requirements
-            let filter_requirements: Vec<_> = coverage.unmet_requirements
+            let filter_requirements: Vec<_> = coverage
+                .unmet_requirements
                 .iter()
-                .filter(|gap| matches!(gap.requirement.kind, GoalRequirementKind::MustFilter { .. }))
+                .filter(|gap| {
+                    matches!(gap.requirement.kind, GoalRequirementKind::MustFilter { .. })
+                })
                 .collect();
-            
+
             if !filter_requirements.is_empty() {
                 detailed_feedback.push_str("\n\nHints for filtering:");
-                detailed_feedback.push_str("\n- Add a separate filtering step after fetching the data");
+                detailed_feedback
+                    .push_str("\n- Add a separate filtering step after fetching the data");
                 detailed_feedback.push_str("\n- The filtering step should check if the data contains the expected filter value");
                 detailed_feedback.push_str("\n- Use a capability that can filter records/data, or synthesize one if needed");
-                
+
                 for gap in filter_requirements {
-                    if let GoalRequirementKind::MustFilter { expected_value, .. } = &gap.requirement.kind {
+                    if let GoalRequirementKind::MustFilter { expected_value, .. } =
+                        &gap.requirement.kind
+                    {
                         if let Some(value) = expected_value {
                             let value_str = match value {
                                 rtfs::runtime::values::Value::String(s) => s.clone(),
                                 _ => format!("{:?}", value),
                             };
-                            detailed_feedback.push_str(&format!("\n- Filter value to match: '{}'", value_str));
+                            detailed_feedback
+                                .push_str(&format!("\n- Filter value to match: '{}'", value_str));
                         }
                     }
                 }
             }
-            
+
             feedback_messages.push(detailed_feedback);
         } else {
             feedback_messages.push("Goal requirements remain unmet.".to_string());
@@ -2175,7 +2529,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         if !provision_targets.is_empty() {
             eprintln!("🔍 PROVISION TARGETS: {:?}", provision_targets);
         }
-        let signals_identified: Vec<String> = signals.requirements
+        let signals_identified: Vec<String> = signals
+            .requirements
             .iter()
             .filter(|req| req.readiness == RequirementReadiness::Identified)
             .filter_map(|req| req.capability_id().map(|s| s.to_string()))
@@ -2184,11 +2539,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             eprintln!("🔍 SIGNALS IDENTIFIED: {:?}", signals_identified);
         }
 
-        eprintln!("🔍 CALLING ensure_capabilities with coverage: {} missing, {} incomplete, {} pending",
+        eprintln!(
+            "🔍 CALLING ensure_capabilities with coverage: {} missing, {} incomplete, {} pending",
             coverage.missing_capabilities.len(),
             coverage.incomplete_capabilities.len(),
-            coverage.pending_capabilities.len());
+            coverage.pending_capabilities.len()
+        );
 
+        let mut discovery_events: Vec<CapabilityDiscoveryEvent> = Vec::new();
         match requirement_resolver
             .ensure_capabilities(&coverage, &signals)
             .await
@@ -2223,6 +2581,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 for capability in &capabilities {
                     let capability_id = capability.manifest.id.clone();
                     synthesized_ids.push(capability_id.clone());
+                    discovery_events.push(CapabilityDiscoveryEvent {
+                        capability_id: capability_id.clone(),
+                        capability_name: Some(capability.manifest.name.clone()),
+                        status: CapabilityDiscoveryStatus::Synthesized,
+                        source: capability.provider_info.clone(),
+                        resolution_method: capability.resolution_method.clone(),
+                        request_id: None,
+                        notes: test_summaries.clone(),
+                    });
                     let mut metadata = vec![
                         (
                             "capability_status".to_string(),
@@ -2265,6 +2632,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     signals.set_pending_request_id(&capability_id, None);
                 }
                 if !pending_requests.is_empty() {
+                    for pending in &pending_requests {
+                        discovery_events.push(CapabilityDiscoveryEvent {
+                            capability_id: pending.capability_id.clone(),
+                            capability_name: None,
+                            status: CapabilityDiscoveryStatus::PendingExternal,
+                            source: None,
+                            resolution_method: None,
+                            request_id: pending.request_id.clone(),
+                            notes: pending
+                                .suggested_human_action
+                                .as_ref()
+                                .map(|s| vec![s.clone()])
+                                .unwrap_or_default(),
+                        });
+                    }
                     let (pending_ids, actions) =
                         register_pending_requests(&mut signals, &mut menu, pending_requests);
                     if !pending_ids.is_empty() {
@@ -2297,6 +2679,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     )
                     .await
                     .map_err(runtime_error)?;
+                    if let Ok(menu_json) = serde_json::to_value(&menu) {
+                        planner_audit.log_json("menu_refreshed", &menu_json);
+                    }
+                    if let Ok(menu_json) = serde_json::to_value(&menu) {
+                        planner_audit.log_json("menu_refreshed", &menu_json);
+                    }
                     let mut loop_feedback = format!(
                         "Synthesized capabilities ({}) are available. Regenerate your plan with the updated menu.",
                         synthesized_ids.join(", ")
@@ -2318,15 +2706,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 pending_requests,
             }) => {
                 let mut discovered_ids = Vec::new();
-                let mut id_mappings: HashMap<String, String> = HashMap::new(); // requested -> discovered
                 let mut capability_mappings_for_feedback = Vec::new(); // Track mappings for LLM feedback
-                
+
                 // Track mappings between requested IDs and discovered IDs
                 // by looking at signals requirements that were identified but now resolved
                 for capability in &capabilities {
                     let discovered_id = capability.manifest.id.clone();
                     discovered_ids.push(discovered_id.clone());
-                    
+                    discovery_events.push(CapabilityDiscoveryEvent {
+                        capability_id: discovered_id.clone(),
+                        capability_name: Some(capability.manifest.name.clone()),
+                        status: CapabilityDiscoveryStatus::Discovered,
+                        source: capability.provider_info.clone(),
+                        resolution_method: capability.resolution_method.clone(),
+                        request_id: None,
+                        notes: Vec::new(),
+                    });
+
                     // Find the requested ID by checking unknown capabilities from validation
                     // These are capabilities that were in the plan but not found in the menu
                     let mut metadata = vec![
@@ -2369,6 +2765,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     signals.set_pending_request_id(&discovered_id, None);
                 }
                 if !pending_requests.is_empty() {
+                    for pending in &pending_requests {
+                        discovery_events.push(CapabilityDiscoveryEvent {
+                            capability_id: pending.capability_id.clone(),
+                            capability_name: None,
+                            status: CapabilityDiscoveryStatus::PendingExternal,
+                            source: None,
+                            resolution_method: None,
+                            request_id: pending.request_id.clone(),
+                            notes: pending
+                                .suggested_human_action
+                                .as_ref()
+                                .map(|s| vec![s.clone()])
+                                .unwrap_or_default(),
+                        });
+                    }
                     let (pending_ids, actions) =
                         register_pending_requests(&mut signals, &mut menu, pending_requests);
                     if !pending_ids.is_empty() {
@@ -2393,23 +2804,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 let discovered_id = &capability.manifest.id;
                                 // Check if discovered capability semantically matches requested one
                                 // Simple heuristic: if both end with the same word (e.g., "issues"), match them
-                                let unknown_last = unknown.capability_id.split('.').last().unwrap_or("");
+                                let unknown_last =
+                                    unknown.capability_id.split('.').last().unwrap_or("");
                                 let discovered_last = discovered_id.split('.').last().unwrap_or("");
                                 // Also check for synonym matching (get/list)
-                                if unknown_last == discovered_last 
-                                    || (unknown_last.contains("get") && discovered_last.contains("list"))
-                                    || (unknown_last.contains("list") && discovered_last.contains("get"))
+                                if unknown_last == discovered_last
+                                    || (unknown_last.contains("get")
+                                        && discovered_last.contains("list"))
+                                    || (unknown_last.contains("list")
+                                        && discovered_last.contains("get"))
                                 {
                                     // Found a match! Update the step and signals requirements
                                     let requested_id = unknown.capability_id.clone();
-                                    if let Some(step) = steps.iter_mut().find(|s| s.id == unknown.step_id) {
+                                    if let Some(step) =
+                                        steps.iter_mut().find(|s| s.id == unknown.step_id)
+                                    {
                                         if step.capability_id == requested_id {
                                             eprintln!(
                                                 "🔄 PLAN UPDATE: Step '{}': '{}' -> '{}'",
                                                 step.id, step.capability_id, discovered_id
                                             );
                                             step.capability_id = discovered_id.clone();
-                                            
+
                                             // Track the mapping for feedback to LLM
                                             if requested_id != *discovered_id {
                                                 capability_mappings_for_feedback.push(format!(
@@ -2417,14 +2833,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     requested_id, discovered_id
                                                 ));
                                             }
-                                            
+
                                             // Also update signals requirements to map requested ID -> discovered ID
                                             // This ensures coverage checks will find the discovered capability
                                             eprintln!(
                                                 "🔄 SIGNALS UPDATE: Mapping requirement '{}' -> '{}'",
                                                 requested_id, discovered_id
                                             );
-                                            
+
                                             // Remove the old requirement with requested ID and add one with discovered ID
                                             signals.requirements.retain(|req| {
                                                 if let Some(req_cap_id) = req.capability_id() {
@@ -2433,19 +2849,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     true
                                                 }
                                             });
-                                            
+
                                             // Add a new requirement with the discovered ID to ensure it's tracked
-                                            signals.ensure_must_call_capability(discovered_id, Some(format!(
-                                                "Discovered capability matching requested '{}'",
-                                                requested_id
-                                            )));
+                                            signals.ensure_must_call_capability(
+                                                discovered_id,
+                                                Some(format!(
+                                                    "Discovered capability matching requested '{}'",
+                                                    requested_id
+                                                )),
+                                            );
                                             // Mark it as available since we just discovered it
                                             signals.update_capability_requirement(
                                                 discovered_id,
                                                 RequirementReadiness::Available,
                                                 vec![
-                                                    ("mapped_from".to_string(), Value::String(requested_id.clone())),
-                                                    ("discovery_status".to_string(), Value::String("discovered".to_string())),
+                                                    (
+                                                        "mapped_from".to_string(),
+                                                        Value::String(requested_id.clone()),
+                                                    ),
+                                                    (
+                                                        "discovery_status".to_string(),
+                                                        Value::String("discovered".to_string()),
+                                                    ),
                                                 ],
                                             );
                                             plan_updated = true;
@@ -2468,13 +2893,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             )
                             .await
                             .map_err(runtime_error)?;
-                            
+                            if let Ok(menu_json) = serde_json::to_value(&menu) {
+                                planner_audit.log_json("menu_refreshed", &menu_json);
+                            }
+
                             // NOW validate against the refreshed menu (which includes discovered capabilities with correct schemas)
-                            let updated_validation = validate_plan_steps_against_menu(&steps, &menu);
-                            
+                            let updated_validation =
+                                validate_plan_steps_against_menu(&steps, &menu);
+
                             // Log validation results
                             if !updated_validation.schema_errors.is_empty() {
-                                eprintln!("⚠️ Schema validation errors after capability discovery:");
+                                eprintln!(
+                                    "⚠️ Schema validation errors after capability discovery:"
+                                );
                                 for err in &updated_validation.schema_errors {
                                     eprintln!("  - {}", err);
                                 }
@@ -2485,7 +2916,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     .map(|msg| format!("- {}", msg))
                                     .collect::<Vec<_>>()
                                     .join("\n");
-                                
+
                                 feedback = Some(format!(
                                     "Plan was updated to use discovered capability '{}', but schema validation failed:\n{}\n\nPlease update the input field names to match the discovered capability's schema.",
                                     discovered_ids.join(", "),
@@ -2497,40 +2928,53 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 );
                                 continue; // Re-run synthesis with schema feedback
                             }
-                            
+
                             if !updated_validation.unknown_capabilities.is_empty() {
                                 eprintln!("⚠️ Plan still has {} unknown capabilities after discovery - continuing discovery loop",
                                     updated_validation.unknown_capabilities.len());
                                 // Continue the loop to discover remaining capabilities
                                 for unknown in &updated_validation.unknown_capabilities {
-                                    signals.ensure_must_call_capability(&unknown.capability_id, Some(
-                                        format!("Plan step {} requires capability {}", unknown.step_id, unknown.capability_id)
-                                    ));
+                                    signals.ensure_must_call_capability(
+                                        &unknown.capability_id,
+                                        Some(format!(
+                                            "Plan step {} requires capability {}",
+                                            unknown.step_id, unknown.capability_id
+                                        )),
+                                    );
                                 }
                                 continue;
                             }
-                            
+
                             eprintln!("✅ Plan updated successfully - all steps now reference discovered capabilities with valid inputs");
-                            
+
                             // Re-check coverage to see if all requirements are now satisfied
                             // (e.g., filter requirement might now be satisfied)
                             let updated_plan_summaries = summarize_plan_steps(&steps);
-                            let updated_coverage = analyzer.evaluate(&signals, &updated_plan_summaries, &menu);
-                            
+                            let updated_coverage =
+                                analyzer.evaluate(&signals, &updated_plan_summaries, &menu);
+
                             if matches!(updated_coverage.status, CoverageStatus::Satisfied) {
-                                eprintln!("✅ All requirements satisfied after capability discovery");
+                                eprintln!(
+                                    "✅ All requirements satisfied after capability discovery"
+                                );
                                 break steps; // Exit loop with updated plan
                             } else {
-                                eprintln!("⚠️ Some requirements still unmet after capability discovery:");
+                                eprintln!(
+                                    "⚠️ Some requirements still unmet after capability discovery:"
+                                );
                                 for gap in &updated_coverage.unmet_requirements {
                                     eprintln!("  - {}", gap.explanation);
                                 }
-                                
+
                                 // Check if there are missing capabilities that need to be discovered
                                 // (e.g., filter capability might need to be discovered/scaffolded)
-                                let updated_provision_targets = updated_coverage.provision_targets();
+                                let updated_provision_targets =
+                                    updated_coverage.provision_targets();
                                 if !updated_provision_targets.is_empty() {
-                                    eprintln!("🔍 Attempting to discover remaining capabilities: {:?}", updated_provision_targets);
+                                    eprintln!(
+                                        "🔍 Attempting to discover remaining capabilities: {:?}",
+                                        updated_provision_targets
+                                    );
                                     // Continue the loop - the normal flow will handle discovery of remaining capabilities
                                 } else {
                                     eprintln!("⚠️ No missing capabilities to discover - continuing with synthesis loop");
@@ -2539,7 +2983,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
                     }
-                    
+
                     println!(
                         "{}",
                         format!(
@@ -2548,7 +2992,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         )
                         .green()
                     );
-                    
+
                     // CRITICAL: Refresh menu FIRST with all discovered capabilities before checking for unknowns
                     // This ensures that when we check for unknown capabilities, the menu includes the newly discovered ones
                     menu = refresh_capability_menu(
@@ -2561,7 +3005,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     )
                     .await
                     .map_err(runtime_error)?;
-                    
+
                     // After discovering capabilities and updating the plan,
                     // re-validate to check if there are OTHER missing capabilities to discover
                     // BEFORE re-running synthesis. This is more efficient than re-running synthesis
@@ -2574,19 +3018,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             // Continue the loop to discover remaining capabilities
                             // Add them to signals so they get discovered in the next iteration
                             for unknown in &updated_validation.unknown_capabilities {
-                                signals.ensure_must_call_capability(&unknown.capability_id, Some(
-                                    format!("Plan step {} requires capability {}", unknown.step_id, unknown.capability_id)
-                                ));
+                                signals.ensure_must_call_capability(
+                                    &unknown.capability_id,
+                                    Some(format!(
+                                        "Plan step {} requires capability {}",
+                                        unknown.step_id, unknown.capability_id
+                                    )),
+                                );
                             }
                             // Continue the loop to discover the remaining capabilities
                             continue;
                         }
                     }
-                    
+
                     // Re-check coverage after all discoveries
                     let updated_plan_summaries = summarize_plan_steps(&steps);
-                    let updated_coverage = analyzer.evaluate(&signals, &updated_plan_summaries, &menu);
-                    
+                    let updated_coverage =
+                        analyzer.evaluate(&signals, &updated_plan_summaries, &menu);
+
                     // Check if there are still missing capabilities to discover
                     let remaining_provision_targets = updated_coverage.provision_targets();
                     if !remaining_provision_targets.is_empty() {
@@ -2595,7 +3044,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         // Continue the loop to discover remaining capabilities
                         continue;
                     }
-                    
+
                     // Only re-run synthesis if all capabilities are discovered but requirements still unmet
                     if matches!(updated_coverage.status, CoverageStatus::Satisfied) {
                         eprintln!("✅ All requirements satisfied after capability discovery");
@@ -2607,7 +3056,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             "New capabilities ({}) were registered and are now available in the menu.",
                             discovered_ids.join(", ")
                         );
-                        
+
                         // Inform about capability mappings so LLM knows to use the discovered IDs
                         if !capability_mappings_for_feedback.is_empty() {
                             capability_info.push_str("\n\nImportant capability mappings:");
@@ -2616,16 +3065,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                             capability_info.push_str("\nPlease use the discovered capability IDs (not the requested ones) in your plan.");
                         }
-                        
+
                         // Also inform about plan update if any
                         if plan_updated {
                             capability_info.push_str("\nNote: The current plan has been updated to use the discovered capabilities.");
                         }
-                        
+
                         feedback = Some(capability_info);
                         println!(
                             "{}",
-                            "All missing capabilities discovered - re-running plan synthesis...".yellow()
+                            "All missing capabilities discovered - re-running plan synthesis..."
+                                .yellow()
                         );
                         continue;
                     }
@@ -2635,6 +3085,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 capability_requests,
             }) => {
                 if !capability_requests.is_empty() {
+                    for pending in &capability_requests {
+                        discovery_events.push(CapabilityDiscoveryEvent {
+                            capability_id: pending.capability_id.clone(),
+                            capability_name: None,
+                            status: CapabilityDiscoveryStatus::PendingExternal,
+                            source: None,
+                            resolution_method: None,
+                            request_id: pending.request_id.clone(),
+                            notes: pending
+                                .suggested_human_action
+                                .as_ref()
+                                .map(|s| vec![s.clone()])
+                                .unwrap_or_default(),
+                        });
+                    }
                     let (pending_ids, actions) =
                         register_pending_requests(&mut signals, &mut menu, capability_requests);
                     if !pending_ids.is_empty() {
@@ -2657,6 +3122,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     "{}",
                     format!("Requirement resolution failed: {}", reason).red()
                 );
+                discovery_events.push(CapabilityDiscoveryEvent {
+                    capability_id: "unknown".to_string(),
+                    capability_name: None,
+                    status: CapabilityDiscoveryStatus::Failed,
+                    source: None,
+                    resolution_method: None,
+                    request_id: None,
+                    notes: vec![reason.clone()],
+                });
                 feedback_messages.push(if recoverable {
                     format!(
                         "Automatic capability provisioning failed but is retryable: {}.",
@@ -2671,36 +3145,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             Ok(RequirementResolutionOutcome::NoAction) => {
                 eprintln!("⚠️ RESOLUTION: NoAction - no capabilities were provisioned");
-                
+
                 // Even if no capabilities need to be provisioned, check if requirements are still unmet
                 // (e.g., MustFilter requirement might not be satisfied even though all capabilities exist)
                 if !coverage.unmet_requirements.is_empty() {
                     // Check for unmet MustFilter requirements and try to synthesize a filtering capability
-                    let filter_requirements: Vec<_> = coverage.unmet_requirements
+                    let filter_requirements: Vec<_> = coverage
+                        .unmet_requirements
                         .iter()
-                        .filter(|gap| matches!(gap.requirement.kind, GoalRequirementKind::MustFilter { .. }))
+                        .filter(|gap| {
+                            matches!(gap.requirement.kind, GoalRequirementKind::MustFilter { .. })
+                        })
                         .collect();
-                    
+
                     if !filter_requirements.is_empty() {
                         // Check if there's a filtering capability in the menu
                         let has_filter_capability = menu.iter().any(|entry| {
-                            entry.id.contains("filter") || 
-                            entry.description.to_lowercase().contains("filter") ||
-                            entry.id == "mcp.core.filter"
+                            entry.id.contains("filter")
+                                || entry.description.to_lowercase().contains("filter")
+                                || entry.id == "mcp.core.filter"
                         });
-                        
-                        if !has_filter_capability && attempt < MAX_PLAN_ATTEMPTS {
+
+                        if !has_filter_capability && attempt < max_plan_attempts {
                             eprintln!("⚠️ MustFilter requirement unmet but no filtering capability found - attempting synthesis");
-                            
+
                             // Try to synthesize a filtering capability by adding it to signals as an identified requirement
                             // This will cause the resolver to attempt synthesis/discovery in the next iteration
                             let filter_capability_id = "mcp.core.filter".to_string();
-                            
+
                             // Add as identified requirement so resolver picks it up
                             let mut metadata = BTreeMap::new();
-                            metadata.insert("purpose".to_string(), Value::String("filtering".to_string()));
-                            metadata.insert("reason".to_string(), Value::String("MustFilter requirement unmet".to_string()));
-                            
+                            metadata.insert(
+                                "purpose".to_string(),
+                                Value::String("filtering".to_string()),
+                            );
+                            metadata.insert(
+                                "reason".to_string(),
+                                Value::String("MustFilter requirement unmet".to_string()),
+                            );
+
                             signals.add_requirement(GoalRequirement {
                                 id: format!("filter-requirement-{}", filter_capability_id),
                                 kind: GoalRequirementKind::MustCallCapability {
@@ -2708,7 +3191,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 },
                                 priority: RequirementPriority::Must,
                                 source: GoalSignalSource::Derived {
-                                    rationale: Some("MustFilter requirement unmet - need filtering capability".to_string()),
+                                    rationale: Some(
+                                        "MustFilter requirement unmet - need filtering capability"
+                                            .to_string(),
+                                    ),
                                 },
                                 metadata,
                                 readiness: RequirementReadiness::Identified,
@@ -2716,21 +3202,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 pending_request_id: None,
                                 scaffold_summary: None,
                             });
-                            
+
                             // Force a capability provisioning attempt by calling ensure_capabilities again
                             // This will trigger synthesis/discovery of the filtering capability
                             let mut test_coverage = coverage.clone();
-                            test_coverage.missing_capabilities.push(filter_capability_id.clone());
-                            
-                            match requirement_resolver.ensure_capabilities(&test_coverage, &signals).await {
-                                Ok(RequirementResolutionOutcome::Synthesized { capabilities, .. }) |
-                                Ok(RequirementResolutionOutcome::CapabilitiesDiscovered { capabilities, .. }) => {
+                            test_coverage
+                                .missing_capabilities
+                                .push(filter_capability_id.clone());
+
+                            match requirement_resolver
+                                .ensure_capabilities(&test_coverage, &signals)
+                                .await
+                            {
+                                Ok(RequirementResolutionOutcome::Synthesized {
+                                    capabilities,
+                                    ..
+                                })
+                                | Ok(RequirementResolutionOutcome::CapabilitiesDiscovered {
+                                    capabilities,
+                                    ..
+                                }) => {
                                     // Add synthesized/discovered capabilities to marketplace
                                     for capability in &capabilities {
-                                        marketplace.register_capability_manifest(capability.manifest.clone()).await?;
-                                        eprintln!("✅ Added filtering capability: {}", capability.manifest.id);
+                                        marketplace
+                                            .register_capability_manifest(
+                                                capability.manifest.clone(),
+                                            )
+                                            .await?;
+                                        eprintln!(
+                                            "✅ Added filtering capability: {}",
+                                            capability.manifest.id
+                                        );
                                     }
-                                    
+
                                     // Refresh menu to include the new capability
                                     menu = build_capability_menu_from_catalog(
                                         catalog.clone(),
@@ -2738,8 +3242,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         &goal,
                                         &intent,
                                         20,
-                                    ).await?;
-                                    
+                                    )
+                                    .await?;
+
                                     feedback = Some(format!(
                                         "A filtering capability has been synthesized and added to the menu. Please add a filtering step to your plan using a filtering capability (e.g., 'mcp.core.filter')."
                                     ));
@@ -2748,7 +3253,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         format!(
                                             "Re-running plan synthesis with newly synthesized filtering capability (attempt {}/{})...",
                                             attempt + 1,
-                                            MAX_PLAN_ATTEMPTS
+                                            max_plan_attempts
                                         )
                                         .yellow()
                                     );
@@ -2761,9 +3266,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
                     }
-                    
+
                     // Check if we should retry with feedback
-                    if attempt < MAX_PLAN_ATTEMPTS {
+                    if attempt < max_plan_attempts {
                         eprintln!("⚠️ Requirements still unmet despite all capabilities available - providing feedback for retry");
                         // Feedback has already been prepared above (lines 1741-1775)
                         if feedback.is_none() {
@@ -2774,7 +3279,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             format!(
                                 "Re-running plan synthesis with requirement feedback (attempt {}/{})...",
                                 attempt + 1,
-                                MAX_PLAN_ATTEMPTS
+                                max_plan_attempts
                             )
                             .yellow()
                         );
@@ -2782,7 +3287,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     } else {
                         // Max attempts reached - provide final error
                         let mut error_parts = vec![
-                            "Planner could not satisfy all requirements after maximum attempts.".to_string(),
+                            "Planner could not satisfy all requirements after maximum attempts."
+                                .to_string(),
                         ];
                         error_parts.extend(feedback_messages);
                         return Err(runtime_error(RuntimeError::Generic(error_parts.join("\n"))));
@@ -2793,11 +3299,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             Err(err) => {
                 println!("{}", format!("Requirement resolution error: {}", err).red());
+                discovery_events.push(CapabilityDiscoveryEvent {
+                    capability_id: "unknown".to_string(),
+                    capability_name: None,
+                    status: CapabilityDiscoveryStatus::Failed,
+                    source: None,
+                    resolution_method: None,
+                    request_id: None,
+                    notes: vec![err.to_string()],
+                });
                 feedback_messages.push(format!(
                     "Failed to resolve missing capabilities automatically ({}).",
                     err
                 ));
             }
+        }
+
+        if !discovery_events.is_empty() {
+            render_capability_discovery_summary(&discovery_events);
+            planner_audit.log_json(
+                &format!("plan_attempt_{}_discovery", attempt),
+                &json!({
+                    "attempt": attempt,
+                    "events": discovery_events_to_json(&discovery_events),
+                }),
+            );
         }
 
         annotate_menu_with_readiness(&signals, &mut menu);
@@ -2811,6 +3337,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let final_feedback = feedback_messages.join("\n\n");
         println!("{}", final_feedback);
+        planner_audit.log_text("plan_failure", &final_feedback);
         return Err(runtime_error(RuntimeError::Generic(format!(
             "Planner awaiting external capability provisioning or intervention.\n{}",
             final_feedback
@@ -2819,11 +3346,150 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     render_intent_summary(&intent);
     render_plan_steps(&steps);
+    planner_audit.log_json(
+        "plan_steps_final",
+        &serialize_plan_steps_for_logging(&steps),
+    );
 
-    let plan = assemble_plan_from_steps(&steps, &intent, Some(delegating))
+    let plan = assemble_plan_from_steps(&steps, &intent, Some(&plan_run_id), Some(delegating))
         .await
         .map_err(runtime_error)?;
+    if let PlanBody::Rtfs(rtfs_body) = &plan.body {
+        planner_audit.log_text("plan_body_rtfs", rtfs_body);
+    }
+    planner_audit.log_json(
+        "plan_metadata",
+        &json!({
+            "plan_id": plan.plan_id,
+            "capabilities_required": plan.capabilities_required,
+            "input_schema": plan.input_schema.as_ref().map(|value| value_to_string_repr(value)),
+            "output_schema": plan.output_schema.as_ref().map(|value| value_to_string_repr(value)),
+        }),
+    );
     render_plan_summary(&plan);
+
+    if let Some(path) = args.export_plan_json.as_deref() {
+        let steps_json = serialize_plan_steps_for_logging(&steps);
+        match serde_json::to_string_pretty(&steps_json) {
+            Ok(pretty) => match write_text_file(path, &pretty) {
+                Ok(()) => {
+                    println!("💾 Plan steps JSON saved to {}", path);
+                    planner_audit.log_text(
+                        "plan_export_json",
+                        &format!("wrote plan steps JSON to {}", path),
+                    );
+                }
+                Err(err) => eprintln!("⚠️  Failed to write plan steps JSON to {}: {}", path, err),
+            },
+            Err(err) => eprintln!("⚠️  Failed to serialize plan steps JSON: {}", err),
+        }
+    }
+
+    if let Some(path) = args.export_plan_rtfs.as_deref() {
+        match &plan.body {
+            PlanBody::Rtfs(rtfs_code) => match write_text_file(path, rtfs_code) {
+                Ok(()) => {
+                    println!("💾 Plan RTFS saved to {}", path);
+                    planner_audit
+                        .log_text("plan_export_rtfs", &format!("wrote plan RTFS to {}", path));
+                }
+                Err(err) => eprintln!("⚠️  Failed to write plan RTFS to {}: {}", path, err),
+            },
+            _ => eprintln!(
+                "⚠️  Plan body is not RTFS; skipping RTFS export to {}",
+                path
+            ),
+        }
+    }
+
+    if args.execute_plan {
+        println!("\n{}", "Plan Execution".bold().cyan());
+        let mut context = RuntimeContext::full();
+        let mut runtime_inputs = signals.constraints_map();
+        for (key, value) in runtime_inputs.drain() {
+            context.cross_plan_params.insert(key, value);
+        }
+        for (key, value) in &args.plan_inputs {
+            context
+                .cross_plan_params
+                .insert(key.clone(), Value::String(value.clone()));
+        }
+        match ccos.validate_and_execute_plan(plan.clone(), &context).await {
+            Ok(result) => {
+                println!(
+                    "{} {}",
+                    "✅ Execution result:".green(),
+                    value_to_string_repr(&result.value)
+                );
+                planner_audit.log_json("plan_execution_result", &execution_result_to_json(&result));
+
+                // Export and summarize causal chain for audit/replay
+                let causal_chain = ccos.get_causal_chain();
+                let chain_guard = causal_chain.lock().unwrap();
+
+                // Export plan actions for replay
+                let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+                println!(
+                    "\n{} {} actions logged to causal chain",
+                    "📋 Causal Chain:".bold().cyan(),
+                    plan_actions.len()
+                );
+
+                // Verify chain integrity
+                match chain_guard.verify_and_summarize() {
+                    Ok((is_valid, total_actions, first_ts, last_ts)) => {
+                        if is_valid {
+                            println!("  ✅ Chain integrity verified");
+                        } else {
+                            eprintln!("  ⚠️ Chain integrity check failed");
+                        }
+                        println!("  📊 Total actions in chain: {}", total_actions);
+                        if let (Some(first), Some(last)) = (first_ts, last_ts) {
+                            let duration_ms = last.saturating_sub(first);
+                            println!("  ⏱️ Duration: {}ms", duration_ms);
+                        }
+
+                        // Log plan trace for audit
+                        let trace = chain_guard.get_plan_execution_trace(&plan.plan_id);
+                        planner_audit.log_json(
+                            "plan_execution_trace",
+                            &json!({
+                                "plan_id": plan.plan_id,
+                                "action_count": trace.len(),
+                                "actions": trace.iter().map(|a| json!({
+                                    "action_id": a.action_id,
+                                    "type": format!("{:?}", a.action_type),
+                                    "function_name": a.function_name,
+                                    "timestamp": a.timestamp,
+                                    "parent_action_id": a.parent_action_id,
+                                    "success": a.result.as_ref().map(|r| r.success),
+                                })).collect::<Vec<_>>(),
+                            }),
+                        );
+                    }
+                    Err(err) => {
+                        eprintln!("  ⚠️ Failed to verify chain: {}", err);
+                    }
+                }
+            }
+            Err(err) => {
+                eprintln!("❌ Plan execution failed: {}", err);
+                planner_audit.log_text("plan_execution_error", &err.to_string());
+
+                // Still export what we have in the causal chain
+                let causal_chain = ccos.get_causal_chain();
+                let chain_guard = causal_chain.lock().unwrap();
+                let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+                if !plan_actions.is_empty() {
+                    println!(
+                        "\n{} {} actions logged before failure",
+                        "📋 Causal Chain:".bold().cyan(),
+                        plan_actions.len()
+                    );
+                }
+            }
+        }
+    }
 
     print_architecture_summary(&agent_config, args.profile.as_deref());
 
@@ -2885,6 +3551,44 @@ fn render_plan_summary(plan: &Plan) {
         other => {
             println!("  plan body: {:?}", other);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keyword_identifier_detection() {
+        assert!(looks_like_keyword_identifier("valid_output"));
+        assert!(!looks_like_keyword_identifier("Invalid Output"));
+        assert!(!looks_like_keyword_identifier("with.dot"));
+    }
+
+    #[test]
+    fn test_serialize_plan_steps_for_logging_contains_bindings() {
+        let step = PlanStep {
+            id: "step_1".to_string(),
+            name: "Fetch Issues".to_string(),
+            capability_id: "mcp.github.list_issues".to_string(),
+            inputs: vec![(
+                "owner".to_string(),
+                StepInputBinding::Literal("mandubian".to_string()),
+            )],
+            outputs: vec!["issues".to_string()],
+            notes: None,
+        };
+
+        let serialized = serialize_plan_steps_for_logging(&[step]);
+        let serialized_str = serialized.to_string();
+        assert!(
+            serialized_str.contains("\"owner\""),
+            "expected owner binding in serialized plan steps"
+        );
+        assert!(
+            serialized_str.contains("\"literal\""),
+            "expected literal binding marker in serialized plan steps"
+        );
     }
 }
 

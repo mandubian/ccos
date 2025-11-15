@@ -59,20 +59,20 @@ impl Default for MissingCapabilityFeatureFlags {
     fn default() -> Self {
         Self {
             // Conservative defaults for production
-            enabled: false,                // Disabled by default
-            runtime_detection: false,      // Disabled by default
-            auto_resolution: false,        // Disabled by default
-            mcp_registry_enabled: true,    // Safe to enable
-            importers_enabled: false,      // Disabled by default (requires review)
-            http_wrapper_enabled: false,   // Disabled by default (security risk)
-            llm_synthesis_enabled: false,  // Disabled by default (requires review)
-            web_search_enabled: false,     // Disabled by default (external dependency)
-            continuous_resolution: false,  // Disabled by default
-            auto_resume_enabled: false,    // Disabled by default
-            human_approval_required: true, // Always require human approval
-            audit_logging_enabled: true,   // Always enable audit logging
-            validation_enabled: true,      // Always enable validation
-            cli_tooling_enabled: true,     // Safe to enable
+            enabled: false,                             // Disabled by default
+            runtime_detection: false,                   // Disabled by default
+            auto_resolution: false,                     // Disabled by default
+            mcp_registry_enabled: true,                 // Safe to enable
+            importers_enabled: false,                   // Disabled by default (requires review)
+            http_wrapper_enabled: false,                // Disabled by default (security risk)
+            llm_synthesis_enabled: false,               // Disabled by default (requires review)
+            web_search_enabled: false,                  // Disabled by default (external dependency)
+            continuous_resolution: false,               // Disabled by default
+            auto_resume_enabled: false,                 // Disabled by default
+            human_approval_required: true,              // Always require human approval
+            audit_logging_enabled: true,                // Always enable audit logging
+            validation_enabled: true,                   // Always enable validation
+            cli_tooling_enabled: true,                  // Safe to enable
             output_schema_introspection_enabled: false, // Disabled by default (requires auth)
         }
     }
@@ -669,7 +669,11 @@ impl FeatureFlagChecker {
     }
 
     pub fn is_output_schema_introspection_enabled(&self) -> bool {
-        self.config.feature_flags.enabled && self.config.feature_flags.output_schema_introspection_enabled
+        self.config.feature_flags.enabled
+            && self
+                .config
+                .feature_flags
+                .output_schema_introspection_enabled
     }
 
     pub fn is_tool_selector_enabled(&self) -> bool {
