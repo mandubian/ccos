@@ -37,6 +37,7 @@ Convert JSON plan steps into a complete RTFS plan expression.
    - Preserve the exact spelling/casing of each parameter name.
    - Apply RTFS code only to parameters explicitly marked as functions in the JSON. For all other parameters, use literals, variables, or prior step outputs.
    - If a capability lacks a filter parameter, add a separate filtering step that consumes previous outputs instead of hacking additional parameters into the capability call.
+   - Ensure every output or map key you reference can become a keyword: lowercase letters, digits, `_` or `-` only (e.g., `filtered_items` → `:filtered_items`). Rename outputs in the JSON before conversion if needed.
 
 6. Output extraction:
    - Extract all outputs from all steps

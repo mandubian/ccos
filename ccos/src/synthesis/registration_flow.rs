@@ -463,9 +463,12 @@ impl RegistrationFlow {
     }
 
     /// Generate a test value from a TypeExpr
-    fn generate_test_value_from_type_expr(&self, type_expr: &rtfs::ast::TypeExpr) -> RuntimeResult<Value> {
+    fn generate_test_value_from_type_expr(
+        &self,
+        type_expr: &rtfs::ast::TypeExpr,
+    ) -> RuntimeResult<Value> {
         use rtfs::ast::{PrimitiveType, TypeExpr};
-        
+
         match type_expr {
             TypeExpr::Primitive(prim) => match prim {
                 PrimitiveType::String => Ok(Value::String("test".to_string())),
@@ -480,7 +483,10 @@ impl RegistrationFlow {
                 let element = self.generate_test_value_from_type_expr(inner)?;
                 Ok(Value::Vector(vec![element]))
             }
-            TypeExpr::Map { entries, wildcard: _ } => {
+            TypeExpr::Map {
+                entries,
+                wildcard: _,
+            } => {
                 use rtfs::ast::MapKey;
                 let mut map = HashMap::new();
                 for entry in entries {
@@ -491,8 +497,8 @@ impl RegistrationFlow {
                 Ok(Value::Map(map))
             }
             TypeExpr::Any => Ok(Value::String("test".to_string())), // Fallback for :any
-            TypeExpr::Never => Ok(Value::Nil), // :never - use nil as fallback
-            _ => Ok(Value::String("test".to_string())), // Fallback for other types
+            TypeExpr::Never => Ok(Value::Nil),                      // :never - use nil as fallback
+            _ => Ok(Value::String("test".to_string())),             // Fallback for other types
         }
     }
 }

@@ -17,8 +17,8 @@ use tokio::sync::RwLock;
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::causal_chain::CausalChain;
 use ccos::event_sink::CausalChainIntentEventSink;
+use ccos::governance_kernel::GovernanceKernel;
 use ccos::intent_graph::IntentGraph;
-use ccos::orchestrator::Orchestrator;
 use ccos::plan_archive::PlanArchive;
 use ccos::types::StorableIntent;
 use ccos::types::{
@@ -79,12 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
     let marketplace = Arc::new(marketplace);
     let plan_archive = Arc::new(PlanArchive::new());
-    let orchestrator = Arc::new(Orchestrator::new(
-        Arc::clone(&causal_chain),
-        Arc::clone(&intent_graph),
-        Arc::clone(&marketplace),
-        Arc::clone(&plan_archive),
-    ));
+    let governance_kernel = Arc::new(GovernanceKernel::new(Arc::clone(&causal_chain)));
 
     // --- Build a graph ---
     // Root intent
@@ -321,7 +316,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     execute_intent_with_plan(
         &intent_graph,
         &causal_chain,
-        &orchestrator,
+        &governance_kernel,
         &fetch,
         &fetch_plan,
         &ctx,
@@ -334,7 +329,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         execute_intent_with_plan(
             &intent_graph,
             &causal_chain,
-            &orchestrator,
+            &governance_kernel,
             &analyze,
             &analyze_plan,
             &ctx,
@@ -350,7 +345,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         execute_intent_with_plan(
             &intent_graph,
             &causal_chain,
-            &orchestrator,
+            &governance_kernel,
             &announce,
             &announce_plan,
             &ctx,
@@ -419,7 +414,7 @@ fn deps_completed(intent_graph: &Arc<Mutex<IntentGraph>>, intent_id: &IntentId) 
 async fn execute_intent_with_plan(
     intent_graph: &Arc<Mutex<IntentGraph>>,
     causal_chain: &Arc<Mutex<CausalChain>>,
-    orchestrator: &Arc<Orchestrator>,
+    governance_kernel: &Arc<GovernanceKernel>,
     storable_intent: &StorableIntent,
     plan: &Plan,
     runtime_context: &RuntimeContext,
@@ -453,8 +448,8 @@ async fn execute_intent_with_plan(
         );
     }
 
-    // Execute
-    let exec = orchestrator.execute_plan(plan, runtime_context).await;
+    // Execute through governance-enforced interface
+    let exec = governance_kernel.execute_plan_governed(plan, runtime_context).await;
 
     // Update status + audit
     match exec {

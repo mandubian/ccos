@@ -360,7 +360,7 @@ impl GoalSignals {
     ) {
         // Build search query from goal text + constraints + contextual facts
         let mut query_parts = vec![self.goal_text.clone()];
-        
+
         for constraint in &self.constraints {
             query_parts.push(constraint.name.clone());
             query_parts.push(value_to_lowercase_string(&constraint.value));
@@ -372,11 +372,11 @@ impl GoalSignals {
         }
 
         let query = query_parts.join(" ");
-        
+
         // Search catalog for capabilities matching the goal signals
         let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
         let hits = catalog.search_keyword(&query, Some(&filter), max_results * 2);
-        
+
         // Also try semantic search if keyword search returns few results
         let final_hits = if hits.len() < max_results / 2 {
             let semantic_hits = catalog.search_semantic(&query, Some(&filter), max_results);
@@ -392,7 +392,11 @@ impl GoalSignals {
                 }
             }
             let mut result: Vec<_> = combined.into_values().collect();
-            result.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            result.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             result
         } else {
             hits
@@ -413,7 +417,7 @@ impl GoalSignals {
                     "Matched via catalog search (score: {:.2}, source: {})",
                     hit.score, source_str
                 );
-                
+
                 self.ensure_must_call_capability(&capability_id, Some(rationale));
             }
         }
@@ -506,7 +510,11 @@ fn value_to_lowercase_string(value: &Value) -> String {
                     rtfs::ast::MapKey::Keyword(k) => k.0.clone(),
                     rtfs::ast::MapKey::Integer(i) => i.to_string(),
                 };
-                parts.push(format!("{} {}", key_str.to_lowercase(), value_to_lowercase_string(val)));
+                parts.push(format!(
+                    "{} {}",
+                    key_str.to_lowercase(),
+                    value_to_lowercase_string(val)
+                ));
             }
             parts.join(" ")
         }

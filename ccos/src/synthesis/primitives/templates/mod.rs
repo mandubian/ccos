@@ -578,6 +578,7 @@ fn build_filter_rtfs(
               (let [
                 direct (or
                   (get raw-items :items)
+                  (get raw-items :issues)
                   (get raw-items :results)
                   (get raw-items :data)
                   (get raw-items :edges)
