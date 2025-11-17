@@ -69,6 +69,8 @@ pub struct CCOS {
     catalog: Arc<CatalogService>,
 }
 
+// tests moved to bottom module
+
 /// Options that control the behaviour of the plan auto-repair pipeline.
 #[derive(Debug, Clone)]
 pub struct PlanAutoRepairOptions {
@@ -163,30 +165,55 @@ fn extract_plan_rtfs_from_response(response: &str) -> Option<String> {
         return None;
     }
 
-    if let Some(start) = trimmed.find("```") {
-        let after_start = &trimmed[start + 3..];
-        let mut rest = after_start.trim_start();
-        if let Some(idx) = rest.find('\n') {
-            let (first_line, remainder) = rest.split_at(idx);
-            let normalized = first_line.trim().to_ascii_lowercase();
-            rest = if normalized == "rtfs" || normalized == "lisp" || normalized == "scheme" {
-                remainder.trim_start_matches('\n')
-            } else {
-                remainder.trim_start_matches('\n')
-            };
-        }
-        if let Some(end_idx) = rest.find("```") {
-            let code = rest[..end_idx].trim();
-            if code.starts_with("(plan") {
-                return Some(code.to_string());
+    let mut candidates: Vec<String> = Vec::new();
+
+    // Collect fenced code blocks (```rtfs ...``` etc.) from the response.
+    let mut cursor = trimmed;
+    while let Some(start) = cursor.find("```") {
+        let after_tick = &cursor[start + 3..];
+        let mut block_start = after_tick;
+        if let Some(idx) = after_tick.find('\n') {
+            let first_line = after_tick[..idx].trim().to_ascii_lowercase();
+            let rest = &after_tick[idx + 1..];
+            if first_line == "rtfs" || first_line == "lisp" || first_line == "scheme" {
+                block_start = rest;
             }
+        }
+
+        if let Some(end_idx) = block_start.find("```") {
+            let code = block_start[..end_idx].trim();
+            if !code.is_empty() {
+                candidates.push(code.to_string());
+            }
+            cursor = &block_start[end_idx + 3..];
+        } else {
+            break;
         }
     }
 
+    // Fallback: use the trimmed response with surrounding backticks removed.
     let stripped = trimmed.trim_matches('`').trim();
-    if stripped.starts_with("(plan") {
-        return Some(stripped.to_string());
+    if !stripped.is_empty() {
+        candidates.push(stripped.to_string());
     }
+
+    for candidate in candidates {
+        let candidate_trimmed = candidate.trim();
+        if candidate_trimmed.is_empty() {
+            continue;
+        }
+
+        if candidate_trimmed.starts_with("(plan") {
+            return Some(candidate_trimmed.to_string());
+        }
+
+        if rtfs::parser::parse(candidate_trimmed).is_ok()
+            || rtfs::parser::parse_expression(candidate_trimmed).is_ok()
+        {
+            return Some(candidate_trimmed.to_string());
+        }
+    }
+
     None
 }
 
@@ -1416,6 +1443,11 @@ impl CCOS {
             _ => return Ok(None),
         };
 
+        // No deterministic inlined repairs here; prefer LLM-based auto-repair for
+        // behavioral fixes such as converting stringified JSON into vectors. The
+        // LLM will be provided with a clear diagnostic and grammar hints to suggest
+        // the appropriate RTFS transformation (`ccos.json.parse`) when needed.
+
         let diagnostics = RtfsErrorExplainer::explain(error);
         if diagnostics.is_none()
             && !matches!(
@@ -1507,6 +1539,15 @@ impl CCOS {
 
         Ok(Some(repaired_plan))
     }
+
+    /// Try a deterministic repair specific to a MP/collection mismatch by inserting a
+    /// json.parse call when we detect `(get step_N :content)` used as a `:collection`.
+    /// Returns Some(repaired_plan_source) if a change was applied and the new program
+    /// parses successfully.
+    // Previously we had a deterministic heuristic to insert `ccos.json.parse` into
+    // plans when a collection mismatch was detected. Per request, we removed the
+    // deterministic injection so repairs go through the LLM-driven auto-repair
+    // path which keeps plan repair autonomous and within the RTFS/LLM context.
 
     /// Analyze the current session's interactions and synthesize new capabilities.
     /// This method should be called after successful request processing to enable
@@ -2000,6 +2041,7 @@ impl CCOS {
 mod tests {
     use super::*;
     use rtfs::runtime::security::SecurityLevel;
+    // RuntimeError isn't used by the remaining tests in this module
 
     #[tokio::test]
     async fn test_ccos_end_to_end_flow() {
@@ -2042,4 +2084,6 @@ mod tests {
         // We expect a chain of actions: PlanStarted -> StepStarted -> ... -> StepCompleted -> PlanCompleted
         assert!(actions_len > 2);
     }
+
+    // Heuristic-specific tests removed: deterministic injection is disabled
 }

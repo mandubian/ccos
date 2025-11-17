@@ -114,10 +114,8 @@ pub fn parse_simple_mcp_rtfs(path: &Path) -> RuntimeResult<Option<CapabilityMani
     let extract_quoted = |needle: &str| -> Option<String> {
         content.find(needle).and_then(|pos| {
             let after = &content[pos + needle.len()..];
-            let q1 = after.find('"')?;
-            let rest = &after[q1 + 1..];
-            let q2 = rest.find('"')?;
-            Some(rest[..q2].to_string())
+            let end = after.find('"')?;
+            Some(after[..end].to_string())
         })
     };
 
