@@ -684,3 +684,38 @@ fn test_error_messages() {
         panic!("Expected PredicateViolation error");
     }
 }
+
+#[test]
+fn test_alias_optional_validation() {
+    let validator = TypeValidator::new();
+
+    // Alias-style optional (string?) should accept string values
+    let alias_optional = TypeExpr::Alias(Symbol("string?".to_string()));
+    assert!(validator
+        .validate_value(&Value::String("hello".to_string()), &alias_optional)
+        .is_ok());
+
+    // Nil is permitted for optional aliases
+    assert!(validator
+        .validate_value(&Value::Nil, &alias_optional)
+        .is_ok());
+}
+
+#[test]
+fn test_alias_optional_validation_capitalized_and_int() {
+    let validator = TypeValidator::new();
+
+    // Capitalized alias (String?) should behave similarly
+    let alias_string = TypeExpr::Alias(Symbol("String?".to_string()));
+    assert!(validator
+        .validate_value(&Value::String("hello".to_string()), &alias_string)
+        .is_ok());
+    assert!(validator.validate_value(&Value::Nil, &alias_string).is_ok());
+
+    // Integer alias optional
+    let alias_int = TypeExpr::Alias(Symbol("Int?".to_string()));
+    assert!(validator
+        .validate_value(&Value::Integer(42), &alias_int)
+        .is_ok());
+    assert!(validator.validate_value(&Value::Nil, &alias_int).is_ok());
+}
