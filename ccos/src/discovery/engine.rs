@@ -949,6 +949,12 @@ impl DiscoveryEngine {
                     );
                 }
 
+                let auth_headers_for_schema = if auth_headers.is_empty() {
+                    None
+                } else {
+                    Some(auth_headers.clone())
+                };
+
                 // Check cache first if available
                 let introspection_result = if let Some(ref cache) = self.introspection_cache {
                     match cache.get_mcp(&url) {
@@ -1035,7 +1041,7 @@ impl DiscoveryEngine {
 
                 // Process the introspection result
                 match introspection_result {
-                    Ok(introspection) => {
+                    Ok(mut introspection) => {
                         // Create all capabilities from this server's tools
                         match introspector.create_capabilities_from_mcp(&introspection) {
                             Ok(capabilities) => {
@@ -1182,8 +1188,18 @@ impl DiscoveryEngine {
                                 }
 
                                 // Return the best match if found
-                                if let Some((manifest, score, match_type)) = best_match {
+                                if let Some((mut manifest, score, match_type)) = best_match {
                                     stats.matched_servers.push(server.name.clone());
+                                    self.enrich_manifest_output_schema(
+                                        &mut manifest,
+                                        &introspection,
+                                        &introspector,
+                                        &url,
+                                        &server.name,
+                                        &auth_headers_for_schema,
+                                        servers.len() == 1,
+                                    )
+                                    .await;
                                     if servers.len() == 1 {
                                         eprintln!(
                                             "  ✓ Semantic match found ({}): {} (score: {:.2})",
@@ -1253,7 +1269,18 @@ impl DiscoveryEngine {
                                         if servers.len() == 1 {
                                             eprintln!("  ✓ Substring match found: {}", manifest.id);
                                         }
-                                        return Ok(Some(manifest.clone()));
+                                        let mut matched_manifest = manifest.clone();
+                                        self.enrich_manifest_output_schema(
+                                            &mut matched_manifest,
+                                            &introspection,
+                                            &introspector,
+                                            &url,
+                                            &server.name,
+                                            &auth_headers_for_schema,
+                                            servers.len() == 1,
+                                        )
+                                        .await;
+                                        return Ok(Some(matched_manifest));
                                     }
                                 }
                             }
@@ -2413,20 +2440,7 @@ impl DiscoveryEngine {
         Ok(())
     }
 
-    fn format_metadata_map(metadata: &std::collections::HashMap<String, String>) -> String {
-        if metadata.is_empty() {
-            "  :metadata nil".to_string()
-        } else {
-            let mut entries: Vec<_> = metadata.iter().collect();
-            entries.sort_by(|a, b| a.0.cmp(b.0));
-            let mut lines = Vec::with_capacity(entries.len());
-            for (key, value) in entries {
-                let escaped = value.replace('"', "\\\"");
-                lines.push(format!("    :{} \"{}\"", key, escaped));
-            }
-            format!("  :metadata {{\n{}\n  }}", lines.join("\n"))
-        }
-    }
+    // (moved inside save_mcp_capability function)
 
     /// Save an MCP capability to disk (similar to synthesized capabilities)
     pub async fn save_mcp_capability(&self, manifest: &CapabilityManifest) -> RuntimeResult<()> {
@@ -2518,21 +2532,31 @@ impl DiscoveryEngine {
         let input_schema_str = manifest
             .input_schema
             .as_ref()
-            .map(|s| format!("{:?}", s))
+            .map(type_expr_to_rtfs_compact)
             .unwrap_or_else(|| ":any".to_string());
         let output_schema_str = manifest
             .output_schema
             .as_ref()
-            .map(|s| format!("{:?}", s))
+            .map(type_expr_to_rtfs_compact)
             .unwrap_or_else(|| ":any".to_string());
 
         // Create full capability RTFS file
+        let output_snippet_comment = if let Some(snippet) = manifest.metadata.get("output_snippet")
+        {
+            format!(
+                ";; Sample output format:\n;; {}\n",
+                snippet.lines().take(5).collect::<Vec<_>>().join("\n;; ")
+            )
+        } else {
+            String::new()
+        };
+
         let capability_rtfs = format!(
             r#";; MCP Capability: {}
 ;; Generated: {}
 ;; MCP Server: {}
 ;; Tool: {}
-
+{}
 (capability "{}"
   :name "{}"
   :version "{}"
@@ -2563,6 +2587,7 @@ impl DiscoveryEngine {
             chrono::Utc::now().to_rfc3339(),
             server_url,
             tool_name,
+            output_snippet_comment,
             manifest.id,
             manifest.name,
             manifest.version,
@@ -2595,7 +2620,80 @@ impl DiscoveryEngine {
             _ => "Unknown".to_string(),
         }
     }
+
+    fn format_metadata_map(metadata: &std::collections::HashMap<String, String>) -> String {
+        if metadata.is_empty() {
+            "  :metadata nil".to_string()
+        } else {
+            let mut entries: Vec<_> = metadata.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            let mut lines = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                let escaped = value.replace('"', "\\\"");
+                lines.push(format!("    :{} \"{}\"", key, escaped));
+            }
+            format!("  :metadata {{\n{}\n  }}", lines.join("\n"))
+        }
+    }
+
+    // We deliberately avoid generating synthetic examples from the RTFS `TypeExpr`.
+    // Real snippet examples should be gathered via `introspect_output_schema`
+    // (this calls the MCP tool with safe inputs and returns an actual sample
+    // of the tool's response). If no real sample was captured during
+    // introspection, we leave the manifest without an `output_snippet` so the
+    // generated RTFS file does not contain a fabricated example.
+
+    async fn enrich_manifest_output_schema(
+        &self,
+        manifest: &mut CapabilityManifest,
+        introspection: &crate::synthesis::mcp_introspector::MCPIntrospectionResult,
+        introspector: &crate::synthesis::mcp_introspector::MCPIntrospector,
+        url: &str,
+        server_name: &str,
+        auth_headers: &Option<std::collections::HashMap<String, String>>,
+        log_errors: bool,
+    ) {
+        let headers = match auth_headers {
+            Some(inner) if !inner.is_empty() => inner.clone(),
+            _ => return,
+        };
+
+        if let Some(tool) = introspection
+            .tools
+            .iter()
+            .find(|tool| tool.tool_name == manifest.name)
+        {
+            match introspector
+                .introspect_output_schema(tool, url, server_name, Some(headers))
+                .await
+            {
+                Ok((Some(schema), sample_opt)) => {
+                    manifest.output_schema = Some(schema);
+                    if let Some(snippet) = sample_opt {
+                        manifest
+                            .metadata
+                            .insert("output_snippet".to_string(), snippet);
+                    }
+                }
+                Ok((None, Some(sample))) => {
+                    manifest
+                        .metadata
+                        .insert("output_snippet".to_string(), sample);
+                }
+                Ok((None, None)) => {}
+                Err(err) => {
+                    if log_errors {
+                        eprintln!(
+                            "     ⚠️ Output schema introspection failed for '{}': {}",
+                            manifest.name, err
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
+// Close impl DiscoveryEngine
 
 /// Result of a discovery attempt
 #[derive(Debug, Clone)]

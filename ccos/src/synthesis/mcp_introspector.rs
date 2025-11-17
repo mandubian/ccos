@@ -232,6 +232,12 @@ impl MCPIntrospector {
         }
     }
 
+    /// Helper to convert JSON Schema directly to a `TypeExpr` while preserving optionality
+    pub fn type_expr_from_json_schema(schema: &serde_json::Value) -> RuntimeResult<TypeExpr> {
+        let introspector = MCPIntrospector::new();
+        introspector.json_schema_to_rtfs_type(schema)
+    }
+
     /// Create RTFS capabilities from MCP introspection
     pub fn create_capabilities_from_mcp(
         &self,
@@ -248,17 +254,17 @@ impl MCPIntrospector {
     }
 
     /// Introspect output schema by calling the MCP tool once with safe/dummy inputs
-    /// This is only done if authorized (auth_headers provided) and safe to do so
+    /// Returns (inferred_schema, pretty_sample_json)
     pub async fn introspect_output_schema(
         &self,
         tool: &DiscoveredMCPTool,
         server_url: &str,
         server_name: &str,
         auth_headers: Option<HashMap<String, String>>,
-    ) -> RuntimeResult<Option<TypeExpr>> {
+    ) -> RuntimeResult<(Option<TypeExpr>, Option<String>)> {
         // Only introspect if we have auth (indicates we're authorized to make calls)
         if auth_headers.is_none() {
-            return Ok(None);
+            return Ok((None, None));
         }
 
         // Only introspect for read-only operations (safe to call)
@@ -276,7 +282,7 @@ impl MCPIntrospector {
                 "⚠️ Skipping output schema introspection for '{}' (potentially unsafe operation)",
                 tool.tool_name
             );
-            return Ok(None);
+            return Ok((None, None));
         }
 
         eprintln!(
@@ -285,7 +291,7 @@ impl MCPIntrospector {
         );
 
         // Generate safe test inputs from input schema
-        let test_inputs = self.generate_safe_test_inputs(tool)?;
+        let mut test_inputs = self.generate_safe_test_inputs(tool, false)?;
 
         // Create session manager
         let session_manager = MCPSessionManager::new(auth_headers);
@@ -305,7 +311,7 @@ impl MCPIntrospector {
                     "⚠️ Failed to initialize session for output schema introspection: {}",
                     e
                 );
-                return Ok(None);
+                return Ok((None, None));
             }
         };
 
@@ -328,7 +334,7 @@ impl MCPIntrospector {
                     e
                 );
                 let _ = session_manager.terminate_session(&session).await;
-                return Ok(None);
+                return Ok((None, None));
             }
         };
 
@@ -337,17 +343,99 @@ impl MCPIntrospector {
 
         // Extract result from response
         if let Some(result) = response.get("result") {
-            // Infer output schema from the actual response
+            let mut sample_snippet = serde_json::to_string_pretty(result)
+                .ok()
+                .filter(|s| !s.is_empty());
+            let error_detected = sample_snippet
+                .as_ref()
+                .map(|s| {
+                    let s = s.to_lowercase();
+                    s.contains("missing required")
+                        || s.contains("required parameter")
+                        || s.contains("error")
+                        || s.contains("unauthorized")
+                        || s.contains("forbidden")
+                })
+                .unwrap_or(false);
+
+            if error_detected {
+                if let Some(snippet) = &sample_snippet {
+                    eprintln!(
+                        "⚠️ Introspection encountered an error for '{}': {}",
+                        tool.tool_name, snippet
+                    );
+                } else {
+                    eprintln!(
+                        "⚠️ Introspection returned an error-like response for '{}', but no snippet was captured",
+                        tool.tool_name
+                    );
+                }
+
+                eprintln!(
+                    "⚠️ Introspection result appears invalid for '{}', retrying with plausible inputs...",
+                    tool.tool_name
+                );
+
+                test_inputs = self.generate_safe_test_inputs(tool, true)?;
+                let retry_response = match session_manager
+                    .make_request(
+                        &session,
+                        "tools/call",
+                        serde_json::json!({
+                            "name": tool.tool_name,
+                            "arguments": test_inputs
+                        }),
+                    )
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!(
+                            "⚠️ Retry for output schema introspection failed for '{}': {}",
+                            tool.tool_name, e
+                        );
+                        return Ok((None, sample_snippet));
+                    }
+                };
+
+                if let Some(result2) = retry_response.get("result") {
+                    let output_schema = self.infer_type_from_json_value(result2)?;
+                    sample_snippet = serde_json::to_string_pretty(result2)
+                        .ok()
+                        .filter(|s| !s.is_empty());
+                    eprintln!(
+                        "✅ Inferred output schema + sample (retry) for '{}': schema={}, sample lines={}",
+                        tool.tool_name,
+                        type_expr_to_rtfs_compact(&output_schema),
+                        sample_snippet
+                            .as_ref()
+                            .map(|s| s.lines().count())
+                            .unwrap_or(0)
+                    );
+                    return Ok((Some(output_schema), sample_snippet));
+                }
+
+                eprintln!(
+                    "⚠️ Retry did not yield a valid result for '{}'; storing error snippet",
+                    tool.tool_name
+                );
+                return Ok((None, sample_snippet));
+            }
+
             let output_schema = self.infer_type_from_json_value(result)?;
             eprintln!(
-                "✅ Inferred output schema for '{}': {}",
+                "✅ Inferred output schema + sample for '{}': schema={}, sample lines={}",
                 tool.tool_name,
-                type_expr_to_rtfs_compact(&output_schema)
+                type_expr_to_rtfs_compact(&output_schema),
+                sample_snippet
+                    .as_ref()
+                    .map(|s| s.lines().count())
+                    .unwrap_or(0)
             );
-            Ok(Some(output_schema))
+            Ok((Some(output_schema), sample_snippet))
         } else {
             eprintln!("⚠️ No result in response for output schema introspection");
-            Ok(None)
+            Ok((None, None))
         }
     }
 
@@ -355,6 +443,7 @@ impl MCPIntrospector {
     fn generate_safe_test_inputs(
         &self,
         tool: &DiscoveredMCPTool,
+        plausible: bool,
     ) -> RuntimeResult<serde_json::Value> {
         let mut inputs = serde_json::Map::new();
 
@@ -377,7 +466,8 @@ impl MCPIntrospector {
                 for (key, prop_schema) in properties {
                     // Only include required fields or fields with safe defaults
                     if required.contains(key) {
-                        let default_value = self.generate_safe_default_value(prop_schema);
+                        let default_value =
+                            self.generate_safe_default_value(prop_schema, key, plausible);
                         inputs.insert(key.clone(), default_value);
                     }
                 }
@@ -388,7 +478,12 @@ impl MCPIntrospector {
     }
 
     /// Generate a safe default value for a JSON schema property
-    fn generate_safe_default_value(&self, schema: &serde_json::Value) -> serde_json::Value {
+    fn generate_safe_default_value(
+        &self,
+        schema: &serde_json::Value,
+        name: &str,
+        plausible: bool,
+    ) -> serde_json::Value {
         if let Some(type_str) = schema.get("type").and_then(|t| t.as_str()) {
             match type_str {
                 "string" => {
@@ -399,6 +494,35 @@ impl MCPIntrospector {
                         }
                     }
                     // For string fields, use empty string or a safe placeholder
+                    let name_l = name.to_lowercase();
+                    if plausible {
+                        if name_l.contains("owner") || name_l.contains("user") {
+                            return serde_json::Value::String("octocat".to_string());
+                        }
+                        if name_l.contains("repo") || name_l.contains("repository") {
+                            return serde_json::Value::String("hello-world".to_string());
+                        }
+                        if name_l.contains("sha") || name_l.contains("commit") {
+                            return serde_json::Value::String(
+                                "0000000000000000000000000000000000000000".to_string(),
+                            );
+                        }
+                        if name_l.contains("email") {
+                            return serde_json::Value::String("example@example.com".to_string());
+                        }
+                        if name_l.contains("url") || name_l.contains("uri") {
+                            return serde_json::Value::String("https://example.com".to_string());
+                        }
+                        if name_l.contains("name")
+                            || name_l.contains("title")
+                            || name_l.contains("label")
+                        {
+                            return serde_json::Value::String("example".to_string());
+                        }
+                        if name_l.contains("path") {
+                            return serde_json::Value::String("/path/to/file".to_string());
+                        }
+                    }
                     serde_json::Value::String("".to_string())
                 }
                 "integer" | "number" => {
