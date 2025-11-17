@@ -181,27 +181,36 @@ pub fn calculate_description_match_score_with_embedding(
     for need_kw in &need_keywords {
         if let Some(matched) = all_manifest_keywords.iter().find(|mk| *mk == need_kw) {
             matches += 1;
-            matched_manifest_kws.push(matched);
+            if !matched_manifest_kws.contains(&matched) {
+                matched_manifest_kws.push(matched);
+            }
         } else {
             // Check for partial matches (e.g., "list" in "list issues")
-            if all_manifest_keywords
+            if let Some(partial_match) = all_manifest_keywords
                 .iter()
-                .any(|mk| mk.contains(need_kw.as_str()) || need_kw.contains(mk.as_str()))
+                .find(|mk| mk.contains(need_kw.as_str()) || need_kw.contains(mk.as_str()))
             {
                 matches += 1;
-                if let Some(partial_match) = all_manifest_keywords
-                    .iter()
-                    .find(|mk| mk.contains(need_kw.as_str()) || need_kw.contains(mk.as_str()))
-                {
-                    if !matched_manifest_kws.contains(&partial_match) {
-                        matched_manifest_kws.push(partial_match);
-                    }
+                if !matched_manifest_kws.contains(&partial_match) {
+                    matched_manifest_kws.push(partial_match);
                 }
             } else {
                 mismatches += 1;
             }
         }
     }
+
+    // Penalize for unmatched keywords in the manifest
+    let unmatched_manifest_kws: Vec<&String> = all_manifest_keywords
+        .iter()
+        .filter(|mk| !matched_manifest_kws.contains(mk))
+        .collect();
+
+    let extra_keyword_penalty = if !unmatched_manifest_kws.is_empty() && !all_manifest_keywords.is_empty() {
+        0.5 * (unmatched_manifest_kws.len() as f64 / all_manifest_keywords.len() as f64)
+    } else {
+        0.0
+    };
 
     // Base score from keyword matches
     let keyword_score = if need_keywords.is_empty() {
@@ -241,7 +250,7 @@ pub fn calculate_description_match_score_with_embedding(
     };
 
     // Combined score (capped at 1.0, floor at 0.0)
-    ((keyword_score + ordered_bonus + substring_bonus - mismatch_penalty).max(0.0)).min(1.0)
+    ((keyword_score + ordered_bonus + substring_bonus - mismatch_penalty - extra_keyword_penalty).max(0.0)).min(1.0)
 }
 
 /// Calculate similarity using embedding vectors (more accurate than keyword matching)
