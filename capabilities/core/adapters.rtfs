@@ -32,7 +32,12 @@
   :name "Parse MCP Text Content as JSON"
   :version "1.0.0"
   :description "Extracts and parses a JSON string from a standard MCP text content envelope."
-  :provider "core"
+  :provider :mcp
+  :provider-meta {
+    :server_url "https://core.example.local"
+    :tool_name "adapters"
+    :timeout_ms 30000
+  }
   :permissions []
   :effects []
   :input-schema [:map [:content [:vector [:map [:text :string]]]]]
