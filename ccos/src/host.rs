@@ -322,9 +322,10 @@ impl HostInterface for RuntimeHost {
             action
                 .metadata
                 .insert("simulated".to_string(), Value::Boolean(true));
-            action
-                .metadata
-                .insert("security_level".to_string(), Value::String(security_level_clone.clone()));
+            action.metadata.insert(
+                "security_level".to_string(),
+                Value::String(security_level_clone.clone()),
+            );
         }
 
         let _action_id = self.get_causal_chain()?.append(&action)?;
@@ -332,7 +333,7 @@ impl HostInterface for RuntimeHost {
         // 3. If dry-run and critical, simulate the result instead of executing
         if should_simulate {
             let simulated_result = self.generate_simulated_result(name, args)?;
-            
+
             // Log the simulated result
             let execution_result = ExecutionResult {
                 success: true,
@@ -341,7 +342,10 @@ impl HostInterface for RuntimeHost {
                     let mut meta = std::collections::HashMap::new();
                     meta.insert("dry_run".to_string(), Value::Boolean(true));
                     meta.insert("simulated".to_string(), Value::Boolean(true));
-                    meta.insert("security_level".to_string(), Value::String(security_level_clone));
+                    meta.insert(
+                        "security_level".to_string(),
+                        Value::String(security_level_clone),
+                    );
                     meta
                 },
             };
@@ -582,10 +586,7 @@ impl RuntimeHost {
         } else if id_lower.contains("create") || id_lower.contains("write") {
             // Write operations: return success indicator
             let mut map = std::collections::HashMap::new();
-            map.insert(
-                MapKey::String("success".to_string()),
-                Value::Boolean(true),
-            );
+            map.insert(MapKey::String("success".to_string()), Value::Boolean(true));
             map.insert(
                 MapKey::String("id".to_string()),
                 Value::String("simulated-id".to_string()),

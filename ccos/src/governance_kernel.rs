@@ -77,7 +77,7 @@ impl GovernanceKernel {
         // Read execution mode from plan policies or intent constraints
         // This determines how critical actions should be handled
         let execution_mode = self.detect_execution_mode(&safe_plan, intent_opt.as_ref())?;
-        
+
         // Validate execution mode is compatible with plan security requirements
         self.validate_execution_mode(&safe_plan, intent_opt.as_ref(), &execution_mode)?;
 
@@ -87,14 +87,17 @@ impl GovernanceKernel {
 
         // Store execution mode in context for RuntimeHost to access
         let mut context_with_mode = context.clone();
-        context_with_mode
-            .cross_plan_params
-            .insert("execution_mode".to_string(), Value::String(execution_mode.clone()));
+        context_with_mode.cross_plan_params.insert(
+            "execution_mode".to_string(),
+            Value::String(execution_mode.clone()),
+        );
 
         // --- 6. Execution ---
         // If all checks pass, delegate execution to the Orchestrator.
         // Execution mode is passed via context cross_plan_params for RuntimeHost to use
-        self.orchestrator.execute_plan(&safe_plan, &context_with_mode).await
+        self.orchestrator
+            .execute_plan(&safe_plan, &context_with_mode)
+            .await
     }
 
     /// Retrieves the primary intent associated with the plan, if present.
@@ -222,7 +225,7 @@ impl GovernanceKernel {
 
     /// Detect execution mode from plan policies or intent constraints
     /// Precedence: Plan policy > Intent constraint > Default (full)
-    /// 
+    ///
     /// Execution modes:
     /// - "full": Execute all actions (default)
     /// - "dry-run": Validate plan without executing critical actions
@@ -249,8 +252,8 @@ impl GovernanceKernel {
                 // Parse RTFS keyword or string value
                 let mode = constraint_str
                     .trim()
-                    .trim_start_matches(':')  // Remove RTFS keyword prefix if present
-                    .trim_matches('"')        // Remove quotes if present
+                    .trim_start_matches(':') // Remove RTFS keyword prefix if present
+                    .trim_matches('"') // Remove quotes if present
                     .to_string();
                 if !mode.is_empty() {
                     return Ok(mode);
@@ -290,7 +293,7 @@ impl GovernanceKernel {
 
     /// Detect security level for a capability based on ID patterns or manifest metadata
     /// Returns: "low", "medium", "high", or "critical"
-    /// 
+    ///
     /// This implements pattern-based detection as fallback when capabilities
     /// don't declare security levels in their manifest metadata.
     pub fn detect_security_level(&self, capability_id: &str) -> String {
@@ -341,17 +344,15 @@ impl GovernanceKernel {
     }
 
     /// Check if a capability requires approval based on execution mode and security level
-    pub fn requires_approval(
-        &self,
-        capability_id: &str,
-        execution_mode: &str,
-    ) -> bool {
+    pub fn requires_approval(&self, capability_id: &str, execution_mode: &str) -> bool {
         let security_level = self.detect_security_level(capability_id);
 
         match execution_mode {
             "require-approval" => {
                 // Require approval for medium, high, or critical operations
-                security_level == "medium" || security_level == "high" || security_level == "critical"
+                security_level == "medium"
+                    || security_level == "high"
+                    || security_level == "critical"
             }
             "safe-only" => {
                 // Require approval for high or critical operations

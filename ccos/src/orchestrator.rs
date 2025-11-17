@@ -34,7 +34,8 @@ use std::sync::{Arc, Mutex};
 use super::causal_chain::CausalChain;
 use super::intent_graph::IntentGraph;
 use super::types::{
-    Action, ActionType, ExecutionResult, IntentId, IntentStatus, Plan, PlanBody, PlanId, PlanLanguage,
+    Action, ActionType, ExecutionResult, IntentId, IntentStatus, Plan, PlanBody, PlanId,
+    PlanLanguage,
 };
 use rtfs::ast::{Expression, Literal};
 
@@ -1239,7 +1240,11 @@ impl Orchestrator {
                 .causal_chain
                 .lock()
                 .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))?;
-            causal_chain.export_plan_actions(plan_id).into_iter().cloned().collect::<Vec<_>>()
+            causal_chain
+                .export_plan_actions(plan_id)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
         };
 
         // Get the plan
