@@ -1301,16 +1301,38 @@ fn value_to_string_repr(value: &Value) -> String {
 async fn preload_discovered_capabilities_if_needed(
     marketplace: &CapabilityMarketplace,
 ) -> RuntimeResult<()> {
-    let root = Path::new("capabilities/discovered");
-    if !root.exists() {
-        return Ok(());
+    let mut total_loaded = 0;
+
+    // Load from core capabilities directory
+    let core_root = Path::new("capabilities/core");
+    if core_root.exists() {
+        let loaded = preload_discovered_capabilities(marketplace, core_root).await?;
+        if loaded > 0 {
+            println!(
+                "{}",
+                format!("ℹ️  Loaded {} core capability manifest(s)", loaded).blue()
+            );
+            total_loaded += loaded;
+        }
     }
 
-    let loaded = preload_discovered_capabilities(marketplace, root).await?;
-    if loaded > 0 {
+    // Load from discovered capabilities directory
+    let discovered_root = Path::new("capabilities/discovered");
+    if discovered_root.exists() {
+        let loaded = preload_discovered_capabilities(marketplace, discovered_root).await?;
+        if loaded > 0 {
+            println!(
+                "{}",
+                format!("ℹ️  Loaded {} discovered capability manifest(s)", loaded).blue()
+            );
+            total_loaded += loaded;
+        }
+    }
+
+    if total_loaded > 0 {
         println!(
             "{}",
-            format!("ℹ️  Loaded {} discovered capability manifest(s)", loaded).blue()
+            format!("ℹ️  Total capabilities loaded: {}", total_loaded).blue()
         );
     }
 
