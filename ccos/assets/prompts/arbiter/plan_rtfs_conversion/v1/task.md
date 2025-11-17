@@ -31,6 +31,7 @@ Convert JSON plan steps into a complete RTFS plan expression.
    - Variables: Convert `{"var": "name"}` → `name` (unquoted symbol)
    - Step outputs: Convert `{"step": "step_1", "output": "issues"}` → `(get step_1 :issues)`
    - RTFS code: Keep `{"rtfs": "..."}` → embed code directly (convert `var::name` to `name`)
+   - **CRITICAL**: When converting the `inputs` JSON object to an RTFS map, ensure a direct and exact correspondence: the JSON object's *key* becomes the RTFS map's *keyword*, and the JSON object's *value* (after conversion, e.g., `{"var": "name"}` becomes `name`) becomes the RTFS map's *value*. Maintain this one-to-one mapping without altering the association between a specific key and its original value.
 
 5. Parameter fidelity:
    - Use only the parameter names present in the JSON for that step; never invent new inputs (no ad-hoc `:labels`, `:query`, etc.).

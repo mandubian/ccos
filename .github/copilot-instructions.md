@@ -49,7 +49,7 @@ Add new tests in `tests/` mirroring existing style; use env flags for delegation
 
 ## 4. git and documentation
 - commit: commit as soon as a big-enough feature (not a tiny fix or code update) is implemented, don't wait for the end of worktree or staging area. Use present tense, imperative mood, reference issues/PRs when relevant.
-- PR: includea summary of changes, test results, known issues, and next steps.
+- PR: include a summary of changes, test results, known issues, and next steps.
 - docs: update relevant docs in `docs/ccos/specs/` or `docs/rtfs-2.0/specs/` when changing behavior or adding features. For examples or guides, put it in `docs/ccos/guides` and `docs/rtfs-2.0/guides`. Link to these docs in your PR description.
 
 ---
@@ -96,3 +96,8 @@ cargo run --bin rtfs-compiler -- --input file.rtfs --execute --show-timing --sho
 # For examples requiring an agent config, DO NOT USE config_minimal but this one
 cargo run --example EXAMPLE -- --config ../config/agent_config.toml
 ```
+
+---
+## 8. Code practice
+
+- When developing code, avoid creating solutions that are tailored to a single use case or example. Instead, focus on building reusable and general components. Any specific implementations should be confined to the examples or test cases.

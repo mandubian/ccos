@@ -31,8 +31,7 @@ use ccos::examples_common::capability_helpers::{
 };
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::planner::coverage::{
-    CoverageStatus, DefaultGoalCoverageAnalyzer, GoalCoverageAnalyzer,
-    PlanStepSummary,
+    CoverageStatus, DefaultGoalCoverageAnalyzer, GoalCoverageAnalyzer, PlanStepSummary,
 };
 use ccos::planner::menu::{menu_entry_from_manifest, CapabilityMenuEntry};
 use ccos::planner::resolution::{
@@ -46,13 +45,17 @@ use ccos::planner::signals::{
 use ccos::synthesis::missing_capability_resolver::{
     MissingCapabilityRequest, ResolutionEvent, ResolutionObserver, ResolutionResult,
 };
+use ccos::synthesis::schema_serializer::type_expr_to_rtfs_pretty;
 use ccos::types::{Action, ActionType, ExecutionResult, Intent, Plan, PlanBody};
-use ccos::CCOS;
+use ccos::{PlanAutoRepairOptions, CCOS};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use uuid::Uuid;
+
+mod planner_viz_common;
+use planner_viz_common::{load_agent_config, print_architecture_summary};
 
 static PLAN_CONVERSION_PROMPT_MANAGER: Lazy<PromptManager<FilePromptStore>> = Lazy::new(|| {
     let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/arbiter");
@@ -62,13 +65,26 @@ static PLAN_CONVERSION_PROMPT_MANAGER: Lazy<PromptManager<FilePromptStore>> = La
 static RTFS_CODE_BLOCK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"```(?:rtfs|lisp|scheme)?\s*([\s\S]*?)```").unwrap());
 
+const GENERIC_OPERATION_HINTS: [&str; 8] = [
+    "list",
+    "search",
+    "fetch",
+    "filter",
+    "summarize",
+    "analyze",
+    "classify",
+    "compare",
+];
+const MAX_DISCOVERY_HINT_TOKENS: usize = 8;
+const MAX_COMBINATION_TOKENS: usize = 4;
+
 #[derive(Debug, Serialize)]
 struct PlanStepJsonSerialized {
     id: String,
     name: String,
     capability_id: String,
     inputs: HashMap<String, serde_json::Value>,
-    outputs: Vec<String>,
+    outputs: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     notes: Option<String>,
 }
@@ -112,6 +128,10 @@ struct Args {
     /// Execute the synthesized plan via the orchestrator once generated
     #[arg(long, default_value_t = false)]
     execute_plan: bool,
+
+    /// When provided, attempt automatic plan repair using LLM-driven auto-repair flow
+    #[arg(long, default_value_t = false)]
+    auto_repair: bool,
 
     /// Export the final JSON plan steps to a file
     #[arg(long)]
@@ -240,7 +260,7 @@ struct PlanStep {
     name: String,
     capability_id: String,
     inputs: Vec<(String, StepInputBinding)>,
-    outputs: Vec<String>,
+    outputs: Vec<StepOutput>,
     notes: Option<String>,
 }
 
@@ -256,6 +276,12 @@ enum StepInputBinding {
     RtfsCode(String),
 }
 
+#[derive(Debug, Clone)]
+struct StepOutput {
+    alias: String,
+    source: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct PlanStepJson {
     id: String,
@@ -264,9 +290,23 @@ struct PlanStepJson {
     #[serde(rename = "capability_id")]
     capability_id: String,
     inputs: HashMap<String, JsonValue>,
-    outputs: Vec<String>,
+    outputs: Vec<PlanStepOutputJson>,
     #[serde(default)]
     notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PlanStepOutputJson {
+    Name(String),
+    Mapping {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        output: Option<String>,
+        #[serde(default)]
+        field: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -446,12 +486,13 @@ fn serialize_plan_steps_for_logging(steps: &[PlanStep]) -> serde_json::Value {
         for (key, binding) in &step.inputs {
             inputs.insert(key.clone(), binding_to_json(binding));
         }
+        let outputs: Vec<JsonValue> = step.outputs.iter().map(step_output_to_json).collect();
         serialized.push(json!({
             "id": step.id,
             "name": step.name,
             "capability_id": step.capability_id,
             "inputs": inputs,
-            "outputs": step.outputs,
+            "outputs": outputs,
             "notes": step.notes,
         }));
     }
@@ -466,6 +507,32 @@ fn binding_to_json(binding: &StepInputBinding) -> serde_json::Value {
             json!({ "step": step_id, "output": output })
         }
         StepInputBinding::RtfsCode(code) => json!({ "rtfs": code }),
+    }
+}
+
+fn step_output_to_json(output: &StepOutput) -> JsonValue {
+    let alias = output.alias.trim();
+    let source = output.source.trim();
+    if alias.is_empty() {
+        JsonValue::String(String::new())
+    } else if source.is_empty() || alias == source {
+        JsonValue::String(alias.to_string())
+    } else {
+        let mut obj = JsonMap::with_capacity(2);
+        obj.insert("name".to_string(), JsonValue::String(alias.to_string()));
+        obj.insert("output".to_string(), JsonValue::String(source.to_string()));
+        JsonValue::Object(obj)
+    }
+}
+
+fn display_step_output(output: &StepOutput) -> String {
+    if output.alias.trim().is_empty() {
+        return String::new();
+    }
+    if output.source.trim().is_empty() || output.alias == output.source {
+        output.alias.clone()
+    } else {
+        format!("{} ⇐ {}", output.alias, output.source)
     }
 }
 
@@ -529,6 +596,20 @@ async fn build_capability_menu_from_catalog(
                 continue;
             }
             let mut entry = menu_entry_from_manifest(&manifest, Some(hit.score as f64));
+            // Debug: log manifest input schema and extracted required/optional fields
+            if let Some(schema) = &manifest.input_schema {
+                eprintln!(
+                    "DEBUG: manifest={} input_schema:\n{}",
+                    manifest.id,
+                    type_expr_to_rtfs_pretty(schema)
+                );
+            } else {
+                eprintln!("DEBUG: manifest={} has no input_schema", manifest.id);
+            }
+            eprintln!(
+                "DEBUG: manifest={} required_inputs={:?} optional_inputs={:?}",
+                manifest.id, entry.required_inputs, entry.optional_inputs
+            );
             apply_input_overrides(&mut entry);
             menu.push(entry);
         }
@@ -559,6 +640,19 @@ async fn build_capability_menu_from_catalog(
                 }
                 let score = score_manifest_against_tokens(&manifest, &tokens) as f64;
                 let mut entry = menu_entry_from_manifest(&manifest, Some(score));
+                if let Some(schema) = &manifest.input_schema {
+                    eprintln!(
+                        "DEBUG: manifest={} input_schema:\n{}",
+                        manifest.id,
+                        type_expr_to_rtfs_pretty(schema)
+                    );
+                } else {
+                    eprintln!("DEBUG: manifest={} has no input_schema", manifest.id);
+                }
+                eprintln!(
+                    "DEBUG: manifest={} required_inputs={:?} optional_inputs={:?}",
+                    manifest.id, entry.required_inputs, entry.optional_inputs
+                );
                 apply_input_overrides(&mut entry);
                 seen.insert(entry.id.clone());
                 let matches = count_token_matches(&manifest, &tokens);
@@ -601,38 +695,41 @@ async fn build_capability_menu_from_catalog(
     // (bypassing catalog search - this handles the case where discovery found capabilities
     // but catalog search didn't match them)
     if menu.is_empty() {
-        eprintln!("⚠️ Catalog search returned no capabilities - falling back to marketplace listing");
-        
-        // Try specific common capabilities first
-        let common_capability_ids = vec![
-            "mcp.github.github-mcp.list_issues",
-            "mcp.core.filter",
-            "mcp.filter.filter",
-        ];
-        
-        for capability_id in common_capability_ids {
-            if let Some(manifest) = marketplace.get_capability(capability_id).await {
-                // Filter out meta-capabilities
-                if manifest.id.starts_with("planner.") || manifest.id.starts_with("ccos.") {
-                    continue;
+        eprintln!(
+            "⚠️ Catalog search returned no capabilities - falling back to marketplace listing"
+        );
+
+        let fallback_limit = limit.saturating_sub(menu.len());
+        if fallback_limit > 0 {
+            let fallback_tokens = ensure_goal_tokens(goal, intent);
+            let derived_entries = goal_aligned_marketplace_fallbacks(
+                Arc::clone(&marketplace),
+                &fallback_tokens,
+                fallback_limit,
+            )
+            .await;
+
+            if !derived_entries.is_empty() {
+                eprintln!(
+                    "   ✅ Added {} fallback capability(ies) derived from goal context",
+                    derived_entries.len()
+                );
+                for entry in derived_entries {
+                    eprintln!("      ➕ {}", entry.id);
+                    menu.push(entry);
                 }
-                let trimmed = manifest.id.trim();
-                if trimmed.is_empty() || !trimmed.contains('.') {
-                    continue;
-                }
-                let mut entry = menu_entry_from_manifest(&manifest, Some(1.0));
-                apply_input_overrides(&mut entry);
-                menu.push(entry);
-                eprintln!("✅ Added capability from marketplace fallback: {}", capability_id);
             }
         }
-        
+
         // If still empty, try to get ANY capabilities from marketplace (last resort)
         if menu.is_empty() {
             eprintln!("⚠️ Trying to list all marketplace capabilities as last resort");
             let all_capabilities = marketplace.list_capabilities().await;
-            eprintln!("   Found {} total capability(ies) in marketplace", all_capabilities.len());
-            
+            eprintln!(
+                "   Found {} total capability(ies) in marketplace",
+                all_capabilities.len()
+            );
+
             let mut filtered_count = 0;
             for manifest in all_capabilities {
                 // Filter out meta-capabilities
@@ -644,10 +741,26 @@ async fn build_capability_menu_from_catalog(
                 let trimmed = manifest.id.trim();
                 if trimmed.is_empty() || !trimmed.contains('.') {
                     filtered_count += 1;
-                    eprintln!("   ⏭️  Filtered out invalid capability ID: '{}'", manifest.id);
+                    eprintln!(
+                        "   ⏭️  Filtered out invalid capability ID: '{}'",
+                        manifest.id
+                    );
                     continue;
                 }
                 let mut entry = menu_entry_from_manifest(&manifest, Some(0.5));
+                if let Some(schema) = &manifest.input_schema {
+                    eprintln!(
+                        "DEBUG: manifest={} input_schema:\n{}",
+                        manifest.id,
+                        type_expr_to_rtfs_pretty(schema)
+                    );
+                } else {
+                    eprintln!("DEBUG: manifest={} has no input_schema", manifest.id);
+                }
+                eprintln!(
+                    "DEBUG: manifest={} required_inputs={:?} optional_inputs={:?}",
+                    manifest.id, entry.required_inputs, entry.optional_inputs
+                );
                 apply_input_overrides(&mut entry);
                 menu.push(entry);
                 eprintln!("   ✅ Added capability to menu: {}", manifest.id);
@@ -655,7 +768,11 @@ async fn build_capability_menu_from_catalog(
                     break;
                 }
             }
-            eprintln!("   📊 Filtered out {} capability(ies), added {} to menu", filtered_count, menu.len());
+            eprintln!(
+                "   📊 Filtered out {} capability(ies), added {} to menu",
+                filtered_count,
+                menu.len()
+            );
         }
     }
 
@@ -686,7 +803,7 @@ async fn refresh_capability_menu(
     limit: usize,
 ) -> RuntimeResult<Vec<CapabilityMenuEntry>> {
     catalog.ingest_marketplace(marketplace.as_ref()).await;
-    
+
     // Check if marketplace is empty OR only contains meta-capabilities (planner.*, ccos.*)
     // Meta-capabilities are internal system capabilities that shouldn't appear in execution plans
     let all_capabilities_before = marketplace.list_capabilities().await;
@@ -696,13 +813,13 @@ async fn refresh_capability_menu(
             !manifest.id.starts_with("planner.") && !manifest.id.starts_with("ccos.")
         })
         .collect();
-    
+
     let marketplace_count_before = all_capabilities_before.len();
     let executable_count_before = executable_capabilities.len();
-    
+
     eprintln!("📊 Marketplace state: {} total capability(ies), {} executable (non-meta) capability(ies) before discovery", 
         marketplace_count_before, executable_count_before);
-    
+
     // Trigger discovery if marketplace is empty OR only has meta-capabilities
     if executable_count_before == 0 {
         if marketplace_count_before > 0 {
@@ -712,51 +829,38 @@ async fn refresh_capability_menu(
             eprintln!("🔍 Marketplace is empty - triggering MCP discovery based on goal/intent");
         }
         eprintln!("   Goal: {}", goal);
-        
+
         // Extract capability hints from goal/intent
         let capability_hints = extract_capability_hints_from_goal(goal, intent);
-        eprintln!("   Extracted {} capability hint(s): {:?}", capability_hints.len(), capability_hints);
-        
-        if capability_hints.is_empty() {
-            eprintln!("⚠️ No capability hints extracted from goal - trying generic discovery");
-            // Add generic hints as fallback
-            let generic_hints = vec![
-                "github.list_issues".to_string(),
-                "list_issues".to_string(),
-                "filter".to_string(),
-            ];
-            eprintln!("   Using generic hints: {:?}", generic_hints);
-            // Continue with generic hints instead of returning
-        }
-        
+        eprintln!(
+            "   Extracted {} capability hint(s): {:?}",
+            capability_hints.len(),
+            capability_hints
+        );
+
         // Create discovery engine to trigger MCP introspection
         use ccos::discovery::engine::DiscoveryEngine;
         use ccos::discovery::need_extractor::CapabilityNeed;
         use ccos::intent_graph::IntentGraph;
         use std::sync::Mutex;
-        
+
         eprintln!("   Creating discovery engine...");
         let intent_graph = Arc::new(Mutex::new(
             IntentGraph::new_async(IntentGraphConfig::default())
                 .await
-                .map_err(|e| RuntimeError::Generic(format!("Failed to create IntentGraph: {}", e)))?
+                .map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to create IntentGraph: {}", e))
+                })?,
         ));
-        let discovery_engine = DiscoveryEngine::new(
-            Arc::clone(&marketplace),
-            intent_graph,
-        );
-        
-        // Use generic hints if no hints were extracted
+        let discovery_engine = DiscoveryEngine::new(Arc::clone(&marketplace), intent_graph);
+
         let hints_to_use = if capability_hints.is_empty() {
-            vec![
-                "github.list_issues".to_string(),
-                "list_issues".to_string(),
-                "filter".to_string(),
-            ]
+            eprintln!("⚠️ No capability hints extracted from goal - using generic discovery hints");
+            default_discovery_hints()
         } else {
             capability_hints
         };
-        
+
         // Discover capabilities that match the goal/intent
         let mut discovered_count = 0;
         let mut discovered_capability_ids = Vec::new();
@@ -768,7 +872,7 @@ async fn refresh_capability_menu(
                 Vec::new(), // No specific outputs required
                 format!("Need for goal: {}", goal),
             );
-            
+
             // Try to discover via MCP registry
             match discovery_engine.discover_capability(&need).await {
                 Ok(ccos::discovery::DiscoveryResult::Found(manifest)) => {
@@ -789,54 +893,83 @@ async fn refresh_capability_menu(
                 }
             }
         }
-        
-        eprintln!("📊 Discovery summary: {} capability(ies) discovered: {:?}", discovered_count, discovered_capability_ids);
-        
+
+        eprintln!(
+            "📊 Discovery summary: {} capability(ies) discovered: {:?}",
+            discovered_count, discovered_capability_ids
+        );
+
         // Re-ingest marketplace after discovery
         let marketplace_count_after = marketplace.list_capabilities().await.len();
         catalog.ingest_marketplace(marketplace.as_ref()).await;
-        eprintln!("📊 Marketplace now contains {} capability(ies)", marketplace_count_after);
-        
+        eprintln!(
+            "📊 Marketplace now contains {} capability(ies)",
+            marketplace_count_after
+        );
+
         // Build menu from catalog first
-        let mut menu =
-            build_capability_menu_from_catalog(catalog.clone(), marketplace.clone(), goal, intent, limit).await?;
-        
+        let mut menu = build_capability_menu_from_catalog(
+            catalog.clone(),
+            marketplace.clone(),
+            goal,
+            intent,
+            limit,
+        )
+        .await?;
+
         // CRITICAL: Also add all discovered capabilities to the menu, even if catalog search didn't match them
         // This ensures discovered capabilities (like filter) are available even if they don't match the search query
-        let mut seen_ids: std::collections::HashSet<String> = menu.iter().map(|e| e.id.clone()).collect();
+        let mut seen_ids: std::collections::HashSet<String> =
+            menu.iter().map(|e| e.id.clone()).collect();
         for capability_id in discovered_capability_ids {
             if seen_ids.contains(&capability_id) {
                 continue; // Already in menu
             }
-            
+
             // Filter out meta-capabilities
             if capability_id.starts_with("planner.") || capability_id.starts_with("ccos.") {
                 continue;
             }
-            
+
             if let Some(manifest) = marketplace.get_capability(&capability_id).await {
                 let trimmed = manifest.id.trim();
                 if trimmed.is_empty() || !trimmed.contains('.') {
                     continue;
                 }
                 let mut entry = menu_entry_from_manifest(&manifest, Some(0.8)); // High score for discovered capabilities
+                if let Some(schema) = &manifest.input_schema {
+                    eprintln!(
+                        "DEBUG: manifest={} input_schema:\n{}",
+                        manifest.id,
+                        type_expr_to_rtfs_pretty(schema)
+                    );
+                } else {
+                    eprintln!("DEBUG: manifest={} has no input_schema", manifest.id);
+                }
+                eprintln!(
+                    "DEBUG: manifest={} required_inputs={:?} optional_inputs={:?}",
+                    manifest.id, entry.required_inputs, entry.optional_inputs
+                );
                 apply_input_overrides(&mut entry);
                 menu.push(entry);
                 seen_ids.insert(capability_id.clone());
-                eprintln!("   ➕ Added discovered capability to menu: {}", capability_id);
+                eprintln!(
+                    "   ➕ Added discovered capability to menu: {}",
+                    capability_id
+                );
             }
         }
-        
+
         // Re-sort menu by score after adding discovered capabilities
         menu.sort_by(compare_entries_by_score_desc);
         if menu.len() > limit {
             menu.truncate(limit);
         }
-        
+
         annotate_menu_with_readiness(signals, &mut menu);
         return Ok(menu);
     }
-    
+
     let mut menu =
         build_capability_menu_from_catalog(catalog, marketplace, goal, intent, limit).await?;
     annotate_menu_with_readiness(signals, &mut menu);
@@ -845,27 +978,20 @@ async fn refresh_capability_menu(
 
 /// Extract capability hints from goal and intent to guide discovery
 fn extract_capability_hints_from_goal(goal: &str, intent: &Intent) -> Vec<String> {
-    let mut hints = Vec::new();
-    let goal_lower = goal.to_lowercase();
-    
-    // Extract common capability patterns from goal
-    if goal_lower.contains("list") || goal_lower.contains("github") || goal_lower.contains("issue") {
-        hints.push("github.issues.list".to_string());
-        hints.push("mcp.github.list_issues".to_string());
+    let tokens = ensure_goal_tokens(goal, intent);
+    let hints = build_semantic_hints_from_tokens(&tokens);
+    if hints.is_empty() {
+        default_discovery_hints()
+    } else {
+        hints
     }
-    
-    if goal_lower.contains("filter") {
-        hints.push("filter".to_string());
-        hints.push("mcp.core.filter".to_string());
-    }
-    
-    // Extract from intent constraints
-    if let Some(project) = intent.constraints.get("project") {
-        let project_str = value_to_string_repr(project);
-        hints.push(format!("github.{}.list_issues", project_str));
-    }
-    
-    hints
+}
+
+fn default_discovery_hints() -> Vec<String> {
+    GENERIC_OPERATION_HINTS
+        .iter()
+        .map(|hint| format!("general.{}", hint))
+        .collect()
 }
 
 fn annotate_menu_with_readiness(signals: &GoalSignals, entries: &mut [CapabilityMenuEntry]) {
@@ -894,6 +1020,144 @@ fn annotate_menu_with_readiness(signals: &GoalSignals, entries: &mut [Capability
             }
         }
     }
+}
+
+fn collect_goal_intent_tokens(goal: &str, intent: &Intent) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut ordered = Vec::new();
+
+    fn push_tokens_from_text(text: &str, seen: &mut HashSet<String>, ordered: &mut Vec<String>) {
+        for token in tokenize_identifier(text) {
+            if seen.insert(token.clone()) {
+                ordered.push(token);
+            }
+        }
+    }
+
+    push_tokens_from_text(goal, &mut seen, &mut ordered);
+    for (key, value) in &intent.constraints {
+        push_tokens_from_text(key, &mut seen, &mut ordered);
+        push_tokens_from_text(&value_to_string_repr(value), &mut seen, &mut ordered);
+    }
+    for (key, value) in &intent.preferences {
+        push_tokens_from_text(key, &mut seen, &mut ordered);
+        push_tokens_from_text(&value_to_string_repr(value), &mut seen, &mut ordered);
+    }
+    if let Some(success) = &intent.success_criteria {
+        push_tokens_from_text(&value_to_string_repr(success), &mut seen, &mut ordered);
+    }
+
+    ordered
+}
+
+fn ensure_tokens_with_generic_defaults(mut tokens: Vec<String>) -> Vec<String> {
+    if tokens.is_empty() {
+        tokens.extend(GENERIC_OPERATION_HINTS.iter().map(|hint| hint.to_string()));
+        return tokens;
+    }
+
+    for hint in GENERIC_OPERATION_HINTS {
+        if !tokens.iter().any(|token| token == hint) {
+            tokens.push(hint.to_string());
+        }
+    }
+    tokens
+}
+
+fn build_semantic_hints_from_tokens(tokens: &[String]) -> Vec<String> {
+    let mut hints = Vec::new();
+    let mut seen = HashSet::new();
+
+    let focus_tokens: Vec<_> = tokens
+        .iter()
+        .take(MAX_DISCOVERY_HINT_TOKENS)
+        .cloned()
+        .collect();
+    for token in &focus_tokens {
+        if seen.insert(token.clone()) {
+            hints.push(token.clone());
+        }
+    }
+
+    let combination_tokens: Vec<_> = focus_tokens
+        .iter()
+        .filter(|token| !GENERIC_OPERATION_HINTS.contains(&token.as_str()))
+        .take(MAX_COMBINATION_TOKENS)
+        .cloned()
+        .collect();
+
+    for noun in combination_tokens {
+        for operation in GENERIC_OPERATION_HINTS.iter().take(MAX_COMBINATION_TOKENS) {
+            let combo_a = format!("{}.{}", noun, operation);
+            if seen.insert(combo_a.clone()) {
+                hints.push(combo_a);
+            }
+            let combo_b = format!("{}.{}", operation, noun);
+            if seen.insert(combo_b.clone()) {
+                hints.push(combo_b);
+            }
+        }
+    }
+
+    if hints.is_empty() {
+        for default_hint in GENERIC_OPERATION_HINTS.iter().take(3) {
+            let value = (*default_hint).to_string();
+            if seen.insert(value.clone()) {
+                hints.push(value);
+            }
+        }
+    }
+
+    hints
+}
+
+fn ensure_goal_tokens(goal: &str, intent: &Intent) -> Vec<String> {
+    let tokens = collect_goal_intent_tokens(goal, intent);
+    ensure_tokens_with_generic_defaults(tokens)
+}
+
+async fn goal_aligned_marketplace_fallbacks(
+    marketplace: Arc<CapabilityMarketplace>,
+    tokens: &[String],
+    limit: usize,
+) -> Vec<CapabilityMenuEntry> {
+    let mut scored_entries = Vec::new();
+
+    let all_capabilities = marketplace.list_capabilities().await;
+    for manifest in all_capabilities {
+        if manifest.id.starts_with("planner.") || manifest.id.starts_with("ccos.") {
+            continue;
+        }
+        let trimmed = manifest.id.trim();
+        if trimmed.is_empty() || !trimmed.contains('.') {
+            continue;
+        }
+        let score = score_manifest_against_tokens(&manifest, tokens) as f64;
+        let effective_score = if score > 0.0 { score } else { 0.1 };
+        let mut entry = menu_entry_from_manifest(&manifest, Some(effective_score));
+        if let Some(schema) = &manifest.input_schema {
+            eprintln!(
+                "DEBUG: manifest={} input_schema:\n{}",
+                manifest.id,
+                type_expr_to_rtfs_pretty(schema)
+            );
+        } else {
+            eprintln!("DEBUG: manifest={} has no input_schema", manifest.id);
+        }
+        eprintln!(
+            "DEBUG: manifest={} required_inputs={:?} optional_inputs={:?}",
+            manifest.id, entry.required_inputs, entry.optional_inputs
+        );
+        apply_input_overrides(&mut entry);
+        scored_entries.push((effective_score, entry));
+    }
+
+    scored_entries.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+    scored_entries
+        .into_iter()
+        .take(limit)
+        .map(|(_, entry)| entry)
+        .collect()
 }
 
 fn build_catalog_query(goal: &str, intent: &Intent) -> String {
@@ -1130,6 +1394,8 @@ async fn propose_plan_steps_with_menu_and_capture(
                         req_desc.push_str(&format!(" in field '{}'", field_name));
                     }
                     req_desc.push_str(". Use a filtering capability (e.g., one that accepts a predicate function parameter) as a separate step after fetching the data.");
+                    req_desc.push_str(" If an upstream capability returns serialized text (like JSON), add an intermediate step or adapter that parses it into a collection before the filter runs.");
+                    req_desc.push_str(" Use the adapter's declared output schema so downstream steps reference the exact field names it exposes instead of inventing new ones.");
                     requirement_lines.push(req_desc);
                 }
                 GoalRequirementKind::MustCallCapability { capability_id } => {
@@ -1365,6 +1631,9 @@ fn plan_step_from_json(raw: PlanStepJson) -> RuntimeResult<PlanStep> {
         if name.trim().is_empty() {
             continue;
         }
+        if binding_value.is_null() {
+            continue;
+        }
         let parsed = interpret_binding(&binding_value).ok_or_else(|| {
             RuntimeError::Generic(format!(
                 "Step '{}' has invalid binding {:?} for input '{}'",
@@ -1376,7 +1645,7 @@ fn plan_step_from_json(raw: PlanStepJson) -> RuntimeResult<PlanStep> {
 
     // Auto-generate name from capability_id if missing
     let step_name = if raw.name.trim().is_empty() {
-        // Generate a readable name from capability_id (e.g., "mcp.github.github-mcp.get_issues" -> "Get Issues")
+        // Generate a readable name from capability_id (e.g., "mcp.example.catalog.get_items" -> "Get Items")
         raw.capability_id
             .split('.')
             .last()
@@ -1399,12 +1668,57 @@ fn plan_step_from_json(raw: PlanStepJson) -> RuntimeResult<PlanStep> {
         raw.name
     };
 
+    let mut outputs: Vec<StepOutput> = Vec::new();
+    for item in raw.outputs {
+        match item {
+            PlanStepOutputJson::Name(name) => {
+                let trimmed = name.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                outputs.push(StepOutput {
+                    alias: trimmed.to_string(),
+                    source: trimmed.to_string(),
+                });
+            }
+            PlanStepOutputJson::Mapping {
+                name,
+                output,
+                field,
+            } => {
+                let mut alias = name.trim().to_string();
+                let mut source = output
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_string();
+                if source.is_empty() {
+                    source = field
+                        .as_deref()
+                        .map(str::trim)
+                        .unwrap_or_default()
+                        .to_string();
+                }
+                if alias.is_empty() {
+                    if source.is_empty() {
+                        continue;
+                    }
+                    alias = source.clone();
+                }
+                if source.is_empty() {
+                    source = alias.clone();
+                }
+                outputs.push(StepOutput { alias, source });
+            }
+        }
+    }
+
     Ok(PlanStep {
         id: raw.id,
         name: step_name,
         capability_id: raw.capability_id,
         inputs,
-        outputs: raw.outputs,
+        outputs,
         notes: raw.notes,
     })
 }
@@ -1435,7 +1749,9 @@ fn looks_like_keyword_identifier(name: &str) -> bool {
     !trimmed.is_empty()
         && trimmed
             .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            // Accept ASCII letters (lower & upper), digits, hyphen and underscore.
+            // We allow uppercase because MCPs may return keys like `isError`.
+            .all(|c| c.is_ascii_alphabetic() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 fn validate_plan_steps_against_menu(
@@ -1459,7 +1775,7 @@ fn validate_plan_steps_against_menu(
                 },
                 capability_id: step.capability_id.clone(),
                 notes: step.notes.clone(),
-                outputs: step.outputs.clone(),
+                outputs: step.outputs.iter().map(|o| o.alias.clone()).collect(),
             });
             continue;
         };
@@ -1580,11 +1896,18 @@ fn validate_plan_steps_against_menu(
         }
 
         for output in &step.outputs {
-            if !looks_like_keyword_identifier(output) {
+            if !looks_like_keyword_identifier(&output.alias) {
                 outcome.schema_errors.push(format!(
                     "Step '{}' output '{}' cannot be converted to an RTFS keyword. Use lowercase letters, digits, '-' or '_' only.",
                     step.id,
-                    output
+                    output.alias
+                ));
+            }
+            if !output.source.trim().is_empty() && !looks_like_keyword_identifier(&output.source) {
+                outcome.schema_errors.push(format!(
+                    "Step '{}' output source '{}' is not a valid RTFS keyword. Ensure capability outputs use RTFS-compatible identifiers.",
+                    step.id,
+                    output.source
                 ));
             }
         }
@@ -1660,7 +1983,7 @@ fn summarize_plan_steps(steps: &[PlanStep]) -> Vec<PlanStepSummary> {
                 capability_id: Some(step.capability_id.clone()),
                 capability_class: None,
                 provided_inputs,
-                produced_outputs: step.outputs.clone(),
+                produced_outputs: step.outputs.iter().map(|o| o.alias.clone()).collect(),
                 notes: step.notes.clone(),
             }
         })
@@ -1768,7 +2091,8 @@ fn render_plan_steps(steps: &[PlanStep]) {
             }
         }
         if !step.outputs.is_empty() {
-            println!("     outputs: {}", step.outputs.join(", "));
+            let labels: Vec<String> = step.outputs.iter().map(display_step_output).collect();
+            println!("     outputs: {}", labels.join(", "));
         }
         if let Some(notes) = &step.notes {
             println!("     notes: {}", notes);
@@ -1849,8 +2173,11 @@ async fn assemble_plan_from_steps(
         }
 
         for output in &step.outputs {
-            if !output.trim().is_empty() {
-                output_map.insert(output.clone(), idx);
+            if !output.alias.trim().is_empty() {
+                output_map.insert(output.alias.clone(), idx);
+            }
+            if output.source != output.alias && !output.source.trim().is_empty() {
+                output_map.insert(output.source.clone(), idx);
             }
         }
     }
@@ -1993,7 +2320,7 @@ async fn render_plan_body_with_llm(
             name: step.name.clone(),
             capability_id: step.capability_id.clone(),
             inputs,
-            outputs: step.outputs.clone(),
+            outputs: step.outputs.iter().map(step_output_to_json).collect(),
             notes: step.notes.clone(),
         });
     }
@@ -2095,12 +2422,20 @@ fn render_plan_body(
     body.push_str("    ]\n");
     body.push_str("      {\n");
 
-    let mut final_outputs = Vec::new();
+    let mut final_outputs: Vec<(String, usize, String)> = Vec::new();
     for (idx, step) in steps.iter().enumerate() {
         for output in &step.outputs {
-            if !output.trim().is_empty() {
-                final_outputs.push((output.clone(), idx));
+            let alias = output.alias.trim();
+            if alias.is_empty() {
+                continue;
             }
+            let source = output.source.trim();
+            let source_name = if source.is_empty() {
+                alias.to_string()
+            } else {
+                source.to_string()
+            };
+            final_outputs.push((alias.to_string(), idx, source_name));
         }
     }
 
@@ -2109,12 +2444,12 @@ fn render_plan_body(
         body.push_str("0\n");
     } else {
         final_outputs.sort_by(|a, b| a.0.cmp(&b.0));
-        for (idx, (name, step_idx)) in final_outputs.iter().enumerate() {
+        for (idx, (alias, step_idx, source)) in final_outputs.iter().enumerate() {
             body.push_str(&format!(
                 "        :{} (get step_{} :{})",
-                sanitize_keyword_name(name),
+                sanitize_keyword_name(alias),
                 step_idx,
-                sanitize_keyword_name(name)
+                sanitize_keyword_name(source)
             ));
             if idx + 1 != final_outputs.len() {
                 body.push_str("\n");
@@ -3651,86 +3986,176 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .insert(key.clone(), Value::String(value.clone()));
         }
         let causal_chain_arc = ccos.get_causal_chain();
-        match ccos.validate_and_execute_plan(plan.clone(), &context).await {
-            Ok(result) => {
-                println!(
-                    "{} {}",
-                    "✅ Execution result:".green(),
-                    value_to_string_repr(&result.value)
-                );
-                planner_audit.log_json("plan_execution_result", &execution_result_to_json(&result));
+        if args.auto_repair {
+            let mut repair_options = PlanAutoRepairOptions::default();
+            let context_lines = vec![format!("Goal: {}", goal)];
+            repair_options.additional_context = Some(context_lines.join("\n"));
+            repair_options.debug_responses = args.debug_prompts;
 
-                // Export and summarize causal chain for audit/replay
-                if let Ok(chain_guard) = causal_chain_arc.lock() {
-                    // Export plan actions for replay
-                    let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+            match ccos
+                .validate_and_execute_plan_with_auto_repair(plan.clone(), &context, repair_options)
+                .await
+            {
+                Ok(result) => {
                     println!(
-                        "\n{} {} actions logged to causal chain",
-                        "📋 Causal Chain:".bold().cyan(),
-                        plan_actions.len()
+                        "{} {}",
+                        "✅ Execution result:".green(),
+                        value_to_string_repr(&result.value)
                     );
+                    planner_audit
+                        .log_json("plan_execution_result", &execution_result_to_json(&result));
 
-                    // Verify chain integrity
-                    match chain_guard.verify_and_summarize() {
-                        Ok((is_valid, total_actions, first_ts, last_ts)) => {
-                            if is_valid {
-                                println!("  ✅ Chain integrity verified");
-                            } else {
-                                eprintln!("  ⚠️ Chain integrity check failed");
-                            }
-                            println!("  📊 Total actions in chain: {}", total_actions);
-                            if let (Some(first), Some(last)) = (first_ts, last_ts) {
-                                let duration_ms = last.saturating_sub(first);
-                                println!("  ⏱️ Duration: {}ms", duration_ms);
-                            }
-
-                            // Log plan trace for audit
-                            let trace = chain_guard.get_plan_execution_trace(&plan.plan_id);
-                            planner_audit.log_json(
-                                "plan_execution_trace",
-                                &json!({
-                                    "plan_id": plan.plan_id,
-                                    "action_count": trace.len(),
-                                    "actions": trace.iter().map(|a| json!({
-                                        "action_id": a.action_id,
-                                        "type": format!("{:?}", a.action_type),
-                                        "function_name": a.function_name,
-                                        "timestamp": a.timestamp,
-                                        "parent_action_id": a.parent_action_id,
-                                        "success": a.result.as_ref().map(|r| r.success),
-                                    })).collect::<Vec<_>>(),
-                                }),
-                            );
-                        }
-                        Err(err) => {
-                            eprintln!("  ⚠️ Failed to verify chain: {}", err);
-                        }
-                    }
-                } else {
-                    eprintln!("⚠️ Failed to lock causal chain for export");
-                }
-            }
-            Err(err) => {
-                eprintln!("❌ Plan execution failed: {}", err);
-                planner_audit.log_text("plan_execution_error", &err.to_string());
-
-                // Still export what we have in the causal chain
-                if let Ok(chain_guard) = causal_chain_arc.lock() {
-                    let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
-                    if !plan_actions.is_empty() {
+                    // Export and summarize causal chain for audit/replay
+                    if let Ok(chain_guard) = causal_chain_arc.lock() {
+                        // Export plan actions for replay
+                        let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
                         println!(
-                            "\n{} {} actions logged before failure",
+                            "\n{} {} actions logged to causal chain",
                             "📋 Causal Chain:".bold().cyan(),
                             plan_actions.len()
                         );
+
+                        // Verify chain integrity
+                        match chain_guard.verify_and_summarize() {
+                            Ok((is_valid, total_actions, first_ts, last_ts)) => {
+                                if is_valid {
+                                    println!("  ✅ Chain integrity verified");
+                                } else {
+                                    eprintln!("  ⚠️ Chain integrity check failed");
+                                }
+                                println!("  📊 Total actions in chain: {}", total_actions);
+                                if let (Some(first), Some(last)) = (first_ts, last_ts) {
+                                    let duration_ms = last.saturating_sub(first);
+                                    println!("  ⏱️ Duration: {}ms", duration_ms);
+                                }
+
+                                // Log plan trace for audit
+                                let trace = chain_guard.get_plan_execution_trace(&plan.plan_id);
+                                planner_audit.log_json(
+                                    "plan_execution_trace",
+                                    &json!({
+                                        "plan_id": plan.plan_id,
+                                        "action_count": trace.len(),
+                                        "actions": trace.iter().map(|a| json!({
+                                            "action_id": a.action_id,
+                                            "type": format!("{:?}", a.action_type),
+                                            "function_name": a.function_name,
+                                            "timestamp": a.timestamp,
+                                            "parent_action_id": a.parent_action_id,
+                                            "success": a.result.as_ref().map(|r| r.success),
+                                        })).collect::<Vec<_>>(),
+                                    }),
+                                );
+                            }
+                            Err(err) => {
+                                eprintln!("  ⚠️ Failed to verify chain: {}", err);
+                            }
+                        }
+                    } else {
+                        eprintln!("⚠️ Failed to lock causal chain for export");
                     }
-                } else {
-                    eprintln!("⚠️ Failed to lock causal chain for export after failure");
+                }
+                Err(err) => {
+                    eprintln!("❌ Plan execution failed: {}", err);
+                    planner_audit.log_text("plan_execution_error", &err.to_string());
+
+                    // Still export what we have in the causal chain
+                    if let Ok(chain_guard) = causal_chain_arc.lock() {
+                        let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+                        if !plan_actions.is_empty() {
+                            println!(
+                                "\n{} {} actions logged before failure",
+                                "📋 Causal Chain:".bold().cyan(),
+                                plan_actions.len()
+                            );
+                        }
+                    } else {
+                        eprintln!("⚠️ Failed to lock causal chain for export after failure");
+                    }
+                }
+            }
+        } else {
+            match ccos.validate_and_execute_plan(plan.clone(), &context).await {
+                Ok(result) => {
+                    println!(
+                        "{} {}",
+                        "✅ Execution result:".green(),
+                        value_to_string_repr(&result.value)
+                    );
+                    planner_audit
+                        .log_json("plan_execution_result", &execution_result_to_json(&result));
+
+                    // Export and summarize causal chain for audit/replay
+                    if let Ok(chain_guard) = causal_chain_arc.lock() {
+                        // Export plan actions for replay
+                        let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+                        println!(
+                            "\n{} {} actions logged to causal chain",
+                            "📋 Causal Chain:".bold().cyan(),
+                            plan_actions.len()
+                        );
+
+                        // Verify chain integrity
+                        match chain_guard.verify_and_summarize() {
+                            Ok((is_valid, total_actions, first_ts, last_ts)) => {
+                                if is_valid {
+                                    println!("  ✅ Chain integrity verified");
+                                } else {
+                                    eprintln!("  ⚠️ Chain integrity check failed");
+                                }
+                                println!("  📊 Total actions in chain: {}", total_actions);
+                                if let (Some(first), Some(last)) = (first_ts, last_ts) {
+                                    let duration_ms = last.saturating_sub(first);
+                                    println!("  ⏱️ Duration: {}ms", duration_ms);
+                                }
+
+                                // Log plan trace for audit
+                                let trace = chain_guard.get_plan_execution_trace(&plan.plan_id);
+                                planner_audit.log_json(
+                                    "plan_execution_trace",
+                                    &json!({
+                                        "plan_id": plan.plan_id,
+                                        "action_count": trace.len(),
+                                        "actions": trace.iter().map(|a| json!({
+                                            "action_id": a.action_id,
+                                            "type": format!("{:?}", a.action_type),
+                                            "function_name": a.function_name,
+                                            "timestamp": a.timestamp,
+                                            "parent_action_id": a.parent_action_id,
+                                            "success": a.result.as_ref().map(|r| r.success),
+                                        })).collect::<Vec<_>>(),
+                                    }),
+                                );
+                            }
+                            Err(err) => {
+                                eprintln!("  ⚠️ Failed to verify chain: {}", err);
+                            }
+                        }
+                    } else {
+                        eprintln!("⚠️ Failed to lock causal chain for export");
+                    }
+                }
+                Err(err) => {
+                    eprintln!("❌ Plan execution failed: {}", err);
+                    planner_audit.log_text("plan_execution_error", &err.to_string());
+
+                    // Still export what we have in the causal chain
+                    if let Ok(chain_guard) = causal_chain_arc.lock() {
+                        let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+                        if !plan_actions.is_empty() {
+                            println!(
+                                "\n{} {} actions logged before failure",
+                                "📋 Causal Chain:".bold().cyan(),
+                                plan_actions.len()
+                            );
+                        }
+                    } else {
+                        eprintln!("⚠️ Failed to lock causal chain for export after failure");
+                    }
                 }
             }
         }
     }
-
     print_architecture_summary(&agent_config, args.profile.as_deref());
 
     Ok(())
@@ -3803,6 +4228,8 @@ mod tests {
         assert!(looks_like_keyword_identifier("valid_output"));
         assert!(!looks_like_keyword_identifier("Invalid Output"));
         assert!(!looks_like_keyword_identifier("with.dot"));
+        // Accept camelCase / mixed-case names like 'isError' produced by external MCPs
+        assert!(looks_like_keyword_identifier("isError"));
     }
 
     #[test]
@@ -3810,7 +4237,7 @@ mod tests {
         let step = PlanStep {
             id: "step_1".to_string(),
             name: "Fetch Issues".to_string(),
-            capability_id: "mcp.github.list_issues".to_string(),
+            capability_id: "example.list_items".to_string(),
             inputs: vec![(
                 "owner".to_string(),
                 StepInputBinding::Literal("mandubian".to_string()),
@@ -3946,16 +4373,6 @@ fn runtime_error(err: RuntimeError) -> Box<dyn Error> {
     Box::new(err)
 }
 
-fn load_agent_config(path: &str) -> Result<AgentConfig, Box<dyn Error>> {
-    let data = std::fs::read_to_string(path)?;
-    let config = if path.ends_with(".json") {
-        serde_json::from_str(&data)?
-    } else {
-        toml::from_str(&data)?
-    };
-    Ok(config)
-}
-
 fn apply_llm_profile(
     config: &AgentConfig,
     profile_name: Option<&str>,
@@ -4032,99 +4449,4 @@ fn set_api_key(provider: &str, key: &str) {
         "stub" => {}
         _ => std::env::set_var("OPENAI_API_KEY", key),
     }
-}
-
-fn print_architecture_summary(config: &AgentConfig, profile_name: Option<&str>) {
-    println!("\n{}", "═".repeat(80).bold());
-    println!(
-        "{}",
-        "🏗️  CCOS Smart Assistant - Architecture Summary"
-            .bold()
-            .cyan()
-    );
-    println!("{}", "═".repeat(80).bold());
-
-    println!("\n{}", "📋 Architecture Overview".bold());
-    println!("  ┌─────────────────────────────────────────────────────────────┐");
-    println!("  │ User Goal → Intent Extraction → Plan Generation → Execution │");
-    println!("  └─────────────────────────────────────────────────────────────┘");
-    println!("\n  {} Flow:", "1.".bold());
-    println!("     • Natural language goal → Intent (constraints, preferences)");
-    println!("     • Intent → Plan generation (delegating arbiter)");
-    println!("     • Plan → Capability discovery (aliases → marketplace → MCP)");
-    println!("     • Resolver timelines show how missing tools are synthesized");
-    println!("     • Final plan executes via orchestrator");
-
-    println!("\n  {} Key Components:", "2.".bold());
-    println!(
-        "     • {}: Governs intent extraction and plan synthesis",
-        "DelegatingArbiter".cyan()
-    );
-    println!(
-        "     • {}: Runs marketplace/MCP discovery pipeline",
-        "MissingCapabilityResolver".cyan()
-    );
-    println!(
-        "     • {}: Stores and ranks capabilities",
-        "CapabilityMarketplace".cyan()
-    );
-    println!(
-        "     • {}: Tracks intent relationships and checkpoints",
-        "IntentGraph".cyan()
-    );
-
-    let discovery = &config.discovery;
-    println!("\n  {} Discovery/Search Settings:", "3.".bold());
-    if discovery.use_embeddings {
-        let model = discovery
-            .embedding_model
-            .as_deref()
-            .or(discovery.local_embedding_model.as_deref())
-            .unwrap_or("unspecified model");
-        println!(
-            "     • Embedding search: {} ({})",
-            "enabled".green(),
-            model.cyan()
-        );
-    } else {
-        println!(
-            "     • Embedding search: {} (keyword + schema heuristics)",
-            "disabled".yellow()
-        );
-    }
-    println!("     • Match threshold: {:.2}", discovery.match_threshold);
-    println!(
-        "     • Action verb weight / threshold: {:.2} / {:.2}",
-        discovery.action_verb_weight, discovery.action_verb_threshold
-    );
-    println!(
-        "     • Capability class weight: {:.2}",
-        discovery.capability_class_weight
-    );
-
-    if let Some(llm_profiles) = &config.llm_profiles {
-        let (profiles, _meta, _why) = expand_profiles(config);
-        let chosen = profile_name
-            .map(|s| s.to_string())
-            .or_else(|| llm_profiles.default.clone())
-            .or_else(|| profiles.first().map(|p| p.name.clone()));
-
-        println!("\n  {} LLM Profile:", "4.".bold());
-        if let Some(name) = chosen {
-            if let Some(profile) = profiles.iter().find(|p| p.name == name) {
-                println!("     • Active profile: {}", name.cyan());
-                println!("     • Provider: {}", profile.provider.as_str().cyan());
-                println!("     • Model: {}", profile.model.as_str().cyan());
-                if let Some(base) = &profile.base_url {
-                    println!("     • Base URL: {}", base);
-                }
-            } else {
-                println!("     • Active profile name: {} (details unavailable)", name);
-            }
-        } else {
-            println!("     • No LLM profile configured");
-        }
-    }
-
-    println!("\n{}", "═".repeat(80).bold());
 }
