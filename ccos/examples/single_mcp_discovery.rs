@@ -40,13 +40,17 @@ mod single_mcp_discovery_impl {
         #[arg(long)]
         pub hint: String,
 
+        /// Optional: specific tool name to introspect
+        #[arg(long)]
+        pub tool_name: Option<String>,
+
         /// Optional auth token (if not set, example will read env vars)
         #[arg(long)]
         pub token: Option<String>,
 
-        /// Whether to be verbose
-        #[arg(long, default_value_t = false)]
-        pub verbose: bool,
+        /// Where to save the generated capability RTFS file
+        #[arg(long, default_value = "capabilities/discovered")]
+        pub output_dir: String,
     }
 
     pub async fn run_discovery(args: Args) -> Result<(), Box<dyn Error>> {
@@ -174,6 +178,15 @@ mod single_mcp_discovery_impl {
                 output_schema: None,
                 input_schema_json,
             });
+        }
+
+        // If a specific tool name is provided, filter the list
+        if let Some(target_tool_name) = &args.tool_name {
+            discovered_tools.retain(|tool| &tool.tool_name == target_tool_name);
+            if discovered_tools.is_empty() {
+                eprintln!("✗ Tool '{}' not found on the server.", target_tool_name);
+                return Ok(());
+            }
         }
 
         let introspection = ccos::synthesis::mcp_introspector::MCPIntrospectionResult {
@@ -401,6 +414,22 @@ mod single_mcp_discovery_impl {
                     let introspector = MCPIntrospector::new();
                     if let Ok(schema) = introspector.infer_type_from_json_value(&result_val) {
                         eprintln!("✅ Inferred output schema from retry: {}", ccos::synthesis::schema_serializer::type_expr_to_rtfs_compact(&schema));
+                        let mut discovered_tool = tool.clone();
+                        discovered_tool.output_schema = Some(schema.clone());
+
+                        let capability = introspector.create_capability_from_mcp_tool(&discovered_tool, &introspection)?;
+                        let implementation_code = introspector.generate_mcp_rtfs_implementation(&discovered_tool, &server_url);
+
+                        let output_path = std::path::PathBuf::from(&args.output_dir);
+                        let sample_output = serde_json::to_string_pretty(&result_val).ok();
+                        let saved_path = introspector.save_capability_to_rtfs(
+                            &capability,
+                            &implementation_code,
+                            &output_path,
+                            sample_output.as_deref(),
+                        )?;
+
+                        eprintln!("✅ Capability saved to: {}", saved_path.display());
                     }
                     eprintln!("Result:\n{}", serde_json::to_string_pretty(&result_val).unwrap_or_default());
                 }

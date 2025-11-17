@@ -598,7 +598,7 @@ impl MCPIntrospector {
     }
 
     /// Create a single capability from an MCP tool
-    fn create_capability_from_mcp_tool(
+    pub fn create_capability_from_mcp_tool(
         &self,
         tool: &DiscoveredMCPTool,
         introspection: &MCPIntrospectionResult,
@@ -747,7 +747,32 @@ impl MCPIntrospector {
         &self,
         capability: &CapabilityManifest,
         implementation_code: &str,
+        sample_output: Option<&str>,
     ) -> String {
+        let sample_comment = if let Some(sample) = sample_output {
+            let truncated_sample = sample
+                .lines()
+                .take(15) // Take a reasonable number of lines
+                .map(|line| {
+                    if line.len() > 200 {
+                        // Truncate very long lines (like embedded JSON strings)
+                        format!("{}...", &line[..200])
+                    } else {
+                        line.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let indented_sample = truncated_sample
+                .lines()
+                .map(|line| format!(";; {}", line))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(";; Sample Output (truncated):\n{}\n\n", indented_sample)
+        } else {
+            String::new()
+        };
+
         let input_schema_str = capability
             .input_schema
             .as_ref()
@@ -810,6 +835,7 @@ impl MCPIntrospector {
 ;; MCP Server: {} ({})
 ;; Tool: {}
 
+{}
 (capability "{}"
   :name "{}"
   :version "{}"
@@ -844,6 +870,7 @@ impl MCPIntrospector {
             mcp_server_name,
             mcp_server_url,
             mcp_tool_name,
+            sample_comment,
             capability.id,
             capability.name,
             capability.version,
@@ -877,6 +904,7 @@ impl MCPIntrospector {
         capability: &CapabilityManifest,
         implementation_code: &str,
         output_dir: &std::path::Path,
+        sample_output: Option<&str>,
     ) -> RuntimeResult<std::path::PathBuf> {
         // Parse capability ID: "mcp.namespace.tool_name"
         let parts: Vec<&str> = capability.id.split('.').collect();
@@ -897,7 +925,8 @@ impl MCPIntrospector {
             RuntimeError::Generic(format!("Failed to create capability directory: {}", e))
         })?;
 
-        let rtfs_content = self.capability_to_rtfs_string(capability, implementation_code);
+        let rtfs_content =
+            self.capability_to_rtfs_string(capability, implementation_code, sample_output);
         let rtfs_file = capability_dir.join(format!("{}.rtfs", tool_name));
 
         std::fs::write(&rtfs_file, rtfs_content)
