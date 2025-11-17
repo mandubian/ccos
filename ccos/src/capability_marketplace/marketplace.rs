@@ -2641,12 +2641,16 @@ impl CapabilityMarketplace {
                 })
             } else {
                 // Unsupported provider for import
+                // Add clearer output indicating why the RTFS file was skipped
+                let msg = format!(
+                    "Skipping RTFS import for unsupported provider '{}' in {}",
+                    provider_token, id
+                );
                 if let Some(cb) = &self.debug_callback {
-                    cb(format!(
-                        "Skipping RTFS import for unsupported provider in {}",
-                        id
-                    ));
+                    cb(msg.clone());
                 }
+                // Also print a visible stderr line to aid users running examples
+                eprintln!("⚠️  {} - to fix, change :provider to one of :http, :mcp, :a2a, :remote_rtfs, or register the capability manually.", msg);
                 continue;
             };
 
