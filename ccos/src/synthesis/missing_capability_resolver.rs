@@ -2392,7 +2392,7 @@ impl MissingCapabilityResolver {
                         .iter()
                         .find(|t| t.tool_name == *tool_name)
                     {
-                        if let Ok(Some(output_schema)) = introspector
+                        if let Ok((schema_opt, sample_opt)) = introspector
                             .introspect_output_schema(
                                 tool,
                                 &server_url,
@@ -2401,8 +2401,15 @@ impl MissingCapabilityResolver {
                             )
                             .await
                         {
-                            manifest.output_schema = Some(output_schema);
-                            eprintln!("✅ Updated output schema for '{}'", manifest.id);
+                            if let Some(schema) = schema_opt {
+                                manifest.output_schema = Some(schema);
+                                eprintln!("✅ Updated output schema for '{}'", manifest.id);
+                            }
+                            if let Some(sample) = sample_opt {
+                                manifest
+                                    .metadata
+                                    .insert("output_snippet".to_string(), sample);
+                            }
                         }
                     }
                 }
