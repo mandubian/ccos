@@ -30,7 +30,7 @@ mod single_mcp_discovery_impl {
     pub struct Args {
         /// MCP server base URL (http(s)://.../)
         #[arg(long)]
-        pub server_url: String,
+        pub server_url: Option<String>,
 
         /// Friendly server name (e.g. github/github-mcp)
         #[arg(long, default_value = "github")]
@@ -55,7 +55,7 @@ mod single_mcp_discovery_impl {
 
         let _introspector = MCPIntrospector::new();
 
-        eprintln!("🔍 Introspecting MCP server: {} ({})", args.server_name, args.server_url);
+        eprintln!("🔍 Introspecting MCP server: {} ({})", args.server_name, args.server_url.as_deref().unwrap_or(""));
 
         let mut auth_headers = args.token.map(|t| {
             let mut m = std::collections::HashMap::new();
@@ -94,11 +94,17 @@ mod single_mcp_discovery_impl {
                 eprintln!("  → Using curated override remote URL: {}", url);
                 url
             }
-            None => args.server_url.clone(),
+            None => {
+                if let Some(url) = args.server_url {
+                    url
+                } else {
+                    eprintln!("✗ No server URL provided and no override found for server '{}'", server_name_candidate);
+                    return Err(Box::<dyn Error>::from("Missing server URL"));
+                }
+            }
         };
 
-        // If args.server_url looks like a repository or non-mcp URL and we didn't map it above,
-        // try deriving a name from the URL (owner/name), and consult overrides again.
+        // If the provided URL looks like a repository, try to derive a better server name and check overrides again.
         if server_url.starts_with("https://github.com") || server_url.starts_with("http://github.com") {
             if let Some(derive) = derive_server_name_from_repo_url(&server_url) {
                 if let Some(url2) = resolve_server_url_from_overrides(&derive) {
@@ -282,10 +288,11 @@ mod single_mcp_discovery_impl {
             .make_request(&session, "tools/call", serde_json::json!({"name": tool.tool_name, "arguments": test_inputs}))
             .await;
 
-        let (schema_opt, sample_opt) = match call_res {
+        let (mut schema_opt, sample_opt) = match call_res {
             Ok(r) => {
-                let sample_snippet = serde_json::to_string_pretty(&r.get("result").cloned().unwrap_or(serde_json::Value::Null)).ok();
-                // Only accept result as positive if the body doesn't look like an error
+                let result_val = r.get("result").cloned().unwrap_or(serde_json::Value::Null);
+                let sample_snippet = serde_json::to_string_pretty(&result_val).ok();
+
                 let is_error = sample_snippet
                     .as_ref()
                     .map(|s| {
@@ -299,9 +306,12 @@ mod single_mcp_discovery_impl {
                     .unwrap_or(true);
 
                 if is_error {
-                    (None::<rtfs::ast::TypeExpr>, sample_snippet)
+                    (None, sample_snippet)
                 } else {
-                    (None::<rtfs::ast::TypeExpr>, sample_snippet)
+                    // Attempt to infer schema from the successful result
+                    let introspector = MCPIntrospector::new();
+                    let inferred_schema = introspector.infer_type_from_json_value(&result_val).ok();
+                    (inferred_schema, sample_snippet)
                 }
             }
             Err(e) => {
@@ -323,405 +333,79 @@ mod single_mcp_discovery_impl {
         if let Some(sample) = sample_opt {
             eprintln!("⚠️ Introspection produced sample/error: {}", sample.lines().next().unwrap_or(""));
 
-            // Try to extract missing parameter names from the sample text (e.g. "missing required parameter: owner")
-            // Try to extract missing parameter names from the sample text (generic, provider-agnostic)
-            let re = regex::Regex::new(r"missing required (?:field|parameter)[: ]+([a-zA-Z0-9_-]+)").ok();
             let mut suggested_args = serde_json::Map::new();
+            let required = get_required_params(&tool);
 
-            if let Some(r) = &re {
-                for cap in r.captures_iter(&sample.to_lowercase()) {
-                    if let Some(name) = cap.get(1) {
-                        let key = name.as_str();
-                        // for now, use a generic placeholder and let the Arbiter refine it later
-                        let val = serde_json::Value::String("example".to_string());
-                        suggested_args.insert(key.to_string(), val);
+            // Loop until we have all required arguments
+            loop {
+                let missing_params: Vec<String> = required
+                    .iter()
+                    .filter(|k| !suggested_args.contains_key(*k))
+                    .cloned()
+                    .collect();
+
+                if missing_params.is_empty() {
+                    break;
+                }
+
+                eprintln!("💡 Missing required parameters: {}", missing_params.join(", "));
+
+                // 1. Try to use the Arbiter to suggest values
+                let arbiter_suggestions = get_arbiter_suggestions(
+                    &ccos,
+                    &tool,
+                    &suggested_args,
+                    &sample,
+                    &missing_params,
+                ).await;
+
+                if let Some(mut suggestions) = arbiter_suggestions {
+                    suggested_args.append(&mut suggestions);
+                    // Continue loop to check if all params are now filled
+                    continue;
+                }
+
+                // 2. If Arbiter fails, fall back to user input
+                eprintln!("🤖 Arbiter could not provide suggestions. Please provide the values manually.");
+                for param in &missing_params {
+                    let user_input = prompt_user_for_input(&format!("  Enter value for '{}':", param));
+                    if !user_input.is_empty() {
+                        suggested_args.insert(param.clone(), serde_json::Value::String(user_input));
                     }
                 }
             }
 
-            // If we couldn't find missing parameter names, fall back to schema hints if present
-            if suggested_args.is_empty() {
-                if let Some(input_schema_json) = &tool.input_schema_json {
-                    if let Some(props) = input_schema_json.get("properties").and_then(|p| p.as_object()) {
-                        let required: Vec<String> = input_schema_json
-                            .get("required")
-                            .and_then(|r| r.as_array())
-                            .map(|arr| arr.iter().filter_map(|s| s.as_str()).map(|s| s.to_string()).collect())
-                            .unwrap_or_default();
 
-                        for req in required.iter() {
-                            // Try enum default or a generic placeholder; do not assume provider-specific semantics
-                            let val = if let Some(prop_schema) = props.get(req) {
-                                if let Some(enum_vals) = prop_schema.get("enum").and_then(|e| e.as_array()) {
-                                    if let Some(first) = enum_vals.first().and_then(|v| v.as_str()) {
-                                        serde_json::Value::String(first.to_string())
-                                    } else {
-                                        serde_json::Value::String("example".to_string())
-                                    }
-                                } else {
-                                    serde_json::Value::String("example".to_string())
-                                }
-                            } else {
-                                serde_json::Value::String("example".to_string())
-                            };
-                            suggested_args.insert(req.clone(), val);
-                        }
+            eprintln!("→ Synthesized inputs for retry: {}", serde_json::Value::Object(suggested_args.clone()).to_string());
+
+            // Retry the tool call
+            let client_info = ccos::synthesis::mcp_session::MCPServerInfo {
+                name: "ccos-single-discovery".to_string(),
+                version: "1.0.0".to_string(),
+            };
+
+            let fresh_session = session_manager.initialize_session(&server_url, &client_info).await?;
+            let call_res = session_manager
+                .make_request(
+                    &fresh_session,
+                    "tools/call",
+                    serde_json::json!({"name": tool.tool_name, "arguments": serde_json::Value::Object(suggested_args.clone())}),
+                )
+                .await;
+            let _ = session_manager.terminate_session(&fresh_session).await;
+
+            match call_res {
+                Ok(res) => {
+                    eprintln!("✅ Retry succeeded!");
+                    let result_val = res.get("result").cloned().unwrap_or_default();
+                    let introspector = MCPIntrospector::new();
+                    if let Ok(schema) = introspector.infer_type_from_json_value(&result_val) {
+                        eprintln!("✅ Inferred output schema from retry: {}", ccos::synthesis::schema_serializer::type_expr_to_rtfs_compact(&schema));
                     }
+                    eprintln!("Result:\n{}", serde_json::to_string_pretty(&result_val).unwrap_or_default());
                 }
-            }
-
-            if suggested_args.is_empty() {
-                eprintln!("✗ Could not synthesize any plausible inputs to retry");
-            } else {
-                    // If we found some inputs but still have missing required fields (like 'repo'),
-                    // use the Arbiter (LLM) to suggest the missing values.
-                    // note: missing_keys can be useful for logging & future multi-key suggestions
-
-                    // Identify missing required inputs that we haven't filled yet
-                    let mut missing: Vec<String> = Vec::new();
-                    if let Some(input_schema_json) = &tool.input_schema_json {
-                        if let Some(required_arr) = input_schema_json.get("required") {
-                            if let Some(required_list) = required_arr.as_array() {
-                                for r in required_list {
-                                    if let Some(req_name) = r.as_str() {
-                                        if !suggested_args.contains_key(req_name) {
-                                            missing.push(req_name.to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                                        if !missing.is_empty() {
-
-                                            // Create an arbiter from env config (consistent with other examples)
-
-                                            let intent_graph = ccos.get_intent_graph();
-
-                                            let marketplace = ccos.get_capability_marketplace();
-
-                                            match ArbiterFactory::create_arbiter_from_env(intent_graph, Some(marketplace)).await {
-
-                                                Ok(arbiter) => {
-
-                                                    // Ask the arbiter once for a coherent set of arguments
-
-                                                    // for all required parameters, using the schema and the
-
-                                                    // current suggested_args as context.
-
-                                                    let schema_snippet = tool
-
-                                                        .input_schema_json
-
-                                                        .clone()
-
-                                                        .unwrap_or(serde_json::Value::Null);
-
-                    
-
-                                                    let prompt = format!(
-
-                                                        "You are an expert API tester. Your goal is to provide realistic arguments to successfully call an API tool for introspection purposes.\n\nI tried to call the tool '{tool_name}' with these inputs:\n`{inputs}`\n\nThe server responded with this error:\n`{error}`\n\nHere is the tool's input schema:\n`{schema}`\n\nBased on the parameter names, their descriptions in the schema, and the error message, generate a single JSON object with realistic, valid-looking values for all required parameters. The values should be for publicly known and accessible resources to maximize the chance of a successful API call. For example, for a parameter named 'project_id', use a name of a well-known open-source project. Do not use generic placeholders like 'test', 'dummy', or 'example'.\n\nRespond with ONLY the JSON object.",
-
-                                                        tool_name = tool.tool_name,
-
-                                                        inputs = serde_json::Value::Object(suggested_args.clone()),
-
-                                                        error = sample,
-
-                                                        schema = serde_json::to_string_pretty(&schema_snippet).unwrap_or_default(),
-
-                                                    );
-
-                    
-
-                                                    match arbiter.process_natural_language(&prompt, None).await {
-
-                                                        Ok(exec) => {
-
-                                                            let suggestion_text = format!("{}", exec.value);
-
-                                                            // Try to parse the arbiter response directly as JSON
-
-                                                            match serde_json::from_str::<serde_json::Value>(&suggestion_text) {
-
-                                                                Ok(serde_json::Value::Object(obj)) => {
-
-                                                                    for (k, v) in obj.iter() {
-
-                                                                        eprintln!("→ Arbiter suggested {} -> {}", k, v);
-
-                                                                        suggested_args.insert(k.clone(), v.clone());
-
-                                                                    }
-
-                                                                }
-
-                                                                Ok(_) | Err(_) => {
-
-                                                                    eprintln!("⚠️ Arbiter did not return a clean JSON object, attempting fallback extraction");
-
-                                                                    // Fallback: try to extract each missing key from the text response
-
-                                                                    for key in missing.iter() {
-
-                                                                        if let Some(val) = extract_suggestion_from_text(&suggestion_text, key) {
-
-                                                                            eprintln!("→ Arbiter (fallback) suggested {} -> {}", key, val);
-
-                                                                            suggested_args.insert(key.clone(), serde_json::Value::String(val));
-
-                                                                        }
-
-                                                                    }
-
-                                                                }
-
-                                                            }
-
-                                                        }
-
-                                                        Err(e) => {
-
-                                                            eprintln!("⚠️ Arbiter call failed when suggesting arguments: {}", e);
-
-                                                        }
-
-                                                    }
-
-                                                }
-
-                                                Err(e) => {
-
-                                                    eprintln!("⚠️ Failed to create Arbiter for LLM suggestions: {}", e);
-
-                                                }
-
-                                            }
-
-                                        }
-
-                    
-
-                                                                    // Final pass to replace any remaining placeholder values with more realistic examples.
-
-                    
-
-                                                                    // This is a safeguard against the LLM returning generic values like "dummy" or "example".
-
-                    
-
-                                                                    let mut owner_from_repo = None;
-
-                    
-
-                                                                    let mut repo_name_only = None;
-
-                    
-
-                                                    
-
-                    
-
-                                                                    for (key, val) in suggested_args.iter_mut() {
-
-                    
-
-                                                                        if let Some(s_val) = val.as_str() {
-
-                    
-
-                                                                            if s_val.to_lowercase() == "dummy" || s_val.to_lowercase() == "example" || s_val.is_empty() {
-
-                    
-
-                                                                                if key.to_lowercase().contains("repo") {
-
-                    
-
-                                                                                    let full_repo = "microsoft/vscode";
-
-                    
-
-                                                                                    *val = full_repo.into();
-
-                    
-
-                                                                                    if let Some(owner) = full_repo.split('/').next() {
-
-                    
-
-                                                                                        owner_from_repo = Some(owner.to_string());
-
-                    
-
-                                                                                    }
-
-                    
-
-                                                                                    if let Some(repo_name) = full_repo.split('/').last() {
-
-                    
-
-                                                                                        repo_name_only = Some(repo_name.to_string());
-
-                    
-
-                                                                                    }
-
-                    
-
-                                                                                    eprintln!("  → Replacing placeholder for '{}' with '{}'", key, val);
-
-                    
-
-                                                                                } else if key.to_lowercase().contains("owner") {
-
-                    
-
-                                                                                    *val = "microsoft".into();
-
-                    
-
-                                                                                    eprintln!("  → Replacing placeholder for '{}' with '{}'", key, val);
-
-                    
-
-                                                                                }
-
-                    
-
-                                                                            }
-
-                    
-
-                                                                        }
-
-                    
-
-                                                                    }
-
-                    
-
-                                                    
-
-                    
-
-                                                                    // If we derived an owner from a full repo name, ensure it's consistent
-
-                    
-
-                                                                    if let Some(owner) = owner_from_repo {
-
-                    
-
-                                                                        if let Some(owner_val) = suggested_args.get_mut("owner") {
-
-                    
-
-                                                                            *owner_val = owner.into();
-
-                    
-
-                                                                            eprintln!("  → Aligning owner with repo suggestion.");
-
-                    
-
-                                                                        }
-
-                    
-
-                                                                    }
-
-                    
-
-                                                                    if let Some(repo_name) = repo_name_only {
-
-                    
-
-                                                                        if let Some(repo_val) = suggested_args.get_mut("repo") {
-
-                    
-
-                                                                            *repo_val = repo_name.into();
-
-                    
-
-                                                                            eprintln!("  → Aligning repo name with repo suggestion.");
-
-                    
-
-                                                                        }
-
-                    
-
-                                                                    }
-
-                    
-
-                                                    
-
-                    
-
-                                                                    eprintln!("→ Synthesized inputs for retry: {}", serde_json::Value::Object(suggested_args.clone()).to_string());
-
-                    
-
-                                                    
-
-                    
-
-                                                                    // Retry the tool call using the same open session (session_manager)/recreate only if exp
-
-                    
-
-                                                                    let client_info = ccos::synthesis::mcp_session::MCPServerInfo {
-                    name: "ccos-single-discovery".to_string(),
-                    version: "1.0.0".to_string(),
-                };
-
-                // Try up to two attempts (reinit session if first fails)
-                let mut attempt = 0usize;
-                let mut last_err: Option<anyhow::Error> = None;
-                while attempt < 2 {
-                    attempt += 1;
-                    // Reuse session - re-init if server requires it.
-                    let fresh_session = match session_manager.initialize_session(&server_url, &client_info).await {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("Failed to reinitialize session on attempt {}: {}", attempt, e);
-                            last_err = Some(anyhow::Error::new(e));
-                            continue;
-                        }
-                    };
-
-                    let call_res = session_manager
-                        .make_request(
-                            &fresh_session,
-                            "tools/call",
-                            serde_json::json!({"name": tool.tool_name, "arguments": serde_json::Value::Object(suggested_args.clone())}),
-                        )
-                        .await;
-
-                    let _ = session_manager.terminate_session(&fresh_session).await;
-
-                    match call_res {
-                        Ok(res) => {
-                            eprintln!("✅ Retry succeeded: {}", serde_json::to_string_pretty(&res).unwrap_or_default());
-                            last_err = None;
-                            break;
-                        }
-                        Err(e) => {
-                            eprintln!("Attempt {} failed: {}", attempt, e);
-                            last_err = Some(anyhow::Error::new(e));
-                        }
-                    }
-                }
-
-                if last_err.is_some() {
-                    eprintln!("✗ All retry attempts failed");
+                Err(e) => {
+                    eprintln!("✗ Retry failed: {}", e);
                 }
             }
         } else {
@@ -729,6 +413,93 @@ mod single_mcp_discovery_impl {
         }
 
         Ok(())
+    }
+
+    /// Prompts the user for input and returns the trimmed string.
+    fn prompt_user_for_input(prompt: &str) -> String {
+        use std::io::{self, Write};
+        print!("{}", prompt);
+        io::stdout().flush().unwrap();
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        input.trim().to_string()
+    }
+
+    /// Extracts the list of required parameters from a tool's input schema.
+    fn get_required_params(tool: &DiscoveredMCPTool) -> Vec<String> {
+        if let Some(input_schema_json) = &tool.input_schema_json {
+            if let Some(required_arr) = input_schema_json.get("required") {
+                if let Some(required_list) = required_arr.as_array() {
+                    return required_list
+                        .iter()
+                        .filter_map(|r| r.as_str().map(String::from))
+                        .collect();
+                }
+            }
+        }
+        vec![]
+    }
+
+    /// Asks the Arbiter for suggestions for missing parameters.
+    async fn get_arbiter_suggestions(
+        ccos: &Arc<CCOS>,
+        tool: &DiscoveredMCPTool,
+        current_args: &serde_json::Map<String, serde_json::Value>,
+        error_sample: &str,
+        missing_params: &[String],
+    ) -> Option<serde_json::Map<String, serde_json::Value>> {
+        let intent_graph = ccos.get_intent_graph();
+        let marketplace = ccos.get_capability_marketplace();
+        let arbiter = match ArbiterFactory::create_arbiter_from_env(intent_graph, Some(marketplace)).await {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("⚠️ Failed to create Arbiter: {}", e);
+                return None;
+            }
+        };
+
+        let schema_snippet = tool.input_schema_json.clone().unwrap_or(serde_json::Value::Null);
+        let prompt = format!(
+            "You are an expert API tester. Your goal is to provide realistic arguments to successfully call an API tool for introspection purposes.
+
+I tried to call the tool '{tool_name}' with these inputs:
+`{inputs}`
+
+The server responded with this error:
+`{error}`
+
+Here is the tool's input schema:
+`{schema}`
+
+Based on the error and schema, generate a single JSON object with realistic, valid-looking values for the following required parameters: {missing_list}. The values should be for publicly known and accessible resources to maximize the chance of a successful API call. For example, for a parameter named 'repo', use a well-known open-source repository like 'microsoft/vscode'. Do not use generic placeholders like 'test', 'dummy', or 'example'.
+
+Respond with ONLY the JSON object containing the requested keys.",
+            tool_name = tool.tool_name,
+            inputs = serde_json::Value::Object(current_args.clone()),
+            error = error_sample,
+            schema = serde_json::to_string_pretty(&schema_snippet).unwrap_or_default(),
+            missing_list = missing_params.join(", ")
+        );
+
+        match arbiter.process_natural_language(&prompt, None).await {
+            Ok(exec) => {
+                let suggestion_text = format!("{}", exec.value);
+                match serde_json::from_str::<serde_json::Value>(&suggestion_text) {
+                    Ok(serde_json::Value::Object(obj)) => {
+                        eprintln!("→ Arbiter suggested: {}", serde_json::to_string(&obj).unwrap_or_default());
+                        Some(obj)
+                    }
+                    _ => {
+                        eprintln!("⚠️ Arbiter did not return a clean JSON object.");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("⚠️ Arbiter call failed: {}", e);
+                None
+            }
+        }
     }
 
     fn resolve_server_url_from_overrides(server_name: &str) -> Option<String> {
