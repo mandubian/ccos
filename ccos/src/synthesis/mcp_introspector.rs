@@ -544,7 +544,7 @@ impl MCPIntrospector {
     }
 
     /// Infer RTFS TypeExpr from a JSON value by analyzing its structure
-    fn infer_type_from_json_value(&self, value: &serde_json::Value) -> RuntimeResult<TypeExpr> {
+    pub fn infer_type_from_json_value(&self, value: &serde_json::Value) -> RuntimeResult<TypeExpr> {
         match value {
             serde_json::Value::Null => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Nil)),
             serde_json::Value::Bool(_) => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Bool)),
