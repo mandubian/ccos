@@ -3,6 +3,7 @@
 //! This demonstrates how description-based semantic matching finds MCP capabilities
 //! when given functional descriptions rather than exact capability names.
 
+use ccos::capability_marketplace::types::CapabilityManifest;
 use ccos::discovery::{CapabilityNeed, DiscoveryEngine};
 use ccos::CCOS;
 use std::sync::Arc;
@@ -98,9 +99,24 @@ async fn test_functional_description_discovery(
                 }
             }
 
+            async fn persist_manifest(
+                discovery_engine: &DiscoveryEngine,
+                manifest: &CapabilityManifest,
+            ) {
+                match discovery_engine.save_mcp_capability(manifest).await {
+                    Ok(_) => {
+                        println!("   💾 Persisted capability manifest to disk");
+                    }
+                    Err(e) => {
+                        println!("   ⚠️  Failed to persist capability manifest: {}", e);
+                    }
+                }
+            }
+
             if let Some(ref metadata) = manifest.metadata.get("mcp_server_url") {
                 println!("\n   🌐 MCP Server: {}", metadata);
             }
+            persist_manifest(discovery_engine, &manifest).await;
         }
         Ok(None) => {
             println!("❌ Not found in MCP registry");
