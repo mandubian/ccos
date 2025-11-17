@@ -1,5 +1,6 @@
 use crate::capability_marketplace::types::CapabilityDiscovery;
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
+use crate::synthesis::mcp_introspector::{DiscoveredMCPTool, MCPIntrospector};
 use async_trait::async_trait;
 use chrono::Utc;
 use rtfs::ast::{
@@ -72,8 +73,8 @@ pub struct MCPResourcesResponse {
 #[derive(Debug, Clone)]
 pub struct RTFSCapabilityDefinition {
     pub capability: Expression,
-    pub input_schema: Option<Expression>,
-    pub output_schema: Option<Expression>,
+    pub input_schema: Option<TypeExpr>,
+    pub output_schema: Option<TypeExpr>,
 }
 
 /// Simplified serializable version for backwards compatibility (if needed)
@@ -323,7 +324,9 @@ impl MCPDiscoveryProvider {
         // Convert MCP tools to capability manifests
         let mut capabilities = Vec::new();
         for tool in tools_response.tools {
-            let capability = self.convert_tool_to_capability(tool);
+            let capability = self
+                .convert_tool_to_capability_with_introspection(tool)
+                .await?;
             capabilities.push(capability);
         }
 
@@ -397,6 +400,16 @@ impl MCPDiscoveryProvider {
         let effects = self.derive_tool_effects(&tool);
         let serialized_effects = Self::serialize_effects(&effects);
 
+        let input_schema = tool
+            .input_schema
+            .as_ref()
+            .and_then(|schema| MCPIntrospector::type_expr_from_json_schema(schema).ok());
+
+        let output_schema = tool
+            .output_schema
+            .as_ref()
+            .and_then(|schema| MCPIntrospector::type_expr_from_json_schema(schema).ok());
+
         CapabilityManifest {
             id: capability_id.clone(),
             name: tool.name.clone(),
@@ -409,8 +422,8 @@ impl MCPDiscoveryProvider {
                 timeout_ms: self.config.timeout_seconds * 1000,
             }),
             version: "1.0.0".to_string(),
-            input_schema: None,  // TODO: Convert JSON schema to TypeExpr
-            output_schema: None, // TODO: Convert JSON schema to TypeExpr
+            input_schema,
+            output_schema,
             attestation: None,
             provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
                 source: "mcp_discovery".to_string(),
@@ -443,6 +456,87 @@ impl MCPDiscoveryProvider {
                 metadata
             },
             agent_metadata: None,
+        }
+    }
+
+    async fn convert_tool_to_capability_with_introspection(
+        &self,
+        tool: MCPTool,
+    ) -> RuntimeResult<CapabilityManifest> {
+        let mut manifest = self.convert_tool_to_capability(tool.clone());
+        if let Some(headers) = self.build_auth_headers() {
+            if let Ok((schema_opt, sample_opt)) = self
+                .introspect_output_schema_for_tool(&tool, manifest.input_schema.clone(), &headers)
+                .await
+            {
+                if let Some(schema) = schema_opt {
+                    manifest.output_schema = Some(schema);
+                }
+                if let Some(sample) = sample_opt {
+                    manifest
+                        .metadata
+                        .insert("output_snippet".to_string(), sample);
+                }
+            }
+        }
+        Ok(manifest)
+    }
+
+    fn build_auth_headers(&self) -> Option<HashMap<String, String>> {
+        self.config.auth_token.as_ref().map(|token| {
+            let mut headers = HashMap::new();
+            headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+            headers
+        })
+    }
+
+    async fn introspect_output_schema_for_tool(
+        &self,
+        tool: &MCPTool,
+        input_schema: Option<TypeExpr>,
+        auth_headers: &HashMap<String, String>,
+    ) -> RuntimeResult<(Option<TypeExpr>, Option<String>)> {
+        let discovered = self.build_discovered_tool(tool, input_schema);
+        let introspector = MCPIntrospector::new();
+        match introspector
+            .introspect_output_schema(
+                &discovered,
+                &self.config.endpoint,
+                &self.config.name,
+                Some(auth_headers.clone()),
+            )
+            .await
+        {
+            Ok((Some(schema), maybe_sample)) => {
+                eprintln!(
+                    "✅ MCP Discovery: Inferred output schema for '{}'",
+                    tool.name
+                );
+                Ok((Some(schema), maybe_sample))
+            }
+            Ok((None, Some(sample))) => Ok((None, Some(sample))),
+            Ok((None, None)) => Ok((None, None)),
+            Err(err) => {
+                eprintln!(
+                    "⚠️ MCP Discovery: Output schema introspection failed for '{}': {}",
+                    tool.name, err
+                );
+                Ok((None, None))
+            }
+        }
+    }
+
+    fn build_discovered_tool(
+        &self,
+        tool: &MCPTool,
+        input_schema: Option<TypeExpr>,
+    ) -> DiscoveredMCPTool {
+        DiscoveredMCPTool {
+            tool_name: tool.name.clone(),
+            description: tool.description.clone(),
+            input_schema,
+            output_schema: None,
+            input_schema_json: tool.input_schema.clone(),
         }
     }
 
@@ -590,12 +684,14 @@ impl MCPDiscoveryProvider {
         let input_schema = tool
             .input_schema
             .as_ref()
-            .and_then(|schema| self.convert_json_schema_to_rtfs(schema).ok());
+            .and_then(|schema| self.convert_json_schema_to_rtfs(schema).ok())
+            .and_then(|expr| self.convert_rtfs_to_type_expr(&expr).ok());
 
         let output_schema = tool
             .output_schema
             .as_ref()
-            .and_then(|schema| self.convert_json_schema_to_rtfs(schema).ok());
+            .and_then(|schema| self.convert_json_schema_to_rtfs(schema).ok())
+            .and_then(|expr| self.convert_rtfs_to_type_expr(&expr).ok());
 
         Ok(RTFSCapabilityDefinition {
             capability,
@@ -663,7 +759,7 @@ impl MCPDiscoveryProvider {
 
             if let Some(input_schema) = &capability.input_schema {
                 rtfs_content.push_str("        :input-schema ");
-                rtfs_content.push_str(&self.expression_to_rtfs_text(input_schema, 0));
+                rtfs_content.push_str(&self.type_expr_to_rtfs_text(input_schema));
                 rtfs_content.push_str(",\n");
             } else {
                 rtfs_content.push_str("        :input-schema nil,\n");
@@ -671,7 +767,7 @@ impl MCPDiscoveryProvider {
 
             if let Some(output_schema) = &capability.output_schema {
                 rtfs_content.push_str("        :output-schema ");
-                rtfs_content.push_str(&self.expression_to_rtfs_text(output_schema, 0));
+                rtfs_content.push_str(&self.type_expr_to_rtfs_text(output_schema));
             } else {
                 rtfs_content.push_str("        :output-schema nil");
             }
@@ -1171,6 +1267,59 @@ impl MCPDiscoveryProvider {
         }
     }
 
+    /// Convert TypeExpr to RTFS text format
+    fn type_expr_to_rtfs_text(&self, type_expr: &TypeExpr) -> String {
+        match type_expr {
+            TypeExpr::Primitive(p) => match p {
+                PrimitiveType::String => ":string".to_string(),
+                PrimitiveType::Int => ":int".to_string(),
+                PrimitiveType::Float => ":float".to_string(),
+                PrimitiveType::Bool => ":bool".to_string(),
+                PrimitiveType::Nil => ":nil".to_string(),
+                PrimitiveType::Keyword => ":keyword".to_string(),
+                PrimitiveType::Symbol => ":symbol".to_string(),
+                PrimitiveType::Custom(k) => format!(":{}", k.0),
+            },
+            TypeExpr::Any => ":any".to_string(),
+            TypeExpr::Never => ":never".to_string(),
+            TypeExpr::Vector(inner) => {
+                format!("[:vector {}]", self.type_expr_to_rtfs_text(inner))
+            }
+            TypeExpr::Map { entries, .. } => {
+                let mut map_entries = Vec::new();
+                for entry in entries {
+                    let key_str = format!(":{}", entry.key.0);
+                    let value_str = self.type_expr_to_rtfs_text(&entry.value_type);
+                    if entry.optional {
+                        map_entries.push(format!("[:optional {} {}]", key_str, value_str));
+                    } else {
+                        map_entries.push(format!("[{} {}]", key_str, value_str));
+                    }
+                }
+                format!("[:map {}]", map_entries.join(" "))
+            }
+            TypeExpr::Union(options) => {
+                let options_str: Vec<String> = options
+                    .iter()
+                    .map(|opt| self.type_expr_to_rtfs_text(opt))
+                    .collect();
+                format!("[:union {}]", options_str.join(" "))
+            }
+            TypeExpr::Optional(inner) => {
+                format!("[:optional {}]", self.type_expr_to_rtfs_text(inner))
+            }
+            TypeExpr::Function { .. } => ":fn".to_string(), // Simplified representation
+            TypeExpr::Literal(l) => match l {
+                Literal::String(s) => format!("\"{}\"", s),
+                Literal::Integer(i) => i.to_string(),
+                Literal::Float(f) => f.to_string(),
+                Literal::Boolean(b) => b.to_string(),
+                _ => ":any".to_string(),
+            },
+            _ => ":any".to_string(), // Fallback for unsupported TypeExpr variants
+        }
+    }
+
     /// Convert RTFS capability definition back to CapabilityManifest
     pub fn rtfs_to_capability_manifest(
         &self,
@@ -1279,15 +1428,8 @@ impl MCPDiscoveryProvider {
         };
 
         // Convert input/output schemas
-        let input_schema = rtfs_def
-            .input_schema
-            .as_ref()
-            .and_then(|expr| self.convert_rtfs_to_type_expr(expr).ok());
-
-        let output_schema = rtfs_def
-            .output_schema
-            .as_ref()
-            .and_then(|expr| self.convert_rtfs_to_type_expr(expr).ok());
+        let input_schema = rtfs_def.input_schema.clone();
+        let output_schema = rtfs_def.output_schema.clone();
 
         if effects.is_empty() {
             if let Some(serialized) = serialized_effects {

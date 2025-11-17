@@ -2283,11 +2283,8 @@ impl CapabilityMarketplace {
             let extract_quoted = |key: &str, src: &str| -> Option<String> {
                 if let Some(pos) = src.find(key) {
                     let after = &src[pos + key.len()..];
-                    if let Some(q1) = after.find('"') {
-                        let rest = &after[q1 + 1..];
-                        if let Some(q2) = rest.find('"') {
-                            return Some(rest[..q2].to_string());
-                        }
+                    if let Some(end) = after.find('"') {
+                        return Some(after[..end].to_string());
                     }
                 }
                 None

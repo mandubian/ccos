@@ -264,9 +264,17 @@ impl MCPSessionHandler {
         if let Some(result) = json.get("result") {
             // Debug: Log the actual MCP response structure for troubleshooting
             if let Ok(result_str) = serde_json::to_string_pretty(result) {
-                eprintln!("📦 MCP response result structure:\n{}", result_str);
+                const MAX_DEBUG_CHARS: usize = 1200;
+                let mut preview: String = result_str.chars().take(MAX_DEBUG_CHARS).collect();
+                if preview.chars().count() < result_str.chars().count() {
+                    preview.push_str(&format!(
+                        "… [truncated {} chars]",
+                        result_str.chars().count() - MAX_DEBUG_CHARS
+                    ));
+                }
+                eprintln!("📦 MCP response result structure:\n{}", preview);
             }
-            
+
             // MCP protocol returns results in a "content" array with text blocks
             // If the result has a "content" array with a text block containing JSON,
             // extract and parse the JSON to return the actual structured data
@@ -274,7 +282,9 @@ impl MCPSessionHandler {
                 if let Some(first_block) = content_array.first() {
                     if let Some(text_content) = first_block.get("text").and_then(|t| t.as_str()) {
                         // Try to parse the text content as JSON
-                        if let Ok(parsed_json) = serde_json::from_str::<serde_json::Value>(text_content) {
+                        if let Ok(parsed_json) =
+                            serde_json::from_str::<serde_json::Value>(text_content)
+                        {
                             eprintln!("✅ Extracted structured data from MCP content text block");
                             // Return the parsed JSON structure instead of the MCP wrapper
                             return Ok(json_to_rtfs_value(&parsed_json));
@@ -282,13 +292,13 @@ impl MCPSessionHandler {
                     }
                 }
             }
-            
+
             // Fallback: Check for structuredContent field (if MCP server provides it)
             if let Some(structured) = result.get("structuredContent") {
                 eprintln!("✅ Using MCP structuredContent field");
                 return Ok(json_to_rtfs_value(structured));
             }
-            
+
             // Default: Convert JSON to RTFS Value as-is
             Ok(json_to_rtfs_value(result))
         } else if let Some(error) = json.get("error") {
