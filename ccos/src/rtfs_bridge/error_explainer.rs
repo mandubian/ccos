@@ -33,6 +33,19 @@ impl RtfsErrorExplainer {
             RuntimeError::TypeValidationError(message) => {
                 Some(Self::basic_type_validation_guidance(message))
             }
+            RuntimeError::Generic(message) if message.contains("Input validation failed")
+                || message.to_ascii_lowercase().contains("type mismatch") =>
+            {
+                // Build base guidance from existing type validation helper and append
+                // the JSON parsing hint to describe how to convert string outputs into vectors.
+                let mut base = Self::basic_type_validation_guidance(message).hints;
+                base.push(Self::basic_collection_mismatch_hint());
+                Some(RtfsErrorDiagnostics {
+                    summary: "Input validation failed when invoking a capability; possible type mismatch.".to_string(),
+                    snippet: None,
+                    hints: base,
+                })
+            }
             RuntimeError::UndefinedSymbol(symbol) => Some(RtfsErrorDiagnostics {
                 summary: format!("Undefined symbol `{}` encountered during execution.", symbol.0),
                 snippet: None,
@@ -88,7 +101,7 @@ impl RtfsErrorExplainer {
         }
     }
 
-    fn basic_type_validation_guidance(message: &str) -> RtfsErrorDiagnostics {
+    fn basic_type_validation_guidance(_message: &str) -> RtfsErrorDiagnostics {
         let mut hints = Vec::new();
         hints.push(
             "Ensure capability inputs refer to the correct fields (e.g. `:issues` instead of `:github_issues`)."
@@ -104,6 +117,10 @@ impl RtfsErrorExplainer {
             snippet: None,
             hints,
         }
+    }
+
+    fn basic_collection_mismatch_hint() -> String {
+        "If a capability returns a JSON string inside a field like `:content`, parse it before passing it to a step expecting a vector. Example: `(call :ccos.json.parse (get step_0 :content))` and then pass the parsed vector to `:collection` for `mcp.core.filter`.".to_string()
     }
 
     fn extract_problematic_line(message: &str) -> Option<String> {
@@ -134,4 +151,10 @@ impl RtfsErrorExplainer {
         }
         output
     }
+
+    // tests for the explainer are maintained in separate integration tests; we
+    // prefer exercising the LLM repair behavior end-to-end rather than unit tests
+    // for hints that bridge to generated capability behavior.
 }
+
+// no explicit tests for collection hint; prefer LLM-driven repairs in practice
