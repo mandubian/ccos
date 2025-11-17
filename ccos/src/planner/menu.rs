@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::capability_marketplace::types::{CapabilityManifest, ProviderType};
+use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
 use rtfs::ast::{Literal, MapTypeEntry, PrimitiveType, TypeExpr};
 use serde::{Deserialize, Serialize};
 
@@ -196,6 +197,20 @@ fn insert_entry(
 
     let is_optional =
         entry.optional || parent_optional || type_expr_is_optional(entry.value_type.as_ref());
+    // Debug: log MapTypeEntry optionality to help track down why fields like 'after' become required
+    #[cfg(debug_assertions)]
+    {
+        let value_type_str = type_expr_to_rtfs_compact(entry.value_type.as_ref());
+        eprintln!(
+            "DEBUG: insert_entry key='{}' entry.optional={} parent_optional={} value_type={} computed_is_optional={}",
+            key,
+            entry.optional,
+            parent_optional,
+            value_type_str,
+            is_optional
+        );
+        eprintln!("DEBUG: value_type_debug={:?}", entry.value_type);
+    }
     if is_optional {
         required.remove(&key);
         optional.insert(annotated_key);
@@ -268,6 +283,10 @@ fn type_expr_is_optional(expr: &TypeExpr) -> bool {
             ) || type_expr_is_optional(opt)
         }),
         TypeExpr::Refined { base_type, .. } => type_expr_is_optional(base_type),
+        // Heuristic: alias names that end with '?' (e.g., "string?") should be
+        // treated as optional. This covers cases where the parser retained the
+        // alias symbol instead of wrapping the type in a TypeExpr::Optional.
+        TypeExpr::Alias(sym) => sym.0.ends_with('?'),
         _ => false,
     }
 }

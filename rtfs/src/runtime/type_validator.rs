@@ -231,6 +231,22 @@ impl TypeValidator {
     /// Resolve common alias names (e.g., `Int`, `String`) to primitive types.
     /// Accepts both capitalized and lowercase forms for convenience.
     fn resolve_primitive_alias(alias: &crate::ast::Symbol) -> Option<TypeExpr> {
+        // Support alias-style optionals like `string?` by stripping a trailing
+        // '?' and resolving the core alias. If the core alias resolves to a
+        // primitive, return an Optional wrapping that primitive. This keeps
+        // validation semantics consistent when discovery preserves alias
+        // literals that contain the optional suffix instead of using the
+        // `TypeExpr::Optional` AST node.
+        if alias.0.ends_with('?') {
+            let core = alias.0.trim_end_matches('?');
+            if !core.is_empty() {
+                if let Some(resolved) =
+                    Self::resolve_primitive_alias(&crate::ast::Symbol(core.to_string()))
+                {
+                    return Some(TypeExpr::Optional(Box::new(resolved)));
+                }
+            }
+        }
         match alias.0.as_str() {
             // Capitalized
             "Int" => Some(TypeExpr::Primitive(PrimitiveType::Int)),
