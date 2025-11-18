@@ -750,25 +750,12 @@ impl MCPIntrospector {
         sample_output: Option<&str>,
     ) -> String {
         let sample_comment = if let Some(sample) = sample_output {
-            let truncated_sample = sample
-                .lines()
-                .take(15) // Take a reasonable number of lines
-                .map(|line| {
-                    if line.len() > 200 {
-                        // Truncate very long lines (like embedded JSON strings)
-                        format!("{}...", &line[..200])
-                    } else {
-                        line.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            let indented_sample = truncated_sample
+            let indented_sample = sample
                 .lines()
                 .map(|line| format!(";; {}", line))
                 .collect::<Vec<_>>()
                 .join("\n");
-            format!(";; Sample Output (truncated):\n{}\n\n", indented_sample)
+            format!(";; Sample Output:\n{}\n\n", indented_sample)
         } else {
             String::new()
         };
