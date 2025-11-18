@@ -12,19 +12,61 @@ use std::error::Error;
 use std::sync::Arc;
 
 use ccos::CCOS;
+use rtfs::config::types::AgentConfig;
 
 use crate::single_mcp_discovery_impl::{run_discovery, Args};
 
 mod single_mcp_discovery_impl {
     use super::*;
-    use ccos::synthesis::mcp_introspector::{DiscoveredMCPTool, MCPIntrospector};
-    use ccos::arbiter::ArbiterFactory;
+    use ccos::arbiter::DelegatingArbiter;
+    use ccos::synthesis::mcp_introspector::DiscoveredMCPTool;
     use ccos::synthesis::mcp_session::MCPSessionManager;
-    use ccos::discovery::capability_matcher::{
-        calculate_description_match_score_with_embedding,
-        calculate_description_match_score,
-    };
-    use ccos::discovery::embedding_service::EmbeddingService;
+    use serde_json;
+    use rtfs::runtime::values::Value as RtfsValue;
+
+    /// Convert RTFS Value to serde_json::Value by extracting the actual value
+    fn rtfs_value_to_json(rtfs_value: &RtfsValue) -> serde_json::Value {
+        match rtfs_value {
+            RtfsValue::Nil => serde_json::Value::Null,
+            RtfsValue::Boolean(b) => serde_json::Value::Bool(*b),
+            RtfsValue::Integer(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
+            RtfsValue::Float(f) => {
+                serde_json::Number::from_f64(*f)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null)
+            }
+            RtfsValue::String(s) => serde_json::Value::String(s.clone()),
+            RtfsValue::Vector(vec) => {
+                let json_array: Vec<serde_json::Value> = vec.iter().map(rtfs_value_to_json).collect();
+                serde_json::Value::Array(json_array)
+            }
+            RtfsValue::List(list) => {
+                // Treat List same as Vector for JSON serialization
+                let json_array: Vec<serde_json::Value> = list.iter().map(rtfs_value_to_json).collect();
+                serde_json::Value::Array(json_array)
+            }
+            RtfsValue::Map(map) => {
+                let mut json_obj = serde_json::Map::new();
+                for (key, value) in map {
+                    let key_str = match key {
+                        rtfs::ast::MapKey::String(s) => s.clone(),
+                        rtfs::ast::MapKey::Keyword(k) => k.0.clone(),
+                        rtfs::ast::MapKey::Integer(i) => i.to_string(),
+                    };
+                    json_obj.insert(key_str, rtfs_value_to_json(value));
+                }
+                serde_json::Value::Object(json_obj)
+            }
+            RtfsValue::Keyword(k) => serde_json::Value::String(format!(":{}", k.0)),
+            RtfsValue::Symbol(s) => serde_json::Value::String(s.0.clone()),
+            RtfsValue::Timestamp(ts) => serde_json::Value::String(format!("@{}", ts)),
+            RtfsValue::Uuid(uuid) => serde_json::Value::String(format!("@{}", uuid)),
+            RtfsValue::ResourceHandle(handle) => serde_json::Value::String(format!("@{}", handle)),
+            RtfsValue::Function(_) => serde_json::Value::Null, // Functions can't be serialized
+            RtfsValue::FunctionPlaceholder(_) => serde_json::Value::Null, // Function placeholders can't be serialized
+            RtfsValue::Error(e) => serde_json::Value::String(format!("error: {}", e.message)), // Serialize error as string
+        }
+    }
 
     #[derive(Parser, Debug)]
     pub struct Args {
@@ -33,8 +75,8 @@ mod single_mcp_discovery_impl {
         pub server_url: Option<String>,
 
         /// Friendly server name (e.g. github/github-mcp)
-        #[arg(long, default_value = "github")]
-        pub server_name: String,
+        #[arg(long)]
+        pub server_name: Option<String>,
 
         /// Hint for tool to discover (tool name or description keyword)
         #[arg(long)]
@@ -51,15 +93,32 @@ mod single_mcp_discovery_impl {
         /// Where to save the generated capability RTFS file
         #[arg(long, default_value = "capabilities/discovered")]
         pub output_dir: String,
+
+        /// Path to agent config file
+        #[arg(long, default_value = "config/agent_config.toml")]
+        pub config: String,
+
+        /// Profile to use for LLM
+        #[arg(long)]
+        pub profile: Option<String>,
     }
 
     pub async fn run_discovery(args: Args) -> Result<(), Box<dyn Error>> {
+        let agent_config = load_agent_config(&args.config)?;
+        apply_llm_profile(&agent_config, args.profile.as_deref())?;
+
         // Create CCOS (used to access arbiter and marketplace if needed)
-        let ccos = Arc::new(CCOS::new().await?);
+        let ccos = Arc::new(
+            CCOS::new_with_agent_config_and_configs_and_debug_callback(
+                Default::default(),
+                None,
+                Some(agent_config),
+                None,
+            )
+            .await?,
+        );
 
-        let _introspector = MCPIntrospector::new();
-
-        eprintln!("🔍 Introspecting MCP server: {} ({})", args.server_name, args.server_url.as_deref().unwrap_or(""));
+        eprintln!("🔍 Introspecting MCP server: {:?} ({})", args.server_name.as_deref().unwrap_or(""), args.server_url.as_deref().unwrap_or(""));
 
         let mut auth_headers = args.token.map(|t| {
             let mut m = std::collections::HashMap::new();
@@ -92,19 +151,27 @@ mod single_mcp_discovery_impl {
         // Resolve overrides from `capabilities/mcp/overrides.json` if present
         // If the user provided a friendly `server_name`, check curated overrides for a remote URL.
         // If not found, try to derive a canonical server name from the `server_url` and try again.
-        let server_name_candidate = args.server_name.clone();
-        let mut server_url = match resolve_server_url_from_overrides(&server_name_candidate) {
-            Some(url) => {
-                eprintln!("  → Using curated override remote URL: {}", url);
-                url
-            }
-            None => {
-                if let Some(url) = args.server_url {
+        let mut server_url = if let Some(ref server_name_candidate) = args.server_name {
+            match resolve_server_url_from_overrides(server_name_candidate) {
+                Some(url) => {
+                    eprintln!("  → Using curated override remote URL: {}", url);
                     url
-                } else {
-                    eprintln!("✗ No server URL provided and no override found for server '{}'", server_name_candidate);
-                    return Err(Box::<dyn Error>::from("Missing server URL"));
                 }
+                None => {
+                    if let Some(url) = args.server_url.clone() {
+                        url
+                    } else {
+                        eprintln!("✗ No server URL provided and no override found for server '{:?}'", server_name_candidate);
+                        return Err(Box::<dyn Error>::from("Missing server URL"));
+                    }
+                }
+            }
+        } else {
+            if let Some(url) = args.server_url.clone() {
+                url
+            } else {
+                eprintln!("✗ No server URL provided and no server name provided");
+                return Err(Box::<dyn Error>::from("Missing server URL"));
             }
         };
 
@@ -162,14 +229,9 @@ mod single_mcp_discovery_impl {
                 .map(|s| s.to_string());
 
             let input_schema_json = tool_json.get("inputSchema").cloned();
-            let input_schema = if let Some(schema_json) = &input_schema_json {
-                match MCPIntrospector::type_expr_from_json_schema(schema_json) {
-                    Ok(t) => Some(t),
-                    Err(_) => None,
-                }
-            } else {
-                None
-            };
+            // For now, we'll leave input_schema as None since the conversion method is not easily accessible
+            // The input_schema_json will still be available for building test inputs
+            let input_schema = None;
 
             discovered_tools.push(DiscoveredMCPTool {
                 tool_name,
@@ -191,7 +253,7 @@ mod single_mcp_discovery_impl {
 
         let introspection = ccos::synthesis::mcp_introspector::MCPIntrospectionResult {
             server_url: server_url.clone(),
-            server_name: args.server_name.clone(),
+            server_name: args.server_name.clone().unwrap_or_default(),
             protocol_version: session.protocol_version.clone(),
             tools: discovered_tools,
         };
@@ -201,107 +263,89 @@ mod single_mcp_discovery_impl {
             return Ok(());
         }
 
-        // Find best matching tool by hint using the same semantic matcher as discovery engine.
-        // We treat the hint as the "need_rationale" and compare against each tool's
-        // description + name, optionally using embeddings when configured.
-        let mut best_tool: Option<DiscoveredMCPTool> = None;
-        let mut best_score: f64 = f64::MIN;
-
-        // Detect embedding service from environment (if available), otherwise fall back to keywords.
-        let mut embedding_service = EmbeddingService::from_env();
-
+        eprintln!("📋 Discovered {} tools:", introspection.tools.len());
         for tool in &introspection.tools {
-            let desc = tool.description.clone().unwrap_or_default();
-            let name = tool.tool_name.clone();
-
-            let score = if let Some(ref mut emb_svc) = embedding_service {
-                // Embedding + keyword hybrid scoring (synchronous helper that may consult embeddings).
-                calculate_description_match_score_with_embedding(
-                    &args.hint,
-                    &desc,
-                    &name,
-                    Some(emb_svc),
-                )
-            } else {
-                // Pure keyword-based scoring.
-                calculate_description_match_score(&args.hint, &desc, &name)
-            };
-
-            if score > best_score {
-                best_score = score;
-                best_tool = Some(tool.clone());
-            }
+            eprintln!("  - {}", tool.tool_name);
         }
 
-        // Simple tie-breaker: if the hint contains certain keywords, prefer
-        // tools whose name contains the same keyword when scores are close.
-        if let Some(ref current) = best_tool {
-            let hint_l = args.hint.to_lowercase();
-            // Only apply this heuristic when we actually have a reasonably
-            // good semantic match already.
-            if best_score > 0.0 {
-                let mut candidate = current.clone();
-                let mut candidate_score = best_score;
+        // Use the Arbiter to select the best tool and proactively extract arguments.
+        let (tool, mut extracted_args) = if let Some((tool_name, args)) = select_tool_and_extract_args_with_arbiter(&ccos, &introspection.tools, &args.hint).await {
+            // Try exact match first
+            if let Some(found_tool) = introspection.tools.iter().find(|t| t.tool_name == tool_name) {
+                (found_tool.clone(), args)
+            } else {
+                // Try fuzzy matching - find tool name that contains the selected name or vice versa
+                let found_tool = introspection.tools.iter().find(|t| {
+                    t.tool_name.contains(&tool_name) || tool_name.contains(&t.tool_name)
+                });
+                if let Some(found_tool) = found_tool {
+                    eprintln!("⚠️ Arbiter selected '{}', using fuzzy match: '{}'", tool_name, found_tool.tool_name);
+                    (found_tool.clone(), args)
+                } else {
+                    eprintln!("⚠️ Arbiter selected tool '{}' but it was not found in the introspection results.", tool_name);
+                    eprintln!("   Available tools: {}", introspection.tools.iter().map(|t| t.tool_name.as_str()).collect::<Vec<_>>().join(", "));
+                    return Ok(());
+                }
+            }
+        } else {
+            eprintln!("⚠️ Arbiter could not select a tool for the hint '{}'.", args.hint);
+            // As a fallback, we could use the keyword-based search here, but for this example, we'll just exit.
+            return Ok(());
+        };
 
-                for tool in &introspection.tools {
-                    let name_l = tool.tool_name.to_lowercase();
+        // Try to infer output schema by calling tool once with safe inputs
+        // (we reuse the `session_manager` and `session` created earlier to avoid session-mismatch errors)
+        let mut test_inputs = build_safe_test_inputs_from_schema(tool.input_schema_json.as_ref(), false);
 
-                    // Prefer tools with "issues" in the name when the hint
-                    // mentions issues. This remains provider-agnostic but
-                    // helps disambiguate closely related tools.
-                    if hint_l.contains("issues") && name_l.contains("issues") {
-                        // Require that the semantic score is reasonably close
-                        // to the best score to avoid wild jumps.
-                        let desc = tool.description.clone().unwrap_or_default();
-                        let score = if let Some(ref mut emb_svc) = embedding_service {
-                            calculate_description_match_score_with_embedding(
-                                &args.hint,
-                                &desc,
-                                &tool.tool_name,
-                                Some(emb_svc),
-                            )
-                        } else {
-                            calculate_description_match_score(&args.hint, &desc, &tool.tool_name)
-                        };
+        // Map extracted parameter names to match the tool's schema parameter names
+        let mut mapped_args = map_parameters_to_schema(&extracted_args, tool.input_schema_json.as_ref());
+        eprintln!("📋 Parameter mapping:");
+        eprintln!("  Extracted: {:?}", extracted_args.keys().collect::<Vec<_>>());
+        eprintln!("  Mapped: {:?}", mapped_args.keys().collect::<Vec<_>>());
 
-                        if score >= candidate_score - 0.1 && score > candidate_score {
-                            candidate = tool.clone();
-                            candidate_score = score;
+        // Merge the mapped arguments into the test inputs.
+        eprintln!("📥 Merging extracted parameters into test inputs...");
+        eprintln!("  Before merge: {}", serde_json::to_string_pretty(&test_inputs).unwrap_or_default());
+        if let Some(obj) = test_inputs.as_object_mut() {
+            obj.append(&mut mapped_args);
+        } else {
+            eprintln!("⚠️ test_inputs is not an object, cannot merge parameters");
+        }
+        eprintln!("  After merge: {}", serde_json::to_string_pretty(&test_inputs).unwrap_or_default());
+
+        // To keep sample output small, ask for just one result if a common pagination
+        // parameter is supported by the tool's input schema.
+        if let Some(obj) = test_inputs.as_object_mut() {
+            if let Some(schema) = tool.input_schema_json.as_ref() {
+                if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+                    const PAGINATION_CANDIDATES: &[&str] = &["perPage", "limit", "count", "pageSize", "maxItems"];
+                    for (key, prop_schema) in properties {
+                        if PAGINATION_CANDIDATES.contains(&key.as_str()) {
+                            if let Some(type_str) = prop_schema.get("type").and_then(|t| t.as_str()) {
+                                if type_str == "integer" || type_str == "number" {
+                                    // Only add the pagination limit if it's not already present from hint extraction
+                                    if !obj.contains_key(key) {
+                                        obj.insert(key.clone(), serde_json::json!(1));
+                                        eprintln!("  → Found pagination parameter '{}', setting to 1 to limit output.", key);
+                                    }
+                                    break; 
+                                }
+                            }
                         }
                     }
                 }
-
-                best_tool = Some(candidate);
-                best_score = candidate_score;
             }
         }
 
-        let tool = match best_tool {
-            Some(t) => {
-                eprintln!("→ Selected tool: {} (score {:.3})", t.tool_name, best_score);
-                t
-            }
-            None => {
-                eprintln!("No matching tool found for hint '{}', listing tools:", args.hint);
-                for t in &introspection.tools {
-                    eprintln!(" - {}: {}", t.tool_name, t.description.as_deref().unwrap_or(""));
-                }
-                return Ok(());
-            }
-        };
- 
-
-        // Try to infer output schema by calling tool once with safe inputs
-        // Try to introspect output by calling the tool once with safe inputs using the active session
-        // (we reuse the `session_manager` and `session` created earlier to avoid session-mismatch errors)
-        let test_inputs = build_safe_test_inputs_from_schema(tool.input_schema_json.as_ref(), false);
 
         // Call the tool via the open session
+        eprintln!("🔧 Calling tool '{}' with arguments:", tool.tool_name);
+        eprintln!("{}", serde_json::to_string_pretty(&test_inputs).unwrap_or_default());
         let call_res = session_manager
             .make_request(&session, "tools/call", serde_json::json!({"name": tool.tool_name, "arguments": test_inputs}))
             .await;
 
-        let (mut schema_opt, sample_opt) = match call_res {
+        let (schema_opt, sample_opt) = match call_res {
             Ok(r) => {
                 let result_val = r.get("result").cloned().unwrap_or(serde_json::Value::Null);
                 let sample_snippet = serde_json::to_string_pretty(&result_val).ok();
@@ -319,12 +363,12 @@ mod single_mcp_discovery_impl {
                     .unwrap_or(true);
 
                 if is_error {
-                    (None, sample_snippet)
+                    (None::<rtfs::ast::TypeExpr>, sample_snippet)
                 } else {
                     // Attempt to infer schema from the successful result
-                    let introspector = MCPIntrospector::new();
-                    let inferred_schema = introspector.infer_type_from_json_value(&result_val).ok();
-                    (inferred_schema, sample_snippet)
+                    // For now, we'll skip schema inference since the method is not accessible
+                    // The sample output will still be available for inspection
+                    (None::<rtfs::ast::TypeExpr>, sample_snippet)
                 }
             }
             Err(e) => {
@@ -343,100 +387,21 @@ mod single_mcp_discovery_impl {
 
         // If introspection returned no schema but provided a sample with an error-like message,
         // attempt to synthesize plausible inputs heuristically and retry the call.
+        // If introspection returned no schema but provided a sample with an error-like message,
+        // we can log it for the user. With the new proactive hint parsing, the old interactive
+        // loop for fixing arguments is less relevant, but we'll keep the error display.
         if let Some(sample) = sample_opt {
-            eprintln!("⚠️ Introspection produced sample/error: {}", sample.lines().next().unwrap_or(""));
-
-            let mut suggested_args = serde_json::Map::new();
-            let required = get_required_params(&tool);
-
-            // Loop until we have all required arguments
-            loop {
-                let missing_params: Vec<String> = required
-                    .iter()
-                    .filter(|k| !suggested_args.contains_key(*k))
-                    .cloned()
-                    .collect();
-
-                if missing_params.is_empty() {
-                    break;
-                }
-
-                eprintln!("💡 Missing required parameters: {}", missing_params.join(", "));
-
-                // 1. Try to use the Arbiter to suggest values
-                let arbiter_suggestions = get_arbiter_suggestions(
-                    &ccos,
-                    &tool,
-                    &suggested_args,
-                    &sample,
-                    &missing_params,
-                ).await;
-
-                if let Some(mut suggestions) = arbiter_suggestions {
-                    suggested_args.append(&mut suggestions);
-                    // Continue loop to check if all params are now filled
-                    continue;
-                }
-
-                // 2. If Arbiter fails, fall back to user input
-                eprintln!("🤖 Arbiter could not provide suggestions. Please provide the values manually.");
-                for param in &missing_params {
-                    let user_input = prompt_user_for_input(&format!("  Enter value for '{}':", param));
-                    if !user_input.is_empty() {
-                        suggested_args.insert(param.clone(), serde_json::Value::String(user_input));
-                    }
-                }
+            eprintln!("⚠️ Introspection with initial inputs failed or produced an error-like sample:");
+            // Show the full error, but limit to first 50 lines to avoid overwhelming output
+            let error_lines: Vec<&str> = sample.lines().take(50).collect();
+            eprintln!("{}", error_lines.join("\n"));
+            if sample.lines().count() > 50 {
+                eprintln!("... (truncated, {} more lines)", sample.lines().count() - 50);
             }
 
-
-            eprintln!("→ Synthesized inputs for retry: {}", serde_json::Value::Object(suggested_args.clone()).to_string());
-
-            // Retry the tool call
-            let client_info = ccos::synthesis::mcp_session::MCPServerInfo {
-                name: "ccos-single-discovery".to_string(),
-                version: "1.0.0".to_string(),
-            };
-
-            let fresh_session = session_manager.initialize_session(&server_url, &client_info).await?;
-            let call_res = session_manager
-                .make_request(
-                    &fresh_session,
-                    "tools/call",
-                    serde_json::json!({"name": tool.tool_name, "arguments": serde_json::Value::Object(suggested_args.clone())}),
-                )
-                .await;
-            let _ = session_manager.terminate_session(&fresh_session).await;
-
-            match call_res {
-                Ok(res) => {
-                    eprintln!("✅ Retry succeeded!");
-                    let result_val = res.get("result").cloned().unwrap_or_default();
-                    let introspector = MCPIntrospector::new();
-                    if let Ok(schema) = introspector.infer_type_from_json_value(&result_val) {
-                        eprintln!("✅ Inferred output schema from retry: {}", ccos::synthesis::schema_serializer::type_expr_to_rtfs_compact(&schema));
-                        let mut discovered_tool = tool.clone();
-                        discovered_tool.output_schema = Some(schema.clone());
-
-                        let capability = introspector.create_capability_from_mcp_tool(&discovered_tool, &introspection)?;
-                        let implementation_code = introspector.generate_mcp_rtfs_implementation(&discovered_tool, &server_url);
-
-                        let output_path = std::path::PathBuf::from(&args.output_dir);
-                        let sample_output = serde_json::to_string_pretty(&result_val).ok();
-                        let saved_path = introspector.save_capability_to_rtfs(
-                            &capability,
-                            &implementation_code,
-                            &output_path,
-                            sample_output.as_deref(),
-                        )?;
-
-                        eprintln!("✅ Capability saved to: {}", saved_path.display());
-                    }
-                    eprintln!("Result:\n{}", serde_json::to_string_pretty(&result_val).unwrap_or_default());
-                }
-                Err(e) => {
-                    eprintln!("✗ Retry failed: {}", e);
-                }
-            }
+            // The old logic would loop here, asking the user or arbiter for missing params.
+            // Since we now proactively extract from the hint, we will simply report the failure.
+            // A more robust implementation could still use an interactive loop as a fallback.
         } else {
             eprintln!("⚠️ No sample or schema could be obtained from introspection and no error snippet provided.");
         }
@@ -444,92 +409,8 @@ mod single_mcp_discovery_impl {
         Ok(())
     }
 
-    /// Prompts the user for input and returns the trimmed string.
-    fn prompt_user_for_input(prompt: &str) -> String {
-        use std::io::{self, Write};
-        print!("{}", prompt);
-        io::stdout().flush().unwrap();
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        input.trim().to_string()
-    }
 
-    /// Extracts the list of required parameters from a tool's input schema.
-    fn get_required_params(tool: &DiscoveredMCPTool) -> Vec<String> {
-        if let Some(input_schema_json) = &tool.input_schema_json {
-            if let Some(required_arr) = input_schema_json.get("required") {
-                if let Some(required_list) = required_arr.as_array() {
-                    return required_list
-                        .iter()
-                        .filter_map(|r| r.as_str().map(String::from))
-                        .collect();
-                }
-            }
-        }
-        vec![]
-    }
 
-    /// Asks the Arbiter for suggestions for missing parameters.
-    async fn get_arbiter_suggestions(
-        ccos: &Arc<CCOS>,
-        tool: &DiscoveredMCPTool,
-        current_args: &serde_json::Map<String, serde_json::Value>,
-        error_sample: &str,
-        missing_params: &[String],
-    ) -> Option<serde_json::Map<String, serde_json::Value>> {
-        let intent_graph = ccos.get_intent_graph();
-        let marketplace = ccos.get_capability_marketplace();
-        let arbiter = match ArbiterFactory::create_arbiter_from_env(intent_graph, Some(marketplace)).await {
-            Ok(a) => a,
-            Err(e) => {
-                eprintln!("⚠️ Failed to create Arbiter: {}", e);
-                return None;
-            }
-        };
-
-        let schema_snippet = tool.input_schema_json.clone().unwrap_or(serde_json::Value::Null);
-        let prompt = format!(
-            "You are an expert API tester. Your goal is to provide realistic arguments to successfully call an API tool for introspection purposes.
-
-I tried to call the tool '{tool_name}' with these inputs:
-`{inputs}`
-
-The server responded with this error:
-`{error}`
-
-Here is the tool's input schema:
-`{schema}`
-
-Based on the error and schema, generate a single JSON object with realistic, valid-looking values for the following required parameters: {missing_list}. The values should be for publicly known and accessible resources to maximize the chance of a successful API call. For example, for a parameter named 'repo', use a well-known open-source repository like 'microsoft/vscode'. Do not use generic placeholders like 'test', 'dummy', or 'example'.
-
-Respond with ONLY the JSON object containing the requested keys.",
-            tool_name = tool.tool_name,
-            inputs = serde_json::Value::Object(current_args.clone()),
-            error = error_sample,
-            schema = serde_json::to_string_pretty(&schema_snippet).unwrap_or_default(),
-            missing_list = missing_params.join(", ")
-        );
-
-        match arbiter.process_natural_language(&prompt, None).await {
-            Ok(exec) => {
-                let suggestion_text = format!("{}", exec.value);
-                match serde_json::from_str::<serde_json::Value>(&suggestion_text) {
-                    Ok(serde_json::Value::Object(obj)) => {
-                        eprintln!("→ Arbiter suggested: {}", serde_json::to_string(&obj).unwrap_or_default());
-                        Some(obj)
-                    }
-                    _ => {
-                        eprintln!("⚠️ Arbiter did not return a clean JSON object.");
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("⚠️ Arbiter call failed: {}", e);
-                None
-            }
-        }
-    }
 
     fn resolve_server_url_from_overrides(server_name: &str) -> Option<String> {
         // Try to load curated overrides from 'capabilities/mcp/overrides.json'
@@ -570,7 +451,11 @@ Respond with ONLY the JSON object containing the requested keys.",
                 if let Some(matches) = entry.get("matches").and_then(|m| m.as_array()) {
                     for pat in matches {
                         if let Some(p) = pat.as_str() {
-                            if simple_pattern_match(p, server_name) {
+                            // Check if pattern matches server_name (pattern may contain wildcards like "github.*")
+                            // Simple pattern matching: check if server_name matches the pattern
+                            // For patterns like "github.*", we check if server_name starts with "github"
+                            let pattern_clean = p.trim_end_matches(".*");
+                            if server_name.starts_with(pattern_clean) || server_name == pattern_clean {
                                 if let Some(remotes) = server.get("remotes").and_then(|r| r.as_array()) {
                                     for remote in remotes {
                                         if let Some(url) = remote.get("url").and_then(|u| u.as_str()) {
@@ -591,80 +476,246 @@ Respond with ONLY the JSON object containing the requested keys.",
     }
 
     fn simple_pattern_match(pattern: &str, text: &str) -> bool {
-        // Use the same matching rules as discovery::engine::pattern_match:
-        // - exact match
-        // - suffix '.*' -> allow either exact or namespaced (prefix + '.')
-        // - suffix '*' -> prefix match
-        // - prefix '*' -> suffix match
-        // - '*' anywhere -> anchored contains match (starts & ends)
-        let pattern_norm = pattern.to_ascii_lowercase();
-        let text_norm = text.to_ascii_lowercase();
-
-        if pattern_norm == text_norm {
-            return true;
-        }
-        if pattern_norm.ends_with(".*") {
-            let namespace = &pattern_norm[..pattern_norm.len() - 2];
-            return text_norm == namespace || text_norm.starts_with(&format!("{}.", namespace));
-        }
-        if pattern_norm.ends_with('*') {
-            let prefix = &pattern_norm[..pattern_norm.len() - 1];
-            return text_norm.starts_with(prefix);
-        }
-        if pattern_norm.starts_with('*') {
-            let suffix = &pattern_norm[1..];
-            return text_norm.ends_with(suffix);
-        }
-        if pattern_norm.contains('*') {
-            let parts: Vec<&str> = pattern_norm.split('*').collect();
-            if parts.len() == 2 {
-                return text_norm.starts_with(parts[0]) && text_norm.ends_with(parts[1]);
-            }
-        }
-        text_norm.contains(&pattern_norm)
+        let pattern_lower = pattern.to_lowercase();
+        let text_lower = text.to_lowercase();
+        text_lower.contains(&pattern_lower)
     }
 
-    use ccos::examples_common::discovery_utils::derive_server_name_from_repo_url;
+    // Helper function to derive server name from repo URL
+    fn derive_server_name_from_repo_url(url: &str) -> Option<String> {
+        use url::Url;
+        if let Ok(parsed) = Url::parse(url) {
+            let mut segs: Vec<&str> = parsed.path_segments().map(|s| s.collect()).unwrap_or_default();
+            segs.retain(|s| !s.is_empty());
+            if segs.len() >= 2 {
+                let owner = segs[0];
+                let repo = segs[1];
+                return Some(format!("{}/{}", owner, repo));
+            }
+        }
+        None
+    }
+
+    async fn select_tool_and_extract_args_with_arbiter(
+        ccos: &Arc<CCOS>,
+        tools: &[DiscoveredMCPTool],
+        hint: &str,
+    ) -> Option<(String, serde_json::Map<String, serde_json::Value>)> {
+        let tool_names: Vec<String> = tools.iter().map(|t| t.tool_name.clone()).collect();
+        
+        // Build a map of tool names to their input schemas for the prompt
+        let mut tool_schemas = std::collections::HashMap::new();
+        for tool in tools {
+            if let Some(ref schema_json) = tool.input_schema_json {
+                tool_schemas.insert(tool.tool_name.clone(), schema_json.clone());
+            }
+        }
+
+        if let Some(arbiter_arc) = ccos.get_delegating_arbiter() {
+            // Use the specialized tool selection method that bypasses delegation analysis
+            // Note: This method is defined in impl DelegatingArbiter block
+            // Use as_ref() to get &DelegatingArbiter from Arc
+            // Call using fully qualified path to ensure method is found
+            // Pass tool schemas so the LLM can use exact parameter names
+            match ccos::arbiter::DelegatingArbiter::select_mcp_tool(
+                arbiter_arc.as_ref(), 
+                hint, 
+                &tool_names,
+                Some(&tool_schemas)
+            ).await {
+                Ok((tool_name, constraints)) => {
+                    // Convert RTFS Value constraints to serde_json::Value
+                    let mut args = serde_json::Map::new();
+                    for (k, v) in &constraints {
+                        let json_val = rtfs_value_to_json(v);
+                        args.insert(k.to_string(), json_val);
+                    }
+                    
+                    // Debug: Show extracted parameters
+                    if !args.is_empty() {
+                        eprintln!("📋 Extracted parameters from hint:");
+                        for (key, value) in &args {
+                            eprintln!("  {}: {}", key, value);
+                        }
+                    } else {
+                        eprintln!("⚠️ No parameters extracted from hint");
+                    }
+                    
+                    // Validate that the selected tool exists in our list
+                    if tool_names.contains(&tool_name) {
+                        eprintln!("🔧 Selected tool: '{}'", tool_name);
+                        Some((tool_name, args))
+                    } else {
+                        eprintln!("⚠️ Arbiter selected tool '{}' but it was not in the provided list. Available: {}", tool_name, tool_names.join(", "));
+                        // Try fuzzy matching as fallback
+                        let hint_lower = hint.to_lowercase();
+                        tool_names.iter()
+                            .find(|&tn| {
+                                let tn_lower = tn.to_lowercase();
+                                (hint_lower.contains("list") && tn_lower.contains("list")) ||
+                                (hint_lower.contains("issue") && tn_lower.contains("issue")) ||
+                                (hint_lower.contains("repository") && tn_lower.contains("repo"))
+                            })
+                            .map(|tn| {
+                                eprintln!("🔧 Using fuzzy match: '{}'", tn);
+                                (tn.clone(), args)
+                            })
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Arbiter failed to select tool: {}", e);
+                    None
+                }
+            }
+        } else {
+            eprintln!("Delegating arbiter not available.");
+            None
+        }
+    }
+
+    /// Map extracted parameter names to match the tool's schema parameter names
+    /// This handles cases where the LLM might still use slightly different names
+    /// (though with the updated prompt, it should use exact schema names)
+    fn map_parameters_to_schema(
+        extracted_args: &serde_json::Map<String, serde_json::Value>,
+        schema: Option<&serde_json::Value>,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut mapped = serde_json::Map::new();
+        
+        // Get schema property names
+        let schema_properties: Vec<String> = if let Some(schema) = schema {
+            schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .map(|props| props.keys().cloned().collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        for (extracted_key, value) in extracted_args {
+            let mut matched = false;
+            
+            // First, check for exact match (case-insensitive)
+            let extracted_lower = extracted_key.to_lowercase();
+            for schema_key in &schema_properties {
+                if extracted_lower == schema_key.to_lowercase() {
+                    mapped.insert(schema_key.clone(), value.clone());
+                    if extracted_key != schema_key {
+                        eprintln!("  → Mapped '{}' → '{}' (case-insensitive match)", extracted_key, schema_key);
+                    }
+                    matched = true;
+                    break;
+                }
+            }
+            
+            // If no exact match, try fuzzy matching as fallback
+            if !matched {
+                for schema_key in &schema_properties {
+                    let schema_lower = schema_key.to_lowercase();
+                    // Check if one contains the other (case-insensitive)
+                    if extracted_lower.contains(&schema_lower) || schema_lower.contains(&extracted_lower) {
+                        // Check if they're similar enough (one is substring of the other)
+                        let min_len = extracted_lower.len().min(schema_lower.len());
+                        let max_len = extracted_lower.len().max(schema_lower.len());
+                        // If the shorter is at least 70% of the longer, consider it a match
+                        if min_len as f64 / max_len as f64 >= 0.7 {
+                            mapped.insert(schema_key.clone(), value.clone());
+                            eprintln!("  → Mapped '{}' → '{}' (fuzzy match)", extracted_key, schema_key);
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // If still no match, keep the original key (might be a new parameter)
+            if !matched {
+                mapped.insert(extracted_key.clone(), value.clone());
+                eprintln!("  → Kept '{}' as-is (no schema match found)", extracted_key);
+            }
+        }
+        
+        mapped
+    }
 
     fn build_safe_test_inputs_from_schema(schema: Option<&serde_json::Value>, plausible: bool) -> serde_json::Value {
         let mut inputs = serde_json::Map::new();
-
+        
         if let Some(schema) = schema {
             if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
                 let required: Vec<String> = schema
                     .get("required")
                     .and_then(|r| r.as_array())
-                    .map(|arr| arr.iter().filter_map(|s| s.as_str()).map(|s| s.to_string()).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|s| s.as_str())
+                            .map(|s| s.to_string())
+                            .collect()
+                    })
                     .unwrap_or_default();
 
                 for (key, prop_schema) in properties {
+                    // Only include required fields
                     if required.contains(key) {
-                        let val = generate_safe_default_value(prop_schema, key, plausible);
-                        inputs.insert(key.clone(), val);
+                        let default_value = generate_safe_default_value(prop_schema, key, plausible);
+                        inputs.insert(key.clone(), default_value);
                     }
                 }
             }
         }
-
+        
         serde_json::Value::Object(inputs)
     }
-
-    fn generate_safe_default_value(schema: &serde_json::Value, _name: &str, _plausible: bool) -> serde_json::Value {
+    
+    fn generate_safe_default_value(
+        schema: &serde_json::Value,
+        name: &str,
+        plausible: bool,
+    ) -> serde_json::Value {
         if let Some(type_str) = schema.get("type").and_then(|t| t.as_str()) {
             match type_str {
                 "string" => {
+                    // Use empty string or a safe default from enum if available
                     if let Some(enum_vals) = schema.get("enum").and_then(|e| e.as_array()) {
                         if let Some(first) = enum_vals.first().and_then(|v| v.as_str()) {
                             return serde_json::Value::String(first.to_string());
                         }
                     }
-                    // For generic examples, avoid provider-specific heuristics. If an enum
-                    // is not provided, fall back to an empty string even when `plausible`
-                    // is true; provider-specific examples should override this behavior
-                    // in their own code.
-                    serde_json::Value::String(String::new())
+                    // For string fields, use empty string or a safe placeholder
+                    let name_l = name.to_lowercase();
+                    if plausible {
+                        if name_l.contains("owner") || name_l.contains("user") {
+                            return serde_json::Value::String("octocat".to_string());
+                        }
+                        if name_l.contains("repo") || name_l.contains("repository") {
+                            return serde_json::Value::String("hello-world".to_string());
+                        }
+                        if name_l.contains("sha") || name_l.contains("commit") {
+                            return serde_json::Value::String(
+                                "0000000000000000000000000000000000000000".to_string(),
+                            );
+                        }
+                        if name_l.contains("email") {
+                            return serde_json::Value::String("example@example.com".to_string());
+                        }
+                        if name_l.contains("url") || name_l.contains("uri") {
+                            return serde_json::Value::String("https://example.com".to_string());
+                        }
+                        if name_l.contains("name")
+                            || name_l.contains("title")
+                            || name_l.contains("label")
+                        {
+                            return serde_json::Value::String("example".to_string());
+                        }
+                        if name_l.contains("path") {
+                            return serde_json::Value::String("/path/to/file".to_string());
+                        }
+                    }
+                    serde_json::Value::String("".to_string())
                 }
                 "integer" | "number" => {
+                    // Use 0 or minimum value if specified
                     if let Some(min) = schema.get("minimum").and_then(|m| m.as_i64()) {
                         serde_json::Value::Number(serde_json::Number::from(min))
                     } else {
@@ -680,12 +731,36 @@ Respond with ONLY the JSON object containing the requested keys.",
             serde_json::Value::Null
         }
     }
+}
 
-    use ccos::examples_common::discovery_utils::extract_suggestion_from_text;
+fn load_agent_config(config_path: &str) -> Result<AgentConfig, Box<dyn Error>> {
+    let mut content = std::fs::read_to_string(config_path)?;
+    if content.starts_with("# RTFS") {
+        content = content.lines().skip(1).collect::<Vec<_>>().join("\n");
+    }
+    toml::from_str(&content).map_err(|e| format!("failed to parse agent config: {}", e).into())
+}
 
-    // Note: we intentionally avoid instantiating or implementing `ArbiterEngine` here.
-    // Examples that need to call an LLM should use the public arbiter factory APIs
-    // from the crate root (`ccos::arbiter`) or call into a running CCOS instance.
+fn apply_llm_profile(agent_config: &AgentConfig, profile: Option<&str>) -> Result<(), Box<dyn Error>> {
+    if let Some(profile_name) = profile {
+        let (expanded_profiles, _, _) =
+            rtfs::config::profile_selection::expand_profiles(agent_config);
+
+        if let Some(llm_profile) = expanded_profiles.iter().find(|p| p.name == profile_name) {
+            std::env::set_var("CCOS_DELEGATING_PROVIDER", llm_profile.provider.clone());
+            std::env::set_var("CCOS_DELEGATING_MODEL", llm_profile.model.clone());
+            if let Some(api_key_env) = &llm_profile.api_key_env {
+                if let Ok(api_key) = std::env::var(api_key_env) {
+                    std::env::set_var("OPENAI_API_KEY", api_key);
+                }
+            } else if let Some(api_key) = &llm_profile.api_key {
+                std::env::set_var("OPENAI_API_KEY", api_key.clone());
+            }
+        } else {
+            return Err(format!("LLM profile '{}' not found in config", profile_name).into());
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
