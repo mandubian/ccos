@@ -3,11 +3,11 @@
 ;; MCP Server: github (https://api.githubcopilot.com/mcp/)
 ;; Tool: list_issues
 
-;; Sample Output (truncated):
+;; Sample Output:
 ;; {
 ;;   "content": [
 ;;     {
-;;       "text": "{\"issues\":[{\"id\":3626081784,\"number\":164,\"state\":\"OPEN\",\"title\":\"Ensure storage/archives complement, not replace, the CausalChain\",\"body\":\"## Summary\\n\\nCCOS introduc...
+;;       "text": "{\"issues\":[{\"id\":3626081784,\"number\":164,\"state\":\"OPEN\",\"title\":\"Ensure storage/archives complement, not replace, the CausalChain\",\"body\":\"## Summary\\n\\nCCOS introduces several storage and archive modules (`storage`, `storage_backends`, `intent_archive`, `plan_archive`, `checkpoint_archive`, `wm_integration`, etc.) alongside `causal_chain`. The Causal Chain is intended to be the canonical audit trail / memory, while archives and storage provide conventional persistence.\\n\\nThis issue tracks reviewing storage modules to ensure they **complement** the Causal Chain and do not act as implicit, ungoverned histories for important actions.\\n\\n## Motivation\\n\\n- **Single source of truth for history:** The Causal Chain should be the place to look for \\u0026#34;what happened\\u0026#34; and \\u0026#34;why\\u0026#34;. Archives and storage should hang off that, not compete with it.\\n- **Consistency with architecture:** Docs describe Plan/Intent archives as backing stores referenced from the chain, not alternate event logs.\\n- **Future tooling:** Analysis, visualization, and replay tooling will be simpler if the chain is the canonical event stream.\\n\\n## Tasks\\n\\n1. **Inventory storage and archive modules**\\n   - List responsibilities of `intent_archive`, `plan_archive`, `checkpoint_archive`, `storage`, `storage_backends`, `wm_integration`, and any other stateful modules in `ccos`.\\n\\n2. **Map storage writes to CausalChain events**\\n   - For each class of write (e.g., new intent stored, plan archived, checkpoint saved, WM update):\\n     - identify whether there is an associated Causal Chain event,\\n     - if not, decide whether one should exist.\\n\\n3. **Add missing CausalChain events where needed**\\n   - When a storage write represents a semantically meaningful event (e.g., plan approved/executed, checkpoint representing an externally visible state, WM update that shapes behavior), add a corresponding `CausalChain` entry.\\n\\n4. **Document the relationship**\\n   - Write a short doc or code comments clarifying:\\n     - which histories live in CausalChain vs. archives,\\n     - how to navigate from a chain event to its underlying stored data.\\n\\n## Acceptance Criteria\\n\\n- For each major storage/archival operation, there is a clear answer to \\u0026#34;is there a CausalChain event for this?\\u0026#34; and \\u0026#34;how do we get from the event to the stored record?\\u0026#34;.\\n- No module relies solely on its own tables/files as a history of user-visible or governance-relevant events.\\n- At least brief documentation exists summarizing how CausalChain and storage/archives interrelate.\\n\\n## Related Issues\\n\\n- #162 Bring CausalChain up to date with current CCOS runtime and storage modules\\n- #161 Audit Orchestrator entrypoints to ensure all execution goes through GovernanceKernel\\n\",\"user\":{\"login\":\"mandubian\"},\"labels\":[{\"name\":\"storage\",\"description\":\"\",\"node_id\":\"LA_kwDOOvgshs8AAAACG86Lpw\"},{\"name\":\"causal-chain\",\"description\":\"\",\"node_id\":\"LA_kwDOOvgshs8AAAACH54nDg\"},{\"name\":\"governance-kernel-review\",\"description\":\"\",\"node_id\":\"LA_kwDOOvgshs8AAAACPv_PoQ\"}],\"comments\":0,\"created_at\":\"2025-11-14T15:26:36Z\",\"updated_at\":\"2025-11-14T15:26:36Z\"}],\"pageInfo\":{\"endCursor\":\"Y3Vyc29yOnYyOpK5MjAyNS0xMS0xNFQxNjoyNjozNiswMTowMM7YIZ34\",\"hasNextPage\":true,\"hasPreviousPage\":false,\"startCursor\":\"Y3Vyc29yOnYyOpK5MjAyNS0xMS0xNFQxNjoyNjozNiswMTowMM7YIZ34\"},\"totalCount\":136}",
 ;;       "type": "text"
 ;;     }
 ;;   ]
@@ -34,7 +34,7 @@
     :discovery {
       :method "mcp_introspection"
       :source_url "https://api.githubcopilot.com/mcp/"
-      :created_at "2025-11-17T23:37:09.755474325+00:00"
+      :created_at "2025-11-18T10:58:31.255282414+00:00"
       :capability_type "mcp_tool"
     }
   }
