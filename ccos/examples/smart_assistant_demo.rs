@@ -3178,18 +3178,19 @@ async fn resolve_and_stub_capabilities(
                     );
 
                     // Test the synthesized capability with dummy data
-                    if let Some(delegating) = &delegating_arbiter {
-                        if let Err(e) =
-                            test_and_correct_capability(ccos, delegating, &manifest, &step).await
-                        {
-                            eprintln!(
-                                "{} {} {}",
-                                "⚠️  Capability testing/correction failed:".yellow(),
-                                e,
-                                "(proceeding with synthesized version)".dim()
-                            );
-                        }
-                    }
+                    // TODO: Re-implement test_and_correct_capability function
+                    // if let Some(delegating) = &delegating_arbiter {
+                    //     if let Err(e) =
+                    //         test_and_correct_capability(ccos, delegating, &manifest, &step).await
+                    //     {
+                    //         eprintln!(
+                    //             "{} {} {}",
+                    //             "⚠️  Capability testing/correction failed:".yellow(),
+                    //             e,
+                    //             "(proceeding with synthesized version)".dim()
+                    //         );
+                    //     }
+                    // }
 
                     let input_bindings = compute_input_bindings_for_step(step, Some(&manifest));
                     let output_bindings = compute_output_bindings_for_step(step, Some(&manifest));
