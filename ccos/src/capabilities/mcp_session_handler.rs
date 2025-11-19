@@ -262,7 +262,8 @@ impl MCPSessionHandler {
 
         // Extract result from JSON-RPC response
         if let Some(result) = json.get("result") {
-            // Debug: Log the actual MCP response structure for troubleshooting
+            // Debug: Log the actual MCP response structure for troubleshooting (commented out to reduce noise)
+            /*
             if let Ok(result_str) = serde_json::to_string_pretty(result) {
                 const MAX_DEBUG_CHARS: usize = 1200;
                 let mut preview: String = result_str.chars().take(MAX_DEBUG_CHARS).collect();
@@ -274,6 +275,7 @@ impl MCPSessionHandler {
                 }
                 eprintln!("📦 MCP response result structure:\n{}", preview);
             }
+            */
 
             // MCP protocol returns results in a "content" array with text blocks.
             // We should return the raw result structure so downstream adapters can handle it
