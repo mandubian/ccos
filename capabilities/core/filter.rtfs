@@ -1,16 +1,15 @@
 (capability "mcp.core.filter"
   :name "Filter Collection"
+  :description "Filters a collection (vector) based on a predicate function."
   :version "1.0.0"
-  :description "Filters a list of items based on a predicate function. Returns a new vector containing only items for which predicate returns true."
-  :provider :local
-  :permissions []
-  :effects [:pure]
-  :input-schema [:map [:items [:vector :any]] [:predicate :fn]]
+  :provider "local"
+  :input-schema [:map [:collection [:vector :any]] [:predicate :fn]]
   :output-schema [:vector :any]
   :implementation
-    (fn [input]
-      (let [items (get input :items)
-            predicate (get input :predicate)]
-        (if (and (vector? items) (fn? predicate))
-          (filter predicate items)
-          {:error "Invalid input: items must be a vector and predicate must be a function."}))))
+  (fn [input]
+    (let [collection (get input :collection) 
+          predicate (get input :predicate)]
+      (if (and (vector? collection) (fn? predicate))
+        (filter predicate collection)
+        []))))
+
