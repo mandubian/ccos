@@ -4097,17 +4097,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .log_json("plan_execution_result", &execution_result_to_json(&result));
 
                     // Export and summarize causal chain for audit/replay
-                    if let Ok(chain_guard) = causal_chain_arc.lock() {
-                        // Export plan actions for replay
+                    // EXTRACT DATA UNDER LOCK THEN RELEASE TO AVOID DEADLOCK with planner_audit.log_json
+                    let (plan_actions_len, integrity_result, trace) = if let Ok(chain_guard) = causal_chain_arc.lock() {
                         let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+                        let len = plan_actions.len();
+                        let integrity = chain_guard.verify_and_summarize();
+                        // Clone actions so we can release the lock
+                        let trace: Vec<Action> = chain_guard
+                            .get_plan_execution_trace(&plan.plan_id)
+                            .into_iter()
+                            .cloned()
+                            .collect();
+                        (len, integrity, trace)
+                    } else {
+                        eprintln!("⚠️ Failed to lock causal chain for export");
+                        (
+                            0,
+                            Err(RuntimeError::Generic(
+                                "Failed to lock causal chain".to_string(),
+                            )),
+                            Vec::new(),
+                        )
+                    };
+
+                    if plan_actions_len > 0 {
                         println!(
                             "\n{} {} actions logged to causal chain",
                             "📋 Causal Chain:".bold().cyan(),
-                            plan_actions.len()
+                            plan_actions_len
                         );
 
                         // Verify chain integrity
-                        match chain_guard.verify_and_summarize() {
+                        match integrity_result {
                             Ok((is_valid, total_actions, first_ts, last_ts)) => {
                                 if is_valid {
                                     println!("  ✅ Chain integrity verified");
@@ -4120,8 +4141,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     println!("  ⏱️ Duration: {}ms", duration_ms);
                                 }
 
-                                // Log plan trace for audit
-                                let trace = chain_guard.get_plan_execution_trace(&plan.plan_id);
+                                // Log plan trace for audit - NOW SAFE as lock is released
                                 planner_audit.log_json(
                                     "plan_execution_trace",
                                     &json!({
@@ -4142,8 +4162,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 eprintln!("  ⚠️ Failed to verify chain: {}", err);
                             }
                         }
-                    } else {
-                        eprintln!("⚠️ Failed to lock causal chain for export");
                     }
                 }
                 Err(err) => {
@@ -4177,17 +4195,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .log_json("plan_execution_result", &execution_result_to_json(&result));
 
                     // Export and summarize causal chain for audit/replay
-                    if let Ok(chain_guard) = causal_chain_arc.lock() {
-                        // Export plan actions for replay
+                    // EXTRACT DATA UNDER LOCK THEN RELEASE TO AVOID DEADLOCK with planner_audit.log_json
+                    let (plan_actions_len, integrity_result, trace) = if let Ok(chain_guard) = causal_chain_arc.lock() {
                         let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+                        let len = plan_actions.len();
+                        let integrity = chain_guard.verify_and_summarize();
+                        // Clone actions so we can release the lock
+                        let trace: Vec<Action> = chain_guard
+                            .get_plan_execution_trace(&plan.plan_id)
+                            .into_iter()
+                            .cloned()
+                            .collect();
+                        (len, integrity, trace)
+                    } else {
+                        eprintln!("⚠️ Failed to lock causal chain for export");
+                        (
+                            0,
+                            Err(RuntimeError::Generic(
+                                "Failed to lock causal chain".to_string(),
+                            )),
+                            Vec::new(),
+                        )
+                    };
+
+                    if plan_actions_len > 0 {
                         println!(
                             "\n{} {} actions logged to causal chain",
                             "📋 Causal Chain:".bold().cyan(),
-                            plan_actions.len()
+                            plan_actions_len
                         );
 
                         // Verify chain integrity
-                        match chain_guard.verify_and_summarize() {
+                        match integrity_result {
                             Ok((is_valid, total_actions, first_ts, last_ts)) => {
                                 if is_valid {
                                     println!("  ✅ Chain integrity verified");
@@ -4200,8 +4239,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     println!("  ⏱️ Duration: {}ms", duration_ms);
                                 }
 
-                                // Log plan trace for audit
-                                let trace = chain_guard.get_plan_execution_trace(&plan.plan_id);
+                                // Log plan trace for audit - NOW SAFE as lock is released
                                 planner_audit.log_json(
                                     "plan_execution_trace",
                                     &json!({
@@ -4222,8 +4260,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 eprintln!("  ⚠️ Failed to verify chain: {}", err);
                             }
                         }
-                    } else {
-                        eprintln!("⚠️ Failed to lock causal chain for export");
                     }
                 }
                 Err(err) => {
