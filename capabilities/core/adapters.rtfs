@@ -21,7 +21,7 @@
 ;;;       [:map [:text :string]]]]]
 ;;;
 ;;; @output-schema
-;;;   :any ;; The output can be any valid JSON structure (map, vector, etc.)
+;;;   [:map [:issues [:vector :any]]] ;; Matches GitHub list_issues output structure
 ;;;
 ;;; @example
 ;;;   (let [mcp-output {:content [{:text "{\"issues\":[{\"id\":1}]}"}]}]
@@ -32,16 +32,11 @@
   :name "Parse MCP Text Content as JSON"
   :version "1.0.0"
   :description "Extracts and parses a JSON string from a standard MCP text content envelope."
-  :provider :mcp
-  :provider-meta {
-    :server_url "https://core.example.local"
-    :tool_name "adapters"
-    :timeout_ms 30000
-  }
+  :provider :local
   :permissions []
-  :effects []
+  :effects [:pure]
   :input-schema [:map [:content [:vector [:map [:text :string]]]]]
-  :output-schema :any
+  :output-schema [:map [:issues [:vector :any]]]
   :implementation
     (fn [input]
       (let [text (get (get (get input :content) 0) :text)]

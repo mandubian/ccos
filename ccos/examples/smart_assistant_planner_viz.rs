@@ -2647,6 +2647,75 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .map_err(runtime_error)?;
 
+    // FIX: Register adapters.mcp.parse-json-from-text-content manually with native implementation
+    // because :local provider loaded from RTFS cannot execute 'call' or 'ccos.data.parse-json'.
+    marketplace.register_local_capability(
+        "adapters.mcp.parse-json-from-text-content".to_string(),
+        "Parse MCP Text Content as JSON".to_string(),
+        "Extracts and parses a JSON string from a standard MCP text content envelope.".to_string(),
+        Arc::new(|input: &Value| -> RuntimeResult<Value> {
+            eprintln!("DEBUG: adapters.mcp.parse-json input: {:?}", input);
+            // Expect input: { :content [ { :text "..." } ] }
+            // Fallback for LLM using text_content instead of content
+            let content = match input {
+                Value::Map(m) => {
+                    m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("content".to_string())))
+                        .or_else(|| m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("text_content".to_string()))))
+                },
+                _ => None
+            }.ok_or_else(|| RuntimeError::Generic("Missing :content (or :text_content) in input".to_string()))?;
+
+            let text = match content {
+                Value::Vector(v) => {
+                    if let Some(first) = v.get(0) {
+                        match first {
+                            Value::Map(m) => {
+                                m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("text".to_string())))
+                                 .and_then(|v| v.as_string())
+                            },
+                            _ => None
+                        }
+                    } else {
+                        None
+                    }
+                },
+                _ => None
+            }.ok_or_else(|| RuntimeError::Generic("Invalid content structure: expected vector with map containing :text".to_string()))?;
+
+            let json_val: serde_json::Value = serde_json::from_str(text)
+                .map_err(|e| RuntimeError::Generic(format!("Failed to parse JSON: {}", e)))?;
+
+            // Convert serde_json::Value to RTFS Value
+            fn json_to_rtfs(v: &serde_json::Value) -> Value {
+                match v {
+                    serde_json::Value::Null => Value::Nil,
+                    serde_json::Value::Bool(b) => Value::Boolean(*b),
+                    serde_json::Value::Number(n) => {
+                        if let Some(i) = n.as_i64() { Value::Integer(i) }
+                        else if let Some(f) = n.as_f64() { Value::Float(f) }
+                        else { Value::String(n.to_string()) }
+                    },
+                    serde_json::Value::String(s) => Value::String(s.clone()),
+                    serde_json::Value::Array(a) => Value::Vector(a.iter().map(json_to_rtfs).collect()),
+                    serde_json::Value::Object(o) => {
+                        let mut map = HashMap::new();
+                        for (k, v) in o {
+                            map.insert(
+                                rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(k.clone())),
+                                json_to_rtfs(v)
+                            );
+                        }
+                        Value::Map(map)
+                    }
+                }
+            }
+
+            let result = json_to_rtfs(&json_val);
+            eprintln!("DEBUG: adapters.mcp.parse-json result: {:?}", result);
+            Ok(result)
+        })
+    ).await.map_err(runtime_error)?;
+
     let catalog = ccos.get_catalog();
     let mut signals = GoalSignals::from_goal_and_intent(&goal, &intent);
     signals.apply_catalog_search(&catalog, 0.5, 10);

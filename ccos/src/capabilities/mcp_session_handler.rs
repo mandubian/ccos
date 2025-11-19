@@ -275,23 +275,13 @@ impl MCPSessionHandler {
                 eprintln!("📦 MCP response result structure:\n{}", preview);
             }
 
-            // MCP protocol returns results in a "content" array with text blocks
-            // If the result has a "content" array with a text block containing JSON,
-            // extract and parse the JSON to return the actual structured data
-            if let Some(content_array) = result.get("content").and_then(|c| c.as_array()) {
-                if let Some(first_block) = content_array.first() {
-                    if let Some(text_content) = first_block.get("text").and_then(|t| t.as_str()) {
-                        // Try to parse the text content as JSON
-                        if let Ok(parsed_json) =
-                            serde_json::from_str::<serde_json::Value>(text_content)
-                        {
-                            eprintln!("✅ Extracted structured data from MCP content text block");
-                            // Return the parsed JSON structure instead of the MCP wrapper
-                            return Ok(json_to_rtfs_value(&parsed_json));
-                        }
-                    }
-                }
-            }
+            // MCP protocol returns results in a "content" array with text blocks.
+            // We should return the raw result structure so downstream adapters can handle it
+            // instead of trying to be too smart and unwrapping it automatically.
+            // The adapter `adapters.mcp.parse-json-from-text-content` expects the raw structure
+            // with a "content" array containing text blocks.
+            
+            // Fallback: Check for structuredContent field (if MCP server provides it)
 
             // Fallback: Check for structuredContent field (if MCP server provides it)
             if let Some(structured) = result.get("structuredContent") {
@@ -483,12 +473,19 @@ fn json_to_rtfs_value(json: &serde_json::Value) -> Value {
         serde_json::Value::Object(obj) => {
             let mut map = HashMap::new();
             for (k, v) in obj.iter() {
+                // DEBUG: Print key generation
+                eprintln!("DEBUG: creating map key for json key '{}'", k);
                 // Use keyword for object keys
+                // FIX: Do not prepend ':' if standard RTFS parser produces Keyword("name") for :name
+                let key_str = if k.starts_with(':') { k[1..].to_string() } else { k.clone() };
+                eprintln!("DEBUG: key_str='{}'", key_str);
+                
                 map.insert(
-                    MapKey::Keyword(Keyword(format!(":{}", k))),
+                    MapKey::Keyword(Keyword(key_str)),
                     json_to_rtfs_value(v),
                 );
             }
+            eprintln!("DEBUG: Converted map keys: {:?}", map.keys().collect::<Vec<_>>());
             Value::Map(map)
         }
     }

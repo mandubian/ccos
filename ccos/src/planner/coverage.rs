@@ -180,6 +180,12 @@ impl DefaultGoalCoverageAnalyzer {
                             .capability_id
                             .as_deref()
                             .map(|id| id.contains("filter"))
+                            .unwrap_or(false)
+                        // Also check if the step uses an adapter that might be doing filtering
+                        || step
+                            .capability_id
+                            .as_deref()
+                            .map(|id| id.contains("adapter") || id.contains("parse"))
                             .unwrap_or(false);
                     if !has_filter_capability {
                         return false;

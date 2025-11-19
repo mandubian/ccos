@@ -508,6 +508,7 @@ impl CapabilityProvider for LocalProvider {
             "ccos.io.print" => Self::print_capability(args),
             "ccos.io.println" => Self::println_capability(args),
             "ccos.agent.ask-human" => Self::ask_human_capability(args),
+            "ccos.user.ask" => Self::ask_human_capability(args),
             "ccos.state.kv.get" => Self::kv_get_capability(args),
             "ccos.state.kv.put" => Self::kv_put_capability(args),
             "ccos.state.kv.cas-put" => Self::kv_cas_put_capability(args),
@@ -1081,6 +1082,21 @@ impl CapabilityRegistry {
                 }),
             },
         );
+
+        // Alias for ccos.user.ask -> ccos.agent.ask-human
+        self.capabilities.insert(
+            "ccos.user.ask".to_string(),
+            Capability {
+                id: "ccos.user.ask".to_string(),
+                arity: Arity::Variadic(1),
+                func: Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "Agent capabilities must be executed through providers".to_string(),
+                    ))
+                }),
+            },
+        );
+        self.map_capability_to_provider("ccos.user.ask", "local");
 
         self.capabilities.insert(
             "ccos.agent.discover-and-assess-agents".to_string(),
