@@ -22,10 +22,11 @@ pub async fn register_default_capabilities(
                     Value::Map(map) => {
                         let args_val = map
                             .get(&MapKey::Keyword(Keyword("args".to_string())))
+                            .or_else(|| map.get(&MapKey::String("args".to_string())))
                             .cloned()
                             .unwrap_or(Value::List(vec![]));
                         match args_val {
-                            Value::List(args) => {
+                            Value::List(args) | Value::Vector(args) => {
                                 if args.len() == 1 {
                                     Ok(args[0].clone())
                                 } else {
@@ -44,7 +45,7 @@ pub async fn register_default_capabilities(
                         }
                     }
                     // Backward compatibility: still accept a plain list
-                    Value::List(args) => {
+                    Value::List(args) | Value::Vector(args) => {
                         if args.len() == 1 {
                             Ok(args[0].clone())
                         } else {
@@ -76,11 +77,13 @@ pub async fn register_default_capabilities(
                 match input {
                     // New calling convention: map with :args containing the argument list
                     Value::Map(map) => {
-                        if let Some(args_val) =
-                            map.get(&MapKey::Keyword(Keyword("args".to_string())))
-                        {
+                        let args_val = map
+                            .get(&MapKey::Keyword(Keyword("args".to_string())))
+                            .or_else(|| map.get(&MapKey::String("args".to_string())));
+
+                        if let Some(args_val) = args_val {
                             match args_val {
-                                Value::List(args) => {
+                                Value::List(args) | Value::Vector(args) => {
                                     let mut sum = 0i64;
                                     for arg in args {
                                         match arg {
@@ -109,7 +112,7 @@ pub async fn register_default_capabilities(
                         }
                     }
                     // Backward compatibility: direct list of arguments
-                    Value::List(args) => {
+                    Value::List(args) | Value::Vector(args) => {
                         let mut sum = 0i64;
                         for arg in args {
                             match arg {
@@ -147,10 +150,12 @@ pub async fn register_default_capabilities(
                 let extract_prompt = |val: &Value| -> Result<String, RuntimeError> {
                     match val {
                         Value::Map(map) => {
-                            if let Some(args_val) =
-                                map.get(&MapKey::Keyword(Keyword("args".to_string())))
-                            {
-                                if let Value::List(args) = args_val {
+                            let args_val = map
+                                .get(&MapKey::Keyword(Keyword("args".to_string())))
+                                .or_else(|| map.get(&MapKey::String("args".to_string())));
+
+                            if let Some(args_val) = args_val {
+                                if let Value::List(args) | Value::Vector(args) = args_val {
                                     if args.len() == 1 {
                                         return Ok(args[0].to_string());
                                     } else {
@@ -166,7 +171,7 @@ pub async fn register_default_capabilities(
                                 "Missing :args for ccos.user.ask".to_string(),
                             ))
                         }
-                        Value::List(args) => {
+                        Value::List(args) | Value::Vector(args) => {
                             if args.len() == 1 {
                                 Ok(args[0].to_string())
                             } else {
@@ -215,27 +220,35 @@ pub async fn register_default_capabilities(
             Arc::new(|input| {
                 let message = match input {
                     Value::Map(map) => {
-                        if let Some(args_val) =
-                            map.get(&MapKey::Keyword(Keyword("args".to_string())))
-                        {
+                        let args_val = map
+                            .get(&MapKey::Keyword(Keyword("args".to_string())))
+                            .or_else(|| map.get(&MapKey::String("args".to_string())));
+
+                        if let Some(args_val) = args_val {
                             match args_val {
-                                Value::List(args) => args
+                                Value::List(args) | Value::Vector(args) => args
                                     .iter()
-                                    .map(|v| format!("{:?}", v))
+                                    .map(|v| match v {
+                                        Value::String(s) => s.clone(),
+                                        _ => format!("{}", v),
+                                    })
                                     .collect::<Vec<_>>()
                                     .join(" "),
-                                _ => format!("{:?}", args_val),
+                                _ => format!("{}", args_val),
                             }
                         } else {
-                            format!("{:?}", input)
+                            format!("{}", input)
                         }
                     }
-                    Value::List(args) => args
+                    Value::List(args) | Value::Vector(args) => args
                         .iter()
-                        .map(|v| format!("{:?}", v))
+                        .map(|v| match v {
+                            Value::String(s) => s.clone(),
+                            _ => format!("{}", v),
+                        })
                         .collect::<Vec<_>>()
                         .join(" "),
-                    other => format!("{:?}", other),
+                    other => format!("{}", other),
                 };
                 println!("{}", message);
                 Ok(Value::Nil)
@@ -254,27 +267,35 @@ pub async fn register_default_capabilities(
             Arc::new(|input| {
                 let message = match input {
                     Value::Map(map) => {
-                        if let Some(args_val) =
-                            map.get(&MapKey::Keyword(Keyword("args".to_string())))
-                        {
+                        let args_val = map
+                            .get(&MapKey::Keyword(Keyword("args".to_string())))
+                            .or_else(|| map.get(&MapKey::String("args".to_string())));
+
+                        if let Some(args_val) = args_val {
                             match args_val {
-                                Value::List(args) => args
+                                Value::List(args) | Value::Vector(args) => args
                                     .iter()
-                                    .map(|v| format!("{:?}", v))
+                                    .map(|v| match v {
+                                        Value::String(s) => s.clone(),
+                                        _ => format!("{}", v),
+                                    })
                                     .collect::<Vec<_>>()
                                     .join(" "),
-                                _ => format!("{:?}", args_val),
+                                _ => format!("{}", args_val),
                             }
                         } else {
-                            format!("{:?}", input)
+                            format!("{}", input)
                         }
                     }
-                    Value::List(args) => args
+                    Value::List(args) | Value::Vector(args) => args
                         .iter()
-                        .map(|v| format!("{:?}", v))
+                        .map(|v| match v {
+                            Value::String(s) => s.clone(),
+                            _ => format!("{}", v),
+                        })
                         .collect::<Vec<_>>()
                         .join(" "),
-                    other => format!("{:?}", other),
+                    other => format!("{}", other),
                 };
                 println!("[CCOS-LOG] {}", message);
                 Ok(Value::Nil)
