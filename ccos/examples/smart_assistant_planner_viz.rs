@@ -587,7 +587,9 @@ async fn build_capability_menu_from_catalog(
         }
         // Filter out meta-capabilities: planner.* are internal planner capabilities
         // and ccos.* are system capabilities, both should not appear in execution plans
-        if hit.entry.id.starts_with("planner.") || hit.entry.id.starts_with("ccos.") {
+        let is_meta = hit.entry.id.starts_with("planner.") || hit.entry.id.starts_with("ccos.");
+        let is_allowed_util = hit.entry.id == "ccos.echo" || hit.entry.id == "ccos.user.ask";
+        if is_meta && !is_allowed_util {
             continue;
         }
         if let Some(manifest) = marketplace.get_capability(&hit.entry.id).await {
@@ -732,8 +734,10 @@ async fn build_capability_menu_from_catalog(
 
             let mut filtered_count = 0;
             for manifest in all_capabilities {
-                // Filter out meta-capabilities
-                if manifest.id.starts_with("planner.") || manifest.id.starts_with("ccos.") {
+                // Filter out meta-capabilities, but allow specific util capabilities like ccos.echo
+                let is_meta = manifest.id.starts_with("planner.") || manifest.id.starts_with("ccos.");
+                let is_allowed_util = manifest.id == "ccos.echo" || manifest.id == "ccos.user.ask"; // Allow echo and ask
+                if is_meta && !is_allowed_util {
                     filtered_count += 1;
                     eprintln!("   ⏭️  Filtered out meta-capability: {}", manifest.id);
                     continue;
@@ -810,7 +814,9 @@ async fn refresh_capability_menu(
     let executable_capabilities: Vec<_> = all_capabilities_before
         .iter()
         .filter(|manifest| {
-            !manifest.id.starts_with("planner.") && !manifest.id.starts_with("ccos.")
+            let is_meta = manifest.id.starts_with("planner.") || manifest.id.starts_with("ccos.");
+            let is_allowed_util = manifest.id == "ccos.echo" || manifest.id == "ccos.user.ask";
+            !is_meta || is_allowed_util
         })
         .collect();
 
@@ -927,7 +933,9 @@ async fn refresh_capability_menu(
             }
 
             // Filter out meta-capabilities
-            if capability_id.starts_with("planner.") || capability_id.starts_with("ccos.") {
+            let is_meta = capability_id.starts_with("planner.") || capability_id.starts_with("ccos.");
+            let is_allowed_util = capability_id == "ccos.echo" || capability_id == "ccos.user.ask";
+            if is_meta && !is_allowed_util {
                 continue;
             }
 
@@ -971,7 +979,17 @@ async fn refresh_capability_menu(
     }
 
     let mut menu =
-        build_capability_menu_from_catalog(catalog, marketplace, goal, intent, limit).await?;
+        build_capability_menu_from_catalog(catalog, marketplace.clone(), goal, intent, limit).await?;
+
+    // Always inject ccos.echo into the menu as a utility
+    if !menu.iter().any(|e| e.id == "ccos.echo") {
+        if let Some(manifest) = marketplace.get_capability("ccos.echo").await {
+             let mut entry = menu_entry_from_manifest(&manifest, Some(0.1));
+             apply_input_overrides(&mut entry);
+             menu.push(entry);
+        }
+    }
+
     annotate_menu_with_readiness(signals, &mut menu);
     Ok(menu)
 }
@@ -1471,18 +1489,22 @@ Output requirements:
     * Arrays: Use JSON arrays (e.g., ["item1", "item2"])
     * Variables: Use object with "var" key (e.g., {{"var": "user"}} references the 'user' parameter)
     * Step outputs: Use object with "step" and "output" keys (e.g., {{"step": "step_1", "output": "issues"}} references the 'issues' output from step_1)
+    * Accessing Step Results in RTFS:
+      - When using RTFS expressions (like in "rtfs" capability or function parameters), access previous step results using (get step_N :key).
+      - CRITICAL: :key must be the ACTUAL output key returned by the tool (as listed in the Capability Menu), NOT the custom name you assigned in the 'outputs' list.
+      - For MCP tools, the key is almost always :content. Example: (get step_0 :content).
+      - For `rtfs` capability steps, `step_N` IS the direct value returned by the expression. Do NOT wrap it or access it via the output name.
     * Function parameters (ONLY for parameters marked as "(function - cannot be passed directly)" in the menu): Use object with "rtfs" key containing RTFS code (e.g., {{"rtfs": "(fn [item] ...)"}})
-      - CRITICAL: Only use {{"rtfs": "..."}} for parameters explicitly marked as function types in the capability menu
-      - Do NOT use {{"rtfs": "..."}} for regular string, number, array, or other non-function parameters
-      - Parameters must receive values matching their declared type: strings get text, arrays get JSON arrays, numbers get numbers
-      - If a capability does not have function parameters but you need filtering/transformation, use a separate step with a capability that supports function parameters
-      - Available RTFS functions for use in function blocks:
-          * Core: let, if, do, get, first, rest, cons, list, vector, map, str
-          * Math: +, -, *, /, ==, !=, <, >, <=, >=
-          * Collections: keys, vals, find, map-indexed, update, remove
-          * JSON: parse-json, serialize-json
-          * I/O & Logging: println, log, print
-          * System: time-ms
+    * Pure Logic / Data Transformations:
+      - Use a step with capability_id: "rtfs" (this is a special built-in capability for logic)
+      - Inputs: {{ "expression": "(your rtfs code)" }}
+      - Note on MCP tools: content is usually a list of objects like [{{ "type": "text", "text": "JSON..." }}].
+      - To parse the JSON content from `list_issues` (which returns a wrapper object {{ "issues": [...], ... }}), use:
+        (get (parse-json (get (first (get step_0 :content)) :text)) "issues")
+      - CRITICAL: `parse-json` returns a map with STRING keys, so use "issues" not :issues.
+      - Example: {{ "capability_id": "rtfs", "inputs": {{ "expression": "(first (get (parse-json (get (first (get step_0 :content)) :text)) \"issues\"))" }}, "outputs": ["first_issue"] }}
+      - Available functions: first, get, parse-json, str, map, filter, etc.
+      - Do NOT use `ccos.echo` or invent other capabilities.
 - outputs must list the symbolic names of values produced by that step.
 - Use capability_id exactly as listed in the menu.
 - Steps must be ordered so dependencies appear earlier than the steps that use them.
@@ -1516,102 +1538,6 @@ Output requirements:
         Ok(steps) => Ok((response, steps)),
         Err(e) => Err((Some(response), e)),
     }
-}
-
-async fn propose_plan_steps_with_menu(
-    delegating: &ccos::arbiter::delegating_arbiter::DelegatingArbiter,
-    goal: &str,
-    intent: &Intent,
-    known_inputs: &HashMap<String, Value>,
-    menu: &[CapabilityMenuEntry],
-    debug_prompts: bool,
-    feedback: Option<&str>,
-) -> RuntimeResult<Vec<PlanStep>> {
-    let menu_text = format_capability_menu(menu);
-    let input_text = format_known_inputs(known_inputs);
-    let mut context_lines = Vec::new();
-    if !intent.preferences.is_empty() {
-        let prefs = intent
-            .preferences
-            .iter()
-            .map(|(k, v)| format!("{} = {}", k, value_to_string_repr(v)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        context_lines.push(format!("Preferences: {}", prefs));
-    }
-    if let Some(success) = &intent.success_criteria {
-        context_lines.push(format!(
-            "Success criteria: {}",
-            value_to_string_repr(success)
-        ));
-    }
-    let additional_context = if context_lines.is_empty() {
-        String::new()
-    } else {
-        format!("\nAdditional context:\n{}\n", context_lines.join("\n"))
-    };
-    let feedback_block = feedback
-        .map(|text| format!("\nPrevious attempt feedback:\n{}\n", text))
-        .unwrap_or_default();
-
-    let prompt = format!(
-        r#"You are designing a plan to achieve the following goal.
-
-Goal: {goal}
-
-Known parameters (use via bindings var::name, e.g., var::user): {inputs}
-
-Capability menu (choose from these only):
-{menu}
-{additional}{feedback}
-Output requirements:
-- Respond with a JSON array (no markdown fences) where each element is an object with keys: id, capability_id, inputs, outputs, notes.
-- The `name` field is optional (will be auto-generated if missing).
-- inputs must be a JSON object mapping capability parameter names to values:
-    * String literals: Use plain strings (e.g., "RTFS", "mandubian", "ccos")
-    * Number literals: Use plain numbers (e.g., 100, 1, 3.14)
-    * Boolean literals: Use true or false
-    * Arrays: Use JSON arrays (e.g., ["item1", "item2"])
-    * Variables: Use object with "var" key (e.g., {{"var": "user"}} references the 'user' parameter)
-    * Step outputs: Use object with "step" and "output" keys (e.g., {{"step": "step_1", "output": "issues"}} references the 'issues' output from step_1)
-    * Function parameters (ONLY for parameters marked as "(function - cannot be passed directly)" in the menu): Use object with "rtfs" key containing RTFS code (e.g., {{"rtfs": "(fn [item] ...)"}})
-      - CRITICAL: Only use {{"rtfs": "..."}} for parameters explicitly marked as function types in the capability menu
-      - Do NOT use {{"rtfs": "..."}} for regular string, number, array, or other non-function parameters
-      - Parameters must receive values matching their declared type: strings get text, arrays get JSON arrays, numbers get numbers
-      - If a capability does not have function parameters but you need filtering/transformation, use a separate step with a capability that supports function parameters
-      - Available RTFS functions for use in function blocks:
-          * Core: let, if, do, get, first, rest, cons, list, vector, map, str
-          * Math: +, -, *, /, ==, !=, <, >, <=, >=
-          * Collections: keys, vals, find, map-indexed, update, remove
-          * JSON: parse-json, serialize-json
-          * I/O & Logging: println, log, print
-          * System: time-ms
-- outputs must list the symbolic names of values produced by that step.
-- Use capability_id exactly as listed in the menu.
-- Steps must be ordered so dependencies appear earlier than the steps that use them.
-- Include only the steps needed to satisfy the goal.
-- notes is optional but may include rationale.
-"#,
-        goal = goal,
-        inputs = input_text,
-        menu = menu_text,
-        additional = additional_context,
-        feedback = feedback_block,
-    );
-
-    if debug_prompts {
-        println!("\n{}", "=== Plan Synthesis Prompt ===".bold());
-        println!("{}", prompt);
-    }
-
-    let response = delegating.generate_raw_text(&prompt).await?;
-
-    if debug_prompts {
-        println!("\n{}", "=== Plan Synthesis Response ===".bold());
-        println!("{}", response);
-    }
-
-    parse_plan_steps_from_json(&response)
 }
 
 fn parse_plan_steps_from_json(response: &str) -> RuntimeResult<Vec<PlanStep>> {
@@ -1801,6 +1727,10 @@ fn validate_plan_steps_against_menu(
         .collect::<HashMap<_, _>>();
 
     for step in steps {
+        // Special case for inline RTFS steps (pseudo-capability)
+        if step.capability_id == "rtfs" {
+            continue;
+        }
         let Some(entry) = menu_map.get(step.capability_id.as_str()) else {
             outcome.unknown_capabilities.push(UnknownCapabilityUsage {
                 step_id: step.id.clone(),
@@ -2431,6 +2361,50 @@ async fn render_plan_body_with_llm(
     Ok(rtfs_code)
 }
 
+fn rewrite_rtfs_references(code: &str, step_index: &HashMap<String, usize>) -> String {
+    let mut rewritten = code.to_string();
+    // Sort by length descending to handle prefixes correctly (e.g. step_10 vs step_1)
+    let mut sorted_ids: Vec<_> = step_index.keys().collect();
+    sorted_ids.sort_by(|a, b| b.len().cmp(&a.len()));
+
+    for id in sorted_ids {
+        let index = step_index[id];
+        let target = format!("step_{}", index);
+        if id == &target {
+            continue; // No change needed
+        }
+        
+        // Only replace if surrounded by boundaries to avoid partial matches
+        // e.g. don't replace "step_1" in "step_10"
+        let mut result = String::with_capacity(rewritten.len());
+        let mut last_end = 0;
+        
+        // Find all occurrences
+        let matches: Vec<(usize, &str)> = rewritten.match_indices(id).collect();
+        for (start, _part) in matches {
+             if start < last_end { continue; } // Already processed (overlapping?)
+
+             let before = if start > 0 { rewritten.chars().nth(start - 1) } else { None };
+             let after = rewritten.chars().nth(start + id.len());
+             
+             let boundary_start = before.map(|c| !c.is_alphanumeric() && c != '_').unwrap_or(true);
+             let boundary_end = after.map(|c| !c.is_alphanumeric() && c != '_').unwrap_or(true);
+             
+             result.push_str(&rewritten[last_end..start]);
+             
+             if boundary_start && boundary_end {
+                 result.push_str(&target);
+             } else {
+                 result.push_str(id);
+             }
+             last_end = start + id.len();
+        }
+        result.push_str(&rewritten[last_end..]);
+        rewritten = result;
+    }
+    rewritten
+}
+
 fn render_plan_body(
     steps: &[PlanStep],
     step_index: &HashMap<String, usize>,
@@ -2447,12 +2421,41 @@ fn render_plan_body(
 
     for (idx, step) in steps.iter().enumerate() {
         let args = render_step_arguments(step, step_index)?;
-        body.push_str(&format!(
-            "      step_{} (call :{} {})\n",
-            idx,
-            sanitize_capability_id(&step.capability_id),
-            args
-        ));
+        if step.capability_id == "rtfs" {
+            // Handle pseudo-capability for inline RTFS
+            // Extract 'expression' or 'code' or use args map if not found
+            // We expect a direct RTFS string.
+            // But render_step_arguments rendered inputs as a Map string.
+            // We need to be careful.
+            
+            // Try to find the "expression" or "code" input
+            let expr = step.inputs.iter().find_map(|(k, v)| {
+                if k == "expression" || k == "code" {
+                    match v {
+                         StepInputBinding::Literal(s) => Some(s.clone()),
+                         StepInputBinding::RtfsCode(s) => Some(s.clone()),
+                         _ => None
+                    }
+                } else {
+                    None
+                }
+            }).unwrap_or_else(|| "nil".to_string());
+            
+            let rewritten_expr = rewrite_rtfs_references(&expr, step_index);
+
+            body.push_str(&format!(
+                "      step_{} {}\n",
+                idx,
+                rewritten_expr
+            ));
+        } else {
+            body.push_str(&format!(
+                "      step_{} (call :{} {})\n",
+                idx,
+                sanitize_capability_id(&step.capability_id),
+                args
+            ));
+        }
     }
 
     body.push_str("    ]\n");
@@ -2481,11 +2484,18 @@ fn render_plan_body(
     } else {
         final_outputs.sort_by(|a, b| a.0.cmp(&b.0));
         for (idx, (alias, step_idx, source)) in final_outputs.iter().enumerate() {
+            let step_def = &steps[*step_idx];
+            let is_rtfs = step_def.capability_id == "rtfs";
+            let val_expr = if is_rtfs {
+                 format!("step_{}", step_idx)
+            } else {
+                 format!("(get step_{} :{})", step_idx, sanitize_keyword_name(source))
+            };
+
             body.push_str(&format!(
-                "        :{} (get step_{} :{})",
+                "        :{} {}",
                 sanitize_keyword_name(alias),
-                step_idx,
-                sanitize_keyword_name(source)
+                val_expr
             ));
             if idx + 1 != final_outputs.len() {
                 body.push_str("\n");
@@ -2534,6 +2544,10 @@ fn render_step_arguments(
                 // Simple replacement: var::name -> name (keeping it simple, full parsing would require RTFS parser)
                 // Note: This is a basic fix; in production you might want proper parsing
                 rtfs_code = rtfs_code.replace("var::", "");
+                
+                // Also rewrite step references (e.g. step_ID -> step_INDEX)
+                rtfs_code = rewrite_rtfs_references(&rtfs_code, step_index);
+                
                 rtfs_code
             }
         };
@@ -2663,76 +2677,76 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // FIX: Register adapters.mcp.parse-json-from-text-content manually with native implementation
     // because :local provider loaded from RTFS cannot execute 'call' or 'ccos.data.parse-json'.
-    marketplace.register_local_capability(
-        "adapters.mcp.parse-json-from-text-content".to_string(),
-        "Parse MCP Text Content as JSON".to_string(),
-        "Extracts and parses a JSON string from a standard MCP text content envelope.".to_string(),
-        Arc::new(|input: &Value| -> RuntimeResult<Value> {
-            if std::env::var("CCOS_DEBUG").is_ok() {
-                eprintln!("DEBUG: adapters.mcp.parse-json input: {:?}", input);
-            }
-            // Expect input: { :content [ { :text "..." } ] }
-            // Fallback for LLM using text_content instead of content
-            let content = match input {
-                Value::Map(m) => {
-                    m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("content".to_string())))
-                        .or_else(|| m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("text_content".to_string()))))
-                },
-                _ => None
-            }.ok_or_else(|| RuntimeError::Generic("Missing :content (or :text_content) in input".to_string()))?;
+    // marketplace.register_local_capability(
+    //     "adapters.mcp.parse-json-from-text-content".to_string(),
+    //     "Parse MCP Text Content as JSON".to_string(),
+    //     "Extracts and parses a JSON string from a standard MCP text content envelope.".to_string(),
+    //     Arc::new(|input: &Value| -> RuntimeResult<Value> {
+    //         if std::env::var("CCOS_DEBUG").is_ok() {
+    //             eprintln!("DEBUG: adapters.mcp.parse-json input: {:?}", input);
+    //         }
+    //         // Expect input: { :content [ { :text "..." } ] }
+    //         // Fallback for LLM using text_content instead of content
+    //         let content = match input {
+    //             Value::Map(m) => {
+    //                 m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("content".to_string())))
+    //                     .or_else(|| m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("text_content".to_string()))))
+    //             },
+    //             _ => None
+    //         }.ok_or_else(|| RuntimeError::Generic("Missing :content (or :text_content) in input".to_string()))?;
 
-            let text = match content {
-                Value::Vector(v) => {
-                    if let Some(first) = v.get(0) {
-                        match first {
-                            Value::Map(m) => {
-                                m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("text".to_string())))
-                                 .and_then(|v| v.as_string())
-                            },
-                            _ => None
-                        }
-                    } else {
-                        None
-                    }
-                },
-                _ => None
-            }.ok_or_else(|| RuntimeError::Generic("Invalid content structure: expected vector with map containing :text".to_string()))?;
+    //         let text = match content {
+    //             Value::Vector(v) => {
+    //                 if let Some(first) = v.get(0) {
+    //                     match first {
+    //                         Value::Map(m) => {
+    //                             m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("text".to_string())))
+    //                              .and_then(|v| v.as_string())
+    //                         },
+    //                         _ => None
+    //                     }
+    //                 } else {
+    //                     None
+    //                 }
+    //             },
+    //             _ => None
+    //         }.ok_or_else(|| RuntimeError::Generic("Invalid content structure: expected vector with map containing :text".to_string()))?;
 
-            let json_val: serde_json::Value = serde_json::from_str(text)
-                .map_err(|e| RuntimeError::Generic(format!("Failed to parse JSON: {}", e)))?;
+    //         let json_val: serde_json::Value = serde_json::from_str(text)
+    //             .map_err(|e| RuntimeError::Generic(format!("Failed to parse JSON: {}", e)))?;
 
-            // Convert serde_json::Value to RTFS Value
-            fn json_to_rtfs(v: &serde_json::Value) -> Value {
-                match v {
-                    serde_json::Value::Null => Value::Nil,
-                    serde_json::Value::Bool(b) => Value::Boolean(*b),
-                    serde_json::Value::Number(n) => {
-                        if let Some(i) = n.as_i64() { Value::Integer(i) }
-                        else if let Some(f) = n.as_f64() { Value::Float(f) }
-                        else { Value::String(n.to_string()) }
-                    },
-                    serde_json::Value::String(s) => Value::String(s.clone()),
-                    serde_json::Value::Array(a) => Value::Vector(a.iter().map(json_to_rtfs).collect()),
-                    serde_json::Value::Object(o) => {
-                        let mut map = HashMap::new();
-                        for (k, v) in o {
-                            map.insert(
-                                rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(k.clone())),
-                                json_to_rtfs(v)
-                            );
-                        }
-                        Value::Map(map)
-                    }
-                }
-            }
+    //         // Convert serde_json::Value to RTFS Value
+    //         fn json_to_rtfs(v: &serde_json::Value) -> Value {
+    //             match v {
+    //                 serde_json::Value::Null => Value::Nil,
+    //                 serde_json::Value::Bool(b) => Value::Boolean(*b),
+    //                 serde_json::Value::Number(n) => {
+    //                     if let Some(i) = n.as_i64() { Value::Integer(i) }
+    //                     else if let Some(f) = n.as_f64() { Value::Float(f) }
+    //                     else { Value::String(n.to_string()) }
+    //                 },
+    //                 serde_json::Value::String(s) => Value::String(s.clone()),
+    //                 serde_json::Value::Array(a) => Value::Vector(a.iter().map(json_to_rtfs).collect()),
+    //                 serde_json::Value::Object(o) => {
+    //                     let mut map = HashMap::new();
+    //                     for (k, v) in o {
+    //                         map.insert(
+    //                             rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(k.clone())),
+    //                             json_to_rtfs(v)
+    //                         );
+    //                     }
+    //                     Value::Map(map)
+    //                 }
+    //             }
+    //         }
 
-            let result = json_to_rtfs(&json_val);
-            if std::env::var("CCOS_DEBUG").is_ok() {
-                eprintln!("DEBUG: adapters.mcp.parse-json result: {:?}", result);
-            }
-            Ok(result)
-        })
-    ).await.map_err(runtime_error)?;
+    //         let result = json_to_rtfs(&json_val);
+    //         if std::env::var("CCOS_DEBUG").is_ok() {
+    //             eprintln!("DEBUG: adapters.mcp.parse-json result: {:?}", result);
+    //         }
+    //         Ok(result)
+    //     })
+    // ).await.map_err(runtime_error)?;
 
     let catalog = ccos.get_catalog();
     let mut signals = GoalSignals::from_goal_and_intent(&goal, &intent);

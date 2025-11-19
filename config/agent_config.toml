@@ -154,6 +154,7 @@ default = "balanced"
   model = "google/gemini-2.5-flash-lite"
   max_prompt_cost_per_1k = 0.0
   max_completion_cost_per_1k = 0.0
+  max_tokens = 4096
   quality = "balanced"
 
 

@@ -262,20 +262,29 @@ impl MCPSessionHandler {
 
         // Extract result from JSON-RPC response
         if let Some(result) = json.get("result") {
-            // Debug: Log the actual MCP response structure for troubleshooting (commented out to reduce noise)
-            /*
-            if let Ok(result_str) = serde_json::to_string_pretty(result) {
-                const MAX_DEBUG_CHARS: usize = 1200;
-                let mut preview: String = result_str.chars().take(MAX_DEBUG_CHARS).collect();
-                if preview.chars().count() < result_str.chars().count() {
-                    preview.push_str(&format!(
-                        "… [truncated {} chars]",
-                        result_str.chars().count() - MAX_DEBUG_CHARS
-                    ));
-                }
-                eprintln!("📦 MCP response result structure:\n{}", preview);
-            }
-            */
+            // Debug: Log the keys of the result for troubleshooting
+             if let Some(content) = result.get("content") {
+                 if let Some(arr) = content.as_array() {
+                     for (i, item) in arr.iter().enumerate() {
+                         if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                             let preview = if text.len() > 100 { &text[..100] } else { text };
+                             eprintln!("📦 MCP result content[{}]: type={}, text (preview)='{}...'", 
+                                 i, 
+                                 item.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
+                                 preview
+                             );
+                             // Try to parse JSON to see structure
+                             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
+                                 if let Some(obj) = parsed.as_object() {
+                                     eprintln!("   ↳ Parsed JSON keys: {:?}", obj.keys().collect::<Vec<_>>());
+                                 } else if parsed.is_array() {
+                                      eprintln!("   ↳ Parsed JSON is an Array of len {}", parsed.as_array().unwrap().len());
+                                 }
+                             }
+                         }
+                     }
+                 }
+             }
 
             // MCP protocol returns results in a "content" array with text blocks.
             // We should return the raw result structure so downstream adapters can handle it
