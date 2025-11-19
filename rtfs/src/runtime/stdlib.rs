@@ -421,31 +421,12 @@ impl StandardLibrary {
 
     /// `(tool.open-file "path/to/file")`
     ///
-    /// Reads the content of a file and returns it as a string.
+    /// Reads the content of a file and returns it as a string via host.
     fn tool_open_file(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool/open-file".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        let path = match &args[0] {
-            Value::String(s) => s,
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "string".to_string(),
-                    actual: args[0].type_name().to_string(),
-                    operation: "tool/open-file".to_string(),
-                })
-            }
-        };
-
-        match fs::read_to_string(path) {
-            Ok(content) => Ok(Value::String(content)),
-            Err(e) => Err(RuntimeError::IoError(e.to_string())),
-        }
+        Err(RuntimeError::Generic(
+            "tool/open-file is not supported in RTFS core. Use ccos.io.open-file or host delegation."
+                .to_string(),
+        ))
     }
 
     /// `(tool.http-fetch "http://example.com")`
@@ -480,89 +461,63 @@ impl StandardLibrary {
             .execute_capability("ccos.network.http-fetch", &args)
     }
 
-    /// `(tool/open-file path)` delegates to host capability ccos.io.open-file; falls back to local read
+    /// `(tool/open-file path)` delegates to host capability ccos.io.open-file
     fn open_file_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
-        match evaluator
+        evaluator
             .host
             .execute_capability("ccos.io.open-file", &args)
-        {
-            Ok(v) => Ok(v),
-            Err(_e) => Self::tool_open_file(args),
-        }
     }
 
-    /// `(tool/log ...)` delegates to host capability ccos.io.log; falls back to local impl
+    /// `(tool/log ...)` delegates to host capability ccos.io.log
     fn tool_log_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
-        match evaluator.host.execute_capability("ccos.io.log", &args) {
-            Ok(v) => Ok(v),
-            Err(_e) => Self::tool_log(args),
-        }
+        evaluator.host.execute_capability("ccos.io.log", &args)
     }
 
-    /// `(tool/time-ms)` delegates to host capability ccos.system.current-timestamp-ms; falls back to local impl
+    /// `(tool/time-ms)` delegates to host capability ccos.system.current-timestamp-ms
     fn time_ms_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
-        match evaluator
+        evaluator
             .host
             .execute_capability("ccos.system.current-timestamp-ms", &args)
-        {
-            Ok(v) => Ok(v),
-            Err(_e) => Self::tool_time_ms(args),
-        }
     }
 
-    /// `(file-exists? path)` delegates to host capability ccos.io.file-exists; falls back to local impl
+    /// `(file-exists? path)` delegates to host capability ccos.io.file-exists
     fn file_exists_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
-        match evaluator
+        evaluator
             .host
             .execute_capability("ccos.io.file-exists", &args)
-        {
-            Ok(v) => Ok(v),
-            Err(_e) => Self::file_exists(args),
-        }
     }
 
-    /// `(get-env key)` delegates to host capability ccos.system.get-env; falls back to local impl
+    /// `(get-env key)` delegates to host capability ccos.system.get-env
     fn get_env_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
-        match evaluator
+        evaluator
             .host
             .execute_capability("ccos.system.get-env", &args)
-        {
-            Ok(v) => Ok(v),
-            Err(_e) => Self::get_env(args),
-        }
     }
 
-    /// `(println ...)` delegates to host capability ccos.io.println; falls back to local impl
+    /// `(println ...)` delegates to host capability ccos.io.println
     fn println_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
-        match evaluator.host.execute_capability("ccos.io.println", &args) {
-            Ok(v) => Ok(v),
-            Err(_e) => Self::println(args),
-        }
+        evaluator.host.execute_capability("ccos.io.println", &args)
     }
 
-    /// `(thread/sleep ms)` optionally delegates if a host capability exists; currently falls back to local impl
+    /// `(thread/sleep ms)` delegates to host capability ccos.system.sleep-ms
     fn thread_sleep_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
-        match evaluator
+        evaluator
             .host
             .execute_capability("ccos.system.sleep-ms", &args)
-        {
-            Ok(v) => Ok(v),
-            Err(_e) => Self::thread_sleep(args),
-        }
     }
 
-    /// `(read-lines path)` delegates where possible; currently falls back to local impl
-    fn read_lines_via_host(args: Vec<Value>, _evaluator: &Evaluator) -> RuntimeResult<Value> {
-        // A richer host flow would stream via ccos.io.open-file + ccos.io.read-line; keep local for now
-        Self::read_lines(args)
+    /// `(read-lines path)` delegates to host capability ccos.io.read-lines (if available)
+    fn read_lines_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+        // Try delegating to ccos.io.read-lines
+         evaluator.host.execute_capability("ccos.io.read-lines", &args)
     }
 
-    /// `(step ...)` delegates to host println for observability; falls back to local step formatter
+    /// `(step ...)` delegates to host capability ccos.io.println (formatted)
     fn step_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
-        match evaluator.host.execute_capability("ccos.io.println", &args) {
-            Ok(v) => Ok(v),
-            Err(_e) => Self::step(args),
-        }
+        // In a real implementation, step might use a dedicated capability.
+        // For now, reusing ccos.io.println but we could format args first if needed.
+        // Since 'step' is used for logging, we just pass through to println capability.
+        evaluator.host.execute_capability("ccos.io.println", &args)
     }
 
     /// `(kv/assoc! key k v [k v]...)` -> get value at key, assoc, put back, return new value
@@ -712,34 +667,22 @@ impl StandardLibrary {
 
     /// `(tool.log "message" 1 2 3)`
     ///
-    /// Prints the given arguments to the console.
+    /// Prints the given arguments to the console via host.
     fn tool_log(args: Vec<Value>) -> RuntimeResult<Value> {
-        let output = args
-            .iter()
-            .map(|v| v.to_string())
-            .collect::<Vec<String>>()
-            .join(" ");
-        println!("{}", output);
-        Ok(Value::Nil)
+        Err(RuntimeError::Generic(
+            "tool/log is not supported in RTFS core. Use ccos.io.log or host delegation."
+                .to_string(),
+        ))
     }
 
     /// `(tool.time-ms)`
     ///
-    /// Returns the current system time in milliseconds since the UNIX epoch.
+    /// Returns the current system time in milliseconds since the UNIX epoch via host.
     fn tool_time_ms(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 0 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "tool/time-ms".to_string(),
-                expected: "0".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        let since_the_epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| RuntimeError::Generic(format!("SystemTime before UNIX EPOCH: {}", e)))?;
-
-        Ok(Value::Integer(since_the_epoch.as_millis() as i64))
+        Err(RuntimeError::Generic(
+            "tool/time-ms is not supported in RTFS core. Use ccos.system.current-timestamp-ms or host delegation."
+                .to_string(),
+        ))
     }
 
     /// `(find m k)` -> returns a vector [k v] if key exists in map, otherwise nil
@@ -921,253 +864,67 @@ impl StandardLibrary {
 
     /// `(println args...)`
     ///
-    /// Prints the given arguments to the console with a newline.
+    /// Prints the given arguments to the console with a newline via host.
     fn println(args: Vec<Value>) -> RuntimeResult<Value> {
-        let output = if args.is_empty() {
-            String::new()
-        } else {
-            args.iter()
-                .map(|v| v.to_string())
-                .collect::<Vec<String>>()
-                .join(" ")
-        };
-        println!("{}", output);
-        Ok(Value::Nil)
+        Err(RuntimeError::Generic(
+            "println is not supported in RTFS core. Use ccos.io.println or host delegation."
+                .to_string(),
+        ))
     }
 
     /// `(thread/sleep milliseconds)`
     ///
-    /// Sleeps for the specified number of milliseconds.
+    /// Sleeps for the specified number of milliseconds via host.
     fn thread_sleep(args: Vec<Value>) -> RuntimeResult<Value> {
-        let args = args.as_slice();
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "thread/sleep".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        let milliseconds = match &args[0] {
-            Value::Integer(ms) => {
-                if *ms < 0 {
-                    return Err(RuntimeError::InvalidArgument(
-                        "Sleep duration cannot be negative".to_string(),
-                    ));
-                }
-                *ms as u64
-            }
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "integer".to_string(),
-                    actual: args[0].type_name().to_string(),
-                    operation: "thread/sleep".to_string(),
-                })
-            }
-        };
-
-        std::thread::sleep(std::time::Duration::from_millis(milliseconds));
-        Ok(Value::Nil)
+        Err(RuntimeError::Generic(
+            "thread/sleep is not supported in RTFS core. Use ccos.system.sleep-ms or host delegation."
+                .to_string(),
+        ))
     }
 
     /// `(file-exists? filename)`
     ///
-    /// Checks if a file exists and returns a boolean.
+    /// Checks if a file exists via host.
     fn file_exists(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "file-exists?".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        let filename = match &args[0] {
-            Value::String(s) => s,
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "string".to_string(),
-                    actual: args[0].type_name().to_string(),
-                    operation: "file-exists?".to_string(),
-                });
-            }
-        };
-
-        let exists = std::path::Path::new(filename).exists();
-        Ok(Value::Boolean(exists))
+        Err(RuntimeError::Generic(
+            "file-exists? is not supported in RTFS core. Use ccos.io.file-exists or host delegation."
+                .to_string(),
+        ))
     }
 
     /// `(get-env variable-name)`
     ///
-    /// Gets an environment variable and returns its value as a string, or nil if not found.
+    /// Gets an environment variable via host.
     fn get_env(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "get-env".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        let var_name = match &args[0] {
-            Value::String(s) => s,
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "string".to_string(),
-                    actual: args[0].type_name().to_string(),
-                    operation: "get-env".to_string(),
-                });
-            }
-        };
-
-        match std::env::var(var_name) {
-            Ok(value) => Ok(Value::String(value)),
-            Err(_) => Ok(Value::Nil),
-        }
+        Err(RuntimeError::Generic(
+            "get-env is not supported in RTFS core. Use ccos.system.get-env or host delegation."
+                .to_string(),
+        ))
     }
 
     /// `(read-lines filename)`
     ///
-    /// Reads all lines from a file and returns them as a vector of strings.
+    /// Reads all lines from a file via host.
     fn read_lines(args: Vec<Value>) -> RuntimeResult<Value> {
-        let args = args.as_slice();
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "read-lines".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        let filename = match &args[0] {
-            Value::String(s) => s,
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "string".to_string(),
-                    actual: args[0].type_name().to_string(),
-                    operation: "read-lines".to_string(),
-                })
-            }
-        };
-
-        // Try reading the file; if not found, fall back to test asset locations
-        let try_paths: Vec<std::path::PathBuf> = {
-            let p = std::path::Path::new(filename);
-            if p.exists() {
-                vec![p.to_path_buf()]
-            } else {
-                vec![
-                    std::path::Path::new("tests/rtfs_files/features").join(filename),
-                    std::path::Path::new("rtfs_compiler/tests/rtfs_files/features").join(filename),
-                ]
-            }
-        };
-
-        let mut content_opt: Option<String> = None;
-        for p in try_paths {
-            if let Ok(content) = std::fs::read_to_string(&p) {
-                content_opt = Some(content);
-                break;
-            }
-        }
-
-        match content_opt {
-            Some(content) => {
-                let lines: Vec<Value> = content
-                    .lines()
-                    .map(|line| Value::String(line.to_string()))
-                    .collect();
-                Ok(Value::Vector(lines))
-            }
-            None => Err(RuntimeError::IoError(format!(
-                "Failed to read file '{}' (also tried test asset paths)",
-                filename
-            ))),
-        }
+        Err(RuntimeError::Generic(
+            "read-lines is not supported in RTFS core. Use ccos.io.read-file or host delegation."
+                .to_string(),
+        ))
     }
 
     /// `(step message-or-level message [data])`
     ///
-    /// Logs a step/debug message with optional level and data.
-    /// Returns nil (side-effect function for logging/debugging).
+    /// Logs a step/debug message via host.
     fn step(args: Vec<Value>) -> RuntimeResult<Value> {
-        let args = args.as_slice();
-        if args.is_empty() {
-            return Err(RuntimeError::ArityMismatch {
-                function: "step".to_string(),
-                expected: "1 or more".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        // Parse arguments based on patterns:
-        // (step "message") - simple message
-        // (step :level "message") - message with level
-        // (step "message" data) - message with data
-        // (step :level "message" data) - message with level and data
-
-        let (level, message, data) = match args.len() {
-            1 => {
-                // (step "message")
-                let message = args[0].to_string();
-                ("info", message, None)
-            }
-            2 => {
-                // Could be (step :level "message") or (step "message" data)
-                if let Value::Keyword(ref kw) = args[0] {
-                    // (step :level "message")
-                    let level = kw.0.as_str();
-                    let message = args[1].to_string();
-                    (level, message, None)
-                } else {
-                    // (step "message" data)
-                    let message = args[0].to_string();
-                    let data = Some(&args[1]);
-                    ("info", message, data)
-                }
-            }
-            3 => {
-                // (step :level "message" data)
-                let level = if let Value::Keyword(ref kw) = args[0] {
-                    kw.0.as_str()
-                } else {
-                    "info"
-                };
-                let message = args[1].to_string();
-                let data = Some(&args[2]);
-                (level, message, data)
-            }
-            _ => {
-                return Err(RuntimeError::ArityMismatch {
-                    function: "step".to_string(),
-                    expected: "1 to 3".to_string(),
-                    actual: args.len(),
-                });
-            }
-        };
-
-        // Format log message
-        let log_message = if let Some(data) = data {
-            format!(
-                "[{}] {}: {}",
-                level.to_uppercase(),
-                message,
-                data.to_string()
-            )
-        } else {
-            format!("[{}] {}", level.to_uppercase(), message)
-        };
-
-        // Print the log message (in a real implementation, this would go to a proper logger)
-        println!("{}", log_message);
-
-        Ok(Value::Nil)
+        Err(RuntimeError::Generic(
+            "step is not supported in RTFS core. Use ccos.io.println or host delegation."
+                .to_string(),
+        ))
     }
-
-    // Removed stdlib dotimes/for duplicates; evaluator handles special-forms.
 
     /// `(process-data data)` -> placeholder function for testing
     fn process_data(args: Vec<Value>) -> RuntimeResult<Value> {
+        // This seems to be a pure placeholder, keeping it pure.
         if args.len() != 1 {
             return Err(RuntimeError::ArityMismatch {
                 function: "process-data".to_string(),
@@ -1181,15 +938,10 @@ impl StandardLibrary {
 
     /// `(read-file path)` -> placeholder function for testing
     fn read_file(args: Vec<Value>) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "read-file".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        // Return a placeholder string for now
-        Ok(Value::String("file content placeholder".to_string()))
+         Err(RuntimeError::Generic(
+            "read-file is not supported in RTFS core. Use ccos.io.read-file or host delegation."
+                .to_string(),
+        ))
     }
 
     // set! is an evaluator special-form; no stdlib implementation here.
