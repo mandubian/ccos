@@ -153,6 +153,7 @@ fn fallback_grammar_hints() -> Vec<String> {
     vec![
         "RTFS uses prefix notation with parentheses.".to_string(),
         "Maps are written as `{:keyword value}` pairs without `=` characters.".to_string(),
+        "Do NOT use commas `,` to separate map entries or list items.".to_string(),
         "Strings must be enclosed in double quotes.".to_string(),
         "Keywords begin with a colon and typically use kebab-case (e.g. `:issues`).".to_string(),
         "Capability calls use `(call :provider.capability {:param value})`.".to_string(),
@@ -1543,7 +1544,7 @@ impl CCOS {
         prompt.push_str(&plan_source);
         prompt.push_str("\n```\n");
         prompt.push_str(
-            "Produce ONLY the corrected RTFS code (e.g. `(do ...)`). Do not add commentary.\n",
+            "Produce ONLY the corrected RTFS code (e.g. `(do ...)`). Do not add commentary. Do NOT wrap in `(plan ...)`.\n",
         );
 
         let response = delegating.generate_raw_text(&prompt).await.map_err(|e| {

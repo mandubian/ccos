@@ -29,11 +29,13 @@ Convert JSON plan steps into a complete RTFS plan expression.
 
 4. SPECIAL: Logic Steps (capability_id="rtfs")
    - If a step has `capability_id: "rtfs"`, do NOT generate a `(call ...)` expression.
+   - **CRITICAL**: Do NOT generate a `(rtfs ...)` function call. `rtfs` is NOT a function.
    - Instead, extract the RTFS code from the inputs (key "expression" or "code") and use it DIRECTLY in the let binding.
    - Example JSON: `{ "capability_id": "rtfs", "inputs": { "expression": "(first (get step_0 :content))" } }`
    - Example RTFS: `step_1 (first (get step_0 :content))`
+   - BAD Example: `step_1 (rtfs (first (get step_0 :content)))`  <-- NEVER DO THIS
    - Do not verify capabilities for these steps.
-   - **CRITICAL**: The result of a logic step is the value itself. When mapping it to the final output, use `step_N` directly, NOT `(get step_N :key)`.
+   - The result of a logic step is the value itself. When mapping it to the final output, use `step_N` directly, NOT `(get step_N :key)`.
 
 5. Argument conversion:
    - String/number/boolean literals: Keep as-is

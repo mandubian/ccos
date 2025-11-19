@@ -1500,11 +1500,15 @@ Output requirements:
       - Inputs: {{ "expression": "(your rtfs code)" }}
       - Note on MCP tools: content is usually a list of objects like [{{ "type": "text", "text": "JSON..." }}].
       - When parsing JSON content:
-        1. `parse-json` returns a Map (for objects) or Vector (for arrays).
-        2. CRITICAL: `first` throws an error on Maps. You CANNOT do `(first (parse-json ...))` if the JSON is an object (like a wrapper).
-        3. Most API lists are wrapped (e.g. {{ "items": [...] }} or {{ "issues": [...] }}). You MUST extract the list key first.
+        1. `parse-json` expects a STRING.
+        2. MCP tools return `content` as a VECTOR of objects (e.g., `[{{:type "text" :text "..."}}]`).
+        3. You MUST extract the text string first: `(get (first (get step_0 :content)) :text)`.
+        4. Then parse: `(parse-json (get (first (get step_0 :content)) :text))`.
+        5. `parse-json` returns a Map (for objects) or Vector (for arrays).
+        6. CRITICAL: `first` throws an error on Maps. You CANNOT do `(first (parse-json ...))` if the JSON is an object (like a wrapper).
+        7. Most API lists are wrapped (e.g. {{ "items": [...] }} or {{ "issues": [...] }}). You MUST extract the list key first.
            (get (parse-json ...) "items") or (get (parse-json ...) "issues")
-        4. ALWAYS try to extract a key like "items", "data", "results", "issues" before calling `first`.
+        8. ALWAYS try to extract a key like "items", "data", "results", "issues" before calling `first`.
       - Example (SAFE pattern): {{ "capability_id": "rtfs", "inputs": {{ "expression": "(first (get (parse-json (get (first (get step_0 :content)) :text)) \"issues\"))" }}, "outputs": ["first_item"] }}
       - Available functions: first, get, parse-json, str, map, filter, etc.
       - Do NOT use `ccos.echo` or invent other capabilities.
