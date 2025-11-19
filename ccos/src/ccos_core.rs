@@ -1495,6 +1495,9 @@ impl CCOS {
                     | RuntimeError::TypeValidationError(_)
                     | RuntimeError::UndefinedSymbol(_)
                     | RuntimeError::SymbolNotFound(_)
+                    | RuntimeError::TypeError { .. }
+                    | RuntimeError::ArityMismatch { .. }
+                    | RuntimeError::InvalidArguments { .. }
             )
         {
             return Ok(None);
@@ -1540,7 +1543,7 @@ impl CCOS {
         prompt.push_str(&plan_source);
         prompt.push_str("\n```\n");
         prompt.push_str(
-            "Produce ONLY the corrected `(plan ...)` form in valid RTFS syntax. Do not add commentary.\n",
+            "Produce ONLY the corrected RTFS code (e.g. `(do ...)`). Do not add commentary.\n",
         );
 
         let response = delegating.generate_raw_text(&prompt).await.map_err(|e| {
