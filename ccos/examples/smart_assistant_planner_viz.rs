@@ -1499,10 +1499,12 @@ Output requirements:
       - Use a step with capability_id: "rtfs" (this is a special built-in capability for logic)
       - Inputs: {{ "expression": "(your rtfs code)" }}
       - Note on MCP tools: content is usually a list of objects like [{{ "type": "text", "text": "JSON..." }}].
-      - To parse the JSON content from `list_issues` (which returns a wrapper object {{ "issues": [...], ... }}), use:
-        (get (parse-json (get (first (get step_0 :content)) :text)) "issues")
-      - CRITICAL: `parse-json` returns a map with STRING keys, so use "issues" not :issues.
-      - Example: {{ "capability_id": "rtfs", "inputs": {{ "expression": "(first (get (parse-json (get (first (get step_0 :content)) :text)) \"issues\"))" }}, "outputs": ["first_issue"] }}
+      - When parsing JSON content:
+        1. `parse-json` returns a Map with STRING keys (e.g. {{ "items": [...] }}).
+        2. If the result is a wrapper (like {{ "issues": [...] }}), you MUST extract the list first:
+           (get (parse-json ...) "issues")
+        3. NEVER call `first` or `map` directly on the wrapper Map. Extract the list first!
+      - Example (extracting from wrapper): {{ "capability_id": "rtfs", "inputs": {{ "expression": "(first (get (parse-json (get (first (get step_0 :content)) :text)) \"issues\"))" }}, "outputs": ["first_issue"] }}
       - Available functions: first, get, parse-json, str, map, filter, etc.
       - Do NOT use `ccos.echo` or invent other capabilities.
 - outputs must list the symbolic names of values produced by that step.
