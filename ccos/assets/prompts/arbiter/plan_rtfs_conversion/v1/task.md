@@ -18,7 +18,8 @@ Convert JSON plan steps into a complete RTFS plan expression.
 2. Structure the plan as:
    - `(do` wrapper
    - `(let [` bindings block with all steps
-   - Each step as `step_N (call :capability.id {arguments})`
+   - Each capability step as `step_N (call :capability.id {arguments})`
+   - Each logic step (capability_id="rtfs") as `step_N (expression)`
    - Final output map `{...}` extracting outputs from steps
 
 3. Handle step dependencies:
@@ -26,7 +27,15 @@ Convert JSON plan steps into a complete RTFS plan expression.
    - Ensure step order respects dependencies
    - Variable references from intent use unquoted symbols
 
-4. Argument conversion:
+4. SPECIAL: Logic Steps (capability_id="rtfs")
+   - If a step has `capability_id: "rtfs"`, do NOT generate a `(call ...)` expression.
+   - Instead, extract the RTFS code from the inputs (key "expression" or "code") and use it DIRECTLY in the let binding.
+   - Example JSON: `{ "capability_id": "rtfs", "inputs": { "expression": "(first (get step_0 :content))" } }`
+   - Example RTFS: `step_1 (first (get step_0 :content))`
+   - Do not verify capabilities for these steps.
+   - **CRITICAL**: The result of a logic step is the value itself. When mapping it to the final output, use `step_N` directly, NOT `(get step_N :key)`.
+
+5. Argument conversion:
    - String/number/boolean literals: Keep as-is
    - Variables: Convert `{"var": "name"}` → `name` (unquoted symbol)
    - Step outputs: Convert `{"step": "step_1", "output": "issues"}` → `(get step_1 :issues)`
