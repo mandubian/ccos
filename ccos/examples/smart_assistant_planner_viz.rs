@@ -1502,10 +1502,10 @@ Output requirements:
       - When parsing JSON content:
         1. `parse-json` returns a Map (for objects) or Vector (for arrays).
         2. CRITICAL: `first` throws an error on Maps. You CANNOT do `(first (parse-json ...))` if the JSON is an object (like a wrapper).
-        3. Most API lists are wrapped (e.g. {{ "issues": [...] }}). You MUST extract the list key first:
-           (get (parse-json ...) "issues")
-        4. ALWAYS try to extract a key like "issues", "items", "data" before calling `first`.
-      - Example (SAFE pattern): {{ "capability_id": "rtfs", "inputs": {{ "expression": "(first (get (parse-json (get (first (get step_0 :content)) :text)) \"issues\"))" }}, "outputs": ["first_issue"] }}
+        3. Most API lists are wrapped (e.g. {{ "items": [...] }}). You MUST extract the list key first:
+           (get (parse-json ...) "items")
+        4. ALWAYS try to extract a key like "items", "data", "results" before calling `first`.
+      - Example (SAFE pattern): {{ "capability_id": "rtfs", "inputs": {{ "expression": "(first (get (parse-json (get (first (get step_0 :content)) :text)) \"items\"))" }}, "outputs": ["first_item"] }}
       - Available functions: first, get, parse-json, str, map, filter, etc.
       - Do NOT use `ccos.echo` or invent other capabilities.
 - outputs must list the symbolic names of values produced by that step.
