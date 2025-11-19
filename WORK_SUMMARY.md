@@ -105,6 +105,22 @@ This work session focused on improving the capability synthesis and plan generat
 - `ccos/assets/prompts/arbiter/plan_rtfs_conversion/v1/task.md`
 - `ccos/assets/prompts/arbiter/plan_rtfs_conversion/v1/strategy.md`
 
+### 7. Plan Execution and Auto-Repair (Latest Update)
+**Problem**: Plans were generating correctly but failing at runtime due to type mismatches (e.g., `first` on map), incorrect JSON content extraction, or invalid RTFS wrapping (`(rtfs ...)`). Auto-repair was not triggering for runtime errors or was generating invalid plan wrappers.
+
+**Solution**:
+- **Runtime Error Trapping**: Updated `ccos_core.rs` to catch `Ok(ExecutionResult { success: false })` and feed the error message into the auto-repair loop.
+- **Robust JSON Parsing**: Refined planner prompts to explicitly instruct on extracting `:text` from the `content` vector before parsing, and handling JSON wrappers (`"items"`, `"issues"`).
+- **Strict RTFS Generation**: Updated `plan_rtfs_conversion` prompt to strictly forbid generating `(rtfs ...)` function calls, enforcing direct expression inlining.
+- **Auto-Repair Refinement**: Updated `ccos_core.rs` auto-repair prompt to forbid wrapping code in `(plan ...)` and using commas in maps.
+- **Clean Output**: Updated `plan_rtfs_conversion` prompt to extract only relevant final outputs, filtering out large intermediate data.
+- **Verified Execution**: Validated end-to-end execution with `CCOS_USE_LLM_PLAN_CONVERSION=true` and `--auto-repair`, confirming successful retrieval and parsing of specific GitHub issues.
+
+**Files Modified**:
+- `ccos/src/ccos_core.rs`
+- `ccos/assets/prompts/arbiter/plan_rtfs_conversion/v1/task.md`
+- `ccos/examples/smart_assistant_planner_viz.rs`
+
 ## Technical Improvements
 
 ### Code Quality
@@ -128,43 +144,37 @@ This work session focused on improving the capability synthesis and plan generat
 - LLM-based plan conversion
 - Proactive filtering synthesis
 - RTFS syntax validation
+- **Plan Execution & Auto-Repair** (Verified & Robust)
 
 ⚠️ **Minor Issues**:
-- LLM sometimes uses string keys `"title"` instead of keyword keys `:title` in map access
-- Plan execution not yet integrated (visualization only)
+- LLM sometimes uses string keys `"title"` instead of keyword keys `:title` in map access (Mitigated by prompts)
 
 ## Next Steps
 
-1. **Plan Execution Integration**
-   - Add orchestrator execution to `smart_assistant_planner_viz.rs`
-   - Test end-to-end: goal → plan → execution → results
-   - Handle execution errors and provide feedback
-
-2. **RTFS Syntax Refinement**
+1. **RTFS Syntax Refinement**
    - Update grammar hints to emphasize keyword usage (`:key`) over strings (`"key"`)
    - Add more examples of correct map access patterns
    - Strengthen validation for keyword vs string usage
 
-3. **Error Handling and Feedback**
+2. **Error Handling and Feedback**
    - Improve error messages for execution failures
    - Add retry logic for plan generation
    - Better feedback loop for LLM corrections
 
-4. **Testing**
+3. **Testing**
    - Add unit tests for new prompt system
    - Test plan conversion with various capability types
    - Validate RTFS code generation correctness
 
-5. **Documentation**
+4. **Documentation**
    - Document the new prompt system structure
    - Add examples of correct RTFS plan patterns
    - Update architecture docs with new conversion flow
 
 ## Statistics
 
-- **Files Modified**: 18 files
-- **Lines Added**: ~2,527
-- **Lines Removed**: ~476
+- **Files Modified**: 21 files
+- **Lines Added**: ~2,650
+- **Lines Removed**: ~490
 - **New Prompt Files**: 4 files
-- **Major Features**: 6 functional improvements
-
+- **Major Features**: 7 functional improvements
