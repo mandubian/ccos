@@ -14,7 +14,12 @@ use rtfs::runtime::values::Value;
 struct RestrictedHost;
 
 impl HostInterface for RestrictedHost {
-    fn execute_capability(&self, name: &str, _args: &[Value]) -> RuntimeResult<Value> {
+    fn execute_capability(&self, name: &str, args: &[Value]) -> RuntimeResult<Value> {
+        if name == "ccos.io.println" || name == "io.println" {
+             let message = args.iter().map(|v| format!("{}", v)).collect::<Vec<_>>().join(" ");
+             println!("{}", message);
+             return Ok(Value::Nil);
+        }
         Err(RuntimeError::SecurityViolation {
             operation: "execute_capability".to_string(),
             capability: name.to_string(),
@@ -77,7 +82,7 @@ impl RestrictedRtfsExecutor {
             RuntimeError::Generic(format!("Failed to parse synthesized primitive: {:?}", err))
         })?;
 
-        let mut env = SecureStandardLibrary::create_secure_environment();
+        let mut env = rtfs::runtime::stdlib::StandardLibrary::create_global_environment();
 
         let func_value = match self.evaluator.evaluate_with_env(&expr, &mut env)? {
             ExecutionOutcome::Complete(value) => value,
