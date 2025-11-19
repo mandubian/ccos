@@ -50,9 +50,12 @@ Convert JSON plan steps into a complete RTFS plan expression.
    - Ensure every output or map key you reference can become a keyword: lowercase letters, digits, `_` or `-` only (e.g., `filtered_items` → `:filtered_items`). Rename outputs in the JSON before conversion if needed.
 
 6. Output extraction:
-   - Extract all outputs from all steps
-   - Sort outputs alphabetically by keyword name
-   - Use `:keyword` format for map keys
+   - Construct a final output map `{ :key value ... }`.
+   - Include the output of the FINAL step in the plan.
+   - You may omit intermediate outputs (e.g., large raw content from `step_0`) IF they are consumed and transformed by a subsequent step (e.g., `step_1` extracts data from `step_0`).
+   - If the plan has only one step, return its output.
+   - Sort keys alphabetically.
+   - Use `:keyword` format for map keys.
 
 ## Output Format
 

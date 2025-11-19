@@ -1550,9 +1550,6 @@ impl CCOS {
             ))
         })?;
 
-        // ALWAYS log the repair response for debugging
-        println!("DEBUG: Auto-repair response:\n{}", response);
-
         if options.debug_responses {
             if let Some(callback) = &self.debug_callback {
                 callback(format!(

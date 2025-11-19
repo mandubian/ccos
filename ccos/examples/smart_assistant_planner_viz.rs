@@ -4113,6 +4113,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         let causal_chain_arc = ccos.get_causal_chain();
         if args.auto_repair {
+            println!("{}", "🔧 Running with auto-repair enabled...".yellow());
             let mut repair_options = PlanAutoRepairOptions::default();
             let context_lines = vec![format!("Goal: {}", goal)];
             repair_options.additional_context = Some(context_lines.join("\n"));
