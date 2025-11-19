@@ -25,6 +25,10 @@ struct Args {
     /// JSON object of inputs to pass to the capability
     #[arg(long, default_value = "{}")]
     inputs: String,
+
+    /// Path to capability RTFS file (overrides default resolution if provided)
+    #[arg(long)]
+    file: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -44,15 +48,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build()
         .map_err(|e| format!("failed to init CCOS environment: {}", e))?;
 
-    let cap_file_primary = format!("capabilities/generated/{}/capability.rtfs", args.cap_id);
-    let cap_file_fallback = format!("../{}", cap_file_primary);
-    let cap_path = if Path::new(&cap_file_primary).exists() {
-        cap_file_primary
-    } else if Path::new(&cap_file_fallback).exists() {
-        cap_file_fallback
+    let cap_path = if let Some(f) = &args.file {
+        f.clone()
     } else {
-        cap_file_primary
+        let cap_file_primary = format!("capabilities/generated/{}/capability.rtfs", args.cap_id);
+        let cap_file_fallback = format!("../{}", cap_file_primary);
+        if Path::new(&cap_file_primary).exists() {
+            cap_file_primary
+        } else if Path::new(&cap_file_fallback).exists() {
+            cap_file_fallback
+        } else {
+            cap_file_primary
+        }
     };
+
+    if !Path::new(&cap_path).exists() {
+        return Err(format!("capability file not found: {}", cap_path).into());
+    }
+
     env.execute_file(&cap_path)
         .map_err(|e| format!("failed to load capability file '{}': {}", cap_path, e))?;
 
