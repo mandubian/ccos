@@ -1476,6 +1476,13 @@ Output requirements:
       - Do NOT use {{"rtfs": "..."}} for regular string, number, array, or other non-function parameters
       - Parameters must receive values matching their declared type: strings get text, arrays get JSON arrays, numbers get numbers
       - If a capability does not have function parameters but you need filtering/transformation, use a separate step with a capability that supports function parameters
+      - Available RTFS functions for use in function blocks:
+          * Core: let, if, do, get, first, rest, cons, list, vector, map, str
+          * Math: +, -, *, /, ==, !=, <, >, <=, >=
+          * Collections: keys, vals, find, map-indexed, update, remove
+          * JSON: parse-json, serialize-json
+          * I/O & Logging: println, log, print
+          * System: time-ms
 - outputs must list the symbolic names of values produced by that step.
 - Use capability_id exactly as listed in the menu.
 - Steps must be ordered so dependencies appear earlier than the steps that use them.
@@ -1572,6 +1579,13 @@ Output requirements:
       - Do NOT use {{"rtfs": "..."}} for regular string, number, array, or other non-function parameters
       - Parameters must receive values matching their declared type: strings get text, arrays get JSON arrays, numbers get numbers
       - If a capability does not have function parameters but you need filtering/transformation, use a separate step with a capability that supports function parameters
+      - Available RTFS functions for use in function blocks:
+          * Core: let, if, do, get, first, rest, cons, list, vector, map, str
+          * Math: +, -, *, /, ==, !=, <, >, <=, >=
+          * Collections: keys, vals, find, map-indexed, update, remove
+          * JSON: parse-json, serialize-json
+          * I/O & Logging: println, log, print
+          * System: time-ms
 - outputs must list the symbolic names of values produced by that step.
 - Use capability_id exactly as listed in the menu.
 - Steps must be ordered so dependencies appear earlier than the steps that use them.
