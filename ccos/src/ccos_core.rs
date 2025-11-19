@@ -1398,11 +1398,49 @@ impl CCOS {
 
         loop {
             let plan_for_execution = current_plan.clone();
-            match self
+            let execution_result = self
                 .validate_and_execute_plan(plan_for_execution, context)
-                .await
-            {
-                Ok(result) => return Ok(result),
+                .await;
+
+            match execution_result {
+                Ok(result) => {
+                    // Check if execution was successful
+                    if result.success {
+                        return Ok(result);
+                    }
+
+                    // Execution failed (runtime error), but we got a result object
+                    // Extract error from metadata to attempt repair
+                    if attempts_remaining == 0 {
+                        return Ok(result);
+                    }
+
+                    let error_message = result
+                        .metadata
+                        .get("error")
+                        .and_then(|v| match v {
+                            Value::String(s) => Some(s.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| "Unknown execution error".to_string());
+                    
+                    let runtime_error = RuntimeError::Generic(error_message);
+
+                    match self
+                        .try_repair_plan_with_llm(&current_plan, &runtime_error, attempt_index, &options)
+                        .await?
+                    {
+                        Some(repaired_plan) => {
+                            current_plan = repaired_plan;
+                            attempts_remaining -= 1;
+                            attempt_index += 1;
+                        }
+                        None => {
+                            // Could not repair, return the original failure result
+                            return Ok(result);
+                        }
+                    }
+                }
                 Err(err) => {
                     if attempts_remaining == 0 {
                         return Err(err);
@@ -1512,6 +1550,9 @@ impl CCOS {
             ))
         })?;
 
+        // ALWAYS log the repair response for debugging
+        println!("DEBUG: Auto-repair response:\n{}", response);
+
         if options.debug_responses {
             if let Some(callback) = &self.debug_callback {
                 callback(format!(
@@ -1523,10 +1564,14 @@ impl CCOS {
 
         let new_plan_source = match extract_plan_rtfs_from_response(&response) {
             Some(src) => src,
-            None => return Ok(None),
+            None => {
+                println!("DEBUG: Failed to extract RTFS plan from repair response");
+                return Ok(None);
+            },
         };
 
-        if rtfs::parser::parse(&new_plan_source).is_err() {
+        if let Err(e) = rtfs::parser::parse(&new_plan_source) {
+            println!("DEBUG: Repaired plan failed to parse: {}", e);
             return Ok(None);
         }
 
