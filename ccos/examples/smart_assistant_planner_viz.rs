@@ -2654,7 +2654,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "Parse MCP Text Content as JSON".to_string(),
         "Extracts and parses a JSON string from a standard MCP text content envelope.".to_string(),
         Arc::new(|input: &Value| -> RuntimeResult<Value> {
-            eprintln!("DEBUG: adapters.mcp.parse-json input: {:?}", input);
+            if std::env::var("CCOS_DEBUG").is_ok() {
+                eprintln!("DEBUG: adapters.mcp.parse-json input: {:?}", input);
+            }
             // Expect input: { :content [ { :text "..." } ] }
             // Fallback for LLM using text_content instead of content
             let content = match input {
@@ -2711,7 +2713,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
 
             let result = json_to_rtfs(&json_val);
-            eprintln!("DEBUG: adapters.mcp.parse-json result: {:?}", result);
+            if std::env::var("CCOS_DEBUG").is_ok() {
+                eprintln!("DEBUG: adapters.mcp.parse-json result: {:?}", result);
+            }
             Ok(result)
         })
     ).await.map_err(runtime_error)?;
