@@ -1,0 +1,12 @@
+;; RTFS Capability Manifest for system.time.get_current_ms
+
+(capability "system.time.get_current_ms"
+  :name "Get Current Timestamp in Milliseconds"
+  :description "Returns the current system time in milliseconds since the UNIX epoch."
+  :version "1.0.0"
+  :provider :rtfs
+  :input-schema :nil
+  :output-schema :integer
+  :implementation
+  (fn []
+    (tool.time-ms)))

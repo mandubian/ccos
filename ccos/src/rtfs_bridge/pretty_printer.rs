@@ -1,5 +1,5 @@
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
-use rtfs::ast::{Expression, FnExpr, Literal, MapKey, ParamDef, Pattern};
+use rtfs::ast::{Expression, FnExpr, IfExpr, Literal, MapKey, ParamDef, Pattern};
 use std::collections::HashMap;
 
 const DEFAULT_INDENT: &str = "  ";
@@ -185,6 +185,7 @@ impl RtfsPrettyPrinter {
             Expression::Let(let_expr) => {
                 self.format_let(let_expr.bindings.as_slice(), &let_expr.body, depth)
             }
+            Expression::If(if_expr) => self.format_if(if_expr, depth),
             Expression::Fn(fn_expr) => fn_expr_to_rtfs_string(self, fn_expr, depth),
             _ => self.format_debug(expr),
         }
@@ -418,6 +419,53 @@ impl RtfsPrettyPrinter {
                     .sum::<usize>();
                 len <= self.inline_threshold
             }
+        }
+    }
+
+    fn format_if(&self, if_expr: &IfExpr, depth: usize) -> String {
+        let condition = self.format(&if_expr.condition, depth + 1);
+        let then_branch = self.format(&if_expr.then_branch, depth + 1);
+        let else_branch = if_expr
+            .else_branch
+            .as_ref()
+            .map(|e| self.format(e, depth + 1));
+
+        let parts = if let Some(else_b) = &else_branch {
+            vec![condition.clone(), then_branch.clone(), else_b.clone()]
+        } else {
+            vec![condition.clone(), then_branch.clone()]
+        };
+
+        if self.should_inline_body(&parts) {
+            if let Some(else_b) = else_branch {
+                format!("(if {} {} {})", condition, then_branch, else_b)
+            } else {
+                format!("(if {} {})", condition, then_branch)
+            }
+        } else {
+            let mut result = String::from("(if");
+            
+            // Condition
+            result.push('\n');
+            result.push_str(&self.indent(depth + 1));
+            result.push_str(&condition);
+
+            // Then branch
+            result.push('\n');
+            result.push_str(&self.indent(depth + 1));
+            result.push_str(&then_branch);
+
+            // Else branch
+            if let Some(else_b) = else_branch {
+                result.push('\n');
+                result.push_str(&self.indent(depth + 1));
+                result.push_str(&else_b);
+            }
+            
+            result.push('\n');
+            result.push_str(&self.indent(depth));
+            result.push(')');
+            result
         }
     }
 }

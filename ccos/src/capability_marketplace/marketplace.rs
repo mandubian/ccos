@@ -17,6 +17,7 @@ use super::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use crate::streaming::{
     McpStreamingProvider, StreamConfig, StreamHandle, StreamType, StreamingProvider,
 };
+use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
 use chrono::Utc;
 use rtfs::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
@@ -2564,7 +2565,8 @@ impl CapabilityMarketplace {
             let id = id.unwrap();
 
             // provider label e.g. :provider :http
-            let provider_token = extract_keyword(":provider", &content).unwrap_or_default();
+            let raw_provider_token = extract_keyword(":provider", &content).unwrap_or_default();
+            let provider_token = raw_provider_token.to_lowercase().replace("\"", "");
 
             let provider_meta = extract_provider_meta(&content);
             let mut metadata_map = extract_metadata(&content);
@@ -2591,7 +2593,7 @@ impl CapabilityMarketplace {
                 });
 
             // Build provider
-            let provider = if provider_token.contains(":http") || provider_token == ":http" {
+            let provider = if provider_token.contains(":http") || provider_token == "http" {
                 let base_url = provider_meta.get("base_url").cloned().unwrap_or_default();
                 let timeout_ms = provider_meta
                     .get("timeout_ms")
@@ -2602,7 +2604,7 @@ impl CapabilityMarketplace {
                     auth_token: None,
                     timeout_ms,
                 })
-            } else if provider_token.contains(":mcp") || provider_token == ":mcp" {
+            } else if provider_token.contains(":mcp") || provider_token == "mcp" {
                 let server_url = provider_meta.get("server_url").cloned().unwrap_or_default();
                 let tool_name = provider_meta.get("tool_name").cloned().unwrap_or_default();
                 let timeout_ms = provider_meta
@@ -2614,7 +2616,7 @@ impl CapabilityMarketplace {
                     tool_name,
                     timeout_ms,
                 })
-            } else if provider_token.contains(":a2a") || provider_token == ":a2a" {
+            } else if provider_token.contains(":a2a") || provider_token == "a2a" {
                 let agent_id = provider_meta.get("agent_id").cloned().unwrap_or_default();
                 let endpoint = provider_meta.get("endpoint").cloned().unwrap_or_default();
                 let protocol = provider_meta.get("protocol").cloned().unwrap_or_default();
@@ -2628,7 +2630,7 @@ impl CapabilityMarketplace {
                     protocol,
                     timeout_ms,
                 })
-            } else if provider_token.contains(":remote_rtfs") || provider_token == ":remote_rtfs" {
+            } else if provider_token.contains(":remote_rtfs") || provider_token == "remote_rtfs" {
                 let endpoint = provider_meta.get("endpoint").cloned().unwrap_or_default();
                 let timeout_ms = provider_meta
                     .get("timeout_ms")
@@ -2639,6 +2641,25 @@ impl CapabilityMarketplace {
                     timeout_ms,
                     auth_token: None,
                 })
+            } else if provider_token.contains(":local") || provider_token == "local"
+                || provider_token.contains(":rtfs") || provider_token == "rtfs"
+            {
+                // Local/RTFS provider - create a RestrictedRtfsExecutor handler
+                let impl_code = extract_type_expr_block(":implementation", &content)
+                    .or_else(|| extract_type_expr_block(":impl", &content))
+                    .unwrap_or_else(|| "(fn [x] x)".to_string());
+                
+                let handler_code = impl_code.clone();
+                
+                // Create a handler that executes the RTFS code using RestrictedRtfsExecutor
+                // This mirrors how MissingCapabilityResolver constructs handlers for synthesized capabilities
+                let handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync> =
+                    Arc::new(move |input| {
+                        let executor = RestrictedRtfsExecutor::new();
+                        executor.evaluate(&handler_code, input.clone())
+                    });
+                
+                ProviderType::Local(LocalCapability { handler })
             } else {
                 // Unsupported provider for import
                 // Add clearer output indicating why the RTFS file was skipped
@@ -2665,6 +2686,11 @@ impl CapabilityMarketplace {
                     metadata_map
                         .entry("mcp_requires_session".to_string())
                         .or_insert(req);
+                }
+                if let Some(auth) = provider_meta.get("auth_env_var").cloned() {
+                    metadata_map
+                        .entry("mcp_auth_env_var".to_string())
+                        .or_insert(auth);
                 }
             }
 

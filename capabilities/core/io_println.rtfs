@@ -1,0 +1,12 @@
+;; RTFS Capability Manifest for io.println
+
+(capability "io.println"
+  :name "Print Line to Console"
+  :description "Prints all provided arguments to the console, followed by a newline."
+  :version "1.0.0"
+  :provider :rtfs
+  :input-schema [:vector :any]
+  :output-schema :nil
+  :implementation
+  (fn [& args]
+    (apply println args)))

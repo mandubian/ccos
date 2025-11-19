@@ -19,6 +19,12 @@
   :version "1.0.0"
   :description "List issues in a GitHub repository. For pagination, use the 'endCursor' from the previous response's 'pageInfo' in the 'after' parameter."
   :provider "MCP"
+  :provider-meta {
+    :server_url "https://api.githubcopilot.com/mcp/"
+    :tool_name "list_issues"
+    :requires_session "auto"
+    :auth_env_var "MCP_AUTH_TOKEN"
+  }
   :permissions [:network.http]
   :effects [:network_request :mcp_call]
   :metadata {
@@ -29,7 +35,9 @@
       :protocol_version "2024-11-05"
       :requires_session "auto"
       :auth_env_var "MCP_AUTH_TOKEN"
+      :mcp_auth_env_var "MCP_AUTH_TOKEN"
       :server_url_override_env "MCP_SERVER_URL"
+      :mcp_server_url_override_env "MCP_SERVER_URL"
     }
     :discovery {
       :method "mcp_introspection"
@@ -38,7 +46,7 @@
       :capability_type "mcp_tool"
     }
   }
-  :input-schema [:map [:after :string?] [:direction :string?] [:labels [:vector :string]?] [:orderBy :string?] [:owner :string] [:perPage :float?] [:repo :string] [:since :string?] [:state :string?]]
+  :input-schema [:map [:owner :string] [:repo :string]]
   :output-schema [:map [:content [:vector [:map [:text :string] [:type :string]]]]]
   :implementation
     (fn [input]
