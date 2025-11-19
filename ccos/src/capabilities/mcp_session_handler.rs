@@ -283,13 +283,7 @@ impl MCPSessionHandler {
             
             // Fallback: Check for structuredContent field (if MCP server provides it)
 
-            // Fallback: Check for structuredContent field (if MCP server provides it)
-            if let Some(structured) = result.get("structuredContent") {
-                eprintln!("✅ Using MCP structuredContent field");
-                return Ok(json_to_rtfs_value(structured));
-            }
-
-            // Default: Convert JSON to RTFS Value as-is
+            // Default: Convert JSON to RTFS Value as-is, preserving 'content' or 'structuredContent' keys
             Ok(json_to_rtfs_value(result))
         } else if let Some(error) = json.get("error") {
             Err(RuntimeError::Generic(format!("MCP error: {}", error)))
@@ -473,19 +467,15 @@ fn json_to_rtfs_value(json: &serde_json::Value) -> Value {
         serde_json::Value::Object(obj) => {
             let mut map = HashMap::new();
             for (k, v) in obj.iter() {
-                // DEBUG: Print key generation
-                eprintln!("DEBUG: creating map key for json key '{}'", k);
                 // Use keyword for object keys
                 // FIX: Do not prepend ':' if standard RTFS parser produces Keyword("name") for :name
                 let key_str = if k.starts_with(':') { k[1..].to_string() } else { k.clone() };
-                eprintln!("DEBUG: key_str='{}'", key_str);
                 
                 map.insert(
                     MapKey::Keyword(Keyword(key_str)),
                     json_to_rtfs_value(v),
                 );
             }
-            eprintln!("DEBUG: Converted map keys: {:?}", map.keys().collect::<Vec<_>>());
             Value::Map(map)
         }
     }
