@@ -4,6 +4,7 @@ use crate::arbiter::delegating_arbiter::DelegatingArbiter;
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::discovery::config::DiscoveryConfig;
+use crate::discovery::discovery_agent::DiscoveryAgent;
 use crate::discovery::introspection_cache::IntrospectionCache;
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::discovery::recursive_synthesizer::RecursiveSynthesizer;
@@ -40,6 +41,8 @@ pub struct DiscoveryEngine {
     introspection_cache: Option<Arc<IntrospectionCache>>,
     /// Configuration for discovery behavior
     config: DiscoveryConfig,
+    /// Discovery agent for intelligent hint generation and ranking
+    discovery_agent: Option<Arc<DiscoveryAgent>>,
 }
 
 impl DiscoveryEngine {
@@ -48,12 +51,18 @@ impl DiscoveryEngine {
         marketplace: Arc<CapabilityMarketplace>,
         intent_graph: Arc<Mutex<IntentGraph>>,
     ) -> Self {
+        let config = DiscoveryConfig::from_env();
+        let discovery_agent = Some(Arc::new(DiscoveryAgent::new(
+            Arc::clone(&marketplace),
+            config.clone(),
+        )));
         Self {
             marketplace,
             intent_graph,
             delegating_arbiter: None,
             introspection_cache: None,
-            config: DiscoveryConfig::from_env(),
+            config,
+            discovery_agent,
         }
     }
 
@@ -63,12 +72,18 @@ impl DiscoveryEngine {
         intent_graph: Arc<Mutex<IntentGraph>>,
         agent_config: &rtfs::config::types::AgentConfig,
     ) -> Self {
+        let config = DiscoveryConfig::from_agent_config(&agent_config.discovery);
+        let discovery_agent = Some(Arc::new(DiscoveryAgent::new(
+            Arc::clone(&marketplace),
+            config.clone(),
+        )));
         Self {
             marketplace,
             intent_graph,
             delegating_arbiter: None,
             introspection_cache: None,
-            config: DiscoveryConfig::from_agent_config(&agent_config.discovery),
+            config,
+            discovery_agent,
         }
     }
 
@@ -78,12 +93,18 @@ impl DiscoveryEngine {
         intent_graph: Arc<Mutex<IntentGraph>>,
         delegating_arbiter: Option<Arc<DelegatingArbiter>>,
     ) -> Self {
+        let config = DiscoveryConfig::from_env();
+        let discovery_agent = Some(Arc::new(DiscoveryAgent::new(
+            Arc::clone(&marketplace),
+            config.clone(),
+        )));
         Self {
             marketplace,
             intent_graph,
             delegating_arbiter,
             introspection_cache: None,
-            config: DiscoveryConfig::from_env(),
+            config,
+            discovery_agent,
         }
     }
 
@@ -94,12 +115,18 @@ impl DiscoveryEngine {
         delegating_arbiter: Option<Arc<DelegatingArbiter>>,
         agent_config: &rtfs::config::types::AgentConfig,
     ) -> Self {
+        let config = DiscoveryConfig::from_agent_config(&agent_config.discovery);
+        let discovery_agent = Some(Arc::new(DiscoveryAgent::new(
+            Arc::clone(&marketplace),
+            config.clone(),
+        )));
         Self {
             marketplace,
             intent_graph,
             delegating_arbiter,
             introspection_cache: None,
-            config: DiscoveryConfig::from_agent_config(&agent_config.discovery),
+            config,
+            discovery_agent,
         }
     }
 
@@ -602,20 +629,53 @@ impl DiscoveryEngine {
         &self,
         need: &CapabilityNeed,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
+        // Use discovery agent if available to get intelligent suggestions
+        let (keywords, registry_queries) = if let Some(ref agent) = self.discovery_agent {
+            // Learn vocabulary if not already done (lazy initialization)
+            let _ = agent.learn_vocabulary().await;
+            
+            // Get suggestions from agent (we'll use goal from rationale for now)
+            // TODO: Pass actual goal and intent when available
+            if let Ok(suggestion) = agent.suggest(&need.rationale, None, need).await {
+                eprintln!("  → Discovery agent suggested {} hint(s) and {} query(ies)", 
+                    suggestion.hints.len(), suggestion.registry_queries.len());
+                if !suggestion.hints.is_empty() {
+                    eprintln!("  → Hints: {:?}", suggestion.hints);
+                }
+                
+                // Use first registry query as primary, extract keywords from it
+                let primary_query = suggestion.registry_queries.first()
+                    .cloned()
+                    .unwrap_or_else(|| need.capability_class.clone());
+                let keywords: Vec<String> = primary_query.split_whitespace().map(String::from).collect();
+                (keywords, suggestion.registry_queries)
+            } else {
+                // Fallback to old method if agent fails
+                let mut keywords: Vec<String> = need.capability_class.split('.').map(String::from).collect();
+                let context_tokens = extract_context_tokens(&need.rationale);
+                for token in context_tokens {
+                    if !keywords.iter().any(|k| k == &token) {
+                        keywords.insert(0, token);
+                    }
+                }
+                let search_query = keywords.join(" ");
+                (keywords, vec![search_query])
+            }
+        } else {
+            // Fallback: use old extraction method
+            let mut keywords: Vec<String> = need.capability_class.split('.').map(String::from).collect();
+            let context_tokens = extract_context_tokens(&need.rationale);
+            for token in context_tokens {
+                if !keywords.iter().any(|k| k == &token) {
+                    keywords.insert(0, token);
+                }
+            }
+            let search_query = keywords.join(" ");
+            (keywords, vec![search_query])
+        };
+
         // Use MCP registry client to search for servers
         let registry_client = crate::synthesis::mcp_registry_client::McpRegistryClient::new();
-
-        // Extract search keywords from capability class
-        // e.g., "restaurant.api.reserve" -> search for "restaurant" and "reserve"
-        let mut keywords: Vec<String> = need.capability_class.split('.').map(String::from).collect();
-
-        // Add context tokens from rationale (e.g. "github" from "List github issues")
-        let context_tokens = extract_context_tokens(&need.rationale);
-        for token in context_tokens {
-            if !keywords.iter().any(|k| k == &token) {
-                keywords.insert(0, token); // Prepend context for higher relevance
-            }
-        }
 
         let search_query = keywords.join(" "); // Use space-separated keywords for search
 
@@ -662,7 +722,22 @@ impl DiscoveryEngine {
             }
         }
 
-        // If no servers found with full query, try progressively simpler queries
+        // If no servers found with full query, try agent-suggested fallback queries
+        if servers.is_empty() && !registry_queries.is_empty() {
+            // Try remaining registry queries from agent
+            for query in registry_queries.iter().skip(1).take(3) {
+                eprintln!("  → No servers found, trying agent-suggested query: '{}'", query);
+                if let Ok(fallback_servers) = registry_client.search_servers(query).await {
+                    if !fallback_servers.is_empty() {
+                        eprintln!("  → Found {} MCP server(s) for '{}'", fallback_servers.len(), query);
+                        servers.extend(fallback_servers);
+                        break; // Stop after first successful query
+                    }
+                }
+            }
+        }
+
+        // If still no servers, try progressively simpler queries (legacy fallback)
         // e.g., if "text filter by-content" finds nothing, try "text filter", then "filter"
         // This avoids matching completely unrelated servers like "textarttools" when searching for "text.filter"
         if servers.is_empty() && !keywords.is_empty() {

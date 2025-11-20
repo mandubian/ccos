@@ -1,0 +1,42 @@
+;; MCP Capability: mcp.github.github-mcp.list_branches
+;; Generated: 2025-11-20T16:20:57.676189538+00:00
+;; MCP Server: https://api.githubcopilot.com/mcp/
+;; Tool: list_branches
+;; Sample output format:
+;; {
+;;   "content": [
+;;     {
+;;       "text": "missing required parameter: owner",
+;;       "type": "text"
+
+(capability "mcp.github.github-mcp.list_branches"
+  :name "list_branches"
+  :version "1.0.0"
+  :description "List branches in a GitHub repository"
+  :provider "MCP"
+  :permissions []
+  :effects []
+  :metadata {
+    :mcp {
+      :server_url "https://api.githubcopilot.com/mcp/"
+      :tool_name "list_branches"
+      :requires_session "auto"
+      :auth_env_var "MCP_AUTH_TOKEN"
+    }
+    :discovery {
+      :method "mcp_registry"
+      :created_at "2025-11-20T16:20:57.676195234+00:00"
+      :capability_type "mcp_tool"
+    }
+  }
+  :input-schema [:map [:owner :string] [:page :float?] [:perPage :float?] [:repo :string]]
+  :output-schema :any
+  :implementation
+    (fn [input]
+  ;; MCP Tool: list_branches
+  ;; Runtime handles MCP protocol automatically
+  (call :ccos.capabilities.mcp.call
+    :server-url "https://api.githubcopilot.com/mcp/"
+    :tool-name "list_branches"
+    :input input))
+)
