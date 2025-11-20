@@ -826,18 +826,66 @@ async fn refresh_capability_menu(
     eprintln!("📊 Marketplace state: {} total capability(ies), {} executable (non-meta) capability(ies) before discovery", 
         marketplace_count_before, executable_count_before);
 
-    // Trigger discovery if marketplace is empty OR only has meta-capabilities
-    if executable_count_before == 0 {
-        if marketplace_count_before > 0 {
-            eprintln!("🔍 Marketplace only contains meta-capabilities ({} total, {} executable) - triggering MCP discovery", 
-                marketplace_count_before, executable_count_before);
+    // Extract capability hints from goal/intent to check if we need discovery
+    let capability_hints = extract_capability_hints_from_goal(goal, intent);
+    // Check if catalog search finds relevant SPECIFIC capabilities for the goal hints
+    // This detects if we have a semantic gap (e.g. goal asks for "github issues" but we only have "ccos.user.ask")
+    let query = build_catalog_query(goal, intent);
+    let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
+    
+    let mut gap_detected = false;
+    // Check if the main query itself has poor coverage
+    let main_hits = catalog.search_semantic(&query, Some(&filter), 3);
+    let best_main_score = main_hits.iter()
+        .filter(|h| h.entry.id != "ccos.user.ask" && h.entry.id != "ccos.echo") // Ignore generic fallbacks
+        .map(|h| h.score)
+        .next() // Hits are sorted by score desc
+        .unwrap_or(0.0);
+        
+    if best_main_score < 0.65 {
+        eprintln!("🔍 Goal coverage is low (score {:.2}) - checking hints for specific gaps...", best_main_score);
+        
+        // If main query is weak, check specific hints to confirm if we really need external tools
+        // or if the query is just vague.
+        for hint in &capability_hints {
+            // Skip very generic hints to avoid false positives
+            if hint.contains("general.") { continue; }
+            
+            let hits = catalog.search_semantic(hint, Some(&filter), 1);
+            let best_score = hits.iter()
+                .filter(|h| h.entry.id != "ccos.user.ask" && h.entry.id != "ccos.echo")
+                .map(|h| h.score)
+                .next()
+                .unwrap_or(0.0);
+            
+            if best_score < 0.65 { 
+                eprintln!("🔍 Hint '{}' has low coverage (score {:.2}) - signaling discovery need", hint, best_score);
+                gap_detected = true;
+                break;
+            }
+        }
+    }
+
+    // Trigger discovery if:
+    // 1. Marketplace is empty OR only has meta-capabilities
+    // 2. OR we detected a semantic gap in capabilities for the goal
+    let should_trigger_discovery = executable_count_before == 0 || gap_detected;
+
+    if should_trigger_discovery {
+        if executable_count_before == 0 {
+            if marketplace_count_before > 0 {
+                eprintln!("🔍 Marketplace only contains meta-capabilities ({} total, {} executable) - triggering MCP discovery", 
+                    marketplace_count_before, executable_count_before);
+            } else {
+                eprintln!("🔍 Marketplace is empty - triggering MCP discovery based on goal/intent");
+            }
         } else {
-            eprintln!("🔍 Marketplace is empty - triggering MCP discovery based on goal/intent");
+            eprintln!("🔍 Goal suggests external capabilities (based on low semantic coverage) - triggering MCP discovery");
+            eprintln!("   Catalog search query: '{}'", query);
+            // Show the score that triggered this decision
+            eprintln!("   Main query score: {:.2}", best_main_score);
         }
         eprintln!("   Goal: {}", goal);
-
-        // Extract capability hints from goal/intent
-        let capability_hints = extract_capability_hints_from_goal(goal, intent);
         eprintln!(
             "   Extracted {} capability hint(s): {:?}",
             capability_hints.len(),
@@ -1092,6 +1140,12 @@ fn build_semantic_hints_from_tokens(tokens: &[String]) -> Vec<String> {
         .cloned()
         .collect();
     for token in &focus_tokens {
+        // Skip generic operation tokens as single-word hints (e.g., "list", "search")
+        // They are too broad and should only be used in combinations (e.g., "github.list")
+        if GENERIC_OPERATION_HINTS.contains(&token.as_str()) {
+            continue;
+        }
+        
         if seen.insert(token.clone()) {
             hints.push(token.clone());
         }

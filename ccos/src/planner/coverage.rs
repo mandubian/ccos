@@ -186,7 +186,18 @@ impl DefaultGoalCoverageAnalyzer {
                             .capability_id
                             .as_deref()
                             .map(|id| id.contains("adapter") || id.contains("parse"))
-                            .unwrap_or(false);
+                            .unwrap_or(false)
+                        // Check if rtfs step contains filter in its expression
+                        || (step
+                            .capability_id
+                            .as_deref()
+                            .map(|id| id == "rtfs")
+                            .unwrap_or(false)
+                            && step
+                                .provided_inputs
+                                .get("expression")
+                                .map(|expr| expr.contains("filter"))
+                                .unwrap_or(false));
                     if !has_filter_capability {
                         return false;
                     }
@@ -216,6 +227,12 @@ impl DefaultGoalCoverageAnalyzer {
                                 // (e.g., "literal('RTFS')" contains "RTFS")
                                 v.contains(&expected_value_str)
                             });
+                        // For rtfs steps, also check the expression directly
+                        let expression_matches = step
+                            .provided_inputs
+                            .get("expression")
+                            .map(|expr| expr.contains(&expected_value_str))
+                            .unwrap_or(false);
                         let notes_matches = step
                             .notes
                             .as_ref()
@@ -223,17 +240,19 @@ impl DefaultGoalCoverageAnalyzer {
                             .unwrap_or(false);
                         
                         // Debug logging for filter requirement checks
-                        eprintln!("🔍 FILTER CHECK: Step '{}' (capability: {:?}), expected: '{}', inputs: {:?}, notes: {:?}, input_matches: {}, notes_matches: {}",
+                        eprintln!("🔍 FILTER CHECK: Step '{}' (capability: {:?}), expected: '{}', inputs: {:?}, expression: {:?}, notes: {:?}, input_matches: {}, expression_matches: {}, notes_matches: {}",
                             step.id,
                             step.capability_id,
                             expected_value_str,
                             step.provided_inputs.values().collect::<Vec<_>>(),
+                            step.provided_inputs.get("expression"),
                             step.notes,
                             input_matches,
+                            expression_matches,
                             notes_matches
                         );
                         
-                        input_matches || notes_matches
+                        input_matches || expression_matches || notes_matches
                     } else {
                         true
                     }

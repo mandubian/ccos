@@ -1291,7 +1291,8 @@ impl MCPDiscoveryProvider {
                     let key_str = format!(":{}", entry.key.0);
                     let value_str = self.type_expr_to_rtfs_text(&entry.value_type);
                     if entry.optional {
-                        map_entries.push(format!("[:optional {} {}]", key_str, value_str));
+                        // RTFS optional map entry syntax: [key type?] (e.g., [:owner :string?])
+                        map_entries.push(format!("[{} {}?]", key_str, value_str));
                     } else {
                         map_entries.push(format!("[{} {}]", key_str, value_str));
                     }
@@ -1306,7 +1307,8 @@ impl MCPDiscoveryProvider {
                 format!("[:union {}]", options_str.join(" "))
             }
             TypeExpr::Optional(inner) => {
-                format!("[:optional {}]", self.type_expr_to_rtfs_text(inner))
+                // RTFS optional syntax: T? (e.g., :string?)
+                format!("{}?", self.type_expr_to_rtfs_text(inner))
             }
             TypeExpr::Function { .. } => ":fn".to_string(), // Simplified representation
             TypeExpr::Literal(l) => match l {

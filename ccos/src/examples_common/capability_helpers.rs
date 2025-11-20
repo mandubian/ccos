@@ -111,23 +111,39 @@ pub fn parse_simple_mcp_rtfs(path: &Path) -> RuntimeResult<Option<CapabilityMani
         }
     };
 
-    let extract_quoted = |needle: &str| -> Option<String> {
-        content.find(needle).and_then(|pos| {
-            let after = &content[pos + needle.len()..];
-            let end = after.find('"')?;
-            Some(after[..end].to_string())
-        })
+    let extract_quoted = |key: &str| -> Option<String> {
+        let start = content.find(key)? + key.len();
+        let after_key = &content[start..];
+        let mut chars = after_key.chars();
+        let mut offset = 0;
+        
+        // Skip whitespace to find opening quote
+        loop {
+             match chars.next() {
+                 Some(c) if c.is_whitespace() => offset += c.len_utf8(),
+                 Some('"') => {
+                     offset += 1; // skip quote
+                     break;
+                 }
+                 _ => return None, // Found non-whitespace before quote, or EOF
+             }
+        }
+
+        let after_quote = &content[start + offset..];
+        let end = after_quote.find('"')?;
+        Some(after_quote[..end].to_string())
     };
 
-    let id = extract_quoted("(capability \"").or_else(|| extract_quoted(":id \""));
-    let name = extract_quoted(":name \"");
-    let description = extract_quoted(":description \"");
-    let server_url = extract_quoted(":server_url \"").or_else(|| extract_quoted(":server-url \""));
-    let tool_name = extract_quoted(":tool_name \"").or_else(|| extract_quoted(":tool-name \""));
+    let id = extract_quoted("(capability").or_else(|| extract_quoted(":id"));
+    let name = extract_quoted(":name");
+    let description = extract_quoted(":description");
+    let server_url = extract_quoted(":server_url").or_else(|| extract_quoted(":server-url"));
+    let tool_name = extract_quoted(":tool_name").or_else(|| extract_quoted(":tool-name"));
     let requires_session =
-        extract_quoted(":requires_session \"").or_else(|| extract_quoted(":requires-session \""));
+        extract_quoted(":requires_session").or_else(|| extract_quoted(":requires-session"));
     let auth_env_var =
-        extract_quoted(":auth_env_var \"").or_else(|| extract_quoted(":auth-env-var \""));
+        extract_quoted(":auth_env_var").or_else(|| extract_quoted(":auth-env-var"));
+    let version = extract_quoted(":version").unwrap_or_else(|| "1.0.0".to_string());
 
     let id = match id {
         Some(id) => id,
@@ -136,7 +152,6 @@ pub fn parse_simple_mcp_rtfs(path: &Path) -> RuntimeResult<Option<CapabilityMani
 
     let name = name.unwrap_or_else(|| id.split('.').last().unwrap_or(&id).to_string());
     let description = description.unwrap_or_default();
-    let version = extract_quoted(":version \"").unwrap_or_else(|| "1.0.0".to_string());
 
     let server_url = match server_url {
         Some(url) => url,
@@ -322,10 +337,18 @@ pub fn load_override_parameters(capability_id: &str) -> Option<(Vec<String>, Vec
 pub fn tokenize_identifier(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut seen = HashSet::new();
+    
+    // Common English stopwords to filter out
+    let stopwords: HashSet<&str> = [
+        "of", "for", "the", "a", "an", "in", "on", "at", "to", "from", "by", 
+        "with", "and", "or", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "but", "if", "then", "else",
+        "when", "where", "why", "how", "all", "any", "some", "no", "not",
+    ].iter().cloned().collect();
 
     for token in text.split(|c: char| !c.is_ascii_alphanumeric()) {
         let tk = token.trim().to_ascii_lowercase();
-        if tk.is_empty() || seen.contains(&tk) {
+        if tk.is_empty() || seen.contains(&tk) || stopwords.contains(tk.as_str()) {
             continue;
         }
         seen.insert(tk.clone());
