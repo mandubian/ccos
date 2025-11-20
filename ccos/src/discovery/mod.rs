@@ -7,6 +7,7 @@
 pub mod capability_matcher;
 pub mod config;
 pub mod cycle_detector;
+pub mod discovery_agent;
 pub mod embedding_service;
 pub mod engine;
 pub mod intent_transformer;
@@ -18,6 +19,7 @@ pub mod recursive_synthesizer;
 pub use capability_matcher::*;
 pub use config::*;
 pub use cycle_detector::*;
+pub use discovery_agent::*;
 pub use embedding_service::*;
 pub use engine::*;
 pub use intent_transformer::*;
