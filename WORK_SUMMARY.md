@@ -81,9 +81,11 @@ This work session focused on improving the capability synthesis and plan generat
   - Forces capability provisioning attempt
   - Registers synthesized capability and retries plan synthesis
 - Enhanced feedback messages to guide LLM on filtering requirements
+- Updated `DefaultGoalCoverageAnalyzer` to recognize RTFS filter steps (e.g., `(filter ...)`) as valid implementations of `MustFilter`, even without explicit capability calls.
 
 **Files Modified**:
 - `ccos/examples/smart_assistant_planner_viz.rs`
+- `ccos/src/planner/coverage.rs`
 
 ### 6. Enhanced Prompt System and Validation
 **Problem**: Prompts lacked separation of concerns and RTFS-specific guidance was mixed with goal-to-JSON steps.
@@ -98,14 +100,16 @@ This work session focused on improving the capability synthesis and plan generat
   - Non-RTFS syntax usage
   - Fabricated parameters
   - Misuse of `{"rtfs": "..."}` for non-function inputs
+- Updated error explanations in `error_explainer.rs` to suggest correct `parse-json` usage instead of non-existent capabilities.
 
 **Files Modified**:
 - `ccos/assets/prompts/arbiter/plan_rtfs_conversion/v1/grammar.md`
 - `ccos/assets/prompts/arbiter/plan_rtfs_conversion/v1/anti_patterns.md`
 - `ccos/assets/prompts/arbiter/plan_rtfs_conversion/v1/task.md`
 - `ccos/assets/prompts/arbiter/plan_rtfs_conversion/v1/strategy.md`
+- `ccos/src/rtfs_bridge/error_explainer.rs`
 
-### 7. Plan Execution and Auto-Repair (Latest Update)
+### 7. Plan Execution and Auto-Repair
 **Problem**: Plans were generating correctly but failing at runtime due to type mismatches (e.g., `first` on map), incorrect JSON content extraction, or invalid RTFS wrapping (`(rtfs ...)`). Auto-repair was not triggering for runtime errors or was generating invalid plan wrappers.
 
 **Solution**:
@@ -121,6 +125,21 @@ This work session focused on improving the capability synthesis and plan generat
 - `ccos/assets/prompts/arbiter/plan_rtfs_conversion/v1/task.md`
 - `ccos/examples/smart_assistant_planner_viz.rs`
 
+### 8. Smarter Capability Discovery (Latest Update)
+**Problem**: Capability discovery was fragile, relying on exact keyword matches or generic searches that often failed to find relevant tools (e.g., searching "issues" failed to find GitHub tools if not explicitly named "issues"). Hardcoded checks for MCP discovery were brittle.
+
+**Solution**:
+- **Semantic Gap Detection**: Implemented a generic trigger for discovery based on low semantic coverage scores (< 0.65) rather than hardcoded keywords.
+- **Context-Aware Query Expansion**: Enhanced `DiscoveryEngine` to inject high-value context tokens (e.g., "github", "aws", "slack") from the rationale into search queries. If a user asks "list github issues", searching for "issues" alone might fail, but "github issues" succeeds.
+- **Stopword Filtering**: Improved tokenization in `capability_helpers.rs` to ignore common stopwords, improving search relevance.
+- **RTFS Syntax Fixes**: Corrected RTFS type syntax in `mcp_discovery.rs` (e.g., using `T?` instead of `[:optional T]`).
+
+**Files Modified**:
+- `ccos/src/discovery/engine.rs`
+- `ccos/examples/smart_assistant_planner_viz.rs`
+- `ccos/src/examples_common/capability_helpers.rs`
+- `ccos/src/capability_marketplace/mcp_discovery.rs`
+
 ## Technical Improvements
 
 ### Code Quality
@@ -128,6 +147,7 @@ This work session focused on improving the capability synthesis and plan generat
 - Added comprehensive error messages
 - Improved validation logic with specific feedback
 - Enhanced menu display for better UX
+- Addressed linter warnings (unused mutability, etc.)
 
 ### Architecture
 - Separated concerns: goal-to-JSON vs JSON-to-RTFS conversion
@@ -145,6 +165,7 @@ This work session focused on improving the capability synthesis and plan generat
 - Proactive filtering synthesis
 - RTFS syntax validation
 - **Plan Execution & Auto-Repair** (Verified & Robust)
+- **Context-Aware Discovery** (Verified with GitHub example)
 
 ⚠️ **Minor Issues**:
 - LLM sometimes uses string keys `"title"` instead of keyword keys `:title` in map access (Mitigated by prompts)
@@ -173,8 +194,8 @@ This work session focused on improving the capability synthesis and plan generat
 
 ## Statistics
 
-- **Files Modified**: 21 files
-- **Lines Added**: ~2,650
-- **Lines Removed**: ~490
+- **Files Modified**: 25 files
+- **Lines Added**: ~2,850
+- **Lines Removed**: ~530
 - **New Prompt Files**: 4 files
-- **Major Features**: 7 functional improvements
+- **Major Features**: 8 functional improvements
