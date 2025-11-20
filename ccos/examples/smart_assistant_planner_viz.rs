@@ -1139,17 +1139,6 @@ fn build_semantic_hints_from_tokens(tokens: &[String]) -> Vec<String> {
         .take(MAX_DISCOVERY_HINT_TOKENS)
         .cloned()
         .collect();
-    for token in &focus_tokens {
-        // Skip generic operation tokens as single-word hints (e.g., "list", "search")
-        // They are too broad and should only be used in combinations (e.g., "github.list")
-        if GENERIC_OPERATION_HINTS.contains(&token.as_str()) {
-            continue;
-        }
-        
-        if seen.insert(token.clone()) {
-            hints.push(token.clone());
-        }
-    }
 
     let combination_tokens: Vec<_> = focus_tokens
         .iter()
@@ -1158,7 +1147,8 @@ fn build_semantic_hints_from_tokens(tokens: &[String]) -> Vec<String> {
         .cloned()
         .collect();
 
-    for noun in combination_tokens {
+    // 1. Generate combinations first (they are more specific/valuable)
+    for noun in &combination_tokens {
         for operation in GENERIC_OPERATION_HINTS.iter().take(MAX_COMBINATION_TOKENS) {
             let combo_a = format!("{}.{}", noun, operation);
             if seen.insert(combo_a.clone()) {
@@ -1168,6 +1158,19 @@ fn build_semantic_hints_from_tokens(tokens: &[String]) -> Vec<String> {
             if seen.insert(combo_b.clone()) {
                 hints.push(combo_b);
             }
+        }
+    }
+
+    // 2. Add single tokens only if they are not generic operations
+    // And ideally only if we don't have enough hints or specific needs
+    for token in &focus_tokens {
+        // Skip generic operation tokens as single-word hints (e.g., "list", "search")
+        if GENERIC_OPERATION_HINTS.contains(&token.as_str()) {
+            continue;
+        }
+        
+        if seen.insert(token.clone()) {
+            hints.push(token.clone());
         }
     }
 
