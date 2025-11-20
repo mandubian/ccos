@@ -607,7 +607,16 @@ impl DiscoveryEngine {
 
         // Extract search keywords from capability class
         // e.g., "restaurant.api.reserve" -> search for "restaurant" and "reserve"
-        let keywords: Vec<&str> = need.capability_class.split('.').collect();
+        let mut keywords: Vec<String> = need.capability_class.split('.').map(String::from).collect();
+
+        // Add context tokens from rationale (e.g. "github" from "List github issues")
+        let context_tokens = extract_context_tokens(&need.rationale);
+        for token in context_tokens {
+            if !keywords.iter().any(|k| k == &token) {
+                keywords.insert(0, token); // Prepend context for higher relevance
+            }
+        }
+
         let search_query = keywords.join(" "); // Use space-separated keywords for search
 
         eprintln!("  → MCP registry search query: '{}'", search_query);
@@ -697,9 +706,11 @@ impl DiscoveryEngine {
                     Err(_) => Vec::new(),
                 };
                 servers.extend(fallback_servers);
-            } else if servers.is_empty() && !keywords.is_empty() {
-                // Fallback to first keyword only if we have just one keyword
-                let first_keyword = keywords[0];
+            }
+            
+            // If still no servers, try the first keyword (often the context/platform)
+            if servers.is_empty() {
+                let first_keyword = &keywords[0];
                 eprintln!(
                     "  → No servers found, trying first keyword: '{}'",
                     first_keyword
@@ -1041,7 +1052,7 @@ impl DiscoveryEngine {
 
                 // Process the introspection result
                 match introspection_result {
-                    Ok(mut introspection) => {
+                    Ok(introspection) => {
                         // Create all capabilities from this server's tools
                         match introspector.create_capabilities_from_mcp(&introspection) {
                             Ok(capabilities) => {
@@ -2835,4 +2846,48 @@ fn manifest_satisfies_need(
     }
 
     true
+}
+
+/// Extract high-value context tokens (platforms, services) from the rationale/goal text.
+fn extract_context_tokens(rationale: &str) -> Vec<String> {
+    // List of known platforms/services to prioritize in search context
+    // These are words that, if present in the goal, MUST be in the search query
+    // to find the right tool.
+    let high_value_contexts = [
+        "github", "gitlab", "bitbucket", "jira", 
+        "slack", "discord", "telegram", 
+        "google", "gmail", "calendar", "drive",
+        "aws", "azure", "gcp", "cloud",
+        "postgres", "mysql", "sql", "redis", "mongo",
+        "linear", "notion", "trello", "asana",
+        "stripe", "paypal",
+        "weather", "stock", "finance",
+        "email", "sms",
+        "filesystem", "file", "git",
+        "spotify", "youtube",
+        "huggingface", "openai", "anthropic", "llm", "ai"
+    ];
+
+    let text_lower = rationale.to_ascii_lowercase();
+    let mut matches = Vec::new();
+
+    for &context in &high_value_contexts {
+        // Check if the context word appears as a distinct word in the text
+        // Using a simple contains check is usually sufficient given these are unique keywords
+        if text_lower.contains(context) {
+            matches.push(context.to_string());
+        }
+    }
+    
+    // Filter out substrings (e.g. remove "git" if "github" is present)
+    let mut context_tokens = Vec::new();
+    for m in &matches {
+        // Only check if 'm' is a substring of ANOTHER match.
+        let is_substring = matches.iter().any(|other| other != m && other.contains(m));
+        if !is_substring {
+            context_tokens.push(m.clone());
+        }
+    }
+    
+    context_tokens
 }

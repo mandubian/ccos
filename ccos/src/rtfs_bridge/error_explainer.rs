@@ -120,7 +120,7 @@ impl RtfsErrorExplainer {
     }
 
     fn basic_collection_mismatch_hint() -> String {
-        "If a capability returns a JSON string inside a field like `:content`, parse it before passing it to a step expecting a vector. Example: `(call :ccos.json.parse (get step_0 :content))` and then pass the parsed vector to `:collection` for `mcp.core.filter`.".to_string()
+        "If a capability returns a JSON string inside a field like `:content`, parse it before passing it to a step expecting a vector. Example: `(parse-json (get step_0 :content))` and then pass the parsed vector to `:collection` for `mcp.core.filter`. Use the stdlib `parse-json` function directly, not a capability call.".to_string()
     }
 
     fn extract_problematic_line(message: &str) -> Option<String> {
