@@ -59,8 +59,10 @@ pub async fn preload_discovered_capabilities(
 
     let mut total_loaded = 0usize;
     for dir in dirs_vec {
+        eprintln!("DEBUG: preload_discovered_capabilities dir={}", dir.display());
         match marketplace.import_capabilities_from_rtfs_dir(&dir).await {
             Ok(count) => {
+                eprintln!("DEBUG: import_capabilities_from_rtfs_dir count={}", count);
                 if count == 0 {
                     // Fallback: parse simple MCP RTFS files one by one to register alias manifests.
                     if let Ok(entries) = fs::read_dir(&dir) {
@@ -74,7 +76,9 @@ pub async fn preload_discovered_capabilities(
                             {
                                 continue;
                             }
+                            eprintln!("DEBUG: fallback parsing path={}", path.display());
                             if let Some(manifest) = parse_simple_mcp_rtfs(&path)? {
+                                eprintln!("DEBUG: registering manifest id={}", manifest.id);
                                 marketplace.register_capability_manifest(manifest).await?;
                                 fallback_count += 1;
                             }
@@ -131,7 +135,9 @@ pub fn parse_simple_mcp_rtfs(path: &Path) -> RuntimeResult<Option<CapabilityMani
 
         let after_quote = &content[start + offset..];
         let end = after_quote.find('"')?;
-        Some(after_quote[..end].to_string())
+        let result = after_quote[..end].to_string();
+        // eprintln!("DEBUG: extract_quoted key='{}' found='{}'", key, result);
+        Some(result)
     };
 
     let id = extract_quoted("(capability").or_else(|| extract_quoted(":id"));
@@ -139,6 +145,12 @@ pub fn parse_simple_mcp_rtfs(path: &Path) -> RuntimeResult<Option<CapabilityMani
     let description = extract_quoted(":description");
     let server_url = extract_quoted(":server_url").or_else(|| extract_quoted(":server-url"));
     let tool_name = extract_quoted(":tool_name").or_else(|| extract_quoted(":tool-name"));
+    
+    if std::env::var("CCOS_DEBUG_DISCOVERY").is_ok() {
+        eprintln!("DEBUG: parse_simple_mcp_rtfs path={:?}", path);
+        eprintln!("DEBUG: id={:?} name={:?} server_url={:?} tool_name={:?}", id, name, server_url, tool_name);
+    }
+
     let requires_session =
         extract_quoted(":requires_session").or_else(|| extract_quoted(":requires-session"));
     let auth_env_var =
