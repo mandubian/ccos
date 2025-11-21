@@ -58,6 +58,12 @@ pub mod working_memory;
 // Runtime service
 pub mod runtime_service;
 
+// Utilities
+pub mod utils;
+
+// Example helpers
+pub mod planner_viz_common;
+
 // Re-export some arbiter sub-modules for historic import paths
 pub use crate::arbiter::arbiter_engine;
 pub use crate::arbiter::delegating_arbiter;

@@ -2,21 +2,25 @@
 
 ## Overview
 
-RTFS provides a simple macro system for code transformation using quasiquote and unquote.
+**Note**: The macro system described in this document is a **design target** and is **not currently implemented** in RTFS 2.0. This specification represents the planned macro system for future versions.
 
-## Macro Definition
+RTFS is designed to support a simple macro system for code transformation using quasiquote and unquote, but this functionality is not yet available in the current implementation.
 
-Macros are defined using `defmacro`:
+## Planned Macro Definition
+
+Macros would be defined using `defmacro` (not yet implemented):
 
 ```rtfs
-;; Simple macro
+;; Planned macro syntax (not yet implemented)
 (defmacro when [condition body]
   `(if ~condition ~body))
 
-;; Usage
+;; Planned usage (not yet implemented)
 (when (> x 0)
   (println "positive"))
 ```
+
+**Current Workaround**: Use explicit control flow constructs like `if` and `do` instead of macros.
 
 ## Quasiquote and Unquote
 

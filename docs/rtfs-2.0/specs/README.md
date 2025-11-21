@@ -316,12 +316,12 @@ Pure computation:
 Capability definition (conceptual RTFS form):
 
 ```clojure
-(defcap http/example.get
+(capability "http/example.get"
 	:name "Example GET"
-	:input {:url :string}
-	:output {:status :int :body :string}
+	:input-schema {:url :string}
+	:output-schema {:status :int :body :string}
 	:implementation
-	(host/call :http.get {:url (. input :url)}))
+	(fn [input] (host/call :http.get {:url (. input :url)})))
 ```
 
 Invocation:
@@ -335,14 +335,15 @@ Invocation:
 Plan-as-capability (using `:implementation` plan body):
 
 ```clojure
-(defcap demo/pipeline
+(capability "demo/pipeline"
 	:name "Demo pipeline"
-	:input {:x :int}
-	:output :int
+	:input-schema {:x :int}
+	:output-schema :int
 	:implementation
-	(let [a (+ (. input :x) 1)
-				b (* a 2)]
-		b))
+	(fn [input]
+		(let [a (+ (. input :x) 1)
+			  b (* a 2)]
+			b)))
 ```
 
 This registers a local capability whose handler evaluates the pure RTFS plan body with an `input` binding; any effects inside would route through the Host.

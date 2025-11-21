@@ -5,15 +5,15 @@ This document provides a comprehensive overview of all RTFS 2.0 language feature
 ## 1. Core Language Constructs
 
 ### Data Types and Literals
-- **Atoms**: Integers, strings, symbols, keywords, booleans, nil
+- **Atoms**: Integers, floats, strings, symbols, keywords, booleans, timestamps, UUIDs, resource handles, nil
 - **Collections**: Lists `()`, vectors `[]`, maps `{}`
 - **Functions**: First-class functions with lexical scoping
 
-### Special Forms
-- **Definition**: `def`, `defn` - bind values and functions to symbols
-- **Control Flow**: `if`, `cond` - conditional execution
-- **Binding**: `let` - lexical variable binding with destructuring
-- **Functions**: `fn`, `lambda` - function definition and anonymous functions
+### Special Forms (implemented in RTFS 2.0)
+- **Definition**: `def`, `defn`, `defstruct` – bind values, functions, and struct-like types to symbols
+- **Control Flow**: `if`, `match`, `do`, `try`/`catch`/`finally`, `for`
+- **Binding**: `let` – lexical variable binding with destructuring
+- **Functions**: `fn` (with `λ` as an alias) – function definition and anonymous functions
 
 ## 2. Advanced Pattern Matching and Destructuring
 
@@ -86,45 +86,36 @@ RTFS supports incremental data processing through host-mediated streaming:
    :on-complete (fn [result] (finalize result))})
 ```
 
-## 4. Macro System
+## 4. Macro System (design, not yet implemented)
 
-RTFS provides compile-time code transformation through hygienic macros.
+RTFS 2.0 currently **does not implement a user-facing `defmacro` form or quasiquote syntax** in the shipped grammar.
+The macro system described in `08-macro-system.md` is a **design target** for future versions and should be treated as aspirational.
 
-### Macro Definition
-```rtfs
-;; Simple macro example
-(defmacro unless (condition then-expr)
-  `(if (not ,condition) ,then-expr nil))
+- Macros today are effectively handled by CCOS- or compiler-level transformations, not by RTFS code using `defmacro`.
+- Examples using `defmacro`, backtick (`` ` ``), `~`, or `~@` are **conceptual** and will not parse in the current RTFS 2.0 implementation.
 
-;; Usage
-(unless (= 2 2) (call :fs.delete "/"))  ; Safe - condition prevents execution
-```
-
-### Key Macro Features
-- **Quasiquote**: ``` ` ``` for code templates
-- **Unquote**: `,` for value insertion
-- **Unquote-splicing**: `,@` for list splicing
-- Compile-time evaluation prevents runtime side effects
+When generating RTFS code today, prefer **functions and higher-order combinators** instead of relying on macros.
 
 ## 5. Module and Namespace System
 
-RTFS supports modular code organization with explicit imports and exports.
+RTFS supports modular code organization with explicit imports and exports via the `module` special form defined in `rtfs.pest`.
 
-### Module Definition
+### Module Definition (current syntax)
 ```rtfs
 ;; Module declaration
-(module my-module
-  (export add multiply)
-  (import [math :as m])
+(module my.app/math
+  (:exports [add multiply])
 
-  (defn add [a b] (m/+ a b))
-  (defn multiply [a b] (m/* a b)))
+  (import my.app/core :as core)
+
+  (defn add [a b] (core/+ a b))
+  (defn multiply [a b] (core/* a b)))
 ```
 
 ### Import/Export
-- Explicit export lists for encapsulation
-- Qualified and aliased imports
-- Namespace isolation prevents name conflicts
+- **Exports**: Use `(:exports [sym1 sym2 ...])` inside `module` to declare public symbols.
+- **Imports**: Use `(import some.module :as alias)` or `(import some.module :only [sym1 sym2])`.
+- Namespace-qualified symbols (e.g., `math/sqrt`) follow the rules in `rtfs.pest` and `12-module-system.md`.
 
 ## 6. Type System and Validation
 
@@ -194,17 +185,16 @@ RTFS enforces security through the host boundary and capability system.
 
 ## 10. Performance and Optimization
 
-RTFS includes several performance optimization features.
+RTFS includes several performance-oriented design choices.
 
-### Compilation Optimizations
-- **IR (Intermediate Representation)**: Efficient bytecode compilation
-- **Inlining**: Automatic function inlining for performance
-- **Constant Folding**: Compile-time evaluation of constant expressions
+### Compilation and Evaluation
+- **IR (Intermediate Representation)**: Optional compilation target described in `12-ir-and-compilation.md`
+- **Tree-walking evaluator**: Simple, direct execution of the AST
 
 ### Memory Management
 - Immutable data structures reduce copying overhead
-- Lazy evaluation for large data structures
-- Host-managed resource pooling
+- Structural sharing for persistent data
+- Host-managed resource pooling for external resources
 
 ## 11. Interoperability Features
 
@@ -238,28 +228,17 @@ RTFS provides comprehensive tooling for development.
 - Stack trace correlation
 - Performance profiling hooks
 
-## 13. Advanced Language Features
+## 13. Advanced Language Features (conceptual / future work)
 
-### Quoting and Metaprogramming
-```rtfs
-;; Code as data
-(def code '(+ 1 2 3))
-(eval code)  ; => 6
+Some features described in earlier RTFS 2.0 drafts are **not implemented in the current runtime** and should be treated as future design directions:
 
-;; Macro expansion inspection
-(macroexpand '(unless true (println "hello")))
-; => (if (not true) (println "hello") nil)
-```
+- **General `eval` on arbitrary RTFS code**
+- **User-defined macros via `defmacro` and macro inspection (`macroexpand`)**
+- **Clojure-style lazy sequences via `lazy-seq`**
 
-### Lazy Evaluation
-```rtfs
-;; Lazy sequences
-(def lazy-numbers
-  (lazy-seq (range 1 1000000)))
-
-;; Only computed when needed
-(take 10 lazy-numbers)
-```
+Instead:
+- Treat RTFS programs themselves as data structures (lists, maps, symbols) using standard literals.
+- Use CCOS streaming and host capabilities (see `09-streaming-capabilities.md`) to model lazy or incremental computation.
 
 ## Summary
 

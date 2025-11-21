@@ -16,27 +16,25 @@ RTFS provides a comprehensive module system for organizing code into reusable, c
 ### Basic Module Structure
 
 ```rtfs
-;; Module declaration
-(module my-module
-  ;; Export list - what this module provides
-  (export add multiply PI)
-
+;; Module declaration with exports
+(module my.app/math
+  (:exports [add multiply PI])
+  
   ;; Import declarations - dependencies
-  (import [math :as m]
-          [string :as str]
-          [collections :refer [map filter]])
+  (import my.app/core :as core)
+  (import my.app/string :only [join split])
 
   ;; Module body - implementation
   (def PI 3.14159)
 
   (defn add [a b]
-    (m/+ a b))
+    (core/+ a b))
 
   (defn multiply [a b]
-    (m/* a b))
+    (core/* a b))
 
-  ;; Private functions (not exported)
-  (defn- helper [x]
+  ;; Private functions (not in exports list)
+  (defn helper [x]
     (* x 2)))
 ```
 
@@ -47,7 +45,7 @@ RTFS provides a comprehensive module system for organizing code into reusable, c
 ```rtfs
 ;; Pure library - only exports, no side effects
 (module math.utils
-  (export gcd lcm fibonacci)
+  (:exports [gcd lcm fibonacci])
 
   (defn gcd [a b]
     (if (= b 0)
@@ -69,9 +67,9 @@ RTFS provides a comprehensive module system for organizing code into reusable, c
 ```rtfs
 ;; Application module - may have side effects
 (module app.main
-  (import [http.server :as server]
-          [db.connection :as db]
-          [app.routes :as routes])
+  (import http.server :as server)
+  (import db.connection :as db)
+  (import app.routes :as routes)
 
   (defn start []
     (db/connect)

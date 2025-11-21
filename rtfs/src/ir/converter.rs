@@ -1031,12 +1031,6 @@ impl<'a> IrConverter<'a> {
             Expression::Map(map) => self.convert_map(map),
             Expression::List(exprs) => self.convert_list_as_application(exprs),
             Expression::TryCatch(try_expr) => self.convert_try_catch(try_expr),
-            Expression::Parallel(parallel_expr) => self.convert_parallel(parallel_expr),
-            Expression::WithResource(with_expr) => self.convert_with_resource(with_expr),
-            Expression::LogStep(log_expr) => self.convert_log_step(*log_expr),
-            Expression::DiscoverAgents(discover_expr) => {
-                self.convert_discover_agents(discover_expr)
-            }
             Expression::Def(def_expr) => self.convert_def(*def_expr),
             Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
             Expression::Defstruct(defstruct_expr) => self.convert_defstruct(*defstruct_expr),
@@ -2439,102 +2433,6 @@ impl<'a> IrConverter<'a> {
         })
     }
 
-    fn convert_parallel(&mut self, parallel_expr: ParallelExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let mut bindings = Vec::new();
-        for binding in parallel_expr.bindings {
-            let init_expr = self.convert_expression(*binding.expression)?;
-            let binding_node = IrNode::VariableBinding {
-                id: self.next_id(),
-                name: binding.symbol.0,
-                ir_type: init_expr.ir_type().cloned().unwrap_or(IrType::Any),
-                source_location: None,
-            };
-            bindings.push(IrParallelBinding {
-                binding: binding_node,
-                init_expr,
-            });
-        }
-        Ok(IrNode::Parallel {
-            id,
-            bindings,
-            ir_type: IrType::Vector(Box::new(IrType::Any)),
-            source_location: None,
-        })
-    }
-
-    fn convert_with_resource(&mut self, with_expr: WithResourceExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let resource_id = self.next_id();
-        let resource_name = with_expr.resource_symbol.0;
-        let init_expr = Box::new(self.convert_expression(*with_expr.resource_init)?);
-
-        self.enter_scope();
-        let binding_info = BindingInfo {
-            name: resource_name.clone(),
-            binding_id: resource_id,
-            ir_type: IrType::Any, // Type of resource is not known at this stage
-            kind: BindingKind::Resource,
-        };
-        self.define_binding(resource_name.clone(), binding_info);
-
-        let body_expressions = with_expr
-            .body
-            .into_iter()
-            .map(|e| self.convert_expression(e))
-            .collect::<Result<_, _>>()?;
-
-        self.exit_scope();
-
-        let binding_node = IrNode::VariableBinding {
-            id: resource_id,
-            name: resource_name,
-            ir_type: self.convert_type_annotation(with_expr.resource_type)?,
-            source_location: None,
-        };
-
-        Ok(IrNode::WithResource {
-            id,
-            binding: Box::new(binding_node),
-            init_expr,
-            body: body_expressions,
-            ir_type: IrType::Any,
-            source_location: None,
-        })
-    }
-
-    fn convert_log_step(&mut self, log_expr: LogStepExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let values = log_expr
-            .values
-            .into_iter()
-            .map(|e| self.convert_expression(e))
-            .collect::<Result<_, _>>()?;
-        Ok(IrNode::LogStep {
-            id,
-            values,
-            level: log_expr.level.unwrap_or(Keyword("info".to_string())),
-            location: log_expr.location,
-            ir_type: IrType::Nil,
-            source_location: None,
-        })
-    }
-
-    fn convert_discover_agents(
-        &mut self,
-        discover_expr: DiscoverAgentsExpr,
-    ) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let criteria = Box::new(self.convert_expression(*discover_expr.criteria)?);
-        // TODO: Handle options
-        Ok(IrNode::DiscoverAgents {
-            id,
-            criteria,
-            ir_type: IrType::Vector(Box::new(IrType::Any)),
-            source_location: None,
-        })
-    }
-
     fn convert_def(&mut self, def_expr: DefExpr) -> IrConversionResult<IrNode> {
         let id = self.next_id();
         let name = def_expr.symbol.0;
@@ -2954,23 +2852,6 @@ impl<'a> IrConverter<'a> {
                     }
                 }
             }
-            IrNode::WithResource {
-                binding,
-                init_expr,
-                body,
-                ..
-            } => {
-                self.collect_variable_references(binding, captured_names);
-                self.collect_variable_references(init_expr, captured_names);
-                for expr in body {
-                    self.collect_variable_references(expr, captured_names);
-                }
-            }
-            IrNode::LogStep { values, .. } => {
-                for value in values {
-                    self.collect_variable_references(value, captured_names);
-                }
-            }
             IrNode::Step { params, body, .. } => {
                 if let Some(p) = params {
                     self.collect_variable_references(p, captured_names);
@@ -2978,9 +2859,6 @@ impl<'a> IrConverter<'a> {
                 for expr in body {
                     self.collect_variable_references(expr, captured_names);
                 }
-            }
-            IrNode::DiscoverAgents { criteria, .. } => {
-                self.collect_variable_references(criteria, captured_names);
             }
             IrNode::VariableDef { init_expr, .. } => {
                 self.collect_variable_references(init_expr, captured_names);
@@ -3005,6 +2883,31 @@ impl<'a> IrConverter<'a> {
             IrNode::Destructure { value, .. } => {
                 self.collect_variable_references(value, captured_names);
             }
+            IrNode::Parallel { bindings, .. } => {
+                for binding in bindings {
+                    self.collect_variable_references(&binding.init_expr, captured_names);
+                }
+            }
+            IrNode::WithResource {
+                binding,
+                init_expr,
+                body,
+                ..
+            } => {
+                self.collect_variable_references(binding, captured_names);
+                self.collect_variable_references(init_expr, captured_names);
+                for expr in body {
+                    self.collect_variable_references(expr, captured_names);
+                }
+            }
+            IrNode::LogStep { values, .. } => {
+                for value in values {
+                    self.collect_variable_references(value, captured_names);
+                }
+            }
+            IrNode::DiscoverAgents { criteria, .. } => {
+                self.collect_variable_references(criteria, captured_names);
+            }
             // These nodes don't contain variable references
             IrNode::Literal { .. }
             | IrNode::VariableBinding { .. }
@@ -3012,7 +2915,6 @@ impl<'a> IrConverter<'a> {
             | IrNode::QualifiedSymbolRef { .. }
             | IrNode::Param { .. }
             | IrNode::Match { .. }
-            | IrNode::Parallel { .. }
             | IrNode::Module { .. }
             | IrNode::Import { .. }
             | IrNode::Program { .. } => {

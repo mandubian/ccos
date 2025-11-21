@@ -2,8 +2,8 @@
 
 use crate::ast::{
     CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr, ForExpr, IfExpr,
-    Keyword, LetExpr, Literal, LogStepExpr, MapKey, MatchExpr, ParallelExpr, Symbol, TopLevel,
-    TryCatchExpr, WithResourceExpr,
+    Keyword, LetExpr, Literal, MapKey, MatchExpr, Symbol, TopLevel,
+    TryCatchExpr,
 };
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
@@ -78,12 +78,6 @@ impl Evaluator {
 
         // LLM execution bridge (M1)
         special_forms.insert("llm-execute".to_string(), Self::eval_llm_execute_form);
-
-        // Resource management special form
-        special_forms.insert(
-            "with-resource".to_string(),
-            Self::eval_with_resource_special_form,
-        );
 
         // Match special form
         special_forms.insert("match".to_string(), Self::eval_match_form);
@@ -694,11 +688,8 @@ impl Evaluator {
             Expression::Let(let_expr) => self.eval_let(let_expr, env),
             Expression::Do(do_expr) => self.eval_do(do_expr, env),
             Expression::Match(match_expr) => self.eval_match(match_expr, env),
-            Expression::LogStep(log_expr) => self.eval_log_step(log_expr, env),
             Expression::TryCatch(try_expr) => self.eval_try_catch(try_expr, env),
             Expression::Fn(fn_expr) => self.eval_fn(fn_expr, env),
-            Expression::WithResource(with_expr) => self.eval_with_resource(with_expr, env),
-            Expression::Parallel(parallel_expr) => self.eval_parallel(parallel_expr, env),
             Expression::Def(def_expr) => self.eval_def(def_expr, env),
             Expression::Defn(defn_expr) => self.eval_defn(defn_expr, env),
             Expression::Defstruct(defstruct_expr) => self.eval_defstruct(defstruct_expr, env),
@@ -710,9 +701,6 @@ impl Evaluator {
                     arguments: vec![*expr.clone()],
                 };
                 self.eval_expr(&deref_call, env)
-            }
-            Expression::DiscoverAgents(discover_expr) => {
-                self.eval_discover_agents(discover_expr, env)
             }
             Expression::ResourceRef(s) => {
                 // Resolve resource references from the host's execution context
@@ -2216,27 +2204,6 @@ impl Evaluator {
                             .any(|expr| self.expr_references_symbols(expr, symbols))
                     })
             }
-            Expression::WithResource(with_expr) => {
-                self.expr_references_symbols(&with_expr.resource_init, symbols)
-                    || with_expr
-                        .body
-                        .iter()
-                        .any(|expr| self.expr_references_symbols(expr, symbols))
-            }
-            Expression::Parallel(parallel_expr) => parallel_expr
-                .bindings
-                .iter()
-                .any(|binding| self.expr_references_symbols(&binding.expression, symbols)),
-            Expression::DiscoverAgents(discover_expr) => {
-                self.expr_references_symbols(&discover_expr.criteria, symbols)
-                    || discover_expr.options.as_ref().map_or(false, |options| {
-                        self.expr_references_symbols(options, symbols)
-                    })
-            }
-            Expression::LogStep(log_expr) => log_expr
-                .values
-                .iter()
-                .any(|expr| self.expr_references_symbols(expr, symbols)),
             // These don't reference symbols
             Expression::Literal(_)
             | Expression::List(_)
@@ -2418,33 +2385,6 @@ impl Evaluator {
         Err(RuntimeError::MatchError("No matching clause".to_string()))
     }
 
-    fn eval_log_step(
-        &self,
-        log_expr: &LogStepExpr,
-        env: &mut Environment,
-    ) -> Result<ExecutionOutcome, RuntimeError> {
-        let level = log_expr
-            .level
-            .as_ref()
-            .map(|k| k.0.as_str())
-            .unwrap_or("info");
-        let mut messages = Vec::new();
-        for expr in &log_expr.values {
-            match self.eval_expr(expr, env)? {
-                ExecutionOutcome::Complete(v) => messages.push(v.to_string()),
-                ExecutionOutcome::RequiresHost(hc) => {
-                    return Ok(ExecutionOutcome::RequiresHost(hc))
-                }
-                #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHost(host_call) => {
-                    return Ok(ExecutionOutcome::RequiresHost(host_call))
-                }
-            }
-        }
-        println!("[{}] {}", level, messages.join(" "));
-        Ok(ExecutionOutcome::Complete(Value::Nil))
-    }
-
     // Removed eval_set_form - no mutable variables allowed in RTFS 2.0
 
     fn eval_try_catch(
@@ -2553,78 +2493,17 @@ impl Evaluator {
         )))
     }
 
-    fn eval_with_resource(
-        &self,
-        with_expr: &WithResourceExpr,
-        env: &mut Environment,
-    ) -> Result<ExecutionOutcome, RuntimeError> {
-        let resource = self.eval_expr(&with_expr.resource_init, env)?;
-        let mut resource_env = Environment::with_parent(Arc::new(env.clone()));
-        match resource {
-            ExecutionOutcome::Complete(v) => resource_env.define(&with_expr.resource_symbol, v),
-            ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
-            #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHost(host_call) => {
-                return Ok(ExecutionOutcome::RequiresHost(host_call))
-            }
-        }
-        self.eval_do_body(&with_expr.body, &mut resource_env)
-    }
-    fn eval_parallel(
-        &self,
-        parallel_expr: &ParallelExpr,
-        env: &mut Environment,
-    ) -> Result<ExecutionOutcome, RuntimeError> {
-        // TODO: ARCHITECTURAL NOTE - True parallel execution requires Arc<T> migration
-        // Current implementation: Sequential execution with parallel semantics
-        // This maintains correctness while preparing for future parallelism
-
-        let mut results = HashMap::new();
-
-        // Process each binding in isolation to simulate parallel execution
-        // Each binding gets its own environment clone to avoid interference
-        for binding in &parallel_expr.bindings {
-            // Clone environment for each binding to simulate parallel isolation
-            let mut isolated_env = env.clone();
-
-            // Evaluate expression in isolated environment
-            let value = self.eval_expr(&binding.expression, &mut isolated_env)?;
-
-            // Store result with symbol key
-            match value {
-                ExecutionOutcome::Complete(v) => {
-                    results.insert(MapKey::Keyword(Keyword(binding.symbol.0.clone())), v);
-                }
-                ExecutionOutcome::RequiresHost(hc) => {
-                    return Ok(ExecutionOutcome::RequiresHost(hc))
-                }
-                #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHost(host_call) => {
-                    return Ok(ExecutionOutcome::RequiresHost(host_call))
-                }
-            }
-        }
-
-        // Return results as a map (parallel bindings produce a map of results)
-        Ok(ExecutionOutcome::Complete(Value::Map(results)))
-    }
-
     fn eval_def(
         &self,
         def_expr: &DefExpr,
         env: &mut Environment,
     ) -> Result<ExecutionOutcome, RuntimeError> {
-        match self.eval_expr(&def_expr.value, env)? {
-            ExecutionOutcome::Complete(v) => {
-                env.define(&def_expr.symbol, v.clone());
-                Ok(ExecutionOutcome::Complete(v))
-            }
-            ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
-            #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHost(host_call) => {
-                Ok(ExecutionOutcome::RequiresHost(host_call))
-            }
-        }
+        let value = match self.eval_expr(&def_expr.value, env)? {
+            ExecutionOutcome::Complete(v) => v,
+            ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+        };
+        env.define(&def_expr.symbol, value.clone());
+        Ok(ExecutionOutcome::Complete(value))
     }
 
     fn eval_defn(
@@ -2637,6 +2516,15 @@ impl Evaluator {
             .variadic_param
             .as_ref()
             .map(|p| self.extract_param_symbol(&p.pattern));
+
+        // Create a placeholder for recursion support
+        // This allows the function to reference itself in its own body
+        let placeholder = Arc::new(std::sync::RwLock::new(Value::Nil));
+        let placeholder_value = Value::FunctionPlaceholder(placeholder.clone());
+        
+        // Define the placeholder in the environment BEFORE creating the closure
+        // This ensures the captured environment contains the symbol pointing to the placeholder
+        env.define(&defn_expr.name, placeholder_value.clone());
 
         let function = Value::Function(Function::new_closure(
             defn_expr
@@ -2662,6 +2550,16 @@ impl Evaluator {
             defn_expr.delegation_hint.clone(),
             defn_expr.return_type.clone(),
         ));
+
+        // Update the placeholder to point to the actual function
+        {
+            let mut guard = placeholder.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+            *guard = function.clone();
+        }
+
+        // Update the environment to point directly to the function
+        // This replaces the placeholder in the current scope, but the captured environment
+        // still holds the placeholder (which now points to the function)
         env.define(&defn_expr.name, function.clone());
         Ok(ExecutionOutcome::Complete(function))
     }
@@ -2838,26 +2736,20 @@ impl Evaluator {
                 actual: args.len(),
             });
         }
-        let binding_val = self.eval_expr(&args[0], env)?;
-        let binding_val = match binding_val {
-            ExecutionOutcome::Complete(v) => v,
-            ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
-            #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHost(host_call) => {
-                return Ok(ExecutionOutcome::RequiresHost(host_call))
-            }
-        };
-        let bindings_vec = match binding_val {
-            Value::Vector(v) => v,
-            other => {
-                return Err(RuntimeError::TypeError {
-                    expected: "vector of [sym coll] pairs".into(),
-                    actual: other.type_name().into(),
+
+        // Parse bindings from AST, don't evaluate the vector itself
+        let bindings_exprs = match &args[0] {
+            Expression::Vector(v) => v,
+            _ => {
+                 return Err(RuntimeError::TypeError {
+                    expected: "vector literal for bindings".into(),
+                    actual: format!("{:?}", args[0]),
                     operation: "for".into(),
                 })
             }
         };
-        if bindings_vec.len() % 2 != 0 || bindings_vec.is_empty() {
+
+        if bindings_exprs.len() % 2 != 0 || bindings_exprs.is_empty() {
             return Err(RuntimeError::Generic(
                 "for requires an even number of binding elements [sym coll ...]".into(),
             ));
@@ -2866,23 +2758,36 @@ impl Evaluator {
         // Convert into Vec<(Symbol, Vec<Value>)>
         let mut pairs: Vec<(Symbol, Vec<Value>)> = Vec::new();
         let mut i = 0;
-        while i < bindings_vec.len() {
-            let sym = match &bindings_vec[i] {
-                Value::Symbol(s) => s.clone(),
+        while i < bindings_exprs.len() {
+            // 1. Get the symbol (unevaluated)
+            let sym = match &bindings_exprs[i] {
+                Expression::Symbol(s) => s.clone(),
                 other => {
                     return Err(RuntimeError::TypeError {
                         expected: "symbol".into(),
-                        actual: other.type_name().into(),
+                        actual: format!("{:?}", other),
                         operation: "for binding symbol".into(),
                     })
                 }
             };
-            let coll_val = bindings_vec[i + 1].clone();
+
+            // 2. Evaluate the collection expression
+            let coll_outcome = self.eval_expr(&bindings_exprs[i + 1], env)?;
+            let coll_val = match coll_outcome {
+                ExecutionOutcome::Complete(v) => v,
+                ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
+            };
+
             let items = match coll_val {
                 Value::Vector(v) => v,
+                Value::List(v) => v,
                 other => {
                     return Err(RuntimeError::TypeError {
-                        expected: "vector".into(),
+                        expected: "vector or list".into(),
                         actual: other.type_name().into(),
                         operation: "for binding collection".into(),
                     })
@@ -2903,27 +2808,8 @@ impl Evaluator {
         for_expr: &ForExpr,
         env: &mut Environment,
     ) -> Result<ExecutionOutcome, RuntimeError> {
-        // Evaluate the bindings vector to get the actual values
-        let mut bindings_vec = Vec::new();
-        for binding in &for_expr.bindings {
-            match self.eval_expr(binding, env)? {
-                ExecutionOutcome::Complete(v) => bindings_vec.push(v),
-                ExecutionOutcome::RequiresHost(hc) => {
-                    return Ok(ExecutionOutcome::RequiresHost(hc))
-                }
-                #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHost(host_call) => {
-                    return Ok(ExecutionOutcome::RequiresHost(host_call))
-                }
-                #[cfg(feature = "effect-boundary")]
-                ExecutionOutcome::RequiresHost(host_call) => {
-                    return Ok(ExecutionOutcome::RequiresHost(host_call))
-                }
-            }
-        }
-
         // Convert to (Symbol, Vec<Value>) pairs
-        if bindings_vec.len() % 2 != 0 {
+        if for_expr.bindings.len() % 2 != 0 {
             return Err(RuntimeError::Generic(
                 "for requires an even number of binding elements [sym coll ...]".into(),
             ));
@@ -2931,23 +2817,36 @@ impl Evaluator {
 
         let mut pairs: Vec<(Symbol, Vec<Value>)> = Vec::new();
         let mut i = 0;
-        while i < bindings_vec.len() {
-            let sym = match &bindings_vec[i] {
-                Value::Symbol(s) => s.clone(),
+        while i < for_expr.bindings.len() {
+            // 1. Get the symbol (unevaluated)
+            let sym = match &for_expr.bindings[i] {
+                Expression::Symbol(s) => s.clone(),
                 other => {
                     return Err(RuntimeError::TypeError {
                         expected: "symbol".into(),
-                        actual: other.type_name().into(),
+                        actual: format!("{:?}", other),
                         operation: "for binding symbol".into(),
                     })
                 }
             };
-            let coll_val = bindings_vec[i + 1].clone();
+
+            // 2. Evaluate the collection expression
+            let coll_outcome = self.eval_expr(&for_expr.bindings[i + 1], env)?;
+            let coll_val = match coll_outcome {
+                ExecutionOutcome::Complete(v) => v,
+                ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                #[cfg(feature = "effect-boundary")]
+                ExecutionOutcome::RequiresHost(host_call) => {
+                    return Ok(ExecutionOutcome::RequiresHost(host_call))
+                }
+            };
+
             let items = match coll_val {
                 Value::Vector(v) => v,
+                Value::List(v) => v,
                 other => {
                     return Err(RuntimeError::TypeError {
-                        expected: "vector".into(),
+                        expected: "vector or list".into(),
                         actual: other.type_name().into(),
                         operation: "for binding collection".into(),
                     })
@@ -2959,18 +2858,8 @@ impl Evaluator {
 
         // Recursive nested iteration
         let mut out: Vec<Value> = Vec::new();
-        match self.for_nest(&pairs, 0, env, &for_expr.body, &mut out)? {
-            ExecutionOutcome::Complete(_) => Ok(ExecutionOutcome::Complete(Value::Vector(out))),
-            ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
-            #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHost(host_call) => {
-                Ok(ExecutionOutcome::RequiresHost(host_call))
-            }
-            #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHost(host_call) => {
-                Ok(ExecutionOutcome::RequiresHost(host_call))
-            }
-        }
+        self.for_nest(&pairs, 0, env, &for_expr.body, &mut out)?;
+        Ok(ExecutionOutcome::Complete(Value::Vector(out)))
     }
     fn for_nest(
         &self,
@@ -3029,37 +2918,17 @@ impl Evaluator {
         args: &[Expression],
         env: &mut Environment,
     ) -> Result<ExecutionOutcome, RuntimeError> {
-        if args.len() < 3 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "match".into(),
-                expected: "at least 3".into(),
-                actual: args.len(),
-            });
-        }
-
-        // First argument is the value to match against
-        let value_to_match = match self.eval_expr(&args[0], env)? {
+        let value_to_match_out = self.eval_expr(&args[0], env)?;
+        let value_to_match = match value_to_match_out {
             ExecutionOutcome::Complete(v) => v,
             ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
             #[cfg(feature = "effect-boundary")]
             ExecutionOutcome::RequiresHost(host_call) => {
                 return Ok(ExecutionOutcome::RequiresHost(host_call))
             }
-            #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHost(host_call) => {
-                return Ok(ExecutionOutcome::RequiresHost(host_call))
-            }
         };
 
-        // Remaining arguments are pattern-body pairs
-        let mut i = 1;
-        while i < args.len() {
-            if i + 1 >= args.len() {
-                return Err(RuntimeError::Generic(
-                    "match: incomplete pattern-body pair".into(),
-                ));
-            }
-
+        for i in (1..args.len()).step_by(2) {
             let pattern_expr = &args[i];
             let body_expr = &args[i + 1];
 
@@ -3088,90 +2957,9 @@ impl Evaluator {
                     // This would need to be expanded for full pattern matching support
                 }
             }
-
-            i += 2;
         }
 
         Err(RuntimeError::MatchError("No matching clause".to_string()))
-    }
-
-    fn eval_with_resource_special_form(
-        &self,
-        args: &[Expression],
-        env: &mut Environment,
-    ) -> Result<ExecutionOutcome, RuntimeError> {
-        // Expect (with-resource [binding-vector] body)
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "with-resource".to_string(),
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-
-        // Parse binding vector [name type init]
-        let binding_vec = match &args[0] {
-            Expression::Vector(elements) => elements,
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "vector for binding".to_string(),
-                    actual: format!("{:?}", args[0]),
-                    operation: "with-resource".to_string(),
-                });
-            }
-        };
-
-        if binding_vec.len() != 3 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "with-resource binding".to_string(),
-                expected: "3 elements [name type init]".to_string(),
-                actual: binding_vec.len(),
-            });
-        }
-
-        // Extract variable name
-        let var_name = match &binding_vec[0] {
-            Expression::Symbol(s) => s.clone(),
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "symbol for variable name".to_string(),
-                    actual: format!("{:?}", binding_vec[0]),
-                    operation: "with-resource binding name".to_string(),
-                });
-            }
-        };
-
-        // Evaluate the initialization expression
-        let init_val = match self.eval_expr(&binding_vec[2], env)? {
-            ExecutionOutcome::Complete(v) => v,
-            ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
-            #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHost(host_call) => {
-                return Ok(ExecutionOutcome::RequiresHost(host_call))
-            }
-            #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHost(host_call) => {
-                return Ok(ExecutionOutcome::RequiresHost(host_call))
-            }
-        };
-
-        // Create a new environment scope with the variable bound
-        let mut resource_env = Environment::with_parent(Arc::new(env.clone()));
-        resource_env.define(&var_name, init_val);
-
-        // Evaluate the body in the new scope
-        match self.eval_expr(&args[1], &mut resource_env)? {
-            ExecutionOutcome::Complete(v) => Ok(ExecutionOutcome::Complete(v)),
-            ExecutionOutcome::RequiresHost(hc) => Ok(ExecutionOutcome::RequiresHost(hc)),
-            #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHost(host_call) => {
-                Ok(ExecutionOutcome::RequiresHost(host_call))
-            }
-            #[cfg(feature = "effect-boundary")]
-            ExecutionOutcome::RequiresHost(host_call) => {
-                Ok(ExecutionOutcome::RequiresHost(host_call))
-            }
-        }
     }
 
     fn match_catch_pattern(
@@ -3281,15 +3069,6 @@ impl Evaluator {
                 .clone()
                 .unwrap_or_else(|| Symbol("map".to_string())),
         }
-    }
-    /// Evaluate a discover-agents expression
-    fn eval_discover_agents(
-        &self,
-        _discover_expr: &crate::ast::DiscoverAgentsExpr,
-        _env: &mut Environment,
-    ) -> Result<ExecutionOutcome, RuntimeError> {
-        // TODO: Implement agent discovery
-        Ok(ExecutionOutcome::Complete(Value::Vector(vec![])))
     }
     /// Parse a map of criteria into SimpleDiscoveryQuery
     fn parse_criteria_to_query(
@@ -3752,13 +3531,14 @@ impl Evaluator {
 
                 // Pattern must match against a map value
                 if let Value::Map(map_values) = value {
-                    let mut bound_keys = std::collections::HashSet::new();
+                    let mut temp_env = env.clone();
+                    let mut matched_keys = std::collections::HashSet::new();
 
                     // Process each destructuring entry
                     for entry in entries {
                         match entry {
                             crate::ast::MapDestructuringEntry::KeyBinding { key, pattern } => {
-                                bound_keys.insert(key.clone());
+                                matched_keys.insert(key.clone());
                                 // Look up the key in the map
                                 if let Some(map_value) = map_values.get(key) {
                                     // Recursively bind the pattern to the value
@@ -3784,7 +3564,7 @@ impl Evaluator {
                                     let key = crate::ast::MapKey::Keyword(crate::ast::Keyword(
                                         normalized,
                                     ));
-                                    bound_keys.insert(key.clone());
+                                    matched_keys.insert(key.clone());
                                     if let Some(map_value) = map_values.get(&key) {
                                         env.define(symbol, map_value.clone());
                                     } else {
@@ -3799,7 +3579,7 @@ impl Evaluator {
                     // Handle rest parameter if present
                     if let Some(rest_symbol) = rest {
                         let mut rest_map = map_values.clone();
-                        for key in bound_keys {
+                        for key in matched_keys {
                             rest_map.remove(&key);
                         }
                         env.define(rest_symbol, Value::Map(rest_map));
@@ -3975,9 +3755,7 @@ impl Default for Evaluator {
         // Create a minimal host interface for default case
         // This should be replaced with a proper host in production
         // CCOS dependencies removed - using pure_host instead
-        // Use pure host for standalone RTFS (no CCOS dependencies)
-        use crate::runtime::pure_host::create_pure_host;
-        let host = create_pure_host();
+        let host = crate::runtime::pure_host::create_pure_host();
 
         Self::new(module_registry, security_context, host)
     }

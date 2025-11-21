@@ -460,21 +460,9 @@ impl From<Expression> for Value {
                 // For now, return a placeholder for defn expressions
                 Value::String(format!("#<defn: {}>", defn_expr.name.0))
             }
-            Expression::DiscoverAgents(_) => {
-                // For now, return a placeholder for discover-agents expressions
-                Value::String("#<discover-agents>".to_string())
-            }
             Expression::TryCatch(_) => {
                 // For now, return a placeholder for try-catch expressions
                 Value::String("#<try-catch>".to_string())
-            }
-            Expression::Parallel(_) => {
-                // For now, return a placeholder for parallel expressions
-                Value::String("#<parallel>".to_string())
-            }
-            Expression::WithResource(with_expr) => {
-                // For now, return a placeholder for with-resource expressions
-                Value::String(format!("#<with-resource: {}>", with_expr.resource_symbol.0))
             }
             Expression::Match(_) => {
                 // For now, return a placeholder for match expressions
@@ -483,11 +471,6 @@ impl From<Expression> for Value {
             Expression::ResourceRef(resource_name) => {
                 // Return the resource name as a string
                 Value::String(resource_name)
-            }
-
-            Expression::LogStep(_log_expr) => {
-                // For now, return a placeholder for log step expressions
-                Value::String("#<log-step>".to_string())
             }
             Expression::Defstruct(_defstruct_expr) => {
                 // For now, return a placeholder for defstruct expressions

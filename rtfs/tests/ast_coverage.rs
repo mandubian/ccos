@@ -575,90 +575,8 @@ mod advanced_form_coverage {
         );
     }
 
-    #[test]
-    fn test_parallel_expressions() {
-        assert_expr_parses_to!(
-            "(parallel [a 1] [b 2])",
-            Expression::Parallel(ParallelExpr {
-                bindings: vec![
-                    ParallelBinding {
-                        symbol: Symbol("a".to_string()),
-                        type_annotation: None,
-                        expression: Box::new(Expression::Literal(Literal::Integer(1))),
-                    },
-                    ParallelBinding {
-                        symbol: Symbol("b".to_string()),
-                        type_annotation: None,
-                        expression: Box::new(Expression::Literal(Literal::Integer(2))),
-                    },
-                ],
-            })
-        );
-    }
-
-    #[test]
-    fn test_with_resource_expressions() {
-        assert_expr_parses_to!(
-            "(with-resource [file FileHandle (open \"test.txt\")] (read file))",
-            Expression::WithResource(WithResourceExpr {
-                resource_symbol: Symbol("file".to_string()),
-                resource_type: TypeExpr::Alias(Symbol("FileHandle".to_string())),
-                resource_init: Box::new(Expression::FunctionCall {
-                    callee: Box::new(Expression::Symbol(Symbol("open".to_string()))),
-                    arguments: vec![Expression::Literal(Literal::String("test.txt".to_string()))],
-                }),
-                body: vec![Expression::FunctionCall {
-                    callee: Box::new(Expression::Symbol(Symbol("read".to_string()))),
-                    arguments: vec![Expression::Symbol(Symbol("file".to_string()))],
-                }],
-            })
-        );
-    }
-
-    #[test]
-    fn test_log_step_expressions() {
-        assert_expr_parses_to!(
-            "(log-step \"Computing value\" x)",
-            Expression::LogStep(Box::new(LogStepExpr {
-                level: None,
-                values: vec![
-                    Expression::Literal(Literal::String("Computing value".to_string())),
-                    Expression::Symbol(Symbol("x".to_string())),
-                ],
-                location: None,
-            }))
-        );
-
-        // With log level
-        assert_expr_parses_to!(
-            "(log-step :debug \"Debug info\" x)",
-            Expression::LogStep(Box::new(LogStepExpr {
-                level: Some(Keyword("debug".to_string())),
-                values: vec![
-                    Expression::Literal(Literal::String("Debug info".to_string())),
-                    Expression::Symbol(Symbol("x".to_string())),
-                ],
-                location: None,
-            }))
-        );
-    }
-
-    #[test]
-    fn test_discover_agents_expressions() {
-        let mut criteria_map = HashMap::new();
-        criteria_map.insert(
-            MapKey::Keyword(Keyword("capability".to_string())),
-            Expression::Literal(Literal::String("database".to_string())),
-        );
-
-        assert_expr_parses_to!(
-            r#"(discover-agents {:capability "database"})"#,
-            Expression::DiscoverAgents(DiscoverAgentsExpr {
-                criteria: Box::new(Expression::Map(criteria_map.clone())),
-                options: None,
-            })
-        );
-    }
+    // Removed tests for parallel, with-resource, log-step, and discover-agents
+    // These special forms have been moved to the Host layer (CCOS capabilities)
 }
 
 #[cfg(test)]
@@ -793,7 +711,8 @@ mod pattern_coverage {
 // Integration test to verify complete parsing chain
 #[test]
 fn test_complex_nested_expression() {
-    let complex_input = "(let [data {:name \"Alice\" :age 25}] (if (> (:age data) 0) (do (log-step \"Processing user\") (:name data)) \"error\"))";
+    // Removed log-step from test as it's no longer a RTFS special form
+    let complex_input = "(let [data {:name \"Alice\" :age 25}] (if (> (:age data) 0) (:name data) \"error\"))";
 
     // This test ensures the parser can handle complex nested structures
     // We don't check the exact AST structure here, just that it parses successfully
