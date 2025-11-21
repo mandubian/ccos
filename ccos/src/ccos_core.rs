@@ -48,25 +48,25 @@ use crate::plan_archive::PlanArchive;
 /// The main CCOS system struct, which initializes and holds all core components.
 /// This is the primary entry point for interacting with the CCOS.
 pub struct CCOS {
-    arbiter: Arc<Arbiter>,
-    governance_kernel: Arc<GovernanceKernel>,
-    orchestrator: Arc<Orchestrator>,
+    pub arbiter: Arc<Arbiter>,
+    pub governance_kernel: Arc<GovernanceKernel>,
+    pub orchestrator: Arc<Orchestrator>,
     // The following components are shared across the system
-    intent_graph: Arc<Mutex<IntentGraph>>,
-    causal_chain: Arc<Mutex<CausalChain>>,
-    capability_marketplace: Arc<CapabilityMarketplace>,
-    plan_archive: Arc<PlanArchive>,
-    rtfs_runtime: Arc<Mutex<dyn RTFSRuntime>>,
+    pub intent_graph: Arc<Mutex<IntentGraph>>,
+    pub causal_chain: Arc<Mutex<CausalChain>>,
+    pub capability_marketplace: Arc<CapabilityMarketplace>,
+    pub plan_archive: Arc<PlanArchive>,
+    pub rtfs_runtime: Arc<Mutex<dyn RTFSRuntime>>,
     // Optional LLM-driven engine
-    delegating_arbiter: Option<Arc<DelegatingArbiter>>,
-    agent_registry: Arc<std::sync::RwLock<crate::agent::InMemoryAgentRegistry>>, // M4
-    agent_config: Arc<AgentConfig>, // Global agent configuration (future: loaded from RTFS form)
+    pub delegating_arbiter: Option<Arc<DelegatingArbiter>>,
+    pub agent_registry: Arc<std::sync::RwLock<crate::agent::InMemoryAgentRegistry>>, // M4
+    pub agent_config: Arc<AgentConfig>, // Global agent configuration (future: loaded from RTFS form)
     /// Missing capability resolver for runtime trap functionality
-    missing_capability_resolver:
+    pub missing_capability_resolver:
         Option<Arc<crate::synthesis::missing_capability_resolver::MissingCapabilityResolver>>,
     /// Optional debug callback for emitting lifecycle JSON lines (plan generation, execution etc.)
-    debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
-    catalog: Arc<CatalogService>,
+    pub debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    pub catalog: Arc<CatalogService>,
 }
 
 // tests moved to bottom module
@@ -676,17 +676,17 @@ impl CCOS {
                             }
                         }
                         Expression::Defstruct(_) => {}
-                        Expression::DiscoverAgents(d) => {
-                            walk_expr(&d.criteria, acc);
-                            if let Some(opt) = &d.options {
-                                walk_expr(opt, acc);
-                            }
-                        }
-                        Expression::LogStep(logx) => {
-                            for v in &logx.values {
-                                walk_expr(v, acc);
-                            }
-                        }
+                        // Expression::DiscoverAgents(d) => {
+                        //     walk_expr(&d.criteria, acc);
+                        //     if let Some(opt) = &d.options {
+                        //         walk_expr(opt, acc);
+                        //     }
+                        // }
+                        // Expression::LogStep(logx) => {
+                        //     for v in &logx.values {
+                        //         walk_expr(v, acc);
+                        //     }
+                        // }
                         Expression::TryCatch(tc) => {
                             for e in &tc.try_body {
                                 walk_expr(e, acc);
@@ -702,17 +702,17 @@ impl CCOS {
                                 }
                             }
                         }
-                        Expression::Parallel(px) => {
-                            for b in &px.bindings {
-                                walk_expr(&b.expression, acc);
-                            }
-                        }
-                        Expression::WithResource(wx) => {
-                            walk_expr(&wx.resource_init, acc);
-                            for e in &wx.body {
-                                walk_expr(e, acc);
-                            }
-                        }
+                        // Expression::Parallel(px) => {
+                        //     for b in &px.bindings {
+                        //         walk_expr(&b.expression, acc);
+                        //     }
+                        // }
+                        // Expression::WithResource(wx) => {
+                        //     walk_expr(&wx.resource_init, acc);
+                        //     for e in &wx.body {
+                        //         walk_expr(e, acc);
+                        //     }
+                        // }
                         Expression::Match(mx) => {
                             // match expression then each clause pattern guard + body
                             walk_expr(&mx.expression, acc);
