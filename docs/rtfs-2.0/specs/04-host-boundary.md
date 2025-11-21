@@ -13,22 +13,9 @@ The host boundary enables:
 - **Composability**: Pure and effectful code can be safely combined
 - **Testability**: Pure functions are easily testable in isolation
 
-## Control Flow Inversion
-
-RTFS uses **yield-based control flow inversion**:
-
-```clojure
-;; Pure computation
-(let [result (pure-calculation input)]
-  ;; Yield to host for side effect
-  (call :ccos.io/println result)
-  ;; Continue with pure computation
-  (* result 2))
-```
-
 ## Execution Outcomes
 
-RTFS evaluation returns `ExecutionOutcome`:
+RTFS evaluation returns `ExecutionOutcome`, implementing a yield-based control flow inversion:
 
 ```clojure
 enum ExecutionOutcome {
@@ -173,6 +160,17 @@ RTFS provides resource-safe operations through host-mediated resource management
       (call :ccos.fs/close file))))
 ```
 
+### Automatic Resource Cleanup
+
+```clojure
+;; File handles
+(call :fs.with-open "/file.txt" :read
+  (fn [handle]
+    (let [content (read-all handle)]
+      (process content))))
+;; File automatically closed when continuation completes
+```
+
 ## Async and Concurrent Operations
 
 Host-mediated concurrency:
@@ -209,8 +207,9 @@ Pure host interface enables testing through capability mocking:
 
 ```clojure
 ;; Test with capability mocking
-(let [value (call :test.mock/kv-get "test")]
-  (assert (= value "mock-test")))
+(with-mock-host {:fs.read (fn [_] "mock content")}
+  (let [content (call :fs.read "/test.txt")]
+    (assert (= content "mock content"))))
 ```
 
 ## Capability Marketplace
@@ -303,5 +302,4 @@ InlineDev Policy → LocalProvider
 Provider.execute_capability() → Result
 ```
 
-This architecture ensures RTFS remains **pure and composable** while enabling **secure, auditable interaction** with the external world through CCOS capabilities and pluggable providers.</content>
-<parameter name="filePath">/home/mandubian/workspaces/mandubian/ccos/docs/rtfs-2.0/specs-new/04-host-boundary-and-capabilities.md
+This architecture ensures RTFS remains **pure and composable** while enabling **secure, auditable interaction** with the external world through CCOS capabilities and pluggable providers.
