@@ -49,11 +49,41 @@ This creates a **conversational programming paradigm** where LLMs can be "progra
 ### 00-philosophy.md
 Core principles and architectural foundations of RTFS 2.0.
 
-### 01-syntax-and-grammar.md
+### 01-language-overview.md
 Complete syntax reference, grammar rules, and language constructs.
 
-### 02-evaluation-and-runtime.md
+### 02-syntax-and-grammar.md
+Detailed grammar and syntax rules.
+
+### 03-core-syntax-data-types.md
+Core data types and structures.
+
+### 04-evaluation-and-runtime.md
 Evaluation model, scoping rules, and runtime architecture.
+
+### 04-host-boundary.md
+Host interaction mechanisms and the formal model for requesting external actions.
+
+### 05-pattern-matching-destructuring.md
+Pattern matching and destructuring capabilities.
+
+### 07-module-system.md
+Module system design and implementation.
+
+### 08-macro-system.md
+Compile-time metaprogramming, quasiquote, and hygienic macros.
+
+### 09-streaming-capabilities.md
+Streaming and reactive programming support.
+
+### 10-standard-library.md
+Comprehensive function reference for pure and impure operations.
+
+### 11-architecture-analysis.md
+Critical analysis of strengths, weaknesses, and future directions.
+
+### 12-ir-and-compilation.md
+Intermediate Representation (IR) and compilation process.
 
 ### 13-type-system.md (UPDATED - Formal Specification)
 **Complete formal type system** with subtyping, bidirectional type checking, soundness proofs, and theoretical foundations. Includes:
@@ -63,17 +93,20 @@ Evaluation model, scoping rules, and runtime architecture.
 - Algorithmic type checking specification
 - References to Pierce, Cardelli, Davies & Pfenning
 
-### 04-host-boundary.md
-Host interaction mechanisms and the formal model for requesting external actions.
+### 14-concurrency-model.md
+Concurrency model and host-mediated parallelism.
 
-### 05-macro-system.md
-Compile-time metaprogramming, quasiquote, and hygienic macros.
+### 15-error-handling-recovery.md
+Error handling and recovery mechanisms.
 
-### 06-standard-library.md
-Comprehensive function reference for pure and impure operations.
+### 16-security-model.md
+Security model and sandboxing.
 
-### 07-architecture-analysis.md
-Critical analysis of strengths, weaknesses, and future directions.
+### 17-performance-optimization.md
+Performance optimization strategies.
+
+### 18-interoperability.md
+Interoperability with host systems and external services.
 
 ## Key Architectural Insights
 
@@ -156,12 +189,12 @@ For new readers:
 2. Read **01-language-overview.md** for language basics
 3. Study **04-evaluation-and-runtime.md** for execution model
 4. Read **13-type-system.md** for the formal type system specification
-5. Explore **07-host-boundary-and-capabilities.md** for CCOS integration
+5. Explore **04-host-boundary.md** for CCOS integration
 6. Review **11-architecture-analysis.md** for LLM-driven development insights
 
 For LLM developers:
 - Focus on **02-syntax-and-grammar.md** for generation patterns
-- Study **07-host-boundary-and-capabilities.md** for task execution
+- Study **04-host-boundary.md** for task execution
 - Review **10-standard-library.md** for available operations
 - See **[Type Checking Guide](../guides/type-checking-guide.md)** for practical type usage
 
@@ -384,5 +417,3 @@ If you want deeper internals, see also:
 - `rtfs_compiler/src/runtime/security.rs` (RuntimeContext)
 - `ccos/src/capability_marketplace/types.rs` (providers, streaming)
 - `ccos/src/environment.rs` (plan-to-capability registration and Host wiring)
-</content>
-<parameter name="filePath">/home/mandubian/workspaces/mandubian/ccos/docs/rtfs-2.0/specs-new/README.md
