@@ -19,9 +19,11 @@ use crate::single_mcp_discovery_impl::{run_discovery, Args};
 mod single_mcp_discovery_impl {
     use super::*;
     use ccos::arbiter::DelegatingArbiter;
-    use ccos::synthesis::mcp_introspector::DiscoveredMCPTool;
+    use ccos::synthesis::mcp_introspector::{DiscoveredMCPTool, MCPIntrospector};
     use ccos::synthesis::mcp_session::MCPSessionManager;
+    use ccos::synthesis::mcp_registry_client::McpRegistryClient;
     use serde_json;
+    use std::path::Path;
     use rtfs::runtime::values::Value as RtfsValue;
 
     /// Convert RTFS Value to serde_json::Value by extracting the actual value
@@ -161,8 +163,33 @@ mod single_mcp_discovery_impl {
                     if let Some(url) = args.server_url.clone() {
                         url
                     } else {
-                        eprintln!("✗ No server URL provided and no override found for server '{:?}'", server_name_candidate);
-                        return Err(Box::<dyn Error>::from("Missing server URL"));
+                        // Try registry search
+                        eprintln!("🔍 Searching MCP Registry for '{}'...", server_name_candidate);
+                        let client = McpRegistryClient::new();
+                        let mut found_url = None;
+                        match client.search_servers(server_name_candidate).await {
+                            Ok(servers) => {
+                                for server in servers {
+                                    if let Some(remotes) = &server.remotes {
+                                        if let Some(url) = McpRegistryClient::select_best_remote_url(remotes) {
+                                            eprintln!("  → Found server in registry: {} ({})", server.name, url);
+                                            found_url = Some(url);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("⚠️ Registry search failed: {}", e);
+                            }
+                        }
+                        
+                        if let Some(url) = found_url {
+                            url
+                        } else {
+                            eprintln!("✗ No server URL provided, no override found, and registry search failed for server '{:?}'", server_name_candidate);
+                            return Err(Box::<dyn Error>::from("Missing server URL"));
+                        }
                     }
                 }
             }
@@ -170,8 +197,39 @@ mod single_mcp_discovery_impl {
             if let Some(url) = args.server_url.clone() {
                 url
             } else {
-                eprintln!("✗ No server URL provided and no server name provided");
-                return Err(Box::<dyn Error>::from("Missing server URL"));
+                // First, try to resolve overrides using the hint as a server name
+                if let Some(url) = resolve_server_url_from_overrides(&args.hint) {
+                    eprintln!("  → Using curated override remote URL from hint: {}", url);
+                    url
+                } else {
+                    // Try using hint as query
+                    eprintln!("🔍 No server specified. Searching MCP Registry for hint '{}'...", args.hint);
+                    let client = McpRegistryClient::new();
+                    let mut found_url = None;
+                    match client.search_servers(&args.hint).await {
+                        Ok(servers) => {
+                            for server in servers {
+                                if let Some(remotes) = &server.remotes {
+                                    if let Some(url) = McpRegistryClient::select_best_remote_url(remotes) {
+                                        eprintln!("  → Found server in registry: {} ({})", server.name, url);
+                                        found_url = Some(url);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("⚠️ Registry search failed: {}", e);
+                        }
+                    }
+
+                    if let Some(url) = found_url {
+                        url
+                    } else {
+                        eprintln!("✗ No server URL provided and no server name provided");
+                        return Err(Box::<dyn Error>::from("Missing server URL"));
+                    }
+                }
             }
         };
 
@@ -251,6 +309,8 @@ mod single_mcp_discovery_impl {
             }
         }
 
+        let inspector = MCPIntrospector::new();
+
         let introspection = ccos::synthesis::mcp_introspector::MCPIntrospectionResult {
             server_url: server_url.clone(),
             server_name: args.server_name.clone().unwrap_or_default(),
@@ -269,7 +329,7 @@ mod single_mcp_discovery_impl {
         }
 
         // Use the Arbiter to select the best tool and proactively extract arguments.
-        let (tool, mut extracted_args) = if let Some((tool_name, args)) = select_tool_and_extract_args_with_arbiter(&ccos, &introspection.tools, &args.hint).await {
+        let (tool, extracted_args) = if let Some((tool_name, args)) = select_tool_and_extract_args_with_arbiter(&ccos, &introspection.tools, &args.hint).await {
             // Try exact match first
             if let Some(found_tool) = introspection.tools.iter().find(|t| t.tool_name == tool_name) {
                 (found_tool.clone(), args)
@@ -323,17 +383,49 @@ mod single_mcp_discovery_impl {
                         if PAGINATION_CANDIDATES.contains(&key.as_str()) {
                             if let Some(type_str) = prop_schema.get("type").and_then(|t| t.as_str()) {
                                 if type_str == "integer" || type_str == "number" {
-                                    // Only add the pagination limit if it's not already present from hint extraction
                                     if !obj.contains_key(key) {
                                         obj.insert(key.clone(), serde_json::json!(1));
                                         eprintln!("  → Found pagination parameter '{}', setting to 1 to limit output.", key);
                                     }
-                                    break; 
+                                    break;
                                 }
                             }
                         }
                     }
                 }
+            }
+        }
+
+        // Ensure required parameters aren't missing before we actually call the tool
+        if let Some(obj) = test_inputs.as_object() {
+            // Check against schema required fields if available
+            let required_keys: Vec<String> = tool.input_schema_json
+                .as_ref()
+                .and_then(|schema| schema.get("required"))
+                .and_then(|r| r.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+
+            let missing: Vec<&str> = required_keys
+                .iter()
+                .filter(|key| {
+                    obj.get(*key)
+                        .map(|value| {
+                            // Check if value is null or empty string
+                            value.is_null() || value.as_str().map(|s| s.trim().is_empty()).unwrap_or(false)
+                        })
+                        .unwrap_or(true)
+                })
+                .map(|s| s.as_str())
+                .collect();
+
+            if !missing.is_empty() {
+                eprintln!(
+                    "⚠️ Tool '{}' requires {} before it can be called. Please extend the hint to include these parameters.",
+                    tool.tool_name,
+                    missing.join(", ")
+                );
+                return Ok(());
             }
         }
 
@@ -379,7 +471,7 @@ mod single_mcp_discovery_impl {
 
         if schema_opt.is_some() {
             eprintln!("✅ Inferred output schema for {}", tool.tool_name);
-            if let Some(sample) = sample_opt {
+            if let Some(sample) = sample_opt.as_ref() {
                 eprintln!("Sample output (first lines):\n{}", sample.lines().take(8).collect::<Vec<_>>().join("\n"));
             }
             return Ok(());
@@ -390,7 +482,7 @@ mod single_mcp_discovery_impl {
         // If introspection returned no schema but provided a sample with an error-like message,
         // we can log it for the user. With the new proactive hint parsing, the old interactive
         // loop for fixing arguments is less relevant, but we'll keep the error display.
-        if let Some(sample) = sample_opt {
+        if let Some(sample) = sample_opt.as_ref() {
             eprintln!("⚠️ Introspection with initial inputs failed or produced an error-like sample:");
             // Show the full error, but limit to first 50 lines to avoid overwhelming output
             let error_lines: Vec<&str> = sample.lines().take(50).collect();
@@ -404,6 +496,21 @@ mod single_mcp_discovery_impl {
             // A more robust implementation could still use an interactive loop as a fallback.
         } else {
             eprintln!("⚠️ No sample or schema could be obtained from introspection and no error snippet provided.");
+        }
+
+        if let Ok(manifest) = inspector.create_capability_from_mcp_tool(&tool, &introspection) {
+            let implementation_code = inspector.generate_mcp_rtfs_implementation(&tool, &server_url);
+            match inspector.save_capability_to_rtfs(
+                &manifest,
+                &implementation_code,
+                Path::new(&args.output_dir),
+                sample_opt.as_deref(),
+            ) {
+                Ok(path) => eprintln!("💾 Saved discovered capability to {}", path.display()),
+                Err(err) => eprintln!("⚠️ Failed to save capability: {}", err),
+            }
+        } else {
+            eprintln!("⚠️ Failed to synthesize capability manifest from introspection");
         }
 
         Ok(())
@@ -473,12 +580,6 @@ mod single_mcp_discovery_impl {
         }
 
         None
-    }
-
-    fn simple_pattern_match(pattern: &str, text: &str) -> bool {
-        let pattern_lower = pattern.to_lowercase();
-        let text_lower = text.to_lowercase();
-        text_lower.contains(&pattern_lower)
     }
 
     // Helper function to derive server name from repo URL
