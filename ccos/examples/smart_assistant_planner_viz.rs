@@ -54,8 +54,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use uuid::Uuid;
 
-mod planner_viz_common;
-use planner_viz_common::{load_agent_config, print_architecture_summary};
+use ccos::planner_viz_common::{load_agent_config, print_architecture_summary};
 
 static PLAN_CONVERSION_PROMPT_MANAGER: Lazy<PromptManager<FilePromptStore>> = Lazy::new(|| {
     let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/arbiter");
@@ -1404,6 +1403,19 @@ async fn preload_discovered_capabilities_if_needed(
         }
     }
 
+    // Load from generated capabilities directory (demo-only convenience)
+    let generated_root = Path::new("capabilities/generated");
+    if generated_root.exists() {
+        let loaded = preload_discovered_capabilities(marketplace, generated_root).await?;
+        if loaded > 0 {
+            println!(
+                "{}",
+                format!("ℹ️  Loaded {} generated capability manifest(s)", loaded).blue()
+            );
+            total_loaded += loaded;
+        }
+    }
+
     if total_loaded > 0 {
         println!(
             "{}",
@@ -1556,17 +1568,16 @@ Output requirements:
       - Use a step with capability_id: "rtfs" (this is a special built-in capability for logic)
       - Inputs: {{ "expression": "(your rtfs code)" }}
       - Note on MCP tools: content is usually a list of objects like [{{ "type": "text", "text": "JSON..." }}].
-      - When parsing JSON content:
-        1. `parse-json` expects a STRING.
-        2. MCP tools return `content` as a VECTOR of objects (e.g., `[{{:type "text" :text "..."}}]`).
-        3. You MUST extract the text string first: `(get (first (get step_0 :content)) :text)`.
-        4. Then parse: `(parse-json (get (first (get step_0 :content)) :text))`.
-        5. `parse-json` returns a Map (for objects) or Vector (for arrays).
-        6. CRITICAL: `first` throws an error on Maps. You CANNOT do `(first (parse-json ...))` if the JSON is an object (like a wrapper).
-        7. Most API lists are wrapped (e.g. {{ "items": [...] }} or {{ "issues": [...] }}). You MUST extract the list key first.
-           (get (parse-json ...) "items") or (get (parse-json ...) "issues")
-        8. ALWAYS try to extract a key like "items", "data", "results", "issues" before calling `first`.
-      - Example (SAFE pattern): {{ "capability_id": "rtfs", "inputs": {{ "expression": "(first (get (parse-json (get (first (get step_0 :content)) :text)) \"issues\"))" }}, "outputs": ["first_item"] }}
+      - If a capability is an MCP tool (provider="MCP"), the result is a map with a "content" key.
+      - You CANNOT access fields directly from the step result (like :items).
+      - You MUST follow this exact pattern to extract data from MCP tools:
+        1. Get the content array: `(get step_X :content)`
+        2. Get the first item: `(first (get step_X :content))`
+        3. Get the text field: `(get (first (get step_X :content)) :text)`
+        4. Parse the JSON: `(parse-json (get (first (get step_X :content)) :text))`
+        5. ONLY THEN can you access fields: `(get (parse-json ...) :items)`
+      - Example (SAFE pattern): {{ "capability_id": "rtfs", "inputs": {{ "expression": "(get (parse-json (get (first (get step_0 :content)) :text)) \"items\")" }}, "outputs": ["items"] }}
+      - DO NOT use `(get step_0 :items)` directly on MCP results. It will return nil.
       - Available functions: first, get, parse-json, str, map, filter, etc.
       - Do NOT use `ccos.echo` or invent other capabilities.
 - outputs must list the symbolic names of values produced by that step.

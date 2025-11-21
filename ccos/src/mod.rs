@@ -497,17 +497,6 @@ impl CCOS {
                             }
                         }
                         Expression::Defstruct(_) => {}
-                        Expression::DiscoverAgents(d) => {
-                            walk_expr(&d.criteria, acc);
-                            if let Some(opt) = &d.options {
-                                walk_expr(opt, acc);
-                            }
-                        }
-                        Expression::LogStep(logx) => {
-                            for v in &logx.values {
-                                walk_expr(v, acc);
-                            }
-                        }
                         Expression::TryCatch(tc) => {
                             for e in &tc.try_body {
                                 walk_expr(e, acc);
@@ -521,17 +510,6 @@ impl CCOS {
                                 for e in fb {
                                     walk_expr(e, acc);
                                 }
-                            }
-                        }
-                        Expression::Parallel(px) => {
-                            for b in &px.bindings {
-                                walk_expr(&b.expression, acc);
-                            }
-                        }
-                        Expression::WithResource(wx) => {
-                            walk_expr(&wx.resource_init, acc);
-                            for e in &wx.body {
-                                walk_expr(e, acc);
                             }
                         }
                         Expression::Match(mx) => {

@@ -154,16 +154,6 @@ fn create_comprehensive_sample_ast() -> Expression {
         ],
         body: vec![Expression::Do(DoExpr {
             expressions: vec![
-                // (log-step :info "Starting calculation" x y)
-                Expression::LogStep(Box::new(LogStepExpr {
-                    level: Some(Keyword("info".to_string())),
-                    values: vec![
-                        Expression::Literal(Literal::String("Starting calculation".to_string())),
-                        Expression::Symbol(Symbol("x".to_string())),
-                        Expression::Symbol(Symbol("y".to_string())),
-                    ],
-                    location: None,
-                })),
                 // (if (> x 40) (calculate x y) 0)
                 Expression::If(IfExpr {
                     condition: Box::new(Expression::List(vec![
@@ -321,13 +311,6 @@ fn print_ast_recursive(expr: &Expression, indent: usize) {
                 }
             } else {
                 println!("{}📋 Empty List", prefix);
-            }
-        }
-        Expression::LogStep(log_expr) => {
-            println!("{}📝 Log Step: {:?}", prefix, log_expr.level);
-            for (i, value) in log_expr.values.iter().enumerate() {
-                println!("{}  {}.", prefix, i + 1);
-                print_ast_recursive(value, indent + 1);
             }
         }
         Expression::Literal(lit) => {

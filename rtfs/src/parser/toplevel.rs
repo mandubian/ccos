@@ -25,12 +25,8 @@ pub fn build_ast(pair: Pair<Rule>) -> Result<TopLevel, PestParseError> {
         | Rule::fn_expr
         | Rule::def_expr
         | Rule::defn_expr
-        | Rule::parallel_expr
-        | Rule::with_resource_expr
         | Rule::try_catch_expr
         | Rule::match_expr
-        | Rule::log_step_expr
-        | Rule::discover_agents_expr
         | Rule::resource_ref
         | Rule::identifier
         | Rule::namespaced_identifier => {

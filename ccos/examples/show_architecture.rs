@@ -1,8 +1,7 @@
 use clap::Parser;
 use std::error::Error;
 
-mod planner_viz_common;
-use planner_viz_common::{load_agent_config, print_architecture_summary};
+use ccos::planner_viz_common::{load_agent_config, print_architecture_summary};
 
 #[derive(Parser, Debug)]
 #[command(
