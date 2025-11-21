@@ -4,6 +4,7 @@
 //! so they can evolve into first-class RTFS capabilities.
 
 pub mod capabilities;
+pub mod capabilities_v2;
 pub mod coverage;
 pub mod menu;
 pub mod resolution;
