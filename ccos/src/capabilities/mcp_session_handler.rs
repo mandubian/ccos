@@ -293,6 +293,8 @@ impl MCPSessionHandler {
             // with a "content" array containing text blocks.
             
             // Fallback: Check for structuredContent field (if MCP server provides it)
+            // Note: The MCP spec allows structuredContent, but most tools return content array.
+            // We preserve the original structure unless structuredContent is explicitly present.
 
             // Default: Convert JSON to RTFS Value as-is, preserving 'content' or 'structuredContent' keys
             Ok(json_to_rtfs_value(result))
@@ -322,8 +324,25 @@ impl SessionHandler for MCPSessionHandler {
         capability_id: &str,
         metadata: &HashMap<String, String>,
     ) -> RuntimeResult<SessionId> {
-        // Get server URL and auth token from metadata
-        let server_url = self.get_server_url(metadata)?;
+        eprintln!("[MCPSessionHandler] initialize_session for {}: metadata keys={:?}", capability_id, metadata.keys());
+        
+        // Extract server URL from metadata
+        let server_url = metadata.get("server_url")
+            .or_else(|| metadata.get("url"))
+            .or_else(|| metadata.get("mcp_server_url")); // Added fallback to mcp_server_url
+
+        let server_url = match server_url {
+            Some(url) => {
+                eprintln!("[MCPSessionHandler] Found server_url: {}", url);
+                url.clone()
+            },
+            None => {
+                eprintln!("[MCPSessionHandler] Missing server_url in metadata: {:?}", metadata);
+                return Err(RuntimeError::Generic("Missing server_url in metadata".to_string()));
+            }
+        };
+
+        // Get auth token from environment variable specified in metadata
         let auth_token = self.get_auth_token(metadata);
 
         // Initialize MCP session
