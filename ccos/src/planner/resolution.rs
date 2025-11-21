@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
@@ -9,7 +10,7 @@ use crate::planner::coverage::CoverageCheck;
 use crate::planner::signals::{GoalSignals, RequirementReadiness};
 use crate::synthesis::registration_flow::TestResult;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingCapabilityRequest {
     pub capability_id: String,
     pub request_id: Option<String>,
