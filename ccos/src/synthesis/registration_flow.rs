@@ -17,6 +17,7 @@ use crate::synthesis::validation_harness::{ValidationHarness, ValidationResult, 
 use chrono::Utc;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::values::Value;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -511,7 +512,7 @@ struct IntegrationResult {
 }
 
 /// Test result for end-to-end testing
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestResult {
     pub success: bool,
     pub output: Option<Value>,

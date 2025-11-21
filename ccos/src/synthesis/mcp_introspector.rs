@@ -177,25 +177,55 @@ impl MCPIntrospector {
     }
 
     /// Convert JSON Schema to RTFS TypeExpr (reuses logic from api_introspector)
+    /// Convert JSON Schema to RTFS TypeExpr (reuses logic from api_introspector)
     fn json_schema_to_rtfs_type(&self, schema: &serde_json::Value) -> RuntimeResult<TypeExpr> {
-        if let Some(type_str) = schema.get("type").and_then(|t| t.as_str()) {
+        // Handle "type": ["string", "null"] or "nullable": true
+        let is_nullable = schema
+            .get("nullable")
+            .and_then(|n| n.as_bool())
+            .unwrap_or(false);
+
+        let type_val = schema.get("type");
+
+        let (base_type_str, is_nullable_type) = if let Some(t) = type_val.and_then(|t| t.as_str()) {
+            (Some(t), false)
+        } else if let Some(arr) = type_val.and_then(|t| t.as_array()) {
+            // Check if it contains "null"
+            let has_null = arr.iter().any(|v| v.as_str() == Some("null"));
+            // Find the first non-null type
+            let type_str = arr.iter().find_map(|v| {
+                let s = v.as_str()?;
+                if s != "null" {
+                    Some(s)
+                } else {
+                    None
+                }
+            });
+            (type_str, has_null)
+        } else {
+            (None, false)
+        };
+
+        let effective_nullable = is_nullable || is_nullable_type;
+
+        let base_type = if let Some(type_str) = base_type_str {
             match type_str {
-                "string" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
+                "string" => TypeExpr::Primitive(rtfs::ast::PrimitiveType::String),
                 "integer" | "number" => {
                     if schema.get("format").and_then(|f| f.as_str()) == Some("integer") {
-                        Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Int))
+                        TypeExpr::Primitive(rtfs::ast::PrimitiveType::Int)
                     } else {
-                        Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Float))
+                        TypeExpr::Primitive(rtfs::ast::PrimitiveType::Float)
                     }
                 }
-                "boolean" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Bool)),
+                "boolean" => TypeExpr::Primitive(rtfs::ast::PrimitiveType::Bool),
                 "array" => {
                     let element_type = if let Some(items) = schema.get("items") {
                         self.json_schema_to_rtfs_type(items)?
                     } else {
                         TypeExpr::Any
                     };
-                    Ok(TypeExpr::Vector(Box::new(element_type)))
+                    TypeExpr::Vector(Box::new(element_type))
                 }
                 "object" => {
                     let mut entries = Vec::new();
@@ -213,22 +243,42 @@ impl MCPIntrospector {
 
                         for (key, prop_schema) in properties {
                             let prop_type = self.json_schema_to_rtfs_type(prop_schema)?;
+
+                            // Check if prop_type is optional/nullable
+                            let is_prop_nullable = match &prop_type {
+                                TypeExpr::Optional(_) => true,
+                                TypeExpr::Union(types) => types.iter().any(|t| {
+                                    matches!(t, TypeExpr::Primitive(rtfs::ast::PrimitiveType::Nil))
+                                }),
+                                TypeExpr::Primitive(rtfs::ast::PrimitiveType::Nil) => true,
+                                _ => false,
+                            };
+
                             entries.push(MapTypeEntry {
                                 key: Keyword(key.clone()),
                                 value_type: Box::new(prop_type),
-                                optional: !required_fields.contains(key),
+                                optional: !required_fields.contains(key) || is_prop_nullable,
                             });
                         }
                     }
-                    Ok(TypeExpr::Map {
+                    TypeExpr::Map {
                         entries,
                         wildcard: None,
-                    })
+                    }
                 }
-                _ => Ok(TypeExpr::Any),
+                _ => TypeExpr::Any,
             }
         } else {
-            Ok(TypeExpr::Any)
+            TypeExpr::Any
+        };
+
+        if effective_nullable
+            && !matches!(base_type, TypeExpr::Any)
+            && !matches!(base_type, TypeExpr::Optional(_))
+        {
+            Ok(TypeExpr::Optional(Box::new(base_type)))
+        } else {
+            Ok(base_type)
         }
     }
 
