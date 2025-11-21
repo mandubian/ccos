@@ -626,7 +626,8 @@ pub fn calculate_action_verb_match_score(need_verbs: &[String], manifest_verbs: 
 
     // Check for semantic similarity (e.g., "list" and "display" are similar)
     let similar_groups: Vec<Vec<&str>> = vec![
-        vec!["list", "display", "show", "get", "fetch", "retrieve"],
+        vec!["list", "display", "show"], // Collection/View
+        vec!["get", "fetch", "retrieve", "read"], // Retrieval
         vec!["create", "add", "post", "insert", "generate"],
         vec!["update", "modify", "edit", "change", "set"],
         vec!["delete", "remove", "destroy"],
