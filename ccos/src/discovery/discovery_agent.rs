@@ -339,6 +339,46 @@ impl DiscoveryAgent {
         Ok((hints, registry_queries))
     }
 
+    /// Extract semantic terms (nouns/objects) from goal text that indicate what the user wants
+    /// Returns terms that are likely to be in capability names (e.g., "issues", "branches", "commits")
+    pub fn extract_semantic_terms(text: &str) -> Vec<String> {
+        let text_lower = text.to_ascii_lowercase();
+        let words: Vec<&str> = text_lower.split_whitespace().collect();
+        let mut terms = Vec::new();
+        
+        // Common operation verbs to skip
+        let operations: HashSet<&str> = [
+            "list", "search", "get", "fetch", "create", "update", "delete", "filter",
+            "find", "show", "display", "print", "return", "send", "receive"
+        ].iter().cloned().collect();
+        
+        // Common stopwords
+        let stopwords: HashSet<&str> = [
+            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+            "of", "with", "by", "from", "as", "is", "are", "was", "were", "be",
+            "been", "being", "have", "has", "had", "do", "does", "did", "will",
+            "would", "should", "could", "may", "might", "must", "can", "if", "them",
+            "they", "their", "this", "that", "these", "those", "about", "speak"
+        ].iter().cloned().collect();
+        
+        for word in words {
+            let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric());
+            // Skip if too short, is an operation, or is a stopword
+            if cleaned.len() >= 4 
+                && !operations.contains(cleaned)
+                && !stopwords.contains(cleaned)
+                && cleaned.chars().all(|c| c.is_alphabetic()) {
+                terms.push(cleaned.to_string());
+            }
+        }
+        
+        // Remove duplicates while preserving order
+        let mut seen = HashSet::new();
+        terms.into_iter()
+            .filter(|t| seen.insert(t.clone()))
+            .collect()
+    }
+
     /// Rank capabilities using embedding-based similarity
     async fn rank_capabilities_with_embeddings(
         &self,
@@ -351,6 +391,12 @@ impl DiscoveryAgent {
 
         // Build query text for embedding
         let query_text = format!("{} {}", goal, need.rationale);
+        
+        // Extract semantic terms from goal (e.g., "issues", "branches", "commits")
+        let semantic_terms = Self::extract_semantic_terms(&query_text);
+        if !semantic_terms.is_empty() {
+            eprintln!("  → Extracted semantic terms from goal: {:?}", semantic_terms);
+        }
 
         // Get query embedding if available
         let query_embedding = if let Some(ref emb_service) = self.embedding_service {
@@ -371,33 +417,57 @@ impl DiscoveryAgent {
                 "{} {} {}",
                 manifest.id, manifest.name, manifest.description
             );
+            let capability_lower = capability_text.to_ascii_lowercase();
 
             let mut score = 0.0;
             let mut match_reason = String::new();
 
-            // 1. Embedding-based matching (if available)
+            // 1. Semantic term matching (highest priority - boosts capabilities that match goal-specific terms)
+            if !semantic_terms.is_empty() {
+                let semantic_matches: usize = semantic_terms
+                    .iter()
+                    .filter(|term| capability_lower.contains(term.as_str()))
+                    .count();
+                
+                if semantic_matches > 0 {
+                    // Strong boost for semantic term matches (0.3-0.6 depending on match count)
+                    let semantic_boost = (semantic_matches as f64 * 0.2).min(0.6);
+                    score = semantic_boost;
+                    match_reason = format!("semantic term match: {}/{} terms ({:?})", 
+                        semantic_matches, semantic_terms.len(), 
+                        semantic_terms.iter().filter(|t| capability_lower.contains(t.as_str())).collect::<Vec<_>>());
+                }
+            }
+
+            // 2. Embedding-based matching (if available)
             if let Some(ref query_emb) = query_embedding {
                 if let Some(ref emb_service) = self.embedding_service {
                     let mut service = emb_service.lock().unwrap();
                     if let Ok(cap_emb) = service.embed(&capability_text).await {
                         let similarity = EmbeddingService::cosine_similarity(query_emb, &cap_emb);
+                        // Use embedding score if higher than semantic score, or add as boost
                         if similarity > self.config.match_threshold {
-                            score = similarity;
-                            match_reason = format!("embedding similarity: {:.2}", similarity);
+                            if similarity > score {
+                                score = similarity;
+                                match_reason = format!("embedding similarity: {:.2}", similarity);
+                            } else {
+                                // Add embedding as boost to semantic score
+                                score += similarity * 0.3;
+                                match_reason.push_str(&format!(" + embedding: {:.2}", similarity));
+                            }
                         }
                     }
                 }
             }
 
-            // 2. Token-based matching (fallback or supplement)
-            if score < 0.5 {
+            // 3. Token-based matching (fallback or supplement)
+            if score < 0.3 {
                 let tokens: Vec<String> = need
                     .capability_class
                     .split('.')
                     .map(|t| t.to_ascii_lowercase())
                     .collect();
 
-                let capability_lower = capability_text.to_ascii_lowercase();
                 let matching_tokens: usize = tokens
                     .iter()
                     .filter(|t| capability_lower.contains(t.as_str()))
@@ -408,19 +478,21 @@ impl DiscoveryAgent {
                     if token_score > score {
                         score = token_score;
                         match_reason = format!("token match: {}/{} tokens", matching_tokens, tokens.len());
+                    } else {
+                        // Add as small boost
+                        score += token_score * 0.1;
                     }
                 }
             }
 
-            // 3. Hint-based matching (boost score if hints match)
-            let capability_lower = capability_text.to_ascii_lowercase();
+            // 4. Hint-based matching (boost score if hints match)
             let hint_matches: usize = hints
                 .iter()
                 .filter(|hint| capability_lower.contains(&hint.to_lowercase()))
                 .count();
 
             if hint_matches > 0 {
-                let hint_boost = (hint_matches as f64 * 0.1).min(0.3);
+                let hint_boost = (hint_matches as f64 * 0.05).min(0.2); // Smaller boost since semantic terms are more important
                 score += hint_boost;
                 if !match_reason.is_empty() {
                     match_reason.push_str(&format!(" + {} hint matches", hint_matches));

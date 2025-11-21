@@ -56,6 +56,9 @@ impl DiscoveryEngine {
             Arc::clone(&marketplace),
             config.clone(),
         )));
+        if std::env::var("CCOS_DEBUG").is_ok() {
+            eprintln!("🔍 DiscoveryEngine: Discovery agent initialized");
+        }
         Self {
             marketplace,
             intent_graph,
@@ -629,39 +632,55 @@ impl DiscoveryEngine {
         &self,
         need: &CapabilityNeed,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
+        eprintln!("  → search_mcp_registry called for: {}", need.capability_class);
+        eprintln!("  → Discovery agent available: {}", self.discovery_agent.is_some());
+        
         // Use discovery agent if available to get intelligent suggestions
         let (keywords, registry_queries) = if let Some(ref agent) = self.discovery_agent {
+            eprintln!("  → Using discovery agent for intelligent query generation...");
             // Learn vocabulary if not already done (lazy initialization)
-            let _ = agent.learn_vocabulary().await;
+            if let Err(e) = agent.learn_vocabulary().await {
+                eprintln!("  ⚠️  Discovery agent vocabulary learning failed: {}", e);
+            } else {
+                eprintln!("  → Discovery agent vocabulary loaded");
+            }
             
             // Get suggestions from agent (we'll use goal from rationale for now)
             // TODO: Pass actual goal and intent when available
-            if let Ok(suggestion) = agent.suggest(&need.rationale, None, need).await {
-                eprintln!("  → Discovery agent suggested {} hint(s) and {} query(ies)", 
-                    suggestion.hints.len(), suggestion.registry_queries.len());
-                if !suggestion.hints.is_empty() {
-                    eprintln!("  → Hints: {:?}", suggestion.hints);
-                }
-                
-                // Use first registry query as primary, extract keywords from it
-                let primary_query = suggestion.registry_queries.first()
-                    .cloned()
-                    .unwrap_or_else(|| need.capability_class.clone());
-                let keywords: Vec<String> = primary_query.split_whitespace().map(String::from).collect();
-                (keywords, suggestion.registry_queries)
-            } else {
-                // Fallback to old method if agent fails
-                let mut keywords: Vec<String> = need.capability_class.split('.').map(String::from).collect();
-                let context_tokens = extract_context_tokens(&need.rationale);
-                for token in context_tokens {
-                    if !keywords.iter().any(|k| k == &token) {
-                        keywords.insert(0, token);
+            match agent.suggest(&need.rationale, None, need).await {
+                Ok(suggestion) => {
+                    eprintln!("  → Discovery agent suggested {} hint(s) and {} query(ies)", 
+                        suggestion.hints.len(), suggestion.registry_queries.len());
+                    if !suggestion.hints.is_empty() {
+                        eprintln!("  → Hints: {:?}", suggestion.hints);
                     }
+                    if !suggestion.registry_queries.is_empty() {
+                        eprintln!("  → Registry queries: {:?}", suggestion.registry_queries);
+                    }
+                    
+                    // Use first registry query as primary, extract keywords from it
+                    let primary_query = suggestion.registry_queries.first()
+                        .cloned()
+                        .unwrap_or_else(|| need.capability_class.clone());
+                    let keywords: Vec<String> = primary_query.split_whitespace().map(String::from).collect();
+                    (keywords, suggestion.registry_queries)
                 }
-                let search_query = keywords.join(" ");
-                (keywords, vec![search_query])
+                Err(e) => {
+                    eprintln!("  ⚠️  Discovery agent suggestion failed: {}, falling back to legacy method", e);
+                    // Fallback to old method if agent fails
+                    let mut keywords: Vec<String> = need.capability_class.split('.').map(String::from).collect();
+                    let context_tokens = extract_context_tokens(&need.rationale);
+                    for token in context_tokens {
+                        if !keywords.iter().any(|k| k == &token) {
+                            keywords.insert(0, token);
+                        }
+                    }
+                    let search_query = keywords.join(" ");
+                    (keywords, vec![search_query])
+                }
             }
         } else {
+            eprintln!("  → Discovery agent not available, using legacy extraction method");
             // Fallback: use old extraction method
             let mut keywords: Vec<String> = need.capability_class.split('.').map(String::from).collect();
             let context_tokens = extract_context_tokens(&need.rationale);
@@ -1145,8 +1164,17 @@ impl DiscoveryEngine {
                                     None
                                 };
 
+                                // Extract semantic terms from goal/rationale for better matching
+                                let goal_text = format!("{} {}", need.rationale, need.capability_class);
+                                // Use agent's semantic term extraction (public static method)
+                                let semantic_terms = crate::discovery::discovery_agent::DiscoveryAgent::extract_semantic_terms(&goal_text);
+                                
+                                if !semantic_terms.is_empty() {
+                                    eprintln!("  → Using semantic terms for tool matching: {:?}", semantic_terms);
+                                }
+
                                 for manifest in &capabilities {
-                                    let desc_score = if let Some(ref mut emb_svc) =
+                                    let mut desc_score = if let Some(ref mut emb_svc) =
                                         embedding_service
                                     {
                                         // Use embedding-based matching (more accurate)
@@ -1167,6 +1195,24 @@ impl DiscoveryEngine {
                                             &self.config,
                                         )
                                     };
+                                    
+                                    // Boost score if semantic terms match capability name/description
+                                    if !semantic_terms.is_empty() {
+                                        let capability_text = format!("{} {} {}", 
+                                            manifest.id, manifest.name, manifest.description).to_lowercase();
+                                        let semantic_matches: usize = semantic_terms
+                                            .iter()
+                                            .filter(|term| capability_text.contains(term.as_str()))
+                                            .count();
+                                        
+                                        if semantic_matches > 0 {
+                                            // Strong boost: 0.2-0.5 depending on match count
+                                            let semantic_boost = (semantic_matches as f64 * 0.15).min(0.5);
+                                            desc_score += semantic_boost;
+                                            eprintln!("  → Boosted '{}' by {:.2} for semantic term matches ({}/{})", 
+                                                manifest.name, semantic_boost, semantic_matches, semantic_terms.len());
+                                        }
+                                    }
 
                                     if desc_score >= threshold {
                                         match &best_match {
