@@ -27,6 +27,8 @@ impl CapabilityExecutor for MCPExecutor {
     }
     async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
         if let ProviderType::MCP(mcp) = provider {
+            eprintln!("[MCPExecutor] Executing tool '{}' on server '{}'", mcp.tool_name, mcp.server_url);
+            eprintln!("[MCPExecutor] Inputs type: {}", inputs.type_name());
             // Convert RTFS Value to JSON, preserving string/keyword map keys
             let input_json = A2AExecutor::value_to_json(inputs)
                 .map_err(|e| RuntimeError::Generic(format!("Failed to serialize inputs: {}", e)))?;

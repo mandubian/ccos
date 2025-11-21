@@ -524,6 +524,7 @@ impl CapabilityMarketplace {
         self.discovery_agents.push(Box::new(provider));
         Ok(())
     }
+    */
 
     /// Add an MCP discovery provider
     pub fn add_mcp_discovery(&mut self, config: MCPServerConfig) -> RuntimeResult<()> {
@@ -532,13 +533,16 @@ impl CapabilityMarketplace {
         Ok(())
     }
 
+    /*
     /// Add an MCP discovery provider using the builder pattern
     pub fn add_mcp_discovery_builder(&mut self, builder: MCPDiscoveryBuilder) -> RuntimeResult<()> {
         let provider = builder.build()?;
         self.discovery_agents.push(Box::new(provider));
         Ok(())
     }
+    */
 
+    /*
     /// Add an A2A discovery provider
     pub fn add_a2a_discovery(&mut self, config: A2AAgentConfig) -> RuntimeResult<()> {
         let provider = A2ADiscoveryProvider::new(config)?;
@@ -552,6 +556,7 @@ impl CapabilityMarketplace {
         self.discovery_agents.push(Box::new(provider));
         Ok(())
     }
+    */
 
     /// Discover capabilities from all configured network sources
     pub async fn discover_from_network(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
@@ -575,6 +580,7 @@ impl CapabilityMarketplace {
         Ok(all_capabilities)
     }
 
+    /*
     /// Perform health checks on all network discovery providers
     pub async fn check_network_health(&self) -> RuntimeResult<HashMap<String, bool>> {
         let mut health_status = HashMap::new();
@@ -740,6 +746,9 @@ impl CapabilityMarketplace {
         &self,
         manifest: CapabilityManifest,
     ) -> RuntimeResult<()> {
+        if let ProviderType::MCP(ref mcp) = manifest.provider {
+            eprintln!("DEBUG: register_capability_manifest id={} server_url='{}' tool_name='{}'", manifest.id, mcp.server_url, mcp.tool_name);
+        }
         let id = manifest.id.clone();
 
         let catalog_manifest = manifest.clone();
@@ -2284,8 +2293,20 @@ impl CapabilityMarketplace {
             let extract_quoted = |key: &str, src: &str| -> Option<String> {
                 if let Some(pos) = src.find(key) {
                     let after = &src[pos + key.len()..];
-                    if let Some(end) = after.find('"') {
-                        return Some(after[..end].to_string());
+                    // Skip whitespace
+                    let mut start = 0;
+                    let bytes = after.as_bytes();
+                    while start < bytes.len() && bytes[start].is_ascii_whitespace() {
+                        start += 1;
+                    }
+                    
+                    if start < bytes.len() && bytes[start] == b'"' {
+                        start += 1; // Skip opening quote
+                        let rest = &after[start..];
+                        if let Some(end) = rest.find('"') {
+                            let val = rest[..end].to_string();
+                            return Some(val);
+                        }
                     }
                 }
                 None
@@ -2605,8 +2626,16 @@ impl CapabilityMarketplace {
                     timeout_ms,
                 })
             } else if provider_token.contains(":mcp") || provider_token == "mcp" {
-                let server_url = provider_meta.get("server_url").cloned().unwrap_or_default();
-                let tool_name = provider_meta.get("tool_name").cloned().unwrap_or_default();
+                let mut server_url = provider_meta.get("server_url").cloned().unwrap_or_default();
+                let mut tool_name = provider_meta.get("tool_name").cloned().unwrap_or_default();
+                
+                if server_url.is_empty() {
+                    server_url = extract_quoted(":server_url", &content).unwrap_or_default();
+                }
+                if tool_name.is_empty() {
+                    tool_name = extract_quoted(":tool_name", &content).unwrap_or_default();
+                }
+
                 let timeout_ms = provider_meta
                     .get("timeout_ms")
                     .and_then(|s| s.parse::<u64>().ok())
