@@ -18,7 +18,6 @@ use crate::single_mcp_discovery_impl::{run_discovery, Args};
 
 mod single_mcp_discovery_impl {
     use super::*;
-    use ccos::arbiter::DelegatingArbiter;
     use ccos::synthesis::mcp_introspector::{DiscoveredMCPTool, MCPIntrospector};
     use ccos::synthesis::mcp_session::MCPSessionManager;
     use ccos::synthesis::mcp_registry_client::McpRegistryClient;
@@ -683,25 +682,32 @@ mod single_mcp_discovery_impl {
     ) -> serde_json::Map<String, serde_json::Value> {
         let mut mapped = serde_json::Map::new();
         
-        // Get schema property names
-        let schema_properties: Vec<String> = if let Some(schema) = schema {
+        // Get schema property names and types
+        let schema_props_map: std::collections::HashMap<String, String> = if let Some(schema) = schema {
             schema
                 .get("properties")
                 .and_then(|p| p.as_object())
-                .map(|props| props.keys().cloned().collect())
+                .map(|props| {
+                    props.iter().map(|(k, v)| {
+                        let type_str = v.get("type").and_then(|t| t.as_str()).unwrap_or("unknown").to_string();
+                        (k.clone(), type_str)
+                    }).collect()
+                })
                 .unwrap_or_default()
         } else {
-            Vec::new()
+            std::collections::HashMap::new()
         };
+        let schema_properties: Vec<String> = schema_props_map.keys().cloned().collect();
 
         for (extracted_key, value) in extracted_args {
             let mut matched = false;
+            let mut matched_key = String::new();
             
             // First, check for exact match (case-insensitive)
             let extracted_lower = extracted_key.to_lowercase();
             for schema_key in &schema_properties {
                 if extracted_lower == schema_key.to_lowercase() {
-                    mapped.insert(schema_key.clone(), value.clone());
+                    matched_key = schema_key.clone();
                     if extracted_key != schema_key {
                         eprintln!("  → Mapped '{}' → '{}' (case-insensitive match)", extracted_key, schema_key);
                     }
@@ -721,7 +727,7 @@ mod single_mcp_discovery_impl {
                         let max_len = extracted_lower.len().max(schema_lower.len());
                         // If the shorter is at least 70% of the longer, consider it a match
                         if min_len as f64 / max_len as f64 >= 0.7 {
-                            mapped.insert(schema_key.clone(), value.clone());
+                            matched_key = schema_key.clone();
                             eprintln!("  → Mapped '{}' → '{}' (fuzzy match)", extracted_key, schema_key);
                             matched = true;
                             break;
@@ -730,10 +736,98 @@ mod single_mcp_discovery_impl {
                 }
             }
             
-            // If still no match, keep the original key (might be a new parameter)
+            let final_key = if matched { matched_key } else { extracted_key.clone() };
+            
+            // Check for enum casing mismatch if schema has enums for this property
+            let value_with_enum_fix = if let Some(schema) = schema {
+                if let Some(prop) = schema.get("properties").and_then(|p| p.as_object()).and_then(|p| p.get(&final_key)) {
+                    if let Some(enums) = prop.get("enum").and_then(|e| e.as_array()) {
+                        if let serde_json::Value::String(s) = value {
+                            let s_upper = s.to_uppercase();
+                            // Check if any enum matches case-insensitively
+                            if let Some(matched_enum) = enums.iter().find(|e| {
+                                if let Some(es) = e.as_str() {
+                                    es.to_uppercase() == s_upper
+                                } else {
+                                    false
+                                }
+                            }) {
+                                if matched_enum.as_str() != Some(s.as_str()) {
+                                    eprintln!("  → Correcting case for parameter '{}': '{}' -> '{}'", final_key, s, matched_enum.as_str().unwrap_or(""));
+                                    matched_enum.clone()
+                                } else {
+                                    value.clone()
+                                }
+                            } else {
+                                value.clone()
+                            }
+                        } else {
+                            value.clone()
+                        }
+                    } else {
+                        value.clone()
+                    }
+                } else {
+                    value.clone()
+                }
+            } else {
+                value.clone()
+            };
+
+            // Perform type coercion if we have schema info
+            let final_value = if let Some(expected_type) = schema_props_map.get(&final_key) {
+                match (expected_type.as_str(), &value_with_enum_fix) {
+                    ("array", serde_json::Value::String(s)) => {
+                        eprintln!("  → Coercing string '{}' to array for parameter '{}'", s, final_key);
+                        // Try to split by comma if it looks like a list, otherwise single item
+                        if s.contains(',') {
+                            let items: Vec<serde_json::Value> = s.split(',')
+                                .map(|item| serde_json::Value::String(item.trim().to_string()))
+                                .collect();
+                            serde_json::Value::Array(items)
+                        } else {
+                            serde_json::Value::Array(vec![serde_json::Value::String(s.clone())])
+                        }
+                    },
+                    ("integer", serde_json::Value::String(s)) => {
+                        if let Ok(i) = s.parse::<i64>() {
+                            eprintln!("  → Coercing string '{}' to integer for parameter '{}'", s, final_key);
+                            serde_json::Value::Number(serde_json::Number::from(i))
+                        } else {
+                            value_with_enum_fix.clone()
+                        }
+                    },
+                     ("number", serde_json::Value::String(s)) => {
+                        if let Ok(f) = s.parse::<f64>() {
+                             if let Some(n) = serde_json::Number::from_f64(f) {
+                                eprintln!("  → Coercing string '{}' to number for parameter '{}'", s, final_key);
+                                serde_json::Value::Number(n)
+                             } else {
+                                 value_with_enum_fix.clone()
+                             }
+                        } else {
+                            value_with_enum_fix.clone()
+                        }
+                    },
+                    ("boolean", serde_json::Value::String(s)) => {
+                         let s_lower = s.to_lowercase();
+                         if s_lower == "true" {
+                             serde_json::Value::Bool(true)
+                         } else if s_lower == "false" {
+                             serde_json::Value::Bool(false)
+                         } else {
+                             value_with_enum_fix.clone()
+                         }
+                    },
+                    _ => value_with_enum_fix.clone(),
+                }
+            } else {
+                value_with_enum_fix.clone()
+            };
+
+            mapped.insert(final_key, final_value);
             if !matched {
-                mapped.insert(extracted_key.clone(), value.clone());
-                eprintln!("  → Kept '{}' as-is (no schema match found)", extracted_key);
+                 eprintln!("  → Kept '{}' as-is (no schema match found)", extracted_key);
             }
         }
         
