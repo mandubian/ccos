@@ -19,7 +19,7 @@ use crate::discovery::need_extractor::CapabilityNeed;
 use crate::rtfs_bridge::expression_to_pretty_rtfs_string;
 use crate::rtfs_bridge::expression_to_rtfs_string;
 use crate::synthesis::capability_synthesizer::{
-    CapabilitySynthesizer, MultiCapabilityEndpoint, MultiCapabilitySynthesisRequest,
+    MultiCapabilityEndpoint,
 };
 use crate::synthesis::feature_flags::{FeatureFlagChecker, MissingCapabilityConfig};
 use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;

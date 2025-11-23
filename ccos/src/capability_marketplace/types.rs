@@ -746,7 +746,7 @@ pub struct HttpCapability {
 #[derive(Clone)]
 pub struct RegistryCapability {
     pub capability_id: String,
-    pub registry: Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
+    pub registry: Arc<RwLock<crate::capabilities::registry::CapabilityRegistry>>,
 }
 
 impl std::fmt::Debug for RegistryCapability {
@@ -768,6 +768,7 @@ pub struct MCPCapability {
     pub server_url: String,
     pub tool_name: String,
     pub timeout_ms: u64,
+    pub auth_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -788,7 +789,7 @@ pub struct CapabilityMarketplace {
     pub(crate) capabilities: Arc<RwLock<HashMap<String, CapabilityManifest>>>,
     pub(crate) discovery_agents: Vec<Box<dyn CapabilityDiscovery>>,
     pub(crate) capability_registry:
-        Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
+        Arc<RwLock<crate::capabilities::registry::CapabilityRegistry>>,
     pub(crate) network_registry: Option<NetworkRegistryConfig>,
     pub(crate) type_validator: Arc<rtfs::runtime::type_validator::TypeValidator>,
     pub(crate) executor_registry:

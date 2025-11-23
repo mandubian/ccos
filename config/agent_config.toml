@@ -98,6 +98,8 @@ enabled = true
 runtime_detection = true
 # Allow the resolver to auto-attempt repairs instead of deferring to the user
 auto_resolution = true
+# Enable output schema introspection (requires auth)
+output_schema_introspection = true
 # Let the resolver call the promptstore-backed LLM synthesis flow
 llm_synthesis = true
 # Optional guardrails

@@ -235,7 +235,7 @@ mod tests {
         // Build a tiny environment: chain + host + minimal marketplace
         let chain = Arc::new(Mutex::new(CausalChain::new().unwrap()));
         let registry = Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            crate::capabilities::registry::CapabilityRegistry::new(),
         ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let host = RuntimeHost::new(chain.clone(), marketplace, RuntimeContext::full());

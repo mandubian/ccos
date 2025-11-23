@@ -238,6 +238,8 @@ pub struct MissingCapabilityRuntimeConfig {
     pub verbose_logging: Option<bool>,
     /// Maximum resolution attempts before giving up
     pub max_attempts: Option<u32>,
+    /// Enable output schema introspection (requires auth)
+    pub output_schema_introspection: Option<bool>,
     /// Tool selector configuration (LLM-assisted matching)
     #[serde(default)]
     pub tool_selector: MissingCapabilityToolSelectorRuntimeConfig,
