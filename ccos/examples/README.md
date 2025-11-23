@@ -4,9 +4,23 @@ This directory contains working examples demonstrating CCOS+RTFS integration aft
 
 ## Overview
 
-**12 working examples** showcasing different aspects of the CCOS architecture. All examples compile successfully ✅
+**14 working examples** showcasing different aspects of the CCOS architecture. All examples compile successfully ✅
 
 ## Active Examples (All Compile Successfully ✅)
+
+### Synthesis & Resolution (2 examples)
+
+- `missing_capability_demo.rs` (5KB) - **Just-in-Time Capability Resolution**
+  - Runtime trap for missing capabilities
+  - Automated discovery via MCP Registry
+  - Continuous resolution loop
+  - Dynamic plan resumption
+
+- `robust_planning_demo.rs` (9KB) - **Robust Semantic Planning**
+  - LLM-based goal decomposition
+  - Semantic search for tool discovery
+  - Confidence-based fallback to external registries
+  - **New:** Detailed discovery summary (Local vs Remote vs Synthesis)
 
 ### Smart Assistants & User Interaction (2 examples)
 
@@ -177,11 +191,11 @@ To create new examples:
 
 | Metric | Value |
 |--------|-------|
-| Active examples | 12 files |
-| Total active size | ~360KB |
+| Active examples | 14 files |
+| Total active size | ~375KB |
 | Largest example | smart_assistant_demo.rs (124KB) |
 | Archived examples | 34+ files |
-| Compilation status | ✅ 100% passing (12/12) |
+| Compilation status | ✅ 100% passing (14/14) |
 
 ## Migrated From
 
