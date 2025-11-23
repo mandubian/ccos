@@ -140,10 +140,10 @@ RTFS supports structured concurrency through host-mediated parallelism.
 
 ### Parallel Execution
 ```rtfs
-;; Parallel processing
-(call :parallel.map
-  (fn [item] (expensive-computation item))
-  [1 2 3 4 5])
+;; Parallel processing via step-parallel
+(step-parallel
+  (expensive-computation-1)
+  (expensive-computation-2))
 ```
 
 ### Coordination Primitives
