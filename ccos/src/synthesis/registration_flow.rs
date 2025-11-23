@@ -531,7 +531,7 @@ mod tests {
     async fn test_registration_flow() {
         // Create a mock marketplace
         let registry = Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            crate::capabilities::registry::CapabilityRegistry::new(),
         ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let flow = RegistrationFlow::new(marketplace);
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn test_version_generation() {
         let registry = Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            crate::capabilities::registry::CapabilityRegistry::new(),
         ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let flow = RegistrationFlow::new(marketplace);

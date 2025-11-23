@@ -130,13 +130,8 @@ impl MCPSessionManager {
                      💡 Authentication failed. Please verify:\n\
                      • Token is valid and not expired\n\
                      • Token has required permissions/scopes\n\
-                     • Environment variable is set correctly (MCP_AUTH_TOKEN or {}_MCP_TOKEN)",
-                    error_text,
-                    if server_url.contains("githubcopilot") {
-                        "GITHUB"
-                    } else {
-                        "SERVER"
-                    }
+                     • Environment variable is set correctly (MCP_AUTH_TOKEN)",
+                    error_text
                 )
             } else {
                 format!("MCP initialization failed ({}): {}", status, error_text)

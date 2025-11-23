@@ -73,7 +73,7 @@ impl Default for MissingCapabilityFeatureFlags {
             audit_logging_enabled: true,                // Always enable audit logging
             validation_enabled: true,                   // Always enable validation
             cli_tooling_enabled: true,                  // Safe to enable
-            output_schema_introspection_enabled: false, // Disabled by default (requires auth)
+            output_schema_introspection_enabled: true,  // Enabled by default (requires auth)
         }
     }
 }
@@ -334,6 +334,10 @@ impl MissingCapabilityConfig {
             config.feature_flags.enabled = enabled.parse().unwrap_or(false);
         }
 
+        if let Ok(runtime_detection) = std::env::var("CCOS_RUNTIME_DETECTION_ENABLED") {
+            config.feature_flags.runtime_detection = runtime_detection.parse().unwrap_or(false);
+        }
+
         if let Ok(auto_resolution) = std::env::var("CCOS_AUTO_RESOLUTION_ENABLED") {
             config.feature_flags.auto_resolution = auto_resolution.parse().unwrap_or(false);
         }
@@ -352,6 +356,10 @@ impl MissingCapabilityConfig {
 
         if let Ok(human_approval) = std::env::var("CCOS_HUMAN_APPROVAL_REQUIRED") {
             config.feature_flags.human_approval_required = human_approval.parse().unwrap_or(true);
+        }
+
+        if let Ok(output_schema) = std::env::var("CCOS_OUTPUT_SCHEMA_INTROSPECTION_ENABLED") {
+            config.feature_flags.output_schema_introspection_enabled = output_schema.parse().unwrap_or(true);
         }
 
         // Load configuration values from environment
@@ -467,6 +475,10 @@ impl MissingCapabilityConfig {
 
             if let Some(max_attempts) = mc.max_attempts {
                 config.max_resolution_attempts = max_attempts;
+            }
+
+            if let Some(output_schema) = mc.output_schema_introspection {
+                config.feature_flags.output_schema_introspection_enabled = output_schema;
             }
 
             let selector_cfg = &mc.tool_selector;

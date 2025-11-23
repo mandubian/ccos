@@ -2549,7 +2549,7 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
         // For now, we don't pass a real marketplace; provider currently doesn't use it.
         let marketplace = Arc::new(crate::capability_marketplace::CapabilityMarketplace::new(
             Arc::new(tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+                crate::capabilities::registry::CapabilityRegistry::new(),
             )),
         ));
         plan_gen_provider
@@ -2629,7 +2629,7 @@ mod tests {
 
         // Create a minimal capability marketplace for testing
         let registry = Arc::new(RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            crate::capabilities::registry::CapabilityRegistry::new(),
         ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
@@ -2654,7 +2654,7 @@ mod tests {
 
         // Create a minimal capability marketplace for testing
         let registry = Arc::new(RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            crate::capabilities::registry::CapabilityRegistry::new(),
         ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
@@ -2691,7 +2691,7 @@ mod tests {
 
         // Create a minimal capability marketplace for testing
         let registry = Arc::new(RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+            crate::capabilities::registry::CapabilityRegistry::new(),
         ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 

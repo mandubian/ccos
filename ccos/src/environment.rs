@@ -128,12 +128,11 @@ impl CCOSEnvironment {
     /// Create a new CCOS environment with the given configuration
     pub fn new(config: CCOSConfig) -> RuntimeResult<Self> {
         // Create capability registry
-        // Create RTFS stub capability registry for marketplace (RTFS/CCOS separation)
-        let rtfs_registry = Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+        let ccos_registry = Arc::new(tokio::sync::RwLock::new(
+            crate::capabilities::registry::CapabilityRegistry::new(),
         ));
         // Create capability marketplace with integrated registry
-        let marketplace = Arc::new(CapabilityMarketplace::new(rtfs_registry));
+        let marketplace = Arc::new(CapabilityMarketplace::new(ccos_registry.clone()));
 
         // Bootstrap the marketplace to register default capabilities and apply registry config
         let marketplace_for_bootstrap = marketplace.clone();
