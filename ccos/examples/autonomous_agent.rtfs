@@ -52,4 +52,9 @@
 )
 
 ;; Start with initial goal
-(agent-loop "search for 'ccos' in workspace")
+(let [initial_goal (call "ccos.user.ask" "What is your goal?")]
+  (if (and (!= initial_goal "exit") (!= initial_goal ""))
+    (agent-loop initial_goal)
+    (tool/log "Exiting.")
+  )
+)
