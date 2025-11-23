@@ -176,16 +176,16 @@ RTFS provides resource-safe operations through host-mediated resource management
 Host-mediated concurrency:
 
 ```clojure
-;; Parallel execution
-(parallel
+;; Parallel execution (via step-parallel)
+(step-parallel
   (call :ccos.http/get url1)
   (call :ccos.http/get url2)
   (call :ccos.fs/read file))
 
-;; Futures and promises
+;; Futures and promises (conceptual)
 (let [future (call :ccos.async/compute-heavy-task data)]
   (do-other-work)
-  (await future))
+  (call :ccos.async/await future))
 ```
 
 ## Error Handling Across Boundary

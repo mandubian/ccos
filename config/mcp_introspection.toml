@@ -1,0 +1,6 @@
+# Configuration for MCP Tool Introspection
+# Maps tool names to safe input parameters required for schema inference
+
+[tools.list_issues]
+owner = "mandubian"
+repo = "ccos"
