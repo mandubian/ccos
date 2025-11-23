@@ -20,28 +20,50 @@ pub async fn register_default_capabilities(
                 match input {
                     // New calling convention: map with :args and optional :context
                     Value::Map(map) => {
+                        // Try standard :args convention first
                         let args_val = map
                             .get(&MapKey::Keyword(Keyword("args".to_string())))
-                            .or_else(|| map.get(&MapKey::String("args".to_string())))
-                            .cloned()
-                            .unwrap_or(Value::List(vec![]));
-                        match args_val {
-                            Value::List(args) | Value::Vector(args) => {
-                                if args.len() == 1 {
-                                    Ok(args[0].clone())
-                                } else {
-                                    Err(RuntimeError::ArityMismatch {
-                                        function: "ccos.echo".to_string(),
-                                        expected: "1".to_string(),
-                                        actual: args.len(),
-                                    })
+                            .or_else(|| map.get(&MapKey::String("args".to_string())));
+
+                        if let Some(args_val) = args_val {
+                            // Standard path...
+                            match args_val {
+                                Value::List(args) | Value::Vector(args) => {
+                                    if args.len() == 1 {
+                                        Ok(args[0].clone())
+                                    } else {
+                                        Err(RuntimeError::ArityMismatch {
+                                            function: "ccos.echo".to_string(),
+                                            expected: "1".to_string(),
+                                            actual: args.len(),
+                                        })
+                                    }
+                                }
+                                other => Err(RuntimeError::TypeError {
+                                    expected: "list".to_string(),
+                                    actual: other.type_name().to_string(),
+                                    operation: "ccos.echo".to_string(),
+                                }),
+                            }
+                        } else {
+                            // Fallback: check for "message", "content", "text", "value"
+                            for key in &["message", "content", "text", "value"] {
+                                if let Some(val) = map.get(&MapKey::String(key.to_string()))
+                                    .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string())))) 
+                                {
+                                    return Ok(val.clone());
                                 }
                             }
-                            other => Err(RuntimeError::TypeError {
-                                expected: "list".to_string(),
-                                actual: other.type_name().to_string(),
-                                operation: "ccos.echo".to_string(),
-                            }),
+                            // Last resort: if map has exactly one value, use it
+                            if map.len() == 1 {
+                                if let Some(val) = map.values().next() {
+                                    return Ok(val.clone());
+                                }
+                            }
+                            
+                            Err(RuntimeError::Generic(
+                                "Missing :args (or 'message'/'value') for ccos.echo".to_string(),
+                            ))
                         }
                     }
                     // Backward compatibility: still accept a plain list
@@ -106,9 +128,25 @@ pub async fn register_default_capabilities(
                                 }),
                             }
                         } else {
-                            Err(RuntimeError::Generic(
-                                "Missing :args for ccos.math.add".to_string(),
-                            ))
+                            // Fallback: sum all integer values in the map
+                            // This supports { "a": 1, "b": 2 } usage
+                            let mut sum = 0i64;
+                            let mut found_int = false;
+                            
+                            for val in map.values() {
+                                if let Value::Integer(i) = val {
+                                    sum += *i;
+                                    found_int = true;
+                                }
+                            }
+                            
+                            if found_int {
+                                Ok(Value::Integer(sum))
+                            } else {
+                                Err(RuntimeError::Generic(
+                                    "Missing :args or integer values for ccos.math.add".to_string(),
+                                ))
+                            }
                         }
                     }
                     // Backward compatibility: direct list of arguments
@@ -150,6 +188,7 @@ pub async fn register_default_capabilities(
                 let extract_prompt = |val: &Value| -> Result<String, RuntimeError> {
                     match val {
                         Value::Map(map) => {
+                            // Try standard :args convention first
                             let args_val = map
                                 .get(&MapKey::Keyword(Keyword("args".to_string())))
                                 .or_else(|| map.get(&MapKey::String("args".to_string())));
@@ -167,8 +206,26 @@ pub async fn register_default_capabilities(
                                     }
                                 }
                             }
+                            
+                            // Fallback: check for common keys like "prompt", "question", "message"
+                            // or if map has exactly one string value
+                            for key in &["prompt", "question", "message", "text"] {
+                                if let Some(val) = map.get(&MapKey::String(key.to_string()))
+                                    .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string())))) 
+                                {
+                                    return Ok(val.to_string());
+                                }
+                            }
+                            
+                            // Last resort: if map has exactly one entry and value is string, use it
+                            if map.len() == 1 {
+                                if let Some(val) = map.values().next() {
+                                    return Ok(val.to_string());
+                                }
+                            }
+
                             Err(RuntimeError::Generic(
-                                "Missing :args for ccos.user.ask".to_string(),
+                                "Missing :args (or 'prompt'/'question') for ccos.user.ask".to_string(),
                             ))
                         }
                         Value::List(args) | Value::Vector(args) => {
@@ -237,7 +294,32 @@ pub async fn register_default_capabilities(
                                 _ => format!("{}", args_val),
                             }
                         } else {
-                            format!("{}", input)
+                            // Fallback: check common keys
+                            let mut msg = None;
+                            for key in &["message", "content", "text", "value"] {
+                                if let Some(val) = map.get(&MapKey::String(key.to_string()))
+                                    .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string())))) 
+                                {
+                                    msg = Some(match val {
+                                        Value::String(s) => s.clone(),
+                                        _ => format!("{}", val),
+                                    });
+                                    break;
+                                }
+                            }
+                            
+                            msg.unwrap_or_else(|| {
+                                // If single value map, use it
+                                if map.len() == 1 {
+                                    if let Some(val) = map.values().next() {
+                                        return match val {
+                                            Value::String(s) => s.clone(),
+                                            _ => format!("{}", val),
+                                        };
+                                    }
+                                }
+                                format!("{}", input)
+                            })
                         }
                     }
                     Value::List(args) | Value::Vector(args) => args
@@ -285,7 +367,32 @@ pub async fn register_default_capabilities(
                                 _ => format!("{}", args_val),
                             }
                         } else {
-                            format!("{}", input)
+                            // Fallback: check common keys
+                            let mut msg = None;
+                            for key in &["message", "content", "text", "value"] {
+                                if let Some(val) = map.get(&MapKey::String(key.to_string()))
+                                    .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string())))) 
+                                {
+                                    msg = Some(match val {
+                                        Value::String(s) => s.clone(),
+                                        _ => format!("{}", val),
+                                    });
+                                    break;
+                                }
+                            }
+                            
+                            msg.unwrap_or_else(|| {
+                                // If single value map, use it
+                                if map.len() == 1 {
+                                    if let Some(val) = map.values().next() {
+                                        return match val {
+                                            Value::String(s) => s.clone(),
+                                            _ => format!("{}", val),
+                                        };
+                                    }
+                                }
+                                format!("{}", input)
+                            })
                         }
                     }
                     Value::List(args) | Value::Vector(args) => args
