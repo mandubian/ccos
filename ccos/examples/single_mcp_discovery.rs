@@ -286,9 +286,13 @@ mod single_mcp_discovery_impl {
                 .map(|s| s.to_string());
 
             let input_schema_json = tool_json.get("inputSchema").cloned();
-            // For now, we'll leave input_schema as None since the conversion method is not easily accessible
-            // The input_schema_json will still be available for building test inputs
-            let input_schema = None;
+            
+            // Convert JSON schema to RTFS TypeExpr if available
+            let input_schema = if let Some(schema) = &input_schema_json {
+                MCPIntrospector::type_expr_from_json_schema(schema).ok()
+            } else {
+                None
+            };
 
             discovered_tools.push(DiscoveredMCPTool {
                 tool_name,
@@ -441,25 +445,52 @@ mod single_mcp_discovery_impl {
                 let result_val = r.get("result").cloned().unwrap_or(serde_json::Value::Null);
                 let sample_snippet = serde_json::to_string_pretty(&result_val).ok();
 
-                let is_error = sample_snippet
+                // Try to unwrap stringified JSON in "content"[0]["text"] if present
+                // This is common for MCP tools that return complex data serialized as text
+                let actual_val = if let Some(content) = result_val.get("content").and_then(|c| c.as_array()) {
+                    if let Some(first) = content.first() {
+                        if let Some(text) = first.get("text").and_then(|t| t.as_str()) {
+                            if let Ok(inner_json) = serde_json::from_str::<serde_json::Value>(text) {
+                                 eprintln!("  → Detected stringified JSON in output, inferring schema from inner content.");
+                                 inner_json
+                            } else {
+                                 result_val.clone()
+                            }
+                        } else {
+                            result_val.clone()
+                        }
+                    } else {
+                        result_val.clone()
+                    }
+                } else {
+                    result_val.clone()
+                };
+
+                let is_mcp_error = r.get("isError").and_then(|v| v.as_bool()).unwrap_or(false);
+                
+                let is_content_error = sample_snippet
                     .as_ref()
                     .map(|s| {
                         let s_l = s.to_lowercase();
                         s_l.contains("missing required")
                             || s_l.contains("required parameter")
-                            || s_l.contains("error")
                             || s_l.contains("unauthorized")
                             || s_l.contains("forbidden")
                     })
-                    .unwrap_or(true);
+                    .unwrap_or(false);
+                    
+                let is_error = is_mcp_error || is_content_error;
 
                 if is_error {
                     (None::<rtfs::ast::TypeExpr>, sample_snippet)
                 } else {
-                    // Attempt to infer schema from the successful result
-                    // For now, we'll skip schema inference since the method is not accessible
-                    // The sample output will still be available for inspection
-                    (None::<rtfs::ast::TypeExpr>, sample_snippet)
+                    // Attempt to infer schema from the successful result (using unwrapped value)
+                    if let Ok(inferred_schema) = inspector.infer_type_from_json_value(&actual_val) {
+                        (Some(inferred_schema), sample_snippet)
+                    } else {
+                        eprintln!("⚠️ Schema inference failed even though call succeeded.");
+                        (None::<rtfs::ast::TypeExpr>, sample_snippet)
+                    }
                 }
             }
             Err(e) => {
@@ -473,31 +504,30 @@ mod single_mcp_discovery_impl {
             if let Some(sample) = sample_opt.as_ref() {
                 eprintln!("Sample output (first lines):\n{}", sample.lines().take(8).collect::<Vec<_>>().join("\n"));
             }
-            return Ok(());
-        }
-
-        // If introspection returned no schema but provided a sample with an error-like message,
-        // attempt to synthesize plausible inputs heuristically and retry the call.
-        // If introspection returned no schema but provided a sample with an error-like message,
-        // we can log it for the user. With the new proactive hint parsing, the old interactive
-        // loop for fixing arguments is less relevant, but we'll keep the error display.
-        if let Some(sample) = sample_opt.as_ref() {
-            eprintln!("⚠️ Introspection with initial inputs failed or produced an error-like sample:");
-            // Show the full error, but limit to first 50 lines to avoid overwhelming output
-            let error_lines: Vec<&str> = sample.lines().take(50).collect();
-            eprintln!("{}", error_lines.join("\n"));
-            if sample.lines().count() > 50 {
-                eprintln!("... (truncated, {} more lines)", sample.lines().count() - 50);
-            }
-
-            // The old logic would loop here, asking the user or arbiter for missing params.
-            // Since we now proactively extract from the hint, we will simply report the failure.
-            // A more robust implementation could still use an interactive loop as a fallback.
+            // Proceed to save the capability with the inferred schema
         } else {
-            eprintln!("⚠️ No sample or schema could be obtained from introspection and no error snippet provided.");
+            // If introspection returned no schema but provided a sample with an error-like message,
+            // attempt to synthesize plausible inputs heuristically and retry the call.
+            if let Some(sample) = sample_opt.as_ref() {
+                eprintln!("⚠️ Introspection with initial inputs failed or produced an error-like sample:");
+                // Show the full error, but limit to first 50 lines to avoid overwhelming output
+                let error_lines: Vec<&str> = sample.lines().take(50).collect();
+                eprintln!("{}", error_lines.join("\n"));
+                if sample.lines().count() > 50 {
+                    eprintln!("... (truncated, {} more lines)", sample.lines().count() - 50);
+                }
+            } else {
+                eprintln!("⚠️ No sample or schema could be obtained from introspection and no error snippet provided.");
+            }
         }
 
         if let Ok(manifest) = inspector.create_capability_from_mcp_tool(&tool, &introspection) {
+            // Update manifest with inferred output schema if available
+            let mut manifest = manifest;
+            if let Some(output_schema) = schema_opt.clone() {
+                manifest.output_schema = Some(output_schema);
+            }
+
             let implementation_code = inspector.generate_mcp_rtfs_implementation(&tool, &server_url);
             match inspector.save_capability_to_rtfs(
                 &manifest,
