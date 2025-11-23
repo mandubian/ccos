@@ -3,8 +3,7 @@
     {
       "matches": [
         "github.*",
-        "mcp.github.*",
-        "github.search_code"
+        "mcp.github.*"
       ],
       "server": {
         "$schema": null,
@@ -61,75 +60,6 @@
                 "value": null,
                 "isSecret": true,
                 "isRequired": false
-              }
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "matches": [
-        "github.search_code",
-        "github.*"
-      ],
-      "server": {
-        "$schema": null,
-        "name": "github/git-mcp-test",
-        "description": "User-added MCP server for github.search_code",
-        "version": "1.0.0",
-        "repository": {
-          "url": "https://github.com/github/github-mcp",
-          "source": "github"
-        },
-        "packages": null,
-        "remotes": [
-          {
-            "type": "http",
-            "url": "https://github.com/github/github-mcp",
-            "headers": null
-          }
-        ]
-      }
-    },
-    {
-      "matches": [
-        "github.users.list_repos",
-        "github.users.list_projects",
-        "github.users.list_repositories",
-        "mcp.github.github-mcp.users.list_repositories"
-      ],
-      "server": {
-        "$schema": null,
-        "name": "github/github-mcp",
-        "description": "Explicit mapping for GitHub user repository listing",
-        "version": "1.0.0",
-        "repository": {
-          "url": "https://github.com/github/github-mcp",
-          "source": "github"
-        },
-        "packages": [
-          {
-            "registryType": "npm",
-            "identifier": "@github/github-mcp",
-            "version": "^1.0.0",
-            "registryBaseUrl": "https://registry.npmjs.org",
-            "runtimeHint": "node",
-            "transport": {
-              "type": "stdio"
-            }
-          }
-        ],
-        "remotes": [
-          {
-            "type": "http",
-            "url": "https://api.githubcopilot.com/mcp/",
-            "headers": [
-              {
-                "name": "Authorization",
-                "description": "GitHub Personal Access Token for MCP authentication",
-                "value": null,
-                "isSecret": true,
-                "isRequired": true
               }
             ]
           }
