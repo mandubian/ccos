@@ -382,6 +382,7 @@ impl McpRegistryClient {
                 server_url,
                 tool_name: capability_name.to_string(),
                 timeout_ms: 30000, // 30 second timeout
+                auth_token: None,
             }),
             input_schema: None,  // MCP Registry doesn't provide schema information
             output_schema: None, // MCP Registry doesn't provide schema information

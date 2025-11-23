@@ -311,6 +311,7 @@ impl MCPIntrospector {
         server_url: &str,
         server_name: &str,
         auth_headers: Option<HashMap<String, String>>,
+        input_overrides: Option<serde_json::Value>,
     ) -> RuntimeResult<(Option<TypeExpr>, Option<String>)> {
         // Only introspect if we have auth (indicates we're authorized to make calls)
         if auth_headers.is_none() {
@@ -341,7 +342,7 @@ impl MCPIntrospector {
         );
 
         // Generate safe test inputs from input schema
-        let mut test_inputs = self.generate_safe_test_inputs(tool, false)?;
+        let mut test_inputs = self.generate_safe_test_inputs(tool, false, input_overrides.clone())?;
 
         // Create session manager
         let session_manager = MCPSessionManager::new(auth_headers);
@@ -389,7 +390,7 @@ impl MCPIntrospector {
         };
 
         // Terminate session
-        let _ = session_manager.terminate_session(&session).await;
+        // let _ = session_manager.terminate_session(&session).await;
 
         // Extract result from response
         if let Some(result) = response.get("result") {
@@ -426,7 +427,7 @@ impl MCPIntrospector {
                     tool.tool_name
                 );
 
-                test_inputs = self.generate_safe_test_inputs(tool, true)?;
+                test_inputs = self.generate_safe_test_inputs(tool, true, input_overrides)?;
                 let retry_response = match session_manager
                     .make_request(
                         &session,
@@ -444,9 +445,13 @@ impl MCPIntrospector {
                             "⚠️ Retry for output schema introspection failed for '{}': {}",
                             tool.tool_name, e
                         );
+                        let _ = session_manager.terminate_session(&session).await;
                         return Ok((None, sample_snippet));
                     }
                 };
+
+                // Terminate session after retry
+                let _ = session_manager.terminate_session(&session).await;
 
                 if let Some(result2) = retry_response.get("result") {
                     let output_schema = self.infer_type_from_json_value(result2)?;
@@ -482,9 +487,12 @@ impl MCPIntrospector {
                     .map(|s| s.lines().count())
                     .unwrap_or(0)
             );
+            // Terminate session if no error was detected
+            let _ = session_manager.terminate_session(&session).await;
             Ok((Some(output_schema), sample_snippet))
         } else {
             eprintln!("⚠️ No result in response for output schema introspection");
+            let _ = session_manager.terminate_session(&session).await;
             Ok((None, None))
         }
     }
@@ -494,6 +502,7 @@ impl MCPIntrospector {
         &self,
         tool: &DiscoveredMCPTool,
         plausible: bool,
+        overrides: Option<serde_json::Value>,
     ) -> RuntimeResult<serde_json::Value> {
         let mut inputs = serde_json::Map::new();
 
@@ -521,6 +530,12 @@ impl MCPIntrospector {
                         inputs.insert(key.clone(), default_value);
                     }
                 }
+            }
+        }
+
+        if let Some(serde_json::Value::Object(override_map)) = overrides {
+            for (k, v) in override_map {
+                inputs.insert(k, v);
             }
         }
 
@@ -702,13 +717,12 @@ impl MCPIntrospector {
                 .description
                 .clone()
                 .unwrap_or_else(|| format!("MCP tool: {}", tool.tool_name)),
-            provider: crate::capability_marketplace::types::ProviderType::Local(
-                crate::capability_marketplace::types::LocalCapability {
-                    handler: std::sync::Arc::new(|_| {
-                        Ok(rtfs::runtime::values::Value::String(
-                            "MCP RTFS capability".to_string(),
-                        ))
-                    }),
+            provider: crate::capability_marketplace::types::ProviderType::MCP(
+                crate::capability_marketplace::types::MCPCapability {
+                    server_url: introspection.server_url.clone(),
+                    tool_name: tool.tool_name.clone(),
+                    timeout_ms: 30000,
+                    auth_token: None,
                 },
             ),
             version: "1.0.0".to_string(),
@@ -731,65 +745,14 @@ impl MCPIntrospector {
 
     /// Generate RTFS implementation for MCP tool
     ///
-    /// This is a generic MCP wrapper that:
-    /// 1. Reads MCP server URL from metadata (overridable via MCP_SERVER_URL env var)
-    /// 2. Optionally gets auth token from input schema or env var (MCP_AUTH_TOKEN)
-    /// 3. Makes standard JSON-RPC call to MCP server
-    /// 4. Returns result with schema validation by runtime
-    ///
-    /// Session management is handled transparently by the runtime/registry based on
-    /// capability metadata (mcp_requires_session, mcp_auth_env_var).
+    /// Since we use native MCP provider, the RTFS implementation is nil.
+    /// The runtime handles execution via MCPExecutor.
     pub fn generate_mcp_rtfs_implementation(
         &self,
-        tool: &DiscoveredMCPTool,
-        server_url: &str,
+        _tool: &DiscoveredMCPTool,
+        _server_url: &str,
     ) -> String {
-        format!(
-            r#"(fn [input]
-  ;; MCP Tool: {}
-  ;; Runtime validates input against input_schema and output_schema
-  ;; Makes standard MCP JSON-RPC call to tools/call endpoint
-  ;; 
-  ;; Configuration:
-  ;;   - MCP_SERVER_URL: Override server URL (default from metadata)
-  ;;   - MCP_AUTH_TOKEN: Optional auth token for MCP server
-  ;;
-  ;; Session management is handled by the runtime based on capability metadata.
-  (let [default_url "{}"
-        env_url (call "ccos.system.get-env" "MCP_SERVER_URL")
-        mcp_url (if env_url env_url default_url)
-        ;; Optional: get auth token from input or env
-        auth_token (or (get input :auth-token)
-                       (call "ccos.system.get-env" "MCP_AUTH_TOKEN"))
-        ;; Build MCP JSON-RPC request
-        mcp_request {{:jsonrpc "2.0"
-                      :id "mcp_call"
-                      :method "tools/call"
-                      :params {{:name "{}"
-                               :arguments input}}}}
-        ;; Build headers with optional auth
-        headers (if auth_token
-                  {{:content-type "application/json"
-                    :authorization (str "Bearer " auth_token)}}
-                  {{:content-type "application/json"}})]
-    ;; Make HTTP POST to MCP server
-    (let [response (call "ccos.network.http-fetch"
-                        :method "POST"
-                        :url mcp_url
-                        :headers headers
-                        :body (call "ccos.data.serialize-json" mcp_request))]
-      ;; Parse response and extract result
-      (if (get response :body)
-        (let [response_json (call "ccos.data.parse-json" (get response :body))
-              result (get response_json :result)]
-          ;; Return MCP tool result (runtime validates against output_schema)
-          result)
-        ;; Return error if no response body
-        {{:error "No response from MCP server" :url mcp_url}}))))"#,
-            tool.description.as_deref().unwrap_or(&tool.tool_name),
-            server_url,
-            tool.tool_name
-        )
+        "nil".to_string()
     }
 
     /// Serialize MCP capability to RTFS format
@@ -866,6 +829,23 @@ impl MCPIntrospector {
             .map(|s| s.as_str())
             .unwrap_or("");
 
+        let provider_str = match &capability.provider {
+            crate::capability_marketplace::types::ProviderType::MCP(mcp) => format!(
+                r#"{{
+    :type "mcp"
+    :server_endpoint "{}"
+    :tool_name "{}"
+    :timeout_seconds {}
+    :protocol_version "{}"
+  }}"#,
+                mcp.server_url,
+                mcp.tool_name,
+                mcp.timeout_ms / 1000,
+                capability.metadata.get("mcp_protocol_version").map(|s| s.as_str()).unwrap_or("2024-11-05")
+            ),
+            _ => "\"MCP\"".to_string(),
+        };
+
         format!(
             r#";; MCP Capability: {}
 ;; Generated from MCP tool introspection
@@ -877,7 +857,9 @@ impl MCPIntrospector {
   :name "{}"
   :version "{}"
   :description "{}"
-  :provider "MCP"
+  ;; PROVIDER START
+  :provider {}
+  ;; PROVIDER END
   :permissions {}
   :effects {}
   :metadata {{
@@ -912,6 +894,7 @@ impl MCPIntrospector {
             capability.name,
             capability.version,
             capability.description,
+            provider_str,
             permissions_str,
             effects_str,
             mcp_server_url,
@@ -1126,6 +1109,19 @@ impl MCPIntrospector {
                 },
             ],
         })
+    }
+
+    /// Generate the RTFS implementation code for an MCP tool wrapper
+    pub fn generate_mcp_wrapper_code(
+        &self,
+        server_url: &str,
+        tool_name: &str,
+        display_name: &str,
+    ) -> String {
+        format!(
+            "(fn [input]\n  ;; MCP Tool: {}\n  (call :ccos.capabilities.mcp.call\n    :server-url \"{}\"\n    :tool-name \"{}\"\n    :input input))",
+            display_name, server_url, tool_name
+        )
     }
 }
 

@@ -290,12 +290,10 @@ impl CCOS {
         let capability_registry = Arc::new(tokio::sync::RwLock::new(
             crate::capabilities::registry::CapabilityRegistry::new(),
         ));
-        // Create RTFS stub capability registry for marketplace (RTFS/CCOS separation)
-        let rtfs_capability_registry = Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-        ));
+        
+        // Pass the full CCOS capability registry to the marketplace
         let capability_marketplace = CapabilityMarketplace::with_causal_chain_and_debug_callback(
-            rtfs_capability_registry,
+            Arc::clone(&capability_registry),
             Some(Arc::clone(&causal_chain)),
             debug_callback.clone(),
         );
@@ -1647,7 +1645,7 @@ impl CCOS {
     /// Get statistics about missing capability resolution
     pub fn get_missing_capability_stats(
         &self,
-    ) -> Option<crate::synthesis::missing_capability_resolver::QueueStats> {
+    ) -> Option<crate::synthesis::missing_capability_resolver::ResolverStats> {
         self.missing_capability_resolver
             .as_ref()
             .map(|resolver| resolver.get_stats())

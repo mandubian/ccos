@@ -173,6 +173,7 @@ impl MCPProxyAdapter {
                     server_url: self.config.server_url.clone(),
                     tool_name: proxy.tool.name.clone(),
                     timeout_ms: self.config.timeout_seconds * 1000,
+                    auth_token: None,
                 },
             ),
             version: "1.0.0".to_string(),

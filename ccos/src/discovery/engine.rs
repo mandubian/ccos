@@ -2796,7 +2796,7 @@ impl DiscoveryEngine {
             .find(|tool| tool.tool_name == manifest.name)
         {
             match introspector
-                .introspect_output_schema(tool, url, server_name, Some(headers))
+                .introspect_output_schema(tool, url, server_name, Some(headers), None)
                 .await
             {
                 Ok((Some(schema), sample_opt)) => {

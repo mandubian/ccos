@@ -183,6 +183,7 @@ pub fn parse_simple_mcp_rtfs(path: &Path) -> RuntimeResult<Option<CapabilityMani
             server_url: server_url.clone(),
             tool_name: tool_name.clone(),
             timeout_ms: 30_000,
+            auth_token: None,
         }),
         version,
     );
