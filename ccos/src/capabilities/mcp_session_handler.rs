@@ -42,6 +42,12 @@ impl MCPSessionHandler {
 
     /// Get auth token from environment variable specified in metadata
     fn get_auth_token(&self, metadata: &HashMap<String, String>) -> Option<String> {
+        // Check for explicit token in metadata first (passed from executor)
+        if let Some(token) = metadata.get("mcp_auth_token") {
+            return Some(token.clone());
+        }
+        
+        // Fallback to env var lookup
         let env_var = metadata.get("mcp_auth_env_var")?;
         std::env::var(env_var).ok()
     }
@@ -179,7 +185,16 @@ impl MCPSessionHandler {
                             MapKey::String(s) => s.clone(),
                             MapKey::Integer(i) => i.to_string(),
                         };
-                        json_map.insert(key_str, rtfs_value_to_json(value));
+                        
+                        // Convert value to JSON
+                        let json_val = rtfs_value_to_json(value);
+                        
+                        // Filter out null values for MCP arguments
+                        // This handles cases where optional parameters are passed as nil (null)
+                        // but the MCP server expects them to be omitted if not present.
+                        if !json_val.is_null() {
+                            json_map.insert(key_str, json_val);
+                        }
                     }
                     serde_json::Value::Object(json_map)
                 }
@@ -324,7 +339,7 @@ impl SessionHandler for MCPSessionHandler {
         capability_id: &str,
         metadata: &HashMap<String, String>,
     ) -> RuntimeResult<SessionId> {
-        eprintln!("[MCPSessionHandler] initialize_session for {}: metadata keys={:?}", capability_id, metadata.keys());
+        // eprintln!("[MCPSessionHandler] initialize_session for {}: metadata keys={:?}", capability_id, metadata.keys());
         
         // Extract server URL from metadata
         let server_url = metadata.get("server_url")
@@ -333,11 +348,11 @@ impl SessionHandler for MCPSessionHandler {
 
         let server_url = match server_url {
             Some(url) => {
-                eprintln!("[MCPSessionHandler] Found server_url: {}", url);
+                // eprintln!("[MCPSessionHandler] Found server_url: {}", url);
                 url.clone()
             },
             None => {
-                eprintln!("[MCPSessionHandler] Missing server_url in metadata: {:?}", metadata);
+                // eprintln!("[MCPSessionHandler] Missing server_url in metadata: {:?}", metadata);
                 return Err(RuntimeError::Generic("Missing server_url in metadata".to_string()));
             }
         };

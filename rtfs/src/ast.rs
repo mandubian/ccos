@@ -411,6 +411,34 @@ impl TypeExpr {
                 }
                 Ok(schema)
             }
+            TypeExpr::Map {
+                entries,
+                wildcard: _,
+            } => {
+                let mut properties = serde_json::Map::new();
+                let mut required = Vec::new();
+
+                for entry in entries {
+                    let key_name = entry.key.0.clone();
+                    properties.insert(key_name.clone(), entry.value_type.to_json()?);
+                    
+                    if !entry.optional {
+                        required.push(serde_json::Value::String(key_name));
+                    }
+                }
+
+                let mut schema = json!({
+                    "type": "object",
+                    "properties": properties,
+                    "additionalProperties": false
+                });
+                
+                if !required.is_empty() {
+                    schema["required"] = serde_json::Value::Array(required);
+                }
+                
+                Ok(schema)
+            }
             TypeExpr::Any => Ok(json!({})), // Accept anything
             TypeExpr::Never => Ok(json!({"not": {}})), // Accept nothing
             _ => {

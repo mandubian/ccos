@@ -603,6 +603,11 @@ impl CapabilityRegistry {
         self.missing_capability_resolver = Some(resolver);
     }
 
+    /// Get the missing capability resolver
+    pub fn get_missing_capability_resolver(&self) -> Option<Arc<MissingCapabilityResolver>> {
+        self.missing_capability_resolver.clone()
+    }
+
     /// Set the execution policy for capabilities
     pub fn set_execution_policy(&mut self, policy: CapabilityExecutionPolicy) {
         self.execution_policy = policy;

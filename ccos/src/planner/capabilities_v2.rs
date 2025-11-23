@@ -9,12 +9,15 @@ use rtfs::runtime::values::Value;
 
 use crate::capability_marketplace::types::ProviderType;
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::catalog::CatalogService;
+use crate::catalog::{CatalogService, CatalogFilter, CatalogEntryKind};
+use crate::CCOS;
+use crate::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo};
 
 /// Register granular planner capabilities (v2) for the autonomous agent loop.
 pub async fn register_planner_capabilities_v2(
     marketplace: Arc<CapabilityMarketplace>,
     catalog: Arc<CatalogService>,
+    ccos: Arc<CCOS>,
 ) -> RuntimeResult<()> {
     
     // 1. planner.build_menu
@@ -22,30 +25,24 @@ pub async fn register_planner_capabilities_v2(
     let catalog_for_menu = Arc::clone(&catalog);
     let build_menu_handler = Arc::new(move |input: &Value| {
         let payload: BuildMenuInput = parse_payload("planner.build_menu", input)?;
+        let catalog = Arc::clone(&catalog_for_menu);
+        
+        // Use semantic search to find relevant capabilities
+        let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
+        let hits = catalog.search_semantic(&payload.goal, Some(&filter), 10);
         
         let mut menu = Vec::new();
-        
-        // Simple keyword matching for the demo
-        // In a real system, this would use catalog.search_semantic
-        let goal_lower = payload.goal.to_lowercase();
-        
-        if goal_lower.contains("search") || goal_lower.contains("find") {
-             menu.push("discovery.search".to_string());
-        }
-        if goal_lower.contains("analyze") || goal_lower.contains("check") {
-             menu.push("analysis.analyze_imports".to_string());
-        }
-        if goal_lower.contains("ask") || goal_lower.contains("user") {
-             menu.push("ccos.user.ask".to_string());
-        }
-        if goal_lower.contains("issue") || goal_lower.contains("github") {
-             menu.push("github.list_issues".to_string());
+        for hit in hits {
+            // Filter out internal planner capabilities to avoid infinite recursion
+            if !hit.entry.id.starts_with("planner.") {
+                menu.push(hit.entry.id);
+            }
         }
         
-        // Always add some basics
+        // Always add basic utilities
+        menu.push("ccos.user.ask".to_string());
         menu.push("tool/log".to_string());
-        menu.push("tool/time-ms".to_string());
-
+        
         // Deduplicate
         menu.sort();
         menu.dedup();
@@ -65,57 +62,103 @@ pub async fn register_planner_capabilities_v2(
 
     // 2. planner.synthesize
     // Creates a plan (list of steps) based on the goal and menu.
+    let delegating_opt_for_synth = ccos.get_delegating_arbiter();
+    let marketplace_for_synth = Arc::clone(&marketplace);
+
     let synthesize_handler = Arc::new(move |input: &Value| {
         let payload: SynthesizeInput = parse_payload("planner.synthesize", input)?;
         
-        let mut steps = Vec::new();
-        let goal_lower = payload.goal.to_lowercase();
+        // Get delegating arbiter
+        let delegating = delegating_opt_for_synth.clone().ok_or_else(|| 
+            RuntimeError::Generic("Delegating arbiter not available".to_string())
+        )?;
+        
+        let marketplace = marketplace_for_synth.clone();
 
-        // Rule-based synthesis for demo
-        if goal_lower.contains("search") && payload.menu.contains(&"discovery.search".to_string()) {
-            steps.push(PlanStep {
-                id: "step_1".to_string(),
-                capability_id: "discovery.search".to_string(),
-                inputs: serde_json::json!({
-                    "query": payload.goal, // Naive mapping
-                    "context": "workspace"
-                }),
-            });
-        } else if goal_lower.contains("analyze") && payload.menu.contains(&"analysis.analyze_imports".to_string()) {
-             steps.push(PlanStep {
-                id: "step_1".to_string(),
-                capability_id: "analysis.analyze_imports".to_string(),
-                inputs: serde_json::json!({
-                    "path": "./"
-                }),
-            });
-        } else if goal_lower.contains("issue") && payload.menu.contains(&"github.list_issues".to_string()) {
-             steps.push(PlanStep {
-                id: "step_1".to_string(),
-                capability_id: "github.list_issues".to_string(),
-                inputs: serde_json::json!({
-                    "repo": "current"
-                }),
-            });
-        } else {
-            // Fallback: ask user what to do
-             steps.push(PlanStep {
-                id: "step_fallback".to_string(),
-                capability_id: "ccos.user.ask".to_string(),
-                inputs: serde_json::json!({
-                    "args": [format!("I don't know how to '{}'. What should I do?", payload.goal)]
-                }),
-            });
-        }
+        // We need to call the LLM. 
+        // We spawn a thread to handle the async execution and blocking since we are in a sync closure.
+        let goal = payload.goal.clone();
+        let menu = payload.menu.clone();
+        
+        // Capture the current Tokio runtime handle to execute async code that needs the reactor (e.g. reqwest)
+        let rt_handle = tokio::runtime::Handle::current();
+
+        let plan_dto = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                // delegating is already Arc<DelegatingArbiter> which is Send
+                
+                // Enhance menu with capability details and schemas
+                let mut detailed_menu = Vec::new();
+                for cap_id in &menu {
+                    if let Some(cap) = marketplace.get_capability(cap_id).await {
+                        let schema_str = if let Some(schema) = &cap.input_schema {
+                             match schema.to_json() {
+                                 Ok(json) => serde_json::to_string_pretty(&json).unwrap_or_else(|_| "Invalid JSON".to_string()),
+                                 Err(_) => "Schema unavailable".to_string()
+                             }
+                        } else {
+                             "No schema".to_string()
+                        };
+                        
+                        detailed_menu.push(format!("- {}\n  Description: {}\n  Input Schema: {}", 
+                            cap_id, 
+                            cap.description,
+                            schema_str
+                        ));
+                    } else {
+                        detailed_menu.push(format!("- {}", cap_id));
+                    }
+                }
+                
+                let menu_list = detailed_menu.join("\n\n");
+                
+                let prompt = format!(
+                    r#"You are an autonomous planner.
+Goal: {}
+
+Available Capabilities:
+{}
+
+Instructions:
+1. Select capabilities from the list above to achieve the goal.
+2. Create a sequence of steps.
+3. For each step, provide the 'id' (e.g., step_1), 'capability_id', and 'inputs' (as a JSON object).
+4. CRITICAL: Use ONLY the parameters defined in the Input Schema. Do NOT hallucinate parameters like 'first', 'sort', etc. if they are not in the schema.
+5. CRITICAL: Respect Enum values EXACTLY (case-sensitive). If schema says "DESC", do not use "desc".
+6. If you need to search, use search tools. If you need to ask the user, use 'ccos.user.ask'.
+7. Output ONLY valid JSON matching this structure:
+{{
+  "id": "plan_id",
+  "steps": [
+    {{ "id": "step_1", "capability_id": "...", "inputs": {{ ... }} }},
+    ...
+  ]
+}}
+"#, 
+                    goal, menu_list
+                );
+                
+                // DEBUG: Print prompt to verify schema injection
+                // println!("DEBUG: Prompt sent to LLM:\n{}", prompt);
+                
+                let response = delegating.generate_raw_text(&prompt).await?;
+                
+                // Extract JSON from response
+                let json_str = extract_json(&response).ok_or_else(|| 
+                    RuntimeError::Generic("No JSON found in LLM response".to_string())
+                )?;
+                
+                let plan: PlanDto = serde_json::from_str(json_str).map_err(|e| 
+                    RuntimeError::Generic(format!("Failed to parse plan JSON: {}", e))
+                )?;
+                
+                Ok::<PlanDto, RuntimeError>(plan)
+            })
+        }).join().map_err(|_| RuntimeError::Generic("Thread join error in planner.synthesize".to_string()))??;
 
         produce_value(
             "planner.synthesize",
-            SynthesizeOutput { 
-                plan: PlanDto {
-                    id: "generated_plan".to_string(),
-                    steps
-                }
-            }
+            SynthesizeOutput { plan: plan_dto }
         )
     });
 
@@ -175,23 +218,68 @@ pub async fn register_planner_capabilities_v2(
         let cap_id = payload.capability_id.clone();
         let args_json = payload.inputs;
         
-        // Convert JSON args to RTFS Value
-        let args_value = json_to_rtfs_value(args_json)?;
+        // Convert JSON args to RTFS Value (clone args_json as we might need the original json for MCP)
+        let args_value = json_to_rtfs_value(args_json.clone())?;
         
         // Execute
         // We spawn a new thread to avoid nested LocalPool execution issues
         // (host.rs uses block_on, and if we use block_on here on the same thread, it panics)
         let marketplace_clone = marketplace_for_exec.clone();
         
+        // Capture the current Tokio runtime handle to execute async code that needs the reactor
+        let rt_handle = tokio::runtime::Handle::current();
+
         let result = std::thread::spawn(move || {
-            futures::executor::block_on(async {
+            rt_handle.block_on(async {
                 let cap = marketplace_clone.get_capability(&cap_id).await
                     .ok_or_else(|| RuntimeError::Generic(format!("Capability {} not found", cap_id)))?;
                 
                 // We need to execute the handler.
                 match &cap.provider {
                     ProviderType::Local(local_cap) => (local_cap.handler)(&args_value),
-                    _ => Err(RuntimeError::Generic(format!("Capability {} is not a local capability, cannot execute directly in this demo context", cap_id))),
+                    ProviderType::MCP(mcp_cap) => {
+                        // MCP Execution Logic
+                        
+                        // Determine Auth Token from environment
+                        // In a production system, we would look this up based on the capability's configuration/metadata
+                        // For this demo, we stick to the standard MCP_AUTH_TOKEN
+                        let auth_token = std::env::var("MCP_AUTH_TOKEN").ok();
+                            
+                        let auth_headers = auth_token.map(|token| {
+                            let mut headers = HashMap::new();
+                            headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+                            headers
+                        });
+                            
+                        let session_manager = MCPSessionManager::new(auth_headers); 
+                        let client_info = MCPServerInfo {
+                            name: "ccos-planner".to_string(),
+                            version: "1.0.0".to_string(),
+                        };
+                        
+                        // Initialize session
+                        let session = session_manager.initialize_session(&mcp_cap.server_url, &client_info).await?;
+                        
+                        // Call tool
+                        // args_json is already serde_json::Value from the payload
+                        let result_json = session_manager.make_request(
+                            &session, 
+                            "tools/call", 
+                            serde_json::json!({
+                                "name": mcp_cap.tool_name,
+                                "arguments": args_json
+                            })
+                        ).await;
+                        
+                        // Terminate session
+                        let _ = session_manager.terminate_session(&session).await;
+                        
+                        let response = result_json?;
+                        
+                        // Convert response to RTFS Value
+                        json_to_rtfs_value(response)
+                    },
+                    _ => Err(RuntimeError::Generic(format!("Capability {} is not a supported capability type in this demo context", cap_id))),
                 }
             })
         }).join().map_err(|_| RuntimeError::Generic("Thread join error in execute_step".to_string()))??;
@@ -349,4 +437,15 @@ fn json_to_rtfs_value(json: serde_json::Value) -> RuntimeResult<Value> {
             Ok(Value::Map(values))
         }
     }
+}
+
+fn extract_json(response: &str) -> Option<&str> {
+    if let Some(start) = response.find('{') {
+        if let Some(end) = response.rfind('}') {
+            if end >= start {
+                return Some(&response[start..=end]);
+            }
+        }
+    }
+    None
 }
