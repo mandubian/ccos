@@ -51,13 +51,30 @@ A dedicated discovery agent that replaces hard-coded heuristics with intelligent
 - **Automatic Usage**: Discovery engine automatically uses agent when searching MCP registry
 - **Query Prioritization**: Agent-suggested queries are tried in priority order before legacy fallbacks
 
-## 6. Current Status
-- **Feature Complete**: Discovery agent fully implemented and integrated
-- **Code Quality**: All linter errors resolved, code compiles successfully
-- **Documentation**: Code is commented and explained
+## 6. Autonomous Agent Refactoring & Adapter Synthesis (Phase C)
+- **Goal**: Make the `autonomous_agent_demo.rs` fully generic and agnostic of specific APIs (like GitHub), and enable it to synthesize "adapter" code to bridge data format mismatches between steps.
+- **Generic Mocking**: Replaced hardcoded GitHub mocks with an LLM-driven generic mocking system. The agent now generates realistic JSON sample data on the fly based on tool descriptions (e.g., `weather.get_current`, `github.get_latest_release`).
+- **Adapter Synthesis**: Implemented a `synthesize_adapter` function in the planner. When passing data between steps (e.g., from `weather.get_current` to `data.filter`), the agent now writes RTFS glue code (e.g., `(call "data.filter" {:data step_1})`) to handle structural differences.
+- **Verification**: Validated with multiple scenarios ("weather in Paris", "linux kernel release") proving the agent can plan, mock, and adapt data without domain-specific hardcoding.
 
-## 7. Next Steps (Future Enhancements)
+## 7. Removed GitHub Bias from Autonomous Agent
+- **Goal**: Ensure the autonomous agent demo is truly generic and not biased towards GitHub-related tasks in its LLM prompts.
+- **Changes**:
+    - Updated `decompose` prompt to use generic examples like `remote.list_items` instead of `github.list_repos`.
+    - Updated `install_generic_mock_capability` prompt to use generic list examples (`list_items`, `get_records`) instead of `list_repos`, `get_issues`.
+    - Updated `synthesize_adapter` prompt to use generic filtering examples (`filter_records`) instead of `filter_issues`.
+    - Changed the default demo goal to "Find the weather in Paris and filter for rain" to showcase generic capabilities.
+
+## 8. Next Steps (Future Enhancements)
 - **Feedback-Driven Weighting**: Track which hints lead to successful discoveries
 - **Richer Query Expansion**: Use intent constraints, plan history, workspace metadata
 - **Planner Integration**: Have planner use agent directly for hint generation (currently agent is used internally by engine)
 - **Performance Monitoring**: Track discovery success rates and query effectiveness
+
+## 9. Implemented Phase D: Execution Repair Loop
+- **Goal**: Enable the agent to recover from runtime failures by feeding errors back to the LLM.
+- **Changes**:
+    - Modified `autonomous_agent_demo.rs` to wrap the final plan execution in a retry loop (max 3 attempts).
+    - Added `repair_plan` method to `IterativePlanner` which takes the failed plan and error message, and asks the LLM to fix the RTFS code.
+    - Verified the "happy path" still works correctly.
+- **Next**: Simulate failures to verify the repair logic actually fixes broken plans.
