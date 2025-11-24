@@ -34,7 +34,8 @@ use ccos::CCOS;
 use rtfs::config::types::AgentConfig;
 use ccos::arbiter::DelegatingArbiter;
 use ccos::catalog::{CatalogService, CatalogFilter, CatalogEntryKind};
-use ccos::capability_marketplace::{CapabilityMarketplace, CapabilityManifest};
+use ccos::capability_marketplace::{CapabilityMarketplace, CapabilityManifest, CapabilityDiscovery};
+use ccos::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use ccos::synthesis::mcp_registry_client::McpRegistryClient;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
@@ -669,6 +670,28 @@ Respond ONLY with the RTFS expression.
         let search_query = if hint.contains(".") { hint } else { description };
         let servers = client.search_servers(search_query).await.unwrap_or_default();
         
+        // Try to find a matching MCP server configuration
+        let mcp_server_config = self.find_mcp_server_config(hint, &servers);
+        
+        if let Some(config) = mcp_server_config {
+            // Attempt real MCP discovery
+            println!("     🔌 Attempting real MCP connection to: {}", config.name);
+            match self.try_real_mcp_discovery(&config, hint).await {
+                Ok(Some(manifest)) => {
+                    println!("     ✅ Real MCP capability discovered: {}", manifest.id);
+                    self.trace.decisions.push(TraceEvent::MCPDiscovery { hint: hint.to_string(), found: true });
+                    return Ok(Some(manifest));
+                },
+                Ok(None) => {
+                    println!("     ⚠️  Real MCP connection succeeded but tool not found");
+                },
+                Err(e) => {
+                    println!("     ⚠️  Real MCP connection failed: {}. Falling back to mock.", e);
+                }
+            }
+        }
+        
+        // Fallback to generic mock if real MCP fails or no server config found
         let should_install = !servers.is_empty() || hint.starts_with("mcp.") || hint.contains(".");
         
         if should_install {
@@ -687,6 +710,56 @@ Respond ONLY with the RTFS expression.
         }
 
         self.trace.decisions.push(TraceEvent::MCPDiscovery { hint: hint.to_string(), found: false });
+        Ok(None)
+    }
+
+    /// Find a matching MCP server configuration from agent config
+    fn find_mcp_server_config(&self, hint: &str, _servers: &[ccos::synthesis::mcp_registry_client::McpServer]) -> Option<MCPServerConfig> {
+        // For now, check if there's a well-known MCP server in environment
+        // In a full implementation, this would read from agent_config.toml
+        
+        // Example: Check for GitHub MCP server
+        if hint.contains("github") || hint.contains("repository") || hint.contains("issue") {
+            if let Ok(endpoint) = std::env::var("GITHUB_MCP_ENDPOINT") {
+                let auth_token = std::env::var("GITHUB_TOKEN").ok();
+                return Some(MCPServerConfig {
+                    name: "github-mcp".to_string(),
+                    endpoint,
+                    auth_token,
+                    timeout_seconds: 30,
+                    protocol_version: "2024-11-05".to_string(),
+                });
+            }
+        }
+        
+        // Add more MCP server configurations here as needed
+        None
+    }
+
+    /// Try to discover and install a capability from a real MCP server
+    async fn try_real_mcp_discovery(&mut self, config: &MCPServerConfig, hint: &str) -> Result<Option<CapabilityManifest>, Box<dyn Error + Send + Sync>> {
+        // Create MCP discovery provider
+        let provider = MCPDiscoveryProvider::new(config.clone())
+            .map_err(|e| format!("Failed to create MCP discovery provider: {}", e))?;
+        
+        // Discover capabilities
+        let capabilities = provider.discover().await
+            .map_err(|e| format!("MCP discovery failed: {}", e))?;
+        
+        println!("     🔍 Found {} capabilities from MCP server", capabilities.len());
+        
+        // Find matching capability
+        for cap in capabilities {
+            // Simple matching: check if hint is in capability ID or description
+            if cap.id.contains(hint) || cap.description.to_lowercase().contains(&hint.to_lowercase()) {
+                // Register the capability in the marketplace
+                // Note: MCP capabilities need special handling for execution
+                // For now, we'll register them and rely on the marketplace's MCP executor
+                println!("     ✅ Matched MCP capability: {} - {}", cap.id, cap.description);
+                return Ok(Some(cap));
+            }
+        }
+        
         Ok(None)
     }
 

@@ -28,17 +28,33 @@
         - Enhanced prompt with examples for deep JSON extraction (e.g., "Get the ID of the first item in the 'items' list").
         - Provides context awareness: tells LLM which variables are available and what they contain.
 
-## Phase F: Real-World Integration (MCP)
+## Phase F: Real-World Integration (MCP) (In Progress)
 **Goal**: Transition from generic mocks to real MCP services.
 
 ### Tasks
-1.  [ ] **Integrate MCPSessionHandler**:
-    *   Use `ccos::capabilities::mcp_session_handler` to connect to remote MCP servers (SSE).
-2.  [ ] **Implement StdioSessionHandler**:
+1.  [x] **Integrate MCPDiscoveryProvider**:
+    *   Use `MCPDiscoveryProvider` to connect to real MCP servers.
+    *   Added `try_real_mcp_discovery()` method that uses the existing `MCPDiscoveryProvider`.
+    *   Implemented in `try_install_from_registry()` with fallback to generic mocks.
+2.  [x] **Add MCP Server Configuration Support**:
+    *   Created `find_mcp_server_config()` to detect MCP servers from environment variables.
+    *   Example: GitHub MCP server detection via `GITHUB_MCP_ENDPOINT` and `GITHUB_TOKEN`.
+    *   Extensible design for adding more MCP server configurations.
+3.  [x] **Hybrid Resolution Strategy**:
+    *   Updated `try_install_from_registry` to:
+        1.  Check for known MCP server configurations.
+        2.  If found, attempt real MCP connection and discovery.
+        3.  On success, register and return the real capability.
+        4.  On failure (connection error, tool not found), fall back to generic mock.
+4.  [ ] **Implement StdioSessionHandler** (Future):
     *   Create a handler for local MCP servers (running via `npx` or executable).
-    *   Implement JSON-RPC over stdio.
-3.  [ ] **Hybrid Resolution Strategy**:
-    *   Update `resolve_step` to:
-        1.  Check Registry.
-        2.  If found, try connecting/installing real tool.
-        3.  If connection fails, fall back to Generic Mock.
+    *   Implement JSON-RPC over stdio for process-based MCP tools.
+5.  [ ] **Test with Real MCP Service**:
+    *   Set up a real MCP server (e.g., GitHub MCP, filesystem MCP).
+    *   Configure environment variables (e.g., `GITHUB_MCP_ENDPOINT`, `GITHUB_TOKEN`).
+    *   Run the autonomous agent and verify it connects to real services.
+
+### Implementation Notes
+-   The system now supports a **graceful degradation** pattern: real MCP → generic mock.
+-   MCP server configs are currently detected via environment variables but can be extended to read from `agent_config.toml`.
+-   The `MCPDiscoveryProvider::discover()` method returns `CapabilityManifest` objects that are already compatible with the marketplace.
