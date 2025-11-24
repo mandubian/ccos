@@ -24,7 +24,7 @@
 //!   cargo run --example autonomous_agent_demo -- --goal "find the issues of repository ccos and user mandubian and filter them to keep only those containing RTFS"
 
 use std::sync::Arc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
@@ -34,9 +34,13 @@ use ccos::CCOS;
 use rtfs::config::types::AgentConfig;
 use ccos::arbiter::DelegatingArbiter;
 use ccos::catalog::{CatalogService, CatalogFilter, CatalogEntryKind};
-use ccos::capability_marketplace::{CapabilityMarketplace, CapabilityManifest, CapabilityDiscovery};
-use ccos::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
+use ccos::capability_marketplace::{CapabilityMarketplace, CapabilityManifest};
+use ccos::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo};
 use ccos::synthesis::mcp_registry_client::McpRegistryClient;
+use ccos::synthesis::mcp_introspector::{MCPIntrospector, DiscoveredMCPTool};
+use ccos::discovery::capability_matcher::{
+    calculate_action_verb_match_score, calculate_description_match_score, extract_action_verbs,
+};
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 use rtfs::runtime::error::RuntimeResult;
@@ -62,6 +66,10 @@ struct Args {
     /// Simulate a runtime error to test the repair loop
     #[arg(long)]
     simulate_error: bool,
+    
+    /// Disable mock fallback to force synthesis for missing capabilities
+    #[arg(long)]
+    no_mock: bool,
 }
 
 // ============================================================================
@@ -114,10 +122,11 @@ struct IterativePlanner {
     catalog: Arc<CatalogService>,
     trace: PlanningTrace,
     simulate_error: bool,
+    no_mock: bool,
 }
 
 impl IterativePlanner {
-    fn new(ccos: Arc<CCOS>, simulate_error: bool) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    fn new(ccos: Arc<CCOS>, simulate_error: bool, no_mock: bool) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let arbiter = ccos.get_delegating_arbiter()
             .ok_or::<Box<dyn Error + Send + Sync>>("Delegating arbiter not available".into())?;
         let marketplace = ccos.get_capability_marketplace();
@@ -133,6 +142,7 @@ impl IterativePlanner {
                 decisions: Vec::new(),
             },
             simulate_error,
+            no_mock,
         })
     }
 
@@ -255,16 +265,14 @@ impl IterativePlanner {
     async fn decompose(&self, goal: &str) -> Result<Vec<PlannedStep>, Box<dyn Error + Send + Sync>> {
         let prompt = format!(
             r#"You are an expert planner. Decompose the following goal into a sequence of logical steps.
-For each step, provide a description and a short "capability hint" that looks like a tool ID (e.g. "remote.list_items", "calendar.create_event", "data.filter").
-Try to map high-level actions to potential tool names if possible.
+For each step, provide a description and a short "capability hint" that looks like a tool ID (e.g. "service.action", "data.transform").
 
 Goal: "{}"
 
 Respond ONLY with a JSON object in this format:
 {{
   "steps": [
-    {{ "description": "Fetch today's meetings", "capability_hint": "calendar.list_events" }},
-    {{ "description": "Email the summary to the team", "capability_hint": "email.send" }}
+    {{ "description": "Step description", "capability_hint": "service.action" }}
   ]
 }}
 "#,
@@ -278,6 +286,22 @@ Respond ONLY with a JSON object in this format:
     }
 
     async fn resolve_step(&mut self, step: &PlannedStep) -> Result<ResolutionStatus, Box<dyn Error + Send + Sync>> {
+        // Resolution strategy:
+        // 1. Check if hint matches any MCP server in overrides.json
+        // 2. If yes, try MCP first
+        // 3. Otherwise, try local first, then MCP as fallback
+        
+        let hint_has_mcp_override = resolve_server_url_from_overrides(&step.capability_hint).is_some();
+        
+        if hint_has_mcp_override {
+            // Try MCP first for hints that match known MCP servers
+            println!("     🔍 Hint '{}' matches MCP override. Trying MCP first...", step.capability_hint);
+            if let Some(mcp_result) = self.try_mcp_resolution(step).await? {
+                return Ok(mcp_result);
+            }
+            println!("     ⚠️  MCP resolution failed. Falling back to local search...");
+        }
+        
         // A. Semantic Search (Local)
         let query = format!("{} {}", step.capability_hint, step.description);
         let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
@@ -299,17 +323,12 @@ Respond ONLY with a JSON object in this format:
         }
 
         // B. If no local (or rejected), try MCP Registry (Remote)
-        println!("     🔍 Searching MCP Registry for '{}' (Context: '{}')...", step.capability_hint, step.description);
-        if let Some(installed_cap) = self.try_install_from_registry(&step.capability_hint, &step.description).await? {
-            println!("     📦 Installed capability: {}", installed_cap.id);
-            let remote_candidates = vec![installed_cap];
-            if let Some((id, args)) = self.try_select_from_candidates(&remote_candidates, &step.description).await? {
-                return Ok(ResolutionStatus::ResolvedRemote(id, args));
-            } else {
-                println!("     ⚠️  Installed capability rejected by LLM.");
+        if !hint_has_mcp_override {
+            // Only try MCP here if we didn't already try it above
+            println!("     🔍 Searching MCP Registry for '{}' (Context: '{}')...", step.capability_hint, step.description);
+            if let Some(mcp_result) = self.try_mcp_resolution(step).await? {
+                return Ok(mcp_result);
             }
-        } else {
-            println!("     ❌ Registry search returned no results.");
         }
 
         // C. If registry fails, try Synthesis
@@ -479,6 +498,9 @@ Respond ONLY with the corrected RTFS function code. Do not add markdown formatti
         });
         
         let code_clone = final_code.clone();
+        
+        // Save synthesized capability to file for inspection
+        save_synthesized_capability(&id, &final_code, description, hint);
         
         // Register a handler that executes this code dynamically
         if self.marketplace.get_capability(&id).await.is_none() {
@@ -665,6 +687,25 @@ Respond ONLY with the RTFS expression.
         self.select_tool_robust(goal, &tool_descriptions).await
     }
 
+    /// Try to resolve a step using MCP registry/server
+    async fn try_mcp_resolution(&mut self, step: &PlannedStep) -> Result<Option<ResolutionStatus>, Box<dyn Error + Send + Sync>> {
+        println!("     🔍 Searching MCP Registry for '{}' (Context: '{}')...", step.capability_hint, step.description);
+        
+        if let Some(installed_cap) = self.try_install_from_registry(&step.capability_hint, &step.description).await? {
+            println!("     📦 Found MCP capability: {}", installed_cap.id);
+            let remote_candidates = vec![installed_cap];
+            if let Some((id, args)) = self.try_select_from_candidates(&remote_candidates, &step.description).await? {
+                return Ok(Some(ResolutionStatus::ResolvedRemote(id, args)));
+            } else {
+                println!("     ⚠️  MCP capability rejected by LLM.");
+            }
+        } else {
+            println!("     ❌ MCP Registry search returned no results.");
+        }
+        
+        Ok(None)
+    }
+
     async fn try_install_from_registry(&mut self, hint: &str, description: &str) -> Result<Option<CapabilityManifest>, Box<dyn Error + Send + Sync>> {
         let client = McpRegistryClient::new();
         let search_query = if hint.contains(".") { hint } else { description };
@@ -673,10 +714,10 @@ Respond ONLY with the RTFS expression.
         // Try to find a matching MCP server configuration
         let mcp_server_config = self.find_mcp_server_config(hint, &servers);
         
-        if let Some(config) = mcp_server_config {
+        if let Some((server_url, auth_headers)) = mcp_server_config {
             // Attempt real MCP discovery
-            println!("     🔌 Attempting real MCP connection to: {}", config.name);
-            match self.try_real_mcp_discovery(&config, hint).await {
+            println!("     🔌 Attempting real MCP connection to: {}", server_url);
+            match self.try_real_mcp_discovery(&server_url, auth_headers, hint).await {
                 Ok(Some(manifest)) => {
                     println!("     ✅ Real MCP capability discovered: {}", manifest.id);
                     self.trace.decisions.push(TraceEvent::MCPDiscovery { hint: hint.to_string(), found: true });
@@ -692,6 +733,13 @@ Respond ONLY with the RTFS expression.
         }
         
         // Fallback to generic mock if real MCP fails or no server config found
+        // Skip mock if --no-mock flag is set (force synthesis instead)
+        if self.no_mock {
+            println!("     🚫 Mock fallback disabled (--no-mock). Will try synthesis.");
+            self.trace.decisions.push(TraceEvent::MCPDiscovery { hint: hint.to_string(), found: false });
+            return Ok(None);
+        }
+        
         let should_install = !servers.is_empty() || hint.starts_with("mcp.") || hint.contains(".");
         
         if should_install {
@@ -713,50 +761,151 @@ Respond ONLY with the RTFS expression.
         Ok(None)
     }
 
-    /// Find a matching MCP server configuration from agent config
-    fn find_mcp_server_config(&self, hint: &str, _servers: &[ccos::synthesis::mcp_registry_client::McpServer]) -> Option<MCPServerConfig> {
-        // For now, check if there's a well-known MCP server in environment
-        // In a full implementation, this would read from agent_config.toml
+    /// Find a matching MCP server configuration from agent config or overrides
+    fn find_mcp_server_config(&self, hint: &str, servers: &[ccos::synthesis::mcp_registry_client::McpServer]) -> Option<(String, Option<std::collections::HashMap<String, String>>)> {
+        // 1. First, check overrides.json for matching server
+        if let Some(server_url) = resolve_server_url_from_overrides(hint) {
+            println!("     📁 Found MCP server in overrides: {}", server_url);
+            let auth_headers = get_mcp_auth_headers();
+            return Some((server_url, auth_headers));
+        }
         
-        // Example: Check for GitHub MCP server
-        if hint.contains("github") || hint.contains("repository") || hint.contains("issue") {
-            if let Ok(endpoint) = std::env::var("GITHUB_MCP_ENDPOINT") {
-                let auth_token = std::env::var("GITHUB_TOKEN").ok();
-                return Some(MCPServerConfig {
-                    name: "github-mcp".to_string(),
-                    endpoint,
-                    auth_token,
-                    timeout_seconds: 30,
-                    protocol_version: "2024-11-05".to_string(),
-                });
+        // 2. Check if any server from registry has a usable remote URL
+        for server in servers {
+            if let Some(remotes) = &server.remotes {
+                if let Some(url) = ccos::synthesis::mcp_registry_client::McpRegistryClient::select_best_remote_url(remotes) {
+                    println!("     🌐 Found MCP server in registry: {} ({})", server.name, url);
+                    let auth_headers = get_mcp_auth_headers();
+                    return Some((url, auth_headers));
+                }
             }
         }
         
-        // Add more MCP server configurations here as needed
+        // 3. Fallback: check environment variable for explicit endpoint
+        if hint.contains("github") || hint.contains("repository") || hint.contains("issue") {
+            if let Ok(endpoint) = std::env::var("GITHUB_MCP_ENDPOINT") {
+                println!("     🔧 Using GITHUB_MCP_ENDPOINT from environment: {}", endpoint);
+                let auth_headers = get_mcp_auth_headers();
+                return Some((endpoint, auth_headers));
+            }
+        }
+        
         None
     }
 
     /// Try to discover and install a capability from a real MCP server
-    async fn try_real_mcp_discovery(&mut self, config: &MCPServerConfig, hint: &str) -> Result<Option<CapabilityManifest>, Box<dyn Error + Send + Sync>> {
-        // Create MCP discovery provider
-        let provider = MCPDiscoveryProvider::new(config.clone())
-            .map_err(|e| format!("Failed to create MCP discovery provider: {}", e))?;
+    async fn try_real_mcp_discovery(&mut self, server_url: &str, auth_headers: Option<std::collections::HashMap<String, String>>, hint: &str) -> Result<Option<CapabilityManifest>, Box<dyn Error + Send + Sync>> {
+        // Create session manager and initialize session (like single_mcp_discovery.rs)
+        let session_manager = MCPSessionManager::new(auth_headers);
+        let client_info = MCPServerInfo {
+            name: "ccos-autonomous-agent".to_string(),
+            version: "1.0.0".to_string(),
+        };
         
-        // Discover capabilities
-        let capabilities = provider.discover().await
-            .map_err(|e| format!("MCP discovery failed: {}", e))?;
+        let session = session_manager.initialize_session(server_url, &client_info).await
+            .map_err(|e| format!("MCP initialization failed: {}", e))?;
         
-        println!("     🔍 Found {} capabilities from MCP server", capabilities.len());
+        // Call tools/list on the session
+        let tools_resp = session_manager
+            .make_request(&session, "tools/list", serde_json::json!({}))
+            .await
+            .map_err(|e| format!("MCP tools/list failed: {}", e))?;
         
-        // Find matching capability
-        for cap in capabilities {
-            // Simple matching: check if hint is in capability ID or description
-            if cap.id.contains(hint) || cap.description.to_lowercase().contains(&hint.to_lowercase()) {
-                // Register the capability in the marketplace
-                // Note: MCP capabilities need special handling for execution
-                // For now, we'll register them and rely on the marketplace's MCP executor
-                println!("     ✅ Matched MCP capability: {} - {}", cap.id, cap.description);
-                return Ok(Some(cap));
+        // Parse tools array
+        let tools_array = tools_resp
+            .get("result")
+            .and_then(|r| r.get("tools"))
+            .and_then(|t| t.as_array())
+            .ok_or_else(|| "Invalid MCP tools/list response — no tools array")?;
+        
+        println!("     🔍 Found {} tools from MCP server", tools_array.len());
+        
+        // Build list of tool candidates with scores using existing helpers
+        let mut candidates: Vec<(f64, String, serde_json::Value)> = Vec::new();
+        
+        for tool_json in tools_array {
+            let tool_name = tool_json
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let description = tool_json
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("");
+            
+            // Use existing scoring helpers from discovery module
+            let score = compute_mcp_tool_score(hint, &tool_name, description);
+            
+            if score > 0.0 {
+                candidates.push((score, tool_name, tool_json.clone()));
+            }
+        }
+        
+        // Sort by score (descending) and take best match
+        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        
+        // Log top candidates for debugging
+        if !candidates.is_empty() {
+            println!("     📊 Top MCP tool candidates:");
+            for (score, name, _) in candidates.iter().take(3) {
+                println!("        - {} (score: {:.2})", name, score);
+            }
+        }
+        
+        // Select best match if score is above threshold (>= 3.0 or overlap >= 0.75)
+        if let Some((score, tool_name, tool_json)) = candidates.first() {
+            let overlap = keyword_overlap(hint, tool_name);
+            if *score >= 3.0 || overlap >= 0.75 {
+                println!("     ✅ Matched MCP tool: {} (score: {:.2}, overlap: {:.2})", tool_name, score, overlap);
+                
+                // Convert to DiscoveredMCPTool
+                let description = tool_json.get("description").and_then(|d| d.as_str()).map(String::from);
+                let input_schema_json = tool_json.get("inputSchema").cloned();
+                let input_schema = input_schema_json.as_ref()
+                    .and_then(|s| MCPIntrospector::type_expr_from_json_schema(s).ok());
+                
+                let introspector = MCPIntrospector::new();
+                let discovered_tool = DiscoveredMCPTool {
+                    tool_name: tool_name.clone(),
+                    description: description.clone(),
+                    input_schema,
+                    output_schema: None,
+                    input_schema_json,
+                };
+                
+                // Create capability manifest
+                let introspection_result = ccos::synthesis::mcp_introspector::MCPIntrospectionResult {
+                    server_url: server_url.to_string(),
+                    server_name: "mcp-server".to_string(),
+                    protocol_version: session.protocol_version.clone(),
+                    tools: vec![discovered_tool],
+                };
+                
+                let manifest = introspector.create_capability_from_mcp_tool(
+                    &introspection_result.tools[0],
+                    &introspection_result
+                ).map_err(|e| format!("Failed to create manifest: {}", e))?;
+                
+                // Save discovered MCP capability using MCPIntrospector (like single_mcp_discovery.rs)
+                let implementation_code = introspector.generate_mcp_rtfs_implementation(
+                    &introspection_result.tools[0],
+                    server_url
+                );
+                let output_dir = get_capabilities_discovered_dir();
+                match introspector.save_capability_to_rtfs(
+                    &manifest,
+                    &implementation_code,
+                    &output_dir,
+                    None,
+                ) {
+                    Ok(path) => println!("     💾 Saved discovered MCP capability to: {}", path.display()),
+                    Err(e) => eprintln!("     ⚠️  Failed to save MCP capability: {}", e),
+                }
+                
+                return Ok(Some(manifest));
+            } else {
+                println!("     ⚠️  Best match '{}' below threshold (score: {:.2}, overlap: {:.2})", tool_name, score, overlap);
             }
         }
         
@@ -970,7 +1119,25 @@ fn extract_json(response: &str) -> &str {
 }
 
 fn load_agent_config(config_path: &str) -> Result<AgentConfig, Box<dyn Error + Send + Sync>> {
-    let mut content = std::fs::read_to_string(config_path)?;
+    // Try the provided path first, then try parent directory (for running from ccos/ subdirectory)
+    let path = std::path::Path::new(config_path);
+    let actual_path = if path.exists() {
+        path.to_path_buf()
+    } else {
+        // Try parent directory
+        let parent_path = std::path::Path::new("..").join(config_path);
+        if parent_path.exists() {
+            parent_path
+        } else {
+            return Err(format!(
+                "Config file not found: '{}' (also tried '../{}'). Run from the workspace root directory.",
+                config_path, config_path
+            ).into());
+        }
+    };
+    
+    let mut content = std::fs::read_to_string(&actual_path)
+        .map_err(|e| format!("Failed to read config file '{}': {}", actual_path.display(), e))?;
     if content.starts_with("# RTFS") {
         content = content.lines().skip(1).collect::<Vec<_>>().join("\n");
     }
@@ -997,6 +1164,149 @@ fn apply_llm_profile(agent_config: &AgentConfig, profile: Option<&str>) -> Resul
         }
     }
     Ok(())
+}
+
+/// Save synthesized capability to a file for inspection
+fn save_synthesized_capability(id: &str, code: &str, description: &str, hint: &str) {
+    // Determine output directory - save in capabilities/generated/<id>/capability.rtfs
+    let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // Check if we're in the workspace root (has ccos/Cargo.toml) or inside ccos/ dir
+    let base_dir = if root.join("ccos/Cargo.toml").exists() {
+        // We're at workspace root, save in capabilities/
+        root.join("capabilities/generated")
+    } else if root.join("Cargo.toml").exists() && root.ends_with("ccos") {
+        // We're inside ccos/ directory, go up to workspace root
+        root.parent().unwrap_or(&root).join("capabilities/generated")
+    } else {
+        // Fallback
+        root.join("capabilities/generated")
+    };
+    
+    // Create directory for this capability: capabilities/generated/<id>/
+    let cap_dir = base_dir.join(id.replace(".", "_").replace("/", "_"));
+    if let Err(e) = std::fs::create_dir_all(&cap_dir) {
+        eprintln!("     ⚠️  Failed to create synthesized capability directory: {}", e);
+        return;
+    }
+    
+    // Save as capability.rtfs (matching existing structure)
+    let filepath = cap_dir.join("capability.rtfs");
+    
+    // Generate RTFS capability file content
+    let rtfs_content = format!(
+        r#";; Synthesized Capability: {}
+;; Description: {}
+;; Hint: {}
+;; Generated at: {}
+
+(capability
+  :id "{}"
+  :name "Synthesized: {}"
+  :description "{}"
+  :implementation
+    {}
+)
+"#,
+        id,
+        description,
+        hint,
+        chrono::Utc::now().to_rfc3339(),
+        id,
+        hint,
+        description.replace("\"", "\\\""),
+        code
+    );
+    
+    match std::fs::write(&filepath, &rtfs_content) {
+        Ok(_) => println!("     💾 Saved synthesized capability to: {}", filepath.display()),
+        Err(e) => eprintln!("     ⚠️  Failed to save synthesized capability: {}", e),
+    }
+}
+
+/// Get the discovered capabilities directory path
+fn get_capabilities_discovered_dir() -> std::path::PathBuf {
+    let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // Check if we're in the workspace root (has ccos/Cargo.toml) or inside ccos/ dir
+    if root.join("ccos/Cargo.toml").exists() {
+        // We're at workspace root
+        root.join("capabilities/discovered")
+    } else if root.join("Cargo.toml").exists() && root.ends_with("ccos") {
+        // We're inside ccos/ directory, go up to workspace root
+        root.parent().unwrap_or(&root).join("capabilities/discovered")
+    } else {
+        // Fallback
+        root.join("capabilities/discovered")
+    }
+}
+
+/// Compute MCP tool match score using existing scoring helpers
+/// Mirrors the logic from MissingCapabilityResolver::compute_tool_score
+fn compute_mcp_tool_score(hint: &str, tool_name: &str, description: &str) -> f64 {
+    let mut score = 0.0;
+    
+    // Use existing description matcher
+    score += calculate_description_match_score(hint, description, tool_name);
+    
+    // Keyword overlap (using tokenize approach from MissingCapabilityResolver)
+    let overlap = keyword_overlap(hint, tool_name);
+    score += overlap * 2.5;
+    
+    // Extract last part of hint (e.g., "list" from "github.issues.list")
+    let hint_last = hint
+        .split('.')
+        .last()
+        .unwrap_or(hint)
+        .to_ascii_lowercase();
+    let tool_lower = tool_name.to_ascii_lowercase();
+    
+    // Exact match bonus
+    if tool_lower == hint_last {
+        score += 2.0;
+    } else if tool_lower.contains(&hint_last) || hint_last.contains(&tool_lower) {
+        score += 1.0;
+    }
+    
+    // Normalized hint match
+    if hint.replace('.', "_").to_ascii_lowercase().contains(&tool_lower) {
+        score += 1.0;
+    }
+    
+    // Action verb synonym matching using existing helper
+    let hint_verbs = extract_action_verbs(&hint_last);
+    let tool_verbs = extract_action_verbs(&tool_lower);
+    let action_verb_score = calculate_action_verb_match_score(&hint_verbs, &tool_verbs);
+    if action_verb_score > 0.0 {
+        score += action_verb_score * 2.0;
+    }
+    
+    score
+}
+
+/// Calculate keyword overlap between two identifiers
+/// Mirrors MissingCapabilityResolver::keyword_overlap
+fn keyword_overlap(lhs: &str, rhs: &str) -> f64 {
+    let lhs_tokens: HashSet<String> = lhs
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
+    
+    let rhs_tokens: HashSet<String> = rhs
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
+    
+    if lhs_tokens.is_empty() || rhs_tokens.is_empty() {
+        return 0.0;
+    }
+    
+    let intersection = lhs_tokens.intersection(&rhs_tokens).count();
+    if intersection == 0 {
+        return 0.0;
+    }
+    
+    intersection as f64 / lhs_tokens.len().max(rhs_tokens.len()) as f64
 }
 
 /// Convert serde_json::Value to rtfs::Value
@@ -1028,6 +1338,96 @@ fn json_to_rtfs_value(v: serde_json::Value) -> Value {
             Value::Map(map)
         }
     }
+}
+
+// ============================================================================
+// MCP Server Resolution Helpers
+// ============================================================================
+
+/// Resolve MCP server URL from overrides.json
+/// This checks the curated overrides file for matching server configurations
+fn resolve_server_url_from_overrides(hint: &str) -> Option<String> {
+    // Try to load curated overrides from 'capabilities/mcp/overrides.json' (in workspace root)
+    let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // Check if we're in the workspace root (has ccos/Cargo.toml) or inside ccos/ dir
+    let overrides_path = if root.join("ccos/Cargo.toml").exists() {
+        // We're at workspace root
+        root.join("capabilities/mcp/overrides.json")
+    } else if root.join("Cargo.toml").exists() && root.ends_with("ccos") {
+        // We're inside ccos/ directory, go up to workspace root
+        root.parent().unwrap_or(&root).join("capabilities/mcp/overrides.json")
+    } else {
+        // Fallback
+        root.join("capabilities/mcp/overrides.json")
+    };
+
+    if !overrides_path.exists() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(&overrides_path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let entries = parsed.get("entries")?.as_array()?;
+
+    for entry in entries {
+        if let Some(server) = entry.get("server") {
+            // Check server name equality first
+            if let Some(name) = server.get("name").and_then(|n| n.as_str()) {
+                if hint.contains(name) || name.contains(hint) {
+                    // Get best HTTP remote
+                    if let Some(url) = get_http_remote_url(server) {
+                        return Some(url);
+                    }
+                }
+            }
+
+            // Check if `matches` patterns include the hint
+            if let Some(matches) = entry.get("matches").and_then(|m| m.as_array()) {
+                for pat in matches {
+                    if let Some(p) = pat.as_str() {
+                        // Check if pattern matches hint (pattern may contain wildcards like "github.*")
+                        let pattern_clean = p.trim_end_matches(".*").trim_end_matches('*');
+                        if hint.contains(pattern_clean) || pattern_clean.contains(hint) {
+                            if let Some(url) = get_http_remote_url(server) {
+                                return Some(url);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract HTTP/HTTPS remote URL from server definition
+fn get_http_remote_url(server: &serde_json::Value) -> Option<String> {
+    if let Some(remotes) = server.get("remotes").and_then(|r| r.as_array()) {
+        for remote in remotes {
+            if let Some(url) = remote.get("url").and_then(|u| u.as_str()) {
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    return Some(url.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Get MCP authentication headers from environment variables
+fn get_mcp_auth_headers() -> Option<std::collections::HashMap<String, String>> {
+    // Use MCP_AUTH_TOKEN for MCP server authentication
+    if let Ok(tok) = std::env::var("MCP_AUTH_TOKEN") {
+        if !tok.is_empty() {
+            let mut headers = std::collections::HashMap::new();
+            headers.insert("Authorization".to_string(), format!("Bearer {}", tok));
+            println!("     🔑 Using auth token from MCP_AUTH_TOKEN");
+            return Some(headers);
+        }
+    }
+    
+    None
 }
 
 // ============================================================================
@@ -1065,7 +1465,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     ccos::capabilities::defaults::register_default_capabilities(&ccos.get_capability_marketplace()).await?;
 
     // Initialize Planner
-    let mut planner = IterativePlanner::new(ccos.clone(), args.simulate_error)?;
+    let mut planner = IterativePlanner::new(ccos.clone(), args.simulate_error, args.no_mock)?;
 
     // Plan
     println!("\n🏗️  Building Plan...");
