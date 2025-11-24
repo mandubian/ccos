@@ -1304,14 +1304,15 @@ fn compute_mcp_tool_score(hint: &str, tool_name: &str, description: &str) -> f64
 /// Calculate keyword overlap between two identifiers
 /// Mirrors MissingCapabilityResolver::keyword_overlap
 fn keyword_overlap(lhs: &str, rhs: &str) -> f64 {
+    // Split on dots, underscores, and other non-alphanumeric chars
     let lhs_tokens: HashSet<String> = lhs
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
         .map(|token| token.to_ascii_lowercase())
         .collect();
     
     let rhs_tokens: HashSet<String> = rhs
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
         .map(|token| token.to_ascii_lowercase())
         .collect();
