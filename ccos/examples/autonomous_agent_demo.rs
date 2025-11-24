@@ -714,10 +714,10 @@ Respond ONLY with the RTFS expression.
         // Try to find a matching MCP server configuration
         let mcp_server_config = self.find_mcp_server_config(hint, &servers);
         
-        if let Some((server_url, auth_headers)) = mcp_server_config {
+        if let Some((server_url, auth_headers, server_name)) = mcp_server_config {
             // Attempt real MCP discovery
             println!("     🔌 Attempting real MCP connection to: {}", server_url);
-            match self.try_real_mcp_discovery(&server_url, auth_headers, hint).await {
+            match self.try_real_mcp_discovery(&server_url, auth_headers, hint, &server_name).await {
                 Ok(Some(manifest)) => {
                     println!("     ✅ Real MCP capability discovered: {}", manifest.id);
                     self.trace.decisions.push(TraceEvent::MCPDiscovery { hint: hint.to_string(), found: true });
@@ -762,12 +762,13 @@ Respond ONLY with the RTFS expression.
     }
 
     /// Find a matching MCP server configuration from agent config or overrides
-    fn find_mcp_server_config(&self, hint: &str, servers: &[ccos::synthesis::mcp_registry_client::McpServer]) -> Option<(String, Option<std::collections::HashMap<String, String>>)> {
+    /// Returns (url, auth_headers, server_name)
+    fn find_mcp_server_config(&self, hint: &str, servers: &[ccos::synthesis::mcp_registry_client::McpServer]) -> Option<(String, Option<std::collections::HashMap<String, String>>, String)> {
         // 1. First, check overrides.json for matching server
-        if let Some(server_url) = resolve_server_url_from_overrides(hint) {
-            println!("     📁 Found MCP server in overrides: {}", server_url);
+        if let Some((server_url, server_name)) = resolve_server_url_from_overrides(hint) {
+            println!("     📁 Found MCP server in overrides: {} (namespace: {})", server_url, server_name);
             let auth_headers = get_mcp_auth_headers();
-            return Some((server_url, auth_headers));
+            return Some((server_url, auth_headers, server_name));
         }
         
         // 2. Check if any server from registry has a usable remote URL
@@ -776,7 +777,8 @@ Respond ONLY with the RTFS expression.
                 if let Some(url) = ccos::synthesis::mcp_registry_client::McpRegistryClient::select_best_remote_url(remotes) {
                     println!("     🌐 Found MCP server in registry: {} ({})", server.name, url);
                     let auth_headers = get_mcp_auth_headers();
-                    return Some((url, auth_headers));
+                    // Use server name from registry
+                    return Some((url, auth_headers, server.name.clone()));
                 }
             }
         }
@@ -786,7 +788,7 @@ Respond ONLY with the RTFS expression.
             if let Ok(endpoint) = std::env::var("GITHUB_MCP_ENDPOINT") {
                 println!("     🔧 Using GITHUB_MCP_ENDPOINT from environment: {}", endpoint);
                 let auth_headers = get_mcp_auth_headers();
-                return Some((endpoint, auth_headers));
+                return Some((endpoint, auth_headers, "github".to_string()));
             }
         }
         
@@ -794,7 +796,7 @@ Respond ONLY with the RTFS expression.
     }
 
     /// Try to discover and install a capability from a real MCP server
-    async fn try_real_mcp_discovery(&mut self, server_url: &str, auth_headers: Option<std::collections::HashMap<String, String>>, hint: &str) -> Result<Option<CapabilityManifest>, Box<dyn Error + Send + Sync>> {
+    async fn try_real_mcp_discovery(&mut self, server_url: &str, auth_headers: Option<std::collections::HashMap<String, String>>, hint: &str, server_name: &str) -> Result<Option<CapabilityManifest>, Box<dyn Error + Send + Sync>> {
         // Create session manager and initialize session (like single_mcp_discovery.rs)
         let session_manager = MCPSessionManager::new(auth_headers);
         let client_info = MCPServerInfo {
@@ -874,10 +876,10 @@ Respond ONLY with the RTFS expression.
                     input_schema_json,
                 };
                 
-                // Create capability manifest
+                // Create capability manifest using the server name from overrides/config
                 let introspection_result = ccos::synthesis::mcp_introspector::MCPIntrospectionResult {
                     server_url: server_url.to_string(),
-                    server_name: "mcp-server".to_string(),
+                    server_name: server_name.to_string(),
                     protocol_version: session.protocol_version.clone(),
                     tools: vec![discovered_tool],
                 };
@@ -1344,9 +1346,10 @@ fn json_to_rtfs_value(v: serde_json::Value) -> Value {
 // MCP Server Resolution Helpers
 // ============================================================================
 
-/// Resolve MCP server URL from overrides.json
+/// Resolve MCP server URL and name from overrides.json
 /// This checks the curated overrides file for matching server configurations
-fn resolve_server_url_from_overrides(hint: &str) -> Option<String> {
+/// Returns (url, server_name) where server_name is derived from the match pattern prefix (e.g., "github" from "github.*")
+fn resolve_server_url_from_overrides(hint: &str) -> Option<(String, String)> {
     // Try to load curated overrides from 'capabilities/mcp/overrides.json' (in workspace root)
     let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     // Check if we're in the workspace root (has ccos/Cargo.toml) or inside ccos/ dir
@@ -1376,7 +1379,8 @@ fn resolve_server_url_from_overrides(hint: &str) -> Option<String> {
                 if hint.contains(name) || name.contains(hint) {
                     // Get best HTTP remote
                     if let Some(url) = get_http_remote_url(server) {
-                        return Some(url);
+                        // Use the server name from overrides as the namespace
+                        return Some((url, name.to_string()));
                     }
                 }
             }
@@ -1389,7 +1393,9 @@ fn resolve_server_url_from_overrides(hint: &str) -> Option<String> {
                         let pattern_clean = p.trim_end_matches(".*").trim_end_matches('*');
                         if hint.contains(pattern_clean) || pattern_clean.contains(hint) {
                             if let Some(url) = get_http_remote_url(server) {
-                                return Some(url);
+                                // Use the pattern prefix as the server namespace (e.g., "github" from "github.*")
+                                let server_name = pattern_clean.to_string();
+                                return Some((url, server_name));
                             }
                         }
                     }
