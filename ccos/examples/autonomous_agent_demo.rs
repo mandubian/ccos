@@ -512,12 +512,29 @@ Respond ONLY with the corrected RTFS function code. Do not add markdown formatti
                  let module_registry = Arc::new(rtfs::runtime::ModuleRegistry::new());
                  let runtime = rtfs::runtime::Runtime::new_with_tree_walking_strategy(module_registry);
                  
-                 // Convert Value to RTFS literal representation
-                 // For now, we'll use a simple approach: serialize args as a map literal
-                 let args_rtfs = value_to_rtfs_literal(args);
+                 // The marketplace wraps our args as {:args [...], :context ...}
+                 // Extract the actual args from the :args key, or use raw args if not wrapped
+                 let actual_args = match args {
+                     Value::Map(m) => {
+                         // Check if it's the marketplace wrapper format {:args [...]}
+                         if let Some(inner) = m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("args".to_string()))) {
+                             match inner {
+                                 Value::List(list) if list.len() == 1 => list[0].clone(),
+                                 Value::List(list) if list.is_empty() => Value::Map(std::collections::HashMap::new()),
+                                 _ => inner.clone(),
+                             }
+                         } else {
+                             args.clone()
+                         }
+                     },
+                     _ => args.clone(),
+                 };
                  
-                 // Construct the program: ((fn [args] ...) <input_args>)
-                 let program = format!("(({}) {})", code_clone, args_rtfs);
+                 // Convert Value to RTFS literal representation
+                 let args_rtfs = value_to_rtfs_literal(&actual_args);
+                 
+                 // Construct the program: (fn_code arg) - NOT ((fn_code) arg) which would call fn_code with 0 args first
+                 let program = format!("({} {})", code_clone, args_rtfs);
                  
                  match runtime.evaluate(&program) {
                      Ok(v) => {
