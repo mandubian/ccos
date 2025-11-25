@@ -811,11 +811,18 @@ pub fn compute_mcp_tool_score(hint: &str, tool_name: &str, description: &str) ->
     }
     
     // Special semantic equivalences for common patterns
+    // Be careful to only apply these when context is clearly about self/me, not other entities
     let hint_lower = hint.to_ascii_lowercase();
-    if hint_lower.contains("user") && (tool_lower.contains("me") || desc_lower.contains("authenticated user")) {
+    
+    // "my user info" / "my profile" / "get me" → get_me mapping
+    // BUT NOT "of user X" or "by user Y" which refers to another user
+    let is_self_reference = (hint_lower.contains("my ") || hint_lower.contains("my info") || hint_lower.starts_with("me ") || hint_lower.contains(" me ") || hint_lower.ends_with(" me"))
+        && !hint_lower.contains("of user") && !hint_lower.contains("by user") && !hint_lower.contains("user ") || hint_lower.contains("profile");
+    
+    if is_self_reference && (tool_lower.contains("me") || desc_lower.contains("authenticated user")) {
         score += 2.0;
     }
-    if (hint_lower.contains("auth") || hint_lower.contains("profile")) && desc_lower.contains("authenticated") {
+    if (hint_lower.contains("auth") || (hint_lower.contains("my") && hint_lower.contains("profile"))) && desc_lower.contains("authenticated") {
         score += 1.5;
     }
     

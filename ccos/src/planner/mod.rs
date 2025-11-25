@@ -7,5 +7,6 @@ pub mod capabilities;
 pub mod capabilities_v2;
 pub mod coverage;
 pub mod menu;
+pub mod modular_planner;
 pub mod resolution;
 pub mod signals;

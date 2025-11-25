@@ -188,10 +188,15 @@ impl IterativePlanner {
 
             // 0. Try direct MCP tool match before decomposition
             // This avoids over-decomposition for simple API calls
-            if let Some((cap_id, args)) = self.try_direct_mcp_match(goal).await? {
-                println!("     ✅ Direct MCP match found: {}", cap_id);
-                let call_expr = self.generate_call(&cap_id, args);
-                return Ok(call_expr);
+            // BUT only if the goal is simple!
+            if !self.is_complex_goal(goal) {
+                if let Some((cap_id, args)) = self.try_direct_mcp_match(goal).await? {
+                    println!("     ✅ Direct MCP match found: {}", cap_id);
+                    let call_expr = self.generate_call(&cap_id, args);
+                    return Ok(call_expr);
+                }
+            } else {
+                println!("     🔄 Goal appears complex (contains conjunctions/logic), skipping direct match to force decomposition.");
             }
 
             // 1. Decompose
@@ -264,8 +269,9 @@ impl IterativePlanner {
                 
                 let call_expr = if !context_entries.is_empty() {
                     // If we have context from previous steps, try to adapt it to the current step
-                    if args.is_empty() {
-                        match self.synthesize_adapter_with_context(&context_entries, &capability_id, &step.description).await {
+                    // If args are empty OR step implies dependency, try context adapter
+                    if args.is_empty() || self.step_implies_context_dependency(&step.description) {
+                        match self.synthesize_adapter_with_context(&context_entries, &capability_id, &step.description, &args).await {
                             Ok(adapter_expr) => adapter_expr,
                             Err(e) => {
                                 println!("     ⚠️  Context-aware adapter synthesis failed: {}. Falling back to direct call.", e);
@@ -273,7 +279,7 @@ impl IterativePlanner {
                             }
                         }
                     } else {
-                        // If args are present, assume they are sufficient
+                        // If args are present and no dependency implied, assume they are sufficient
                         self.generate_call(&capability_id, args)
                     }
                 } else {
@@ -337,6 +343,26 @@ Respond ONLY with a JSON object in this format:
         let json_str = extract_json(&response);
         let decomposition: Decomposition = serde_json::from_str(json_str)?;
         Ok(decomposition.steps)
+    }
+
+    /// Check if goal implies multiple steps or complexity that warrants decomposition
+    fn is_complex_goal(&self, goal: &str) -> bool {
+        let lower = goal.to_lowercase();
+        // Indicators that suggest the goal requires multiple steps, user interaction, or post-processing
+        let complex_indicators = [
+            " and ", " then ", " but ", " after ", " before ", // Conjunctions
+            "ask me", "prompt me", "wait for", "user input", // Interaction
+            "filter", "sort", "group by", "count", "aggregate", // Post-processing
+            "save to", "write to", "export", // Side effects usually separate
+            "extract", "transform" // Data manipulation
+        ];
+        
+        for indicator in &complex_indicators {
+            if lower.contains(indicator) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Try to find a direct MCP tool match for the goal before decomposition.
@@ -890,6 +916,12 @@ Write an anonymous RTFS function (using `fn`) that performs the following task:
 The function will receive a SINGLE argument `args` which is a Map containing input parameters.
 The function should return the result of the operation.
 
+IMPORTANT - Available Functions:
+- To parse a string to a number (integer/float), use `(tool/parse-json string_value)`. Example: `(tool/parse-json "123")` returns `123`.
+- To convert to string, use `(str value)`.
+- Use `int?` to check for integers, `float?` for floats, `string?` for strings, `map?` for maps. DO NOT use `integer?` or `is-integer`.
+- Use standard Lisp/Clojure-like functions: `map`, `filter`, `reduce`, `get`, `first`, `rest`, `nth`, `keys`, `vals`, `assoc`, `dissoc`, `conj`, `concat`, `contains?`, `count`.
+
 Examples:
 - Task: "Filter items to keep only active ones"
   Code: (fn [args] (filter (fn [item] (= (:status item) "active")) (:items args)))
@@ -899,6 +931,9 @@ Examples:
 
 - Task: "Search for text containing a substring"
   Code: (fn [args] (filter (fn [item] (contains? (:text item) (:query args))) (:items args)))
+
+- Task: "Parse page size from input string"
+  Code: (fn [args] (tool/parse-json (get args "pageSize")))
 
 Respond ONLY with the valid RTFS code for the function. Do not add markdown formatting, code fences, or explanation.
 "#,
@@ -1038,17 +1073,28 @@ Respond ONLY with the corrected RTFS function code. Do not add markdown formatti
                      Value::Map(m) => {
                          // Check if it's the marketplace wrapper format {:args [...]}
                          if let Some(inner) = m.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("args".to_string()))) {
+                             // If it's a list, we need to decide if we want the first element or the list itself
+                             // The previous code assumed list[0] if len == 1, but for synthesized caps expecting a map, this might be right.
+                             // However, if the synthesis expects specific keys, we might need to handle it better.
                              match inner {
                                  Value::List(list) if list.len() == 1 => list[0].clone(),
                                  Value::List(list) if list.is_empty() => Value::Map(std::collections::HashMap::new()),
+                                 // If multiple args, wrap them in a map with indices or similar?
+                                 // For now, let's just pass the inner value if it's not a single-element list
                                  _ => inner.clone(),
                              }
                          } else {
+                             // If no :args key, check if we have the arguments directly in the map
+                             // This happens when the plan calls the capability with named args like {:data step_2 :min 1}
+                             // In this case, 'args' IS the map of arguments.
                              args.clone()
                          }
                      },
                      _ => args.clone(),
                  };
+                 
+                 // DEBUG: Print actual args to help debug "got nil" errors
+                 println!("     🐛 Synthesized execution args: {:?}", actual_args);
                  
                  // Convert Value to RTFS literal representation
                  let args_rtfs = value_to_rtfs_literal(&actual_args);
@@ -1080,9 +1126,32 @@ Respond ONLY with the corrected RTFS function code. Do not add markdown formatti
         return Ok(self.marketplace.get_capability(&id).await);
     }
 
-    async fn synthesize_adapter_with_context(&self, context_vars: &[String], target_capability_id: &str, target_description: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
+    fn step_implies_context_dependency(&self, description: &str) -> bool {
+        let lower = description.to_lowercase();
+        lower.contains("using the") || 
+        lower.contains("from previous") || 
+        lower.contains("with the") ||
+        lower.contains("based on") ||
+        lower.contains("specified") ||
+        lower.contains("result of")
+    }
+
+    async fn synthesize_adapter_with_context(&self, context_vars: &[String], target_capability_id: &str, target_description: &str, known_args: &HashMap<String, String>) -> Result<String, Box<dyn Error + Send + Sync>> {
         println!("     🔌 Synthesizing context-aware data adapter for '{}'...", target_capability_id);
         
+        // Fetch capability to get schema
+        let schema_info = if let Some(cap) = self.marketplace.get_capability(target_capability_id).await {
+             cap.metadata.get("mcp_input_schema_json").cloned().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        
+        let schema_section = if !schema_info.is_empty() {
+            format!("Target Tool Input Schema (JSON): {}\nIMPORTANT: Use ONLY parameter names defined in this schema.", schema_info)
+        } else {
+            String::new()
+        };
+
         // Build context map description for the prompt
         let context_desc = if context_vars.len() == 1 {
             format!("The variable '{}' contains the result from the previous step.", context_vars[0])
@@ -1095,15 +1164,32 @@ Respond ONLY with the corrected RTFS function code. Do not add markdown formatti
         let prev_var = context_vars.last().unwrap(); // Most recent by default
         let all_vars_available = context_vars.join(", ");
         
+        // If the previous step was a user prompt, the result is a simple string, not a map.
+        // The context adapter needs to know this to avoid trying to extract fields from a string.
+        let context_hint = if context_vars.len() > 0 {
+            "Note: If the previous step was a user prompt (ccos.user.ask), the variable contains a simple string value (the user's input)."
+        } else {
+            ""
+        };
+        
         if self.simulate_error {
             println!("     ⚠️  SIMULATING ERROR: Generating broken adapter code...");
             return Ok("(call \"non_existent_function_to_force_crash\" {})".to_string());
         }
         
+        let known_args_info = if !known_args.is_empty() {
+            format!("Known static arguments (extracted from goal): {:?}\nInclude these in the call unless overridden by context.", known_args)
+        } else {
+            String::new()
+        };
+
         let prompt = format!(
             r#"You are an expert RTFS programmer. Generate ONLY the RTFS code to call '{}' with data from previous steps.
 
 Task: {}
+{}
+{}
+{}
 {}
 
 Available context variables: {}
@@ -1112,21 +1198,28 @@ Most recent result is in: {}
 If the task requires extracting specific fields (e.g., "get the ID from the first item"), generate code that:
 1. Accesses the appropriate context variable
 2. Extracts the required data (use 'get', 'first', 'nth', etc.)
-3. Passes it to the capability call
+3. Passes it to the capability call along with any known static arguments.
 
 Examples:
 - Simple pass-through: (call "{}" {{:data {}}})
-- Extract field: (call "{}" {{:query (get {} :field_name)}})
+- Extract field from map: (call "{}" {{:query (get {} :field_name)}})
+- Use string input directly: (call "{}" {{:search_term {}}})
 - First item ID: (call "{}" {{:id (get (first (get {} :items)) :id)}})
 - Filter operation: (call "{}" {{:data {} :filter "condition"}})
+- Mixed args: (call "{}" {{:static "value" :dynamic (get {} :key)}})
 
 Respond with ONLY the RTFS expression - no markdown, no explanation.
 "#,
             target_capability_id,
             target_description,
+            schema_section,
             context_desc,
+            known_args_info,
+            context_hint,
             all_vars_available,
             prev_var,
+            target_capability_id, prev_var,
+            target_capability_id, prev_var,
             target_capability_id, prev_var,
             target_capability_id, prev_var,
             target_capability_id, prev_var,
@@ -1161,8 +1254,8 @@ Respond with ONLY the RTFS expression - no markdown, no explanation.
     }
 
     async fn synthesize_adapter(&self, prev_var: &str, target_capability_id: &str, target_description: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
-        // Legacy single-variable adapter - delegate to context-aware version
-        self.synthesize_adapter_with_context(&[prev_var.to_string()], target_capability_id, target_description).await
+        // Legacy single-variable adapter - delegate to context-aware version with empty known args
+        self.synthesize_adapter_with_context(&[prev_var.to_string()], target_capability_id, target_description, &HashMap::new()).await
     }
 
     #[allow(dead_code)]
