@@ -846,6 +846,15 @@ impl MCPIntrospector {
             _ => "\"MCP\"".to_string(),
         };
 
+        let input_schema_json_entry = if let Some(schema) = capability.metadata.get("mcp_input_schema_json") {
+            // Escape backslashes first, then quotes, because the schema is a JSON string
+            // that will be embedded in an RTFS string literal.
+            let escaped = schema.replace("\\", "\\\\").replace("\"", "\\\"");
+            format!("\n    :mcp_input_schema_json \"{}\"", escaped)
+        } else {
+            String::new()
+        };
+
         format!(
             r#";; MCP Capability: {}
 ;; Generated from MCP tool introspection
@@ -877,7 +886,7 @@ impl MCPIntrospector {
       :source_url "{}"
       :created_at "{}"
       :capability_type "mcp_tool"
-    }}
+    }}{}
   }}
   :input-schema {}
   :output-schema {}
@@ -907,6 +916,7 @@ impl MCPIntrospector {
                 .unwrap_or("2024-11-05"),
             mcp_server_url,
             chrono::Utc::now().to_rfc3339(),
+            input_schema_json_entry,
             input_schema_str,
             output_schema_str,
             implementation_code

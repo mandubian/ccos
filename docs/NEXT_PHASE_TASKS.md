@@ -116,30 +116,48 @@ Output:
 -   [x] Plan execution returns actual GitHub user data.
 -   [x] Direct MCP matching avoids over-decomposition.
 
-## Phase H: Multi-Step MCP Workflows & Advanced Features (Next Priority)
+## Phase H: Multi-Step MCP Workflows & Advanced Features (In Progress)
 **Goal**: Extend MCP integration to handle complex multi-step workflows with data dependencies.
 
 ### Tasks
-1.  [ ] **MCP Tool with Arguments**:
+1.  [x] **Embedding-Based MCP Tool Matching** (Completed 2025-11-25):
+    *   Integrated `EmbeddingService` into `IterativePlanner` for semantic tool matching.
+    *   Provider priority: local Ollama first, then OpenRouter fallback.
+    *   Combined scoring formula: `keyword_score + (embedding_similarity * 5.0)`.
+    *   Added embedding scoring to both primary and secondary intent-matching loops.
+    *   Extended GitHub hint patterns (pull_request, pr, commit, branch).
+    *   Test confirmed: correctly matches `list_pull_requests` with score 20.02.
+2.  [x] **MCP Tool with Arguments**:
     *   Test `list_issues` with `owner`/`repo` arguments.
     *   Test `list_commits` with multiple parameters.
     *   Verify argument extraction from goal description works.
-2.  [ ] **Multi-Step MCP Plans**:
+    *   **Fixed issue**: Argument extraction returned `{}` because schema was missing from metadata - fixed by properly embedding `mcp_input_schema_json` in metadata.
+3.  [x] **Multi-Step MCP Plans**:
     *   Test goals like "list issues in mandubian/ccos and get the first issue details".
     *   Verify data flow between MCP steps.
     *   Test context accumulation for MCP results.
-3.  [ ] **MCP Error Handling**:
+    *   **Verified**: Complex goals like "list issues... but ask me for page size" now trigger decomposition and context-aware data flow.
+    *   **Synthesized Capability Prompt Fix**: Improved prompt to avoid hallucinated `read-string` function and suggest correct `tool/parse-json` for numeric parsing.
+    *   **Adapter Synthesis Fix**: Enhanced prompt to handle string inputs from user prompts correctly, avoiding extraction of fields from simple strings.
+4.  [ ] **MCP Error Handling**:
     *   Parse MCP error responses and convert to RuntimeError.
     *   Integrate with Phase D repair loop for MCP-specific failures.
     *   Handle rate limiting, auth errors, and network failures gracefully.
-4.  [ ] **Stdio MCP Server Support**:
+5.  [ ] **Stdio MCP Server Support**:
     *   Implement `StdioSessionHandler` for local MCP servers.
     *   Support process-based MCP tools (via `npx` or executable).
     *   JSON-RPC over stdio communication.
-5.  [ ] **MCP Capability Caching**:
+6.  [ ] **MCP Capability Caching**:
     *   Cache discovered MCP capabilities across sessions.
     *   Refresh capabilities on session initialization.
     *   Handle capability version changes.
+
+### Recent Progress (2025-11-25)
+-   **Embedding integration**: `EmbeddingService` now used in `autonomous_agent_demo.rs` for MCP tool scoring.
+-   **Provider flexibility**: Supports local Ollama (`LOCAL_EMBEDDING_URL`/`LOCAL_EMBEDDING_MODEL`) or remote OpenRouter.
+-   **Improved matching**: Combined keyword + embedding scoring significantly improves tool selection accuracy.
+-   **Synthesis Prompt**: Updated prompt to recommend `tool/parse-json` instead of hallucinated `read-string`.
+-   **Adapter Synthesis**: Fixed crash when LLM tries to `get` fields from a simple string result (e.g., from `ccos.user.ask`).
 
 ## Phase I: Advanced Planning & Multi-Step Orchestration (Future)
 **Goal**: Improve plan quality and handle complex multi-capability workflows.

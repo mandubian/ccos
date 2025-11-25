@@ -1,0 +1,44 @@
+;; MCP Capability: create_pull_request
+;; Generated from MCP tool introspection
+;; MCP Server: github (https://api.githubcopilot.com/mcp/)
+;; Tool: create_pull_request
+
+
+(capability "mcp.github.create_pull_request"
+  :name "create_pull_request"
+  :version "1.0.0"
+  :description "Create a new pull request in a GitHub repository."
+  ;; PROVIDER START
+  :provider {
+    :type "mcp"
+    :server_endpoint "https://api.githubcopilot.com/mcp/"
+    :tool_name "create_pull_request"
+    :timeout_seconds 30
+    :protocol_version "2024-11-05"
+  }
+  ;; PROVIDER END
+  :permissions [:network.http]
+  :effects [:network_request :mcp_call]
+  :metadata {
+    :mcp {
+      :server_url "https://api.githubcopilot.com/mcp/"
+      :server_name "github"
+      :tool_name "create_pull_request"
+      :protocol_version "2024-11-05"
+      :requires_session "auto"
+      :auth_env_var "MCP_AUTH_TOKEN"
+      :server_url_override_env "MCP_SERVER_URL"
+    }
+    :discovery {
+      :method "mcp_introspection"
+      :source_url "https://api.githubcopilot.com/mcp/"
+      :created_at "2025-11-25T20:31:59.009448953+00:00"
+      :capability_type "mcp_tool"
+    }
+    :mcp_input_schema_json "{\"properties\":{\"base\":{\"description\":\"Branch to merge into\",\"type\":\"string\"},\"body\":{\"description\":\"PR description\",\"type\":\"string\"},\"draft\":{\"description\":\"Create as draft PR\",\"type\":\"boolean\"},\"head\":{\"description\":\"Branch containing changes\",\"type\":\"string\"},\"maintainer_can_modify\":{\"description\":\"Allow maintainer edits\",\"type\":\"boolean\"},\"owner\":{\"description\":\"Repository owner\",\"type\":\"string\"},\"repo\":{\"description\":\"Repository name\",\"type\":\"string\"},\"title\":{\"description\":\"PR title\",\"type\":\"string\"}},\"required\":[\"owner\",\"repo\",\"title\",\"head\",\"base\"],\"type\":\"object\"}"
+  }
+  :input-schema [:map [:base :string] [:body :string?] [:draft :bool?] [:head :string] [:maintainer_can_modify :bool?] [:owner :string] [:repo :string] [:title :string]]
+  :output-schema :any
+  :implementation
+    nil
+)

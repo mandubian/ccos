@@ -1,6 +1,6 @@
 ;; MCP Capability: list_issues
 ;; Generated from MCP tool introspection
-;; MCP Server: github/github-mcp (https://api.githubcopilot.com/mcp/)
+;; MCP Server: github (https://api.githubcopilot.com/mcp/)
 ;; Tool: list_issues
 
 ;; Sample Output:
@@ -14,7 +14,7 @@
 ;; }
 
 
-(capability "mcp.github.github-mcp.list_issues"
+(capability "mcp.github.list_issues"
   :name "list_issues"
   :version "1.0.0"
   :description "List issues in a GitHub repository. For pagination, use the 'endCursor' from the previous response's 'pageInfo' in the 'after' parameter."
@@ -32,7 +32,7 @@
   :metadata {
     :mcp {
       :server_url "https://api.githubcopilot.com/mcp/"
-      :server_name "github/github-mcp"
+      :server_name "github"
       :tool_name "list_issues"
       :protocol_version "2024-11-05"
       :requires_session "auto"
@@ -42,7 +42,7 @@
     :discovery {
       :method "mcp_introspection"
       :source_url "https://api.githubcopilot.com/mcp/"
-      :created_at "2025-11-25T19:09:14.551800970+00:00"
+      :created_at "2025-11-25T20:51:14.931724867+00:00"
       :capability_type "mcp_tool"
     }
     :mcp_input_schema_json "{\"properties\":{\"after\":{\"description\":\"Cursor for pagination. Use the endCursor from the previous page's PageInfo for GraphQL APIs.\",\"type\":\"string\"},\"direction\":{\"description\":\"Order direction. If provided, the 'orderBy' also needs to be provided.\",\"enum\":[\"ASC\",\"DESC\"],\"type\":\"string\"},\"labels\":{\"description\":\"Filter by labels\",\"items\":{\"type\":\"string\"},\"type\":\"array\"},\"orderBy\":{\"description\":\"Order issues by field. If provided, the 'direction' also needs to be provided.\",\"enum\":[\"CREATED_AT\",\"UPDATED_AT\",\"COMMENTS\"],\"type\":\"string\"},\"owner\":{\"description\":\"Repository owner\",\"type\":\"string\"},\"perPage\":{\"description\":\"Results per page for pagination (min 1, max 100)\",\"maximum\":100,\"minimum\":1,\"type\":\"number\"},\"repo\":{\"description\":\"Repository name\",\"type\":\"string\"},\"since\":{\"description\":\"Filter by date (ISO 8601 timestamp)\",\"type\":\"string\"},\"state\":{\"description\":\"Filter by state, by default both open and closed issues are returned when not provided\",\"enum\":[\"OPEN\",\"CLOSED\"],\"type\":\"string\"}},\"required\":[\"owner\",\"repo\"],\"type\":\"object\"}"

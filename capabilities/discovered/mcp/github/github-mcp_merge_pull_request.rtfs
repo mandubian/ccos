@@ -1,0 +1,54 @@
+;; MCP Capability: merge_pull_request
+;; Generated from MCP tool introspection
+;; MCP Server: github/github-mcp (https://api.githubcopilot.com/mcp/)
+;; Tool: merge_pull_request
+
+;; Sample Output:
+;; {
+;;   "content": [
+;;     {
+;;       "text": "missing required parameter: pullNumber",
+;;       "type": "text"
+;;     }
+;;   ],
+;;   "isError": true
+;; }
+
+
+(capability "mcp.github.github-mcp.merge_pull_request"
+  :name "merge_pull_request"
+  :version "1.0.0"
+  :description "Merge a pull request in a GitHub repository."
+  ;; PROVIDER START
+  :provider {
+    :type "mcp"
+    :server_endpoint "https://api.githubcopilot.com/mcp/"
+    :tool_name "merge_pull_request"
+    :timeout_seconds 30
+    :protocol_version "2024-11-05"
+  }
+  ;; PROVIDER END
+  :permissions [:network.http]
+  :effects [:network_request :mcp_call]
+  :metadata {
+    :mcp {
+      :server_url "https://api.githubcopilot.com/mcp/"
+      :server_name "github/github-mcp"
+      :tool_name "merge_pull_request"
+      :protocol_version "2024-11-05"
+      :requires_session "auto"
+      :auth_env_var "MCP_AUTH_TOKEN"
+      :server_url_override_env "MCP_SERVER_URL"
+    }
+    :discovery {
+      :method "mcp_introspection"
+      :source_url "https://api.githubcopilot.com/mcp/"
+      :created_at "2025-11-25T11:56:39.750769600+00:00"
+      :capability_type "mcp_tool"
+    }
+  }
+  :input-schema [:map [:commit_message :string?] [:commit_title :string?] [:merge_method :string?] [:owner :string] [:pullNumber :float] [:repo :string]]
+  :output-schema [:map [:content [:vector [:map [:text :string] [:type :string]]]] [:isError :bool]]
+  :implementation
+    nil
+)

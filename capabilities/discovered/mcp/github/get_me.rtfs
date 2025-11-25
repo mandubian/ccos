@@ -1,6 +1,6 @@
 ;; MCP Capability: get_me
 ;; Generated from MCP tool introspection
-;; MCP Server: github/github-mcp (https://api.githubcopilot.com/mcp/)
+;; MCP Server: github (https://api.githubcopilot.com/mcp/)
 ;; Tool: get_me
 
 ;; Sample Output:
@@ -14,7 +14,7 @@
 ;; }
 
 
-(capability "mcp.github.github-mcp.get_me"
+(capability "mcp.github.get_me"
   :name "get_me"
   :version "1.0.0"
   :description "Get details of the authenticated GitHub user. Use this when a request is about the user's own profile for GitHub. Or when information is missing to build other tool calls."
@@ -32,7 +32,7 @@
   :metadata {
     :mcp {
       :server_url "https://api.githubcopilot.com/mcp/"
-      :server_name "github/github-mcp"
+      :server_name "github"
       :tool_name "get_me"
       :protocol_version "2024-11-05"
       :requires_session "auto"
@@ -42,7 +42,7 @@
     :discovery {
       :method "mcp_introspection"
       :source_url "https://api.githubcopilot.com/mcp/"
-      :created_at "2025-11-25T12:32:51.019374051+00:00"
+      :created_at "2025-11-25T13:24:22.309048516+00:00"
       :capability_type "mcp_tool"
     }
   }

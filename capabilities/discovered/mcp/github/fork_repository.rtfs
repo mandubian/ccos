@@ -1,0 +1,55 @@
+;; MCP Capability: fork_repository
+;; Generated from MCP tool introspection
+;; MCP Server: github (https://api.githubcopilot.com/mcp/)
+;; Tool: fork_repository
+
+;; Sample Output:
+;; {
+;;   "content": [
+;;     {
+;;       "text": "failed to fork repository: POST https://api.github.com/repos/octocat/hello-world/forks: 403 Resource not accessible by personal access token []",
+;;       "type": "text"
+;;     }
+;;   ],
+;;   "isError": true
+;; }
+
+
+(capability "mcp.github.fork_repository"
+  :name "fork_repository"
+  :version "1.0.0"
+  :description "Fork a GitHub repository to your account or specified organization"
+  ;; PROVIDER START
+  :provider {
+    :type "mcp"
+    :server_endpoint "https://api.githubcopilot.com/mcp/"
+    :tool_name "fork_repository"
+    :timeout_seconds 30
+    :protocol_version "2024-11-05"
+  }
+  ;; PROVIDER END
+  :permissions [:network.http]
+  :effects [:network_request :mcp_call]
+  :metadata {
+    :mcp {
+      :server_url "https://api.githubcopilot.com/mcp/"
+      :server_name "github"
+      :tool_name "fork_repository"
+      :protocol_version "2024-11-05"
+      :requires_session "auto"
+      :auth_env_var "MCP_AUTH_TOKEN"
+      :server_url_override_env "MCP_SERVER_URL"
+    }
+    :discovery {
+      :method "mcp_introspection"
+      :source_url "https://api.githubcopilot.com/mcp/"
+      :created_at "2025-11-25T20:25:51.603817875+00:00"
+      :capability_type "mcp_tool"
+    }
+    :mcp_input_schema_json "{\"properties\":{\"organization\":{\"description\":\"Organization to fork to\",\"type\":\"string\"},\"owner\":{\"description\":\"Repository owner\",\"type\":\"string\"},\"repo\":{\"description\":\"Repository name\",\"type\":\"string\"}},\"required\":[\"owner\",\"repo\"],\"type\":\"object\"}"
+  }
+  :input-schema [:map [:organization :string?] [:owner :string] [:repo :string]]
+  :output-schema [:map [:content [:vector [:map [:text :string] [:type :string]]]] [:isError :bool]]
+  :implementation
+    nil
+)

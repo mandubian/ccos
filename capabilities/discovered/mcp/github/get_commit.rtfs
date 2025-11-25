@@ -1,0 +1,55 @@
+;; MCP Capability: get_commit
+;; Generated from MCP tool introspection
+;; MCP Server: github (https://api.githubcopilot.com/mcp/)
+;; Tool: get_commit
+
+;; Sample Output:
+;; {
+;;   "content": [
+;;     {
+;;       "text": "failed to get commit: 0000000000000000000000000000000000000000: GET https://api.github.com/repos/octocat/hello-world/commits/0000000000000000000000000000000000000000?page=1&per_page=30: 422 No commit found for SHA: 0000000000000000000000000000000000000000 []",
+;;       "type": "text"
+;;     }
+;;   ],
+;;   "isError": true
+;; }
+
+
+(capability "mcp.github.get_commit"
+  :name "get_commit"
+  :version "1.0.0"
+  :description "Get details for a commit from a GitHub repository"
+  ;; PROVIDER START
+  :provider {
+    :type "mcp"
+    :server_endpoint "https://api.githubcopilot.com/mcp/"
+    :tool_name "get_commit"
+    :timeout_seconds 30
+    :protocol_version "2024-11-05"
+  }
+  ;; PROVIDER END
+  :permissions [:network.http]
+  :effects [:network_request :mcp_call]
+  :metadata {
+    :mcp {
+      :server_url "https://api.githubcopilot.com/mcp/"
+      :server_name "github"
+      :tool_name "get_commit"
+      :protocol_version "2024-11-05"
+      :requires_session "auto"
+      :auth_env_var "MCP_AUTH_TOKEN"
+      :server_url_override_env "MCP_SERVER_URL"
+    }
+    :discovery {
+      :method "mcp_introspection"
+      :source_url "https://api.githubcopilot.com/mcp/"
+      :created_at "2025-11-25T20:32:09.197794756+00:00"
+      :capability_type "mcp_tool"
+    }
+    :mcp_input_schema_json "{\"properties\":{\"include_diff\":{\"default\":true,\"description\":\"Whether to include file diffs and stats in the response. Default is true.\",\"type\":\"boolean\"},\"owner\":{\"description\":\"Repository owner\",\"type\":\"string\"},\"page\":{\"description\":\"Page number for pagination (min 1)\",\"minimum\":1,\"type\":\"number\"},\"perPage\":{\"description\":\"Results per page for pagination (min 1, max 100)\",\"maximum\":100,\"minimum\":1,\"type\":\"number\"},\"repo\":{\"description\":\"Repository name\",\"type\":\"string\"},\"sha\":{\"description\":\"Commit SHA, branch name, or tag name\",\"type\":\"string\"}},\"required\":[\"owner\",\"repo\",\"sha\"],\"type\":\"object\"}"
+  }
+  :input-schema [:map [:include_diff :bool?] [:owner :string] [:page :float?] [:perPage :float?] [:repo :string] [:sha :string]]
+  :output-schema [:map [:content [:vector [:map [:text :string] [:type :string]]]] [:isError :bool]]
+  :implementation
+    nil
+)
