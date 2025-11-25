@@ -43,7 +43,7 @@
     :discovery {
       :method "mcp_introspection"
       :source_url "https://api.githubcopilot.com/mcp/"
-      :created_at "2025-11-25T19:13:21.180261653+00:00"
+      :created_at "2025-11-25T22:31:43.755081171+00:00"
       :capability_type "mcp_tool"
     }
     :mcp_input_schema_json "{\"properties\":{\"minimal_output\":{\"default\":true,\"description\":\"Return minimal repository information (default: true). When false, returns full GitHub API repository objects.\",\"type\":\"boolean\"},\"order\":{\"description\":\"Sort order\",\"enum\":[\"asc\",\"desc\"],\"type\":\"string\"},\"page\":{\"description\":\"Page number for pagination (min 1)\",\"minimum\":1,\"type\":\"number\"},\"perPage\":{\"description\":\"Results per page for pagination (min 1, max 100)\",\"maximum\":100,\"minimum\":1,\"type\":\"number\"},\"query\":{\"description\":\"Repository search query. Examples: 'machine learning in:name stars:>1000 language:python', 'topic:react', 'user:facebook'. Supports advanced search syntax for precise filtering.\",\"type\":\"string\"},\"sort\":{\"description\":\"Sort repositories by field, defaults to best match\",\"enum\":[\"stars\",\"forks\",\"help-wanted-issues\",\"updated\"],\"type\":\"string\"}},\"required\":[\"query\"],\"type\":\"object\"}"
