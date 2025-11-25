@@ -176,3 +176,108 @@ Output:
 4.  [ ] **Loop/Iteration Support**:
     *   Handle "for each issue, do X" patterns.
     *   Generate RTFS `map`/`filter`/`reduce` constructs.
+
+## Phase J: Modular Planner Architecture (NEW - Completed 2025-11-25) ✅
+**Goal**: Refactor planning into a modular architecture that separates WHAT (decomposition) from HOW (resolution), with proper IntentGraph integration.
+
+### Problem Statement
+The original `autonomous_agent_demo` approach had a key issue: LLM decomposition produced "capability hints" that looked like tool IDs (e.g., `github.list_issues`), but these were hallucinated and didn't match actual MCP tool names. This caused resolution to fail or require expensive secondary matching.
+
+### Solution: Modular Planner
+Created a new `modular_planner` module with pluggable strategies:
+
+### Decomposition Strategies (WHAT to do)
+1.  [x] **PatternDecomposition** (Fast, deterministic):
+    *   4 regex patterns for common goal structures:
+        - `"X but ask me for Y"` → user input + main action
+        - `"ask me for X then Y"` → user input then action
+        - `"X then Y"` → sequential actions
+        - `"X and filter/sort by Y"` → action with transform
+    *   Extracts `owner/repo` parameters automatically.
+    *   Returns `SubIntent` with semantic `IntentType` (not tool IDs).
+
+2.  [x] **IntentFirstDecomposition** (LLM-based):
+    *   LLM produces abstract intents without tool hints.
+    *   Focuses on semantic meaning, not implementation.
+
+3.  [x] **GroundedLlmDecomposition** (Embedding-filtered):
+    *   Pre-filters tools using embeddings before LLM prompt.
+    *   Only includes relevant tools in context.
+    *   Reduces hallucination risk.
+
+4.  [x] **HybridDecomposition** (Pattern-first, LLM fallback):
+    *   Tries patterns first for speed.
+    *   Falls back to LLM for complex goals.
+
+### Resolution Strategies (HOW to do it)
+1.  [x] **SemanticResolution**:
+    *   Embedding-based capability matching.
+    *   Keyword fallback when embeddings unavailable.
+
+2.  [x] **McpResolution**:
+    *   Direct MCP tool discovery.
+    *   Real-time tool listing from servers.
+
+3.  [x] **CatalogResolution**:
+    *   Local capability catalog search.
+    *   Built-in support for `ccos.user.ask`, `ccos.io.println`.
+
+### Core Types
+-   **SubIntent**: Semantic intent with `IntentType`, `DomainHint`, dependencies, extracted params.
+-   **IntentType**: `UserInput`, `ApiCall { action }`, `DataTransform { transform }`, `Output`, `Composite`.
+-   **ApiAction**: `List`, `Get`, `Create`, `Update`, `Delete`, `Search`, `Execute`.
+-   **DomainHint**: `GitHub`, `Git`, `DevOps`, `Data`, `AI`, `General`.
+-   **ResolvedCapability**: `Local`, `Remote`, `BuiltIn`, `Synthesized`, `NeedsReferral`.
+
+### IntentGraph Integration
+-   [x] All intents stored as `StorableIntent` nodes in IntentGraph.
+-   [x] Proper edge creation: `IsSubgoalOf` (parent-child), `DependsOn` (data flow).
+-   [x] Root intent created for original goal.
+-   [x] Sub-intents linked to root with edges.
+-   [x] Resolution results attached to intent nodes.
+
+### ModularPlanner Orchestrator
+-   [x] Coordinates: decompose → store → resolve → plan.
+-   [x] Configurable: `max_depth`, `persist_intents`, `create_edges`, `intent_namespace`.
+-   [x] Returns `PlanResult` with: `root_intent_id`, `intent_ids`, `resolutions`, `rtfs_plan`, `trace`.
+-   [x] RTFS plan generation from resolved capabilities.
+
+### Example Demo
+Created `modular_planner_demo.rs`:
+```bash
+# Pattern-based decomposition
+cargo run --example modular_planner_demo -- \
+  --goal "list issues in mandubian/ccos but ask me for the page size" --verbose
+
+# With MCP discovery
+cargo run --example modular_planner_demo -- \
+  --goal "list issues then filter by label" --discover-mcp --verbose
+```
+
+### Test Results
+-   19 unit tests passing for modular_planner module.
+-   Pattern decomposition correctly identifies goal structures.
+-   Built-in capabilities (`ccos.user.ask`) resolve without external lookup.
+-   IntentGraph stores all planning decisions for audit/reuse.
+
+### Files Created
+-   `ccos/src/planner/modular_planner/mod.rs` - Module exports
+-   `ccos/src/planner/modular_planner/types.rs` - SubIntent, IntentType, etc.
+-   `ccos/src/planner/modular_planner/decomposition/mod.rs` - Strategy trait + exports
+-   `ccos/src/planner/modular_planner/decomposition/pattern.rs` - Regex patterns
+-   `ccos/src/planner/modular_planner/decomposition/intent_first.rs` - LLM-based
+-   `ccos/src/planner/modular_planner/decomposition/grounded_llm.rs` - Embedding-filtered
+-   `ccos/src/planner/modular_planner/decomposition/hybrid.rs` - Pattern + LLM
+-   `ccos/src/planner/modular_planner/resolution/mod.rs` - Strategy trait + exports
+-   `ccos/src/planner/modular_planner/resolution/semantic.rs` - Embedding-based
+-   `ccos/src/planner/modular_planner/resolution/mcp.rs` - MCP discovery
+-   `ccos/src/planner/modular_planner/resolution/catalog.rs` - Local catalog
+-   `ccos/src/planner/modular_planner/orchestrator.rs` - Main planner
+-   `ccos/examples/modular_planner_demo.rs` - Demo example
+
+### Next Steps (Phase K)
+1.  [ ] Integrate modular planner into `autonomous_agent_demo` as optional mode.
+2.  [ ] Add LLM provider to HybridDecomposition for fallback.
+3.  [ ] Connect McpResolution to real MCP session pool.
+4.  [ ] Add execution support to `modular_planner_demo`.
+5.  [ ] Implement composite resolution (try multiple strategies).
