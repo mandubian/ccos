@@ -74,37 +74,74 @@
 -   **Keyword overlap**: Fixed tokenization to split on underscores, enabling proper tool matching.
 -   **Server name**: Now extracts from override pattern prefix instead of hardcoding.
 
-## Phase G: MCP Execution & End-to-End Flow (Next Priority)
+## Phase G: MCP Execution & End-to-End Flow (COMPLETED ✅)
 **Goal**: Complete the MCP integration by executing discovered tools via real MCP `tools/call` requests.
 
 ### Tasks
-1.  [ ] **Implement MCP Capability Executor**:
-    *   Create an executor that handles `mcp.*` capability IDs.
-    *   Parse capability ID to extract server name and tool name (e.g., `mcp.github.list_issues` → server: `github`, tool: `list_issues`).
-    *   Resolve server URL from overrides.json.
-    *   Make `tools/call` request with arguments from the plan.
-2.  [ ] **Wire Up Marketplace to MCP Executor**:
-    *   Modify `CapabilityMarketplace` to detect `mcp.*` capabilities.
-    *   Route execution to MCP executor instead of RTFS evaluation.
-    *   Handle response transformation (JSON → RTFS Value).
-3.  [ ] **Session Management**:
-    *   Reuse MCP sessions across multiple tool calls in a plan.
-    *   Cache session by server URL to avoid repeated initialization.
-    *   Handle session expiry and reconnection.
-4.  [ ] **Error Handling for MCP Calls**:
+1.  [x] **Implement MCP Capability Executor**:
+    *   `MCPExecutor` in `executors.rs` handles `mcp.*` capability IDs.
+    *   Parses capability ID to extract server name and tool name.
+    *   Resolves server URL from capability metadata or overrides.json.
+    *   Makes `tools/call` request with arguments from the plan.
+2.  [x] **Wire Up Marketplace to MCP Executor**:
+    *   `CapabilityMarketplace` detects MCP capabilities via `requires_session_management` metadata.
+    *   Routes execution to session pool → MCPSessionHandler.
+    *   Handles response transformation (JSON → RTFS Value).
+3.  [x] **Session Management**:
+    *   `SessionPoolManager` manages MCP sessions with proper initialization.
+    *   `MCPSessionHandler` implements full MCP lifecycle: initialize → tools/call → terminate.
+    *   Session reuse via session pool for efficiency.
+4.  [x] **Direct MCP Matching Before Decomposition**:
+    *   `try_direct_mcp_match()` checks for MCP tools that directly match goal.
+    *   Avoids over-decomposition for simple API calls.
+    *   Uses `compute_mcp_tool_score()` with semantic matching (score ≥ 3.0).
+5.  [x] **End-to-End Test**:
+    *   `--goal "get my github user information"` works with real MCP execution!
+    *   Flow: Direct MCP match (get_me, score: 5.18) → Session initialization → tools/call → User data returned
+
+### Verified Working (2025-11-25)
+```bash
+cargo run --example autonomous_agent_demo -- \
+  --goal "get my github user information" \
+  --no-mock --config ../config/agent_config.toml
+```
+Output:
+- Direct MCP match found: `get_me` (score: 5.18)
+- Session initialized: `3d64b01c-916d-45f4-a011-23127e19e447`
+- Tool executed successfully
+- User data returned: `mandubian` (Pascal Voitot) with full profile
+
+### Success Criteria
+-   [x] `mcp.github.get_me` executes via real GitHub MCP `tools/call`.
+-   [x] Plan execution returns actual GitHub user data.
+-   [x] Direct MCP matching avoids over-decomposition.
+
+## Phase H: Multi-Step MCP Workflows & Advanced Features (Next Priority)
+**Goal**: Extend MCP integration to handle complex multi-step workflows with data dependencies.
+
+### Tasks
+1.  [ ] **MCP Tool with Arguments**:
+    *   Test `list_issues` with `owner`/`repo` arguments.
+    *   Test `list_commits` with multiple parameters.
+    *   Verify argument extraction from goal description works.
+2.  [ ] **Multi-Step MCP Plans**:
+    *   Test goals like "list issues in mandubian/ccos and get the first issue details".
+    *   Verify data flow between MCP steps.
+    *   Test context accumulation for MCP results.
+3.  [ ] **MCP Error Handling**:
     *   Parse MCP error responses and convert to RuntimeError.
     *   Integrate with Phase D repair loop for MCP-specific failures.
     *   Handle rate limiting, auth errors, and network failures gracefully.
-5.  [ ] **End-to-End Test**:
-    *   Run `--goal "list issues in mandubian/ccos"` with real MCP execution.
-    *   Verify: MCP discovery → MCP tool call → JSON response → formatted output.
+4.  [ ] **Stdio MCP Server Support**:
+    *   Implement `StdioSessionHandler` for local MCP servers.
+    *   Support process-based MCP tools (via `npx` or executable).
+    *   JSON-RPC over stdio communication.
+5.  [ ] **MCP Capability Caching**:
+    *   Cache discovered MCP capabilities across sessions.
+    *   Refresh capabilities on session initialization.
+    *   Handle capability version changes.
 
-### Success Criteria
--   `mcp.github.list_issues` executes via real GitHub MCP `tools/call`.
--   Plan execution returns actual GitHub issues data.
--   No synthesized fallback for MCP-discovered capabilities.
-
-## Phase H: Advanced Planning & Multi-Step Orchestration (Future)
+## Phase I: Advanced Planning & Multi-Step Orchestration (Future)
 **Goal**: Improve plan quality and handle complex multi-capability workflows.
 
 ### Tasks

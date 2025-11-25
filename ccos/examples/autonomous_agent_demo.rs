@@ -88,12 +88,20 @@ struct Decomposition {
     steps: Vec<PlannedStep>,
 }
 
+/// Resolution status for a planning step
 #[derive(Debug, Clone)]
 enum ResolutionStatus {
     ResolvedLocal(String, HashMap<String, String>), // ID, Args
     ResolvedRemote(String, HashMap<String, String>), // ID, Args (installed from MCP)
     ResolvedSynthesized(String, HashMap<String, String>), // ID, Args (generated)
     NeedsSubPlan(String, String), // Goal, Hint (Recursive)
+    /// Capability cannot be resolved - needs external referral (user or another entity)
+    /// Contains: capability description, what's needed, suggested action
+    NeedsReferral {
+        description: String,
+        reason: String,
+        suggested_action: String,
+    },
     Failed(String), // Reason
 }
 
@@ -208,6 +216,21 @@ impl IterativePlanner {
                         step_bindings.push(("subplan".to_string(), sub_plan_rtfs));
                         continue;
                     },
+                    ResolutionStatus::NeedsReferral { description, reason, suggested_action } => {
+                        println!("     🔔 REFERRAL NEEDED: {}", description);
+                        println!("        Reason: {}", reason);
+                        println!("        Suggested action: {}", suggested_action);
+                        
+                        // Instead of failing, we create a placeholder call that will ask for input
+                        // This uses the built-in ccos.user.ask capability
+                        let referral_call = format!(
+                            r#"(call "ccos.user.ask" {{:prompt "{}"}})"#,
+                            format!("Cannot complete step: {}. {}. {}", description, reason, suggested_action)
+                                .replace('"', "\\\"")
+                        );
+                        step_bindings.push((format!("step_{}_referral", i + 1), referral_call));
+                        continue;
+                    },
                     ResolutionStatus::Failed(reason) => {
                         println!("     ❌ Failed: {}", reason);
                         return Err(format!("Planning failed at step '{}': {}", step.description, reason).into());
@@ -299,6 +322,8 @@ Respond ONLY with a JSON object in this format:
     async fn try_direct_mcp_match(&mut self, goal: &str) -> Result<Option<(String, HashMap<String, String>)>, Box<dyn Error + Send + Sync>> {
         println!("     🔍 Checking for direct MCP tool match...");
         
+        let goal_lower = goal.to_lowercase();
+        
         // Try to get MCP server from overrides
         // Use a generic hint like "github" to match the github MCP server
         let keywords: Vec<&str> = goal.split_whitespace()
@@ -317,8 +342,23 @@ Respond ONLY with a JSON object in this format:
         // Also try common patterns
         if server_info.is_none() {
             for pattern in &["github", "gitlab", "slack", "notion"] {
-                if goal.to_lowercase().contains(pattern) {
+                if goal_lower.contains(pattern) {
                     if let Some(info) = resolve_server_url_from_overrides(pattern) {
+                        server_info = Some(info);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Semantic inference: keywords that strongly suggest GitHub context
+        if server_info.is_none() {
+            let github_domain_keywords = ["issue", "issues", "repository", "repo", "pull request", "pr", 
+                                          "commit", "branch", "fork", "star", "gist", "release"];
+            for keyword in &github_domain_keywords {
+                if goal_lower.contains(keyword) {
+                    if let Some(info) = resolve_server_url_from_overrides("github") {
+                        println!("     💡 Detected GitHub context from keyword '{}'", keyword);
                         server_info = Some(info);
                         break;
                     }
@@ -409,14 +449,17 @@ Respond ONLY with a JSON object in this format:
     /// Extract arguments for a capability based on the goal description
     async fn extract_args_for_capability(&self, capability: &CapabilityManifest, goal: &str) -> Result<HashMap<String, String>, Box<dyn Error + Send + Sync>> {
         // For MCP capabilities, parameters are stored in metadata as JSON schema
-        let schema_json = capability.metadata.get("input_schema_json")
+        let schema_json = capability.metadata.get("mcp_input_schema_json")
             .map(|s| s.as_str())
             .unwrap_or("");
         
         // If no schema available, just return empty args
         if schema_json.is_empty() {
+            println!("     ℹ️  No input schema for argument extraction");
             return Ok(HashMap::new());
         }
+        
+        println!("     🔍 Extracting arguments from goal using LLM...");
         
         let prompt = format!(
             r#"Given this capability: {}
@@ -443,6 +486,10 @@ Example: {{"owner": "github", "repo": "copilot"}}
         let string_args: HashMap<String, String> = args.into_iter()
             .map(|(k, v)| (k, v.to_string().trim_matches('"').to_string()))
             .collect();
+        
+        if !string_args.is_empty() {
+            println!("     ✅ Extracted arguments: {:?}", string_args);
+        }
         
         Ok(string_args)
     }
@@ -493,8 +540,29 @@ Example: {{"owner": "github", "repo": "copilot"}}
             }
         }
 
-        // C. If registry fails, try Synthesis
-        println!("     🧪 Registry failed. Attempting to synthesize capability for '{}'...", step.description);
+        // C. If registry fails, consider synthesis but be conservative
+        // Only synthesize if we can use safe stdlib functions
+        println!("     🧪 Registry failed. Checking if safe synthesis is possible for '{}'...", step.description);
+        
+        // Determine if this task requires external services/APIs (which we can't safely synthesize)
+        let requires_external = self.check_requires_external_service(&step.description, &step.capability_hint);
+        
+        if requires_external {
+            // This capability requires external services - request referral instead of broken synthesis
+            return Ok(ResolutionStatus::NeedsReferral {
+                description: step.description.clone(),
+                reason: format!(
+                    "This task requires external service access ({}). No matching MCP tool was found.",
+                    step.capability_hint
+                ),
+                suggested_action: format!(
+                    "Please provide a specific MCP server or capability for '{}', or manually configure the required service.",
+                    step.capability_hint
+                ),
+            });
+        }
+        
+        // Only synthesize for pure data transformations
         if let Some(synth_cap) = self.try_synthesize(&step.description, &step.capability_hint).await? {
              println!("     ✨ Synthesized new capability: {}", synth_cap.id);
              // For synthesized capabilities, we need to extract arguments more intelligently
@@ -518,6 +586,49 @@ Example: {{"owner": "github", "repo": "copilot"}}
 
         // D. If we are here, either no candidates found OR LLM rejected them.
         Ok(ResolutionStatus::NeedsSubPlan(step.description.clone(), step.capability_hint.clone()))
+    }
+
+    /// Check if a task description implies need for external service access
+    /// Returns true if the task requires APIs, network calls, or external data sources
+    fn check_requires_external_service(&self, description: &str, hint: &str) -> bool {
+        let desc_lower = description.to_lowercase();
+        let hint_lower = hint.to_lowercase();
+        
+        // Keywords that indicate external service requirements
+        let external_keywords = [
+            // API/HTTP patterns
+            "api", "http", "https", "fetch", "request", "endpoint", "rest", "graphql",
+            // Database patterns
+            "database", "query", "sql", "mongodb", "postgres", "mysql",
+            // Platform-specific patterns
+            "github", "gitlab", "slack", "jira", "notion", "confluence", "aws", "azure", "gcp",
+            // Authentication patterns
+            "authenticate", "login", "credentials", "oauth", "token",
+            // Network patterns
+            "connect", "network", "remote", "server", "service",
+            // File system patterns that need actual files
+            "read file", "write file", "open file", "download", "upload",
+        ];
+        
+        for keyword in &external_keywords {
+            if desc_lower.contains(keyword) || hint_lower.contains(keyword) {
+                return true;
+            }
+        }
+        
+        // Hint patterns that suggest external needs
+        let external_hint_patterns = [
+            "platform.", "system.", "access.", "service.", 
+            "auth.", "connect.", "network.", "data.query", "data.fetch",
+        ];
+        
+        for pattern in &external_hint_patterns {
+            if hint_lower.contains(pattern) {
+                return true;
+            }
+        }
+        
+        false
     }
 
     async fn try_synthesize(&mut self, description: &str, hint: &str) -> Result<Option<CapabilityManifest>, Box<dyn Error + Send + Sync>> {
@@ -1485,6 +1596,33 @@ fn compute_mcp_tool_score(hint: &str, tool_name: &str, description: &str) -> f64
     }
     if (hint_lower.contains("auth") || hint_lower.contains("profile")) && desc_lower.contains("authenticated") {
         score += 1.5;
+    }
+    
+    // STRONG MATCH: Tool name contains ALL significant words from the hint
+    // e.g., "list issues" -> tool_name "list_issues" should get high score
+    let hint_words: HashSet<String> = hint_lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= 3 && !["the", "and", "for", "from", "with", "latest", "recent"].contains(w))
+        .map(|s| s.to_string())
+        .collect();
+    
+    let tool_words: HashSet<String> = tool_lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= 2)
+        .map(|s| s.to_string())
+        .collect();
+    
+    // Count how many hint words appear in tool name
+    let matched_words: usize = hint_words.iter()
+        .filter(|w| tool_words.contains(*w) || tool_lower.contains(w.as_str()))
+        .count();
+    
+    if !hint_words.is_empty() && matched_words == hint_words.len() {
+        // ALL significant words from hint found in tool name - very strong match
+        score += 3.0;
+    } else if matched_words > 0 {
+        // Partial match
+        score += matched_words as f64 * 1.0;
     }
     
     // Action verb synonym matching using existing helper
