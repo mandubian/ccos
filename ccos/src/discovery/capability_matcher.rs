@@ -820,11 +820,27 @@ pub fn compute_mcp_tool_score(hint: &str, tool_name: &str, description: &str) ->
     }
     
     // STRONG MATCH: Tool name contains ALL significant words from the hint
-    let stop_words = ["the", "and", "for", "from", "with", "latest", "recent"];
+    let stop_words = ["the", "and", "for", "from", "with", "latest", "recent", "of", "to", "in", "on"];
     let hint_words: HashSet<String> = hint_lower
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| w.len() >= 3 && !stop_words.contains(w))
         .map(|s| s.to_string())
+        .collect();
+    
+    // Normalize singular/plural for better matching
+    let hint_words_normalized: HashSet<String> = hint_words.iter()
+        .flat_map(|w| {
+            let mut variants = vec![w.clone()];
+            // Add plural form if singular
+            if !w.ends_with('s') {
+                variants.push(format!("{}s", w));
+            }
+            // Add singular form if plural
+            if w.ends_with('s') && w.len() > 3 {
+                variants.push(w[..w.len()-1].to_string());
+            }
+            variants
+        })
         .collect();
     
     let tool_words: HashSet<String> = tool_lower
@@ -833,17 +849,28 @@ pub fn compute_mcp_tool_score(hint: &str, tool_name: &str, description: &str) ->
         .map(|s| s.to_string())
         .collect();
     
-    // Count how many hint words appear in tool name
-    let matched_words: usize = hint_words.iter()
+    // Count how many hint words appear in tool name (with normalization)
+    let matched_words: usize = hint_words_normalized.iter()
         .filter(|w| tool_words.contains(*w) || tool_lower.contains(w.as_str()))
         .count();
     
-    if !hint_words.is_empty() && matched_words == hint_words.len() {
+    // Count how many tool words DON'T appear in hint (penalty for extra words)
+    let unmatched_tool_words: usize = tool_words.iter()
+        .filter(|w| !hint_words_normalized.iter().any(|hw| hw == *w || hw.contains(w.as_str()) || w.contains(hw.as_str())))
+        .count();
+    
+    if !hint_words.is_empty() && matched_words >= hint_words.len() {
         // ALL significant words from hint found in tool name - very strong match
         score += 3.0;
+        // Bonus if tool has NO extra unmatched words (exact match)
+        if unmatched_tool_words == 0 {
+            score += 2.0;
+        }
     } else if matched_words > 0 {
-        // Partial match
-        score += matched_words as f64 * 1.0;
+        // Partial match - but penalize for unmatched tool words
+        let partial_score = matched_words as f64 * 1.0;
+        let penalty = unmatched_tool_words as f64 * 0.5;
+        score += (partial_score - penalty).max(0.0);
     }
     
     // Action verb synonym matching using existing helper
@@ -852,6 +879,29 @@ pub fn compute_mcp_tool_score(hint: &str, tool_name: &str, description: &str) ->
     let action_verb_score = calculate_action_verb_match_score(&hint_verbs, &tool_verbs);
     if action_verb_score > 0.0 {
         score += action_verb_score * 2.0;
+        // Extra bonus if action verb matches AND we have good word overlap
+        if action_verb_score >= 0.8 && matched_words > 0 {
+            score += 1.5;
+        }
+    }
+    
+    // Penalize for action verb mismatch (e.g., "list" vs "add")
+    let hint_full_verbs = extract_action_verbs(&hint_lower);
+    let tool_full_verbs = extract_action_verbs(&tool_lower);
+    if !hint_full_verbs.is_empty() && !tool_full_verbs.is_empty() {
+        // Check if verbs are in conflicting groups (e.g., "list" vs "add")
+        let read_verbs = ["list", "get", "fetch", "retrieve", "read", "show", "display", "find", "search"];
+        let write_verbs = ["add", "create", "update", "delete", "remove", "modify", "write", "post", "put", "patch"];
+        
+        let hint_is_read = hint_full_verbs.iter().any(|v| read_verbs.contains(&v.as_str()));
+        let hint_is_write = hint_full_verbs.iter().any(|v| write_verbs.contains(&v.as_str()));
+        let tool_is_read = tool_full_verbs.iter().any(|v| read_verbs.contains(&v.as_str()));
+        let tool_is_write = tool_full_verbs.iter().any(|v| write_verbs.contains(&v.as_str()));
+        
+        // Penalize if hint wants read but tool is write, or vice versa
+        if (hint_is_read && tool_is_write) || (hint_is_write && tool_is_read) {
+            score -= 3.0;
+        }
     }
     
     score

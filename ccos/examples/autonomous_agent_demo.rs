@@ -24,7 +24,7 @@
 //!   cargo run --example autonomous_agent_demo -- --goal "find the issues of repository ccos and user mandubian and filter them to keep only those containing RTFS"
 
 use std::sync::Arc;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
@@ -39,10 +39,7 @@ use ccos::capability_marketplace::{CapabilityMarketplace, CapabilityManifest};
 use ccos::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo};
 use ccos::synthesis::mcp_registry_client::McpRegistryClient;
 use ccos::synthesis::mcp_introspector::{MCPIntrospector, DiscoveredMCPTool};
-use ccos::discovery::capability_matcher::{
-    calculate_action_verb_match_score, calculate_description_match_score, extract_action_verbs,
-    compute_mcp_tool_score, keyword_overlap,
-};
+use ccos::discovery::capability_matcher::{compute_mcp_tool_score, keyword_overlap};
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 use rtfs::runtime::error::RuntimeResult;
@@ -1088,6 +1085,9 @@ Respond ONLY with the RTFS expression.
 
     /// Try to discover and install a capability from a real MCP server
     async fn try_real_mcp_discovery(&mut self, server_url: &str, auth_headers: Option<std::collections::HashMap<String, String>>, hint: &str, server_name: &str) -> Result<Option<CapabilityManifest>, Box<dyn Error + Send + Sync>> {
+        // Clone auth_headers for later use in output schema introspection
+        let auth_headers_for_introspection = auth_headers.clone();
+        
         // Create session manager and initialize session (like single_mcp_discovery.rs)
         let session_manager = MCPSessionManager::new(auth_headers);
         let client_info = MCPServerInfo {
@@ -1159,13 +1159,37 @@ Respond ONLY with the RTFS expression.
                     .and_then(|s| MCPIntrospector::type_expr_from_json_schema(s).ok());
                 
                 let introspector = MCPIntrospector::new();
-                let discovered_tool = DiscoveredMCPTool {
+                let mut discovered_tool = DiscoveredMCPTool {
                     tool_name: tool_name.clone(),
                     description: description.clone(),
                     input_schema,
                     output_schema: None,
                     input_schema_json,
                 };
+                
+                // Try to introspect output schema by calling the tool once with safe inputs
+                // This uses the same approach as single_mcp_discovery.rs
+                let (output_schema, sample_output) = match introspector.introspect_output_schema(
+                    &discovered_tool,
+                    server_url,
+                    server_name,
+                    auth_headers_for_introspection.clone(),
+                    None, // No input overrides - will use safe defaults
+                ).await {
+                    Ok((schema, sample)) => {
+                        if schema.is_some() {
+                            println!("     📊 Inferred output schema from live call");
+                        }
+                        (schema, sample)
+                    }
+                    Err(e) => {
+                        eprintln!("     ⚠️  Output schema introspection failed: {}", e);
+                        (None, None)
+                    }
+                };
+                
+                // Update discovered_tool with inferred output schema
+                discovered_tool.output_schema = output_schema;
                 
                 // Create capability manifest using the server name from overrides/config
                 let introspection_result = ccos::synthesis::mcp_introspector::MCPIntrospectionResult {
@@ -1175,10 +1199,15 @@ Respond ONLY with the RTFS expression.
                     tools: vec![discovered_tool],
                 };
                 
-                let manifest = introspector.create_capability_from_mcp_tool(
+                let mut manifest = introspector.create_capability_from_mcp_tool(
                     &introspection_result.tools[0],
                     &introspection_result
                 ).map_err(|e| format!("Failed to create manifest: {}", e))?;
+                
+                // Update manifest with the inferred output schema
+                if let Some(ref schema) = introspection_result.tools[0].output_schema {
+                    manifest.output_schema = Some(schema.clone());
+                }
                 
                 // Save discovered MCP capability using MCPIntrospector (like single_mcp_discovery.rs)
                 let implementation_code = introspector.generate_mcp_rtfs_implementation(
@@ -1190,7 +1219,7 @@ Respond ONLY with the RTFS expression.
                     &manifest,
                     &implementation_code,
                     &output_dir,
-                    None,
+                    sample_output.as_deref(),
                 ) {
                     Ok(path) => println!("     💾 Saved discovered MCP capability to: {}", path.display()),
                     Err(e) => eprintln!("     ⚠️  Failed to save MCP capability: {}", e),
