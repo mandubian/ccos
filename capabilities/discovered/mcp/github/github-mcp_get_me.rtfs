@@ -3,6 +3,16 @@
 ;; MCP Server: github/github-mcp (https://api.githubcopilot.com/mcp/)
 ;; Tool: get_me
 
+;; Sample Output:
+;; {
+;;   "content": [
+;;     {
+;;       "text": "{\"login\":\"mandubian\",\"id\":77193,\"profile_url\":\"https://github.com/mandubian\",\"avatar_url\":\"https://avatars.githubusercontent.com/u/77193?v=4\",\"details\":{\"name\":\"Pascal Voitot\",\"company\":\"Job Free (Paris)\",\"blog\":\"http://www.mandubian.com\",\"location\":\"Paris\",\"email\":\"pascal.voitot.dev@gmail.com\",\"bio\":\"AI applied research scientists \\u0026 engineer - Data/Stream senior engineer - Senior developer on FP \\u0026 typesafe languages\",\"twitter_username\":\"mandubian\",\"public_repos\":120,\"public_gists\":131,\"followers\":277,\"following\":12,\"created_at\":\"2009-04-23T22:40:42Z\",\"updated_at\":\"2025-09-24T11:44:20Z\"}}",
+;;       "type": "text"
+;;     }
+;;   ]
+;; }
+
 
 (capability "mcp.github.github-mcp.get_me"
   :name "get_me"
@@ -32,12 +42,12 @@
     :discovery {
       :method "mcp_introspection"
       :source_url "https://api.githubcopilot.com/mcp/"
-      :created_at "2025-11-25T09:50:27.674922640+00:00"
+      :created_at "2025-11-25T11:18:46.157243501+00:00"
       :capability_type "mcp_tool"
     }
   }
   :input-schema [:map ]
-  :output-schema :any
+  :output-schema [:map [:content [:vector [:map [:text :string] [:type :string]]]]]
   :implementation
     nil
 )
