@@ -76,16 +76,67 @@ impl CapabilityExecutor for MCPExecutor {
                 return pool_clone.execute_with_session(&tool_name, &metadata, &[inputs_clone]);
             }
 
+            // No session pool - do direct MCP execution with initialization
             // Convert RTFS Value to JSON, preserving string/keyword map keys
             let input_json = A2AExecutor::value_to_json(inputs)
                 .map_err(|e| RuntimeError::Generic(format!("Failed to serialize inputs: {}", e)))?;
 
             let client = reqwest::Client::new();
+            
+            // Step 1: Initialize MCP session
+            let init_request = json!({
+                "jsonrpc": "2.0",
+                "id": "init",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "ccos-mcp-executor",
+                        "version": "1.0.0"
+                    }
+                }
+            });
+            
+            let mut init_builder = client.post(&mcp.server_url);
+            if let Some(token) = &auth_token {
+                init_builder = init_builder.header("Authorization", format!("Bearer {}", token));
+            }
+            
+            let init_response = init_builder
+                .json(&init_request)
+                .timeout(Duration::from_millis(mcp.timeout_ms))
+                .send()
+                .await
+                .map_err(|e| RuntimeError::Generic(format!("MCP initialization failed: {}", e)))?;
+            
+            let init_json: serde_json::Value = init_response.json().await.map_err(|e| {
+                RuntimeError::Generic(format!("Failed to parse MCP init response: {}", e))
+            })?;
+            
+            // Check for initialization error
+            if let Some(error) = init_json.get("error") {
+                return Err(RuntimeError::Generic(format!(
+                    "MCP initialization error: {:?}",
+                    error
+                )));
+            }
+            
+            // Extract session ID if provided (some servers use it)
+            let session_id = init_json
+                .get("result")
+                .and_then(|r| r.get("sessionId"))
+                .and_then(|s| s.as_str())
+                .map(String::from);
+
             let tool_name = if mcp.tool_name.is_empty() || mcp.tool_name == "*" {
                 let tools_request = json!({"jsonrpc":"2.0","id":"tools_discovery","method":"tools/list","params":{}});
                 let mut request_builder = client.post(&mcp.server_url);
                 if let Some(token) = &auth_token {
                     request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
+                }
+                if let Some(ref sid) = session_id {
+                    request_builder = request_builder.header("Mcp-Session-Id", sid);
                 }
                 
                 let response = request_builder
@@ -129,6 +180,9 @@ impl CapabilityExecutor for MCPExecutor {
             let mut request_builder = client.post(&mcp.server_url);
             if let Some(token) = &auth_token {
                 request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
+            }
+            if let Some(ref sid) = session_id {
+                request_builder = request_builder.header("Mcp-Session-Id", sid);
             }
 
             let response = request_builder

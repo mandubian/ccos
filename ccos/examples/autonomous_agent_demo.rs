@@ -33,6 +33,7 @@ use clap::Parser;
 use ccos::CCOS;
 use rtfs::config::types::AgentConfig;
 use ccos::arbiter::DelegatingArbiter;
+use ccos::capabilities::{SessionPoolManager, MCPSessionHandler};
 use ccos::catalog::{CatalogService, CatalogFilter, CatalogEntryKind};
 use ccos::capability_marketplace::{CapabilityMarketplace, CapabilityManifest};
 use ccos::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo};
@@ -154,6 +155,14 @@ impl IterativePlanner {
             }
             self.trace.goal = goal.to_string();
             println!("\n🧠 Solving Goal (Depth {}): \"{}\"", depth, goal);
+
+            // 0. Try direct MCP tool match before decomposition
+            // This avoids over-decomposition for simple API calls
+            if let Some((cap_id, args)) = self.try_direct_mcp_match(goal).await? {
+                println!("     ✅ Direct MCP match found: {}", cap_id);
+                let call_expr = self.generate_call(&cap_id, args);
+                return Ok(call_expr);
+            }
 
             // 1. Decompose
             let steps = self.decompose(goal).await?;
@@ -283,6 +292,159 @@ Respond ONLY with a JSON object in this format:
         let json_str = extract_json(&response);
         let decomposition: Decomposition = serde_json::from_str(json_str)?;
         Ok(decomposition.steps)
+    }
+
+    /// Try to find a direct MCP tool match for the goal before decomposition.
+    /// This avoids over-decomposition for simple API calls.
+    async fn try_direct_mcp_match(&mut self, goal: &str) -> Result<Option<(String, HashMap<String, String>)>, Box<dyn Error + Send + Sync>> {
+        println!("     🔍 Checking for direct MCP tool match...");
+        
+        // Try to get MCP server from overrides
+        // Use a generic hint like "github" to match the github MCP server
+        let keywords: Vec<&str> = goal.split_whitespace()
+            .filter(|w| w.len() > 3)
+            .collect();
+        
+        // Check if any keyword matches an override
+        let mut server_info: Option<(String, String)> = None;
+        for keyword in &keywords {
+            if let Some(info) = resolve_server_url_from_overrides(keyword) {
+                server_info = Some(info);
+                break;
+            }
+        }
+        
+        // Also try common patterns
+        if server_info.is_none() {
+            for pattern in &["github", "gitlab", "slack", "notion"] {
+                if goal.to_lowercase().contains(pattern) {
+                    if let Some(info) = resolve_server_url_from_overrides(pattern) {
+                        server_info = Some(info);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        let (server_url, server_name) = match server_info {
+            Some(info) => info,
+            None => {
+                println!("     ⚠️  No MCP server found for goal keywords");
+                return Ok(None);
+            }
+        };
+        
+        // Get auth headers
+        let auth_headers = get_mcp_auth_headers();
+        
+        // Try to discover tools from this server using the same pattern as try_real_mcp_discovery
+        let session_manager = MCPSessionManager::new(auth_headers.clone());
+        let client_info = MCPServerInfo {
+            name: "ccos-autonomous-agent".to_string(),
+            version: "1.0.0".to_string(),
+        };
+        
+        let session = match session_manager.initialize_session(&server_url, &client_info).await {
+            Ok(s) => s,
+            Err(e) => {
+                println!("     ⚠️  Failed to initialize MCP session: {}", e);
+                return Ok(None);
+            }
+        };
+        
+        // Call tools/list
+        let tools_resp = match session_manager.make_request(&session, "tools/list", serde_json::json!({})).await {
+            Ok(r) => r,
+            Err(e) => {
+                println!("     ⚠️  Failed to list MCP tools: {}", e);
+                return Ok(None);
+            }
+        };
+        
+        let empty_vec: Vec<serde_json::Value> = vec![];
+        let tools_array = tools_resp
+            .get("result")
+            .and_then(|r| r.get("tools"))
+            .and_then(|t| t.as_array())
+            .unwrap_or(&empty_vec);
+        
+        // Score each tool against the goal
+        let mut best_match: Option<(String, f64, serde_json::Value)> = None;
+        for tool in tools_array {
+            let tool_name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let tool_description = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");
+            
+            let score = compute_mcp_tool_score(goal, tool_name, tool_description);
+            
+            if score > 3.0 {  // Threshold for direct match
+                if best_match.is_none() || score > best_match.as_ref().unwrap().1 {
+                    best_match = Some((tool_name.to_string(), score, tool.clone()));
+                }
+            }
+        }
+        
+        if let Some((tool_name, score, _tool_schema)) = best_match {
+            println!("     ✨ Found direct MCP match: {} (score: {:.2})", tool_name, score);
+            
+            let cap_id = format!("mcp.{}.{}", server_name, tool_name);
+            
+            // Check if already registered
+            if let Some(manifest) = self.marketplace.get_capability(&cap_id).await {
+                // Already registered, extract args with LLM
+                let args = self.extract_args_for_capability(&manifest, goal).await?;
+                return Ok(Some((cap_id, args)));
+            }
+            
+            // Not registered yet - run full discovery to register it
+            if let Ok(Some(manifest)) = self.try_real_mcp_discovery(&server_url, auth_headers, &tool_name, &server_name).await {
+                let args = self.extract_args_for_capability(&manifest, goal).await?;
+                return Ok(Some((manifest.id, args)));
+            }
+        }
+        
+        println!("     ⚠️  No direct MCP tool match found (best score < 3.0)");
+        Ok(None)
+    }
+    
+    /// Extract arguments for a capability based on the goal description
+    async fn extract_args_for_capability(&self, capability: &CapabilityManifest, goal: &str) -> Result<HashMap<String, String>, Box<dyn Error + Send + Sync>> {
+        // For MCP capabilities, parameters are stored in metadata as JSON schema
+        let schema_json = capability.metadata.get("input_schema_json")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        
+        // If no schema available, just return empty args
+        if schema_json.is_empty() {
+            return Ok(HashMap::new());
+        }
+        
+        let prompt = format!(
+            r#"Given this capability: {}
+Description: {}
+Input Schema (JSON): {}
+
+And this goal: "{}"
+
+Extract parameter values from the goal. Respond with ONLY a JSON object mapping parameter names to values.
+If a parameter value cannot be determined from the goal, omit it.
+Example: {{"owner": "github", "repo": "copilot"}}
+"#,
+            capability.id,
+            &capability.description,
+            schema_json,
+            goal
+        );
+        
+        let response = self.arbiter.generate_raw_text(&prompt).await?;
+        let json_str = extract_json(&response);
+        let args: HashMap<String, serde_json::Value> = serde_json::from_str(json_str).unwrap_or_default();
+        
+        // Convert to String values
+        let string_args: HashMap<String, String> = args.into_iter()
+            .map(|(k, v)| (k, v.to_string().trim_matches('"').to_string()))
+            .collect();
+        
+        Ok(string_args)
     }
 
     async fn resolve_step(&mut self, step: &PlannedStep) -> Result<ResolutionStatus, Box<dyn Error + Send + Sync>> {
@@ -922,6 +1084,14 @@ Respond ONLY with the RTFS expression.
                     Err(e) => eprintln!("     ⚠️  Failed to save MCP capability: {}", e),
                 }
                 
+                // Register the MCP capability in the marketplace for execution
+                // This ensures the MCPExecutor will handle execution via tools/call
+                if let Err(e) = self.marketplace.register_capability_manifest(manifest.clone()).await {
+                    eprintln!("     ⚠️  Failed to register MCP capability: {}", e);
+                } else {
+                    println!("     📦 Registered MCP capability in marketplace: {}", manifest.id);
+                }
+                
                 return Ok(Some(manifest));
             } else {
                 println!("     ⚠️  Best match '{}' below threshold (score: {:.2}, overlap: {:.2})", tool_name, score, overlap);
@@ -1266,9 +1436,14 @@ fn compute_mcp_tool_score(hint: &str, tool_name: &str, description: &str) -> f64
     // Use existing description matcher
     score += calculate_description_match_score(hint, description, tool_name);
     
-    // Keyword overlap (using tokenize approach from MissingCapabilityResolver)
+    // Keyword overlap between hint and tool name
     let overlap = keyword_overlap(hint, tool_name);
     score += overlap * 2.5;
+    
+    // Also check keyword overlap between hint and description
+    // This helps match hints like "github.api.get_user" with tools described as "Get details of the authenticated GitHub user"
+    let desc_overlap = keyword_overlap(hint, description);
+    score += desc_overlap * 2.0;
     
     // Extract last part of hint (e.g., "list" from "github.issues.list")
     let hint_last = hint
@@ -1288,6 +1463,28 @@ fn compute_mcp_tool_score(hint: &str, tool_name: &str, description: &str) -> f64
     // Normalized hint match
     if hint.replace('.', "_").to_ascii_lowercase().contains(&tool_lower) {
         score += 1.0;
+    }
+    
+    // Check if description contains important keywords from the hint
+    let hint_keywords: Vec<&str> = hint.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| s.len() > 2)
+        .collect();
+    let desc_lower = description.to_ascii_lowercase();
+    for keyword in &hint_keywords {
+        if desc_lower.contains(&keyword.to_ascii_lowercase()) {
+            score += 0.5;
+        }
+    }
+    
+    // Special semantic equivalences for common patterns
+    // "user" in hint matches "me" in tool name (GitHub API pattern)
+    // "authenticate"/"auth" matches tools with "authenticated" in description
+    let hint_lower = hint.to_ascii_lowercase();
+    if hint_lower.contains("user") && (tool_lower.contains("me") || desc_lower.contains("authenticated user")) {
+        score += 2.0;
+    }
+    if (hint_lower.contains("auth") || hint_lower.contains("profile")) && desc_lower.contains("authenticated") {
+        score += 1.5;
     }
     
     // Action verb synonym matching using existing helper
@@ -1487,6 +1684,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Register basic tools
     ccos::capabilities::defaults::register_default_capabilities(&ccos.get_capability_marketplace()).await?;
+
+    // Configure session pool for MCP execution
+    let mut session_pool = SessionPoolManager::new();
+    session_pool.register_handler("mcp", std::sync::Arc::new(MCPSessionHandler::new()));
+    let session_pool = std::sync::Arc::new(session_pool);
+    ccos.get_capability_marketplace().set_session_pool(session_pool).await;
+    println!("✅ Session pool configured with MCPSessionHandler");
 
     // Initialize Planner
     let mut planner = IterativePlanner::new(ccos.clone(), args.simulate_error, args.no_mock)?;

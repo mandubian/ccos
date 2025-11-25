@@ -1,18 +1,18 @@
-;; MCP Capability: get_commit
+;; MCP Capability: get_me
 ;; Generated from MCP tool introspection
-;; MCP Server: github (https://api.githubcopilot.com/mcp/)
-;; Tool: get_commit
+;; MCP Server: github/github-mcp (https://api.githubcopilot.com/mcp/)
+;; Tool: get_me
 
 
-(capability "mcp.github.get_commit"
-  :name "get_commit"
+(capability "mcp.github.github-mcp.get_me"
+  :name "get_me"
   :version "1.0.0"
-  :description "Get details for a commit from a GitHub repository"
+  :description "Get details of the authenticated GitHub user. Use this when a request is about the user's own profile for GitHub. Or when information is missing to build other tool calls."
   ;; PROVIDER START
   :provider {
     :type "mcp"
     :server_endpoint "https://api.githubcopilot.com/mcp/"
-    :tool_name "get_commit"
+    :tool_name "get_me"
     :timeout_seconds 30
     :protocol_version "2024-11-05"
   }
@@ -22,8 +22,8 @@
   :metadata {
     :mcp {
       :server_url "https://api.githubcopilot.com/mcp/"
-      :server_name "github"
-      :tool_name "get_commit"
+      :server_name "github/github-mcp"
+      :tool_name "get_me"
       :protocol_version "2024-11-05"
       :requires_session "auto"
       :auth_env_var "MCP_AUTH_TOKEN"
@@ -32,11 +32,11 @@
     :discovery {
       :method "mcp_introspection"
       :source_url "https://api.githubcopilot.com/mcp/"
-      :created_at "2025-11-25T08:46:00.878388201+00:00"
+      :created_at "2025-11-25T09:18:40.960543565+00:00"
       :capability_type "mcp_tool"
     }
   }
-  :input-schema [:map [:include_diff :bool?] [:owner :string] [:page :float?] [:perPage :float?] [:repo :string] [:sha :string]]
+  :input-schema [:map ]
   :output-schema :any
   :implementation
     nil
