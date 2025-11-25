@@ -45,6 +45,21 @@ use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 use rtfs::runtime::error::RuntimeResult;
 
+// Import Modular Planner components
+use ccos::planner::modular_planner::{
+    ModularPlanner, PlannerConfig,
+    PatternDecomposition,
+    CatalogResolution,
+    ResolvedCapability,
+    DecompositionStrategy,
+};
+use ccos::planner::modular_planner::resolution::{
+    CompositeResolution, McpResolution,
+};
+use ccos::planner::modular_planner::resolution::semantic::{CapabilityCatalog, CapabilityInfo};
+use ccos::planner::modular_planner::orchestrator::{PlanResult, TraceEvent as ModularTraceEvent};
+use ccos::planner::modular_planner::resolution::mcp::RuntimeMcpDiscovery;
+
 // ============================================================================
 // CLI Arguments
 // ============================================================================
@@ -70,6 +85,10 @@ struct Args {
     /// Enable mock fallback for missing capabilities (disabled by default)
     #[arg(long)]
     allow_mock: bool,
+
+    /// Use the new modular planner architecture
+    #[arg(long)]
+    use_modular_planner: bool,
 }
 
 // ============================================================================
@@ -2112,82 +2131,287 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     ccos.get_capability_marketplace().set_session_pool(session_pool).await;
     println!("✅ Session pool configured with MCPSessionHandler");
 
-    // Initialize Planner
-    let mut planner = IterativePlanner::new(ccos.clone(), args.simulate_error, args.allow_mock)?;
+    if args.use_modular_planner {
+        run_modular_planner(ccos, args.goal, args.profile).await?;
+    } else {
+        // Initialize Planner
+        let mut planner = IterativePlanner::new(ccos.clone(), args.simulate_error, args.allow_mock)?;
 
-    // Plan
-    println!("\n🏗️  Building Plan...");
-    let final_plan_rtfs = planner.solve(&args.goal, 0).await?;
+        // Plan
+        println!("\n🏗️  Building Plan...");
+        let final_plan_rtfs = planner.solve(&args.goal, 0).await?;
 
-    println!("\n📝 Generated RTFS Plan:");
-    println!("--------------------------------------------------");
-    println!("{}", final_plan_rtfs);
-    println!("--------------------------------------------------");
+        println!("\n📝 Generated RTFS Plan:");
+        println!("--------------------------------------------------");
+        println!("{}", final_plan_rtfs);
+        println!("--------------------------------------------------");
 
-    // Execute
-    println!("\n🚀 Executing Plan...");
-    
-    let mut current_plan_rtfs = final_plan_rtfs;
-    let mut attempts = 0;
-    const MAX_ATTEMPTS: usize = 3;
-    
-    loop {
-        attempts += 1;
-        let plan_obj = ccos::types::Plan {
-            plan_id: "iterative-plan".to_string(),
-            name: Some("Generated Plan".to_string()),
-            body: ccos::types::PlanBody::Rtfs(current_plan_rtfs.clone()),
-            intent_ids: vec![], // Simplification
-            ..Default::default()
-        };
+        // Execute
+        println!("\n🚀 Executing Plan...");
+        
+        let mut current_plan_rtfs = final_plan_rtfs;
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: usize = 3;
+        
+        loop {
+            attempts += 1;
+            let plan_obj = ccos::types::Plan {
+                plan_id: "iterative-plan".to_string(),
+                name: Some("Generated Plan".to_string()),
+                body: ccos::types::PlanBody::Rtfs(current_plan_rtfs.clone()),
+                intent_ids: vec![], // Simplification
+                ..Default::default()
+            };
 
-        let context = RuntimeContext::full();
-        let result = ccos.validate_and_execute_plan(plan_obj, &context).await;
+            let context = RuntimeContext::full();
+            let result = ccos.validate_and_execute_plan(plan_obj, &context).await;
 
-        let (success, error_msg) = match result {
-            Ok(exec_result) => {
-                if exec_result.success {
-                    println!("\n🏁 Execution Result:");
-                    println!("   Success: {}", exec_result.success);
-                    println!("   Result: {:?}", exec_result.value);
-                    break;
-                } else {
-                    let msg = exec_result.metadata.get("error")
-                        .map(|v| value_to_rtfs_literal(v))
-                        .unwrap_or_else(|| "Unknown error".to_string());
-                    (false, msg)
-                }
-            },
-            Err(e) => {
-                (false, format!("Runtime Error: {}", e))
-            }
-        };
-
-        if !success {
-            println!("\n❌ Execution Failed (Attempt {}/{}): {}", attempts, MAX_ATTEMPTS, error_msg);
-            
-            if attempts >= MAX_ATTEMPTS {
-                println!("   Giving up after {} attempts.", MAX_ATTEMPTS);
-                break;
-            }
-            
-            // Repair
-            match planner.repair_plan(&current_plan_rtfs, &error_msg).await {
-                Ok(repaired) => {
-                    println!("   📝 Repaired Plan:\n{}", repaired);
-                    current_plan_rtfs = repaired;
+            let (success, error_msg) = match result {
+                Ok(exec_result) => {
+                    if exec_result.success {
+                        println!("\n🏁 Execution Result:");
+                        println!("   Success: {}", exec_result.success);
+                        println!("   Result: {:?}", exec_result.value);
+                        break;
+                    } else {
+                        let msg = exec_result.metadata.get("error")
+                            .map(|v| value_to_rtfs_literal(v))
+                            .unwrap_or_else(|| "Unknown error".to_string());
+                        (false, msg)
+                    }
                 },
                 Err(e) => {
-                    println!("   ⚠️ Failed to repair plan: {}", e);
+                    (false, format!("Runtime Error: {}", e))
+                }
+            };
+
+            if !success {
+                println!("\n❌ Execution Failed (Attempt {}/{}): {}", attempts, MAX_ATTEMPTS, error_msg);
+                
+                if attempts >= MAX_ATTEMPTS {
+                    println!("   Giving up after {} attempts.", MAX_ATTEMPTS);
                     break;
                 }
+                
+                // Repair
+                match planner.repair_plan(&current_plan_rtfs, &error_msg).await {
+                    Ok(repaired) => {
+                        println!("   📝 Repaired Plan:\n{}", repaired);
+                        current_plan_rtfs = repaired;
+                    },
+                    Err(e) => {
+                        println!("   ⚠️ Failed to repair plan: {}", e);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Dump Trace
+        println!("\n🔍 Planning Trace:");
+        println!("{}", serde_json::to_string_pretty(&planner.trace)?);
+    }
+    
+    Ok(())
+}
+
+// ============================================================================
+// Modular Planner Mode
+// ============================================================================
+
+/// CCOS Catalog Adapter for Modular Planner
+struct CcosCatalogAdapter {
+    catalog: Arc<CatalogService>,
+}
+
+impl CcosCatalogAdapter {
+    fn new(catalog: Arc<CatalogService>) -> Self {
+        Self { catalog }
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl CapabilityCatalog for CcosCatalogAdapter {
+    async fn list_capabilities(&self, _domain: Option<&str>) -> Vec<CapabilityInfo> {
+        let hits = self.catalog.search_keyword("", None, 100);
+        hits.into_iter().map(catalog_hit_to_info).collect()
+    }
+
+    async fn get_capability(&self, id: &str) -> Option<CapabilityInfo> {
+        let hits = self.catalog.search_keyword(id, None, 10);
+        hits.into_iter()
+            .find(|h| h.entry.id == id)
+            .map(catalog_hit_to_info)
+    }
+
+    async fn search(&self, query: &str, limit: usize) -> Vec<CapabilityInfo> {
+        let hits = self.catalog.search_semantic(query, None, limit);
+        hits.into_iter().map(catalog_hit_to_info).collect()
+    }
+}
+
+fn catalog_hit_to_info(hit: ccos::catalog::CatalogHit) -> CapabilityInfo {
+    CapabilityInfo {
+        id: hit.entry.id,
+        name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
+        description: hit.entry.description.unwrap_or_default(),
+        input_schema: None,
+    }
+}
+
+async fn run_modular_planner(ccos: Arc<CCOS>, goal: String, profile: Option<String>) -> Result<(), Box<dyn Error + Send + Sync>> {
+    println!("\n╔══════════════════════════════════════════════════════════════╗");
+    println!("║           🧩 Modular Planner Mode                            ║");
+    println!("╚══════════════════════════════════════════════════════════════╝\n");
+    
+    println!("📋 Goal: \"{}\"\n", goal);
+
+    // Apply LLM profile if specified (already done in main, but ensuring env vars are set)
+    if let Some(p) = profile {
+        println!("   Using LLM Profile: {}", p);
+    }
+
+    // 1. Use IntentGraph from CCOS
+    println!("🔧 Using IntentGraph from CCOS...");
+    let intent_graph = ccos.get_intent_graph();
+    
+    // 2. Build capability catalog using adapter
+    println!("\n🔍 Setting up capability catalog...");
+    let catalog = Arc::new(CcosCatalogAdapter::new(ccos.get_catalog()));
+    
+    // 3. Create decomposition strategy
+    println!("\n📐 Using PatternDecomposition (fast, deterministic)");
+    let decomposition: Box<dyn DecompositionStrategy> = Box::new(PatternDecomposition::new());
+    
+    // 4. Create resolution strategy (Composite: Catalog + MCP)
+    let mut composite_resolution = CompositeResolution::new();
+    
+    // A. Catalog Resolution
+    composite_resolution.add_strategy(Box::new(CatalogResolution::new(catalog.clone())));
+    
+    // B. MCP Resolution
+    let mut auth_headers = HashMap::new();
+    if let Ok(token) = std::env::var("MCP_AUTH_TOKEN") {
+        if !token.is_empty() {
+             auth_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+        }
+    }
+    let discovery_session_manager = Arc::new(MCPSessionManager::new(Some(auth_headers)));
+    
+    // Create runtime MCP discovery
+    let mcp_discovery = Arc::new(RuntimeMcpDiscovery::new(
+        discovery_session_manager,
+        ccos.get_capability_marketplace(),
+    ));
+    
+    let mcp_resolution = McpResolution::new(mcp_discovery);
+    composite_resolution.add_strategy(Box::new(mcp_resolution));
+    
+    // 5. Create the modular planner
+    let config = PlannerConfig {
+        max_depth: 5,
+        persist_intents: true,
+        create_edges: true,
+        intent_namespace: "auto".to_string(),
+    };
+    
+    let mut planner = ModularPlanner::new(decomposition, Box::new(composite_resolution), intent_graph.clone())
+        .with_config(config);
+    
+    // 6. Plan
+    println!("\n🚀 Planning...\n");
+    
+    let plan_result = match planner.plan(&goal).await {
+        Ok(result) => result,
+        Err(e) => {
+            println!("\n❌ Planning failed: {}", e);
+            return Ok(());
+        }
+    };
+    
+    println!("═══════════════════════════════════════════════════════════════");
+    println!("📋 Plan Result");
+    println!("═══════════════════════════════════════════════════════════════\n");
+    
+    println!("📝 Resolved Steps ({}):", plan_result.intent_ids.len());
+    for (i, intent_id) in plan_result.intent_ids.iter().enumerate() {
+        if let Some(resolution) = plan_result.resolutions.get(intent_id) {
+            let (status, cap_id) = match resolution {
+                ResolvedCapability::Local { capability_id, .. } => ("Local", capability_id.as_str()),
+                ResolvedCapability::Remote { capability_id, .. } => ("Remote", capability_id.as_str()),
+                ResolvedCapability::BuiltIn { capability_id, .. } => ("BuiltIn", capability_id.as_str()),
+                ResolvedCapability::Synthesized { capability_id, .. } => ("Synth", capability_id.as_str()),
+                ResolvedCapability::NeedsReferral { reason, .. } => ("Referral", reason.as_str()),
+            };
+            println!("   {}. [{}] {}", i + 1, status, cap_id);
+        }
+    }
+    
+    println!("\n📜 Generated RTFS Plan:");
+    println!("───────────────────────────────────────────────────────────────");
+    println!("{}", plan_result.rtfs_plan);
+    println!("───────────────────────────────────────────────────────────────");
+    
+    // Show trace if verbose
+    println!("\n🔍 Planning Trace:");
+    for event in &plan_result.trace.events {
+        match event {
+            ModularTraceEvent::DecompositionStarted { strategy } => {
+                println!("   → Decomposition started with strategy: {}", strategy);
+            }
+            ModularTraceEvent::DecompositionCompleted { num_intents, confidence } => {
+                println!("   ✓ Decomposition completed: {} intents, confidence: {:.2}", num_intents, confidence);
+            }
+            ModularTraceEvent::IntentCreated { intent_id, description } => {
+                println!("   + Intent created: {} - \"{}\"", &intent_id[..20.min(intent_id.len())], description);
+            }
+            ModularTraceEvent::EdgeCreated { from, to, edge_type } => {
+                println!("   ⟶ Edge: {} -> {} ({})", &from[..16.min(from.len())], &to[..16.min(to.len())], edge_type);
+            }
+            ModularTraceEvent::ResolutionStarted { intent_id } => {
+                println!("   🔍 Resolving: {}", &intent_id[..20.min(intent_id.len())]);
+            }
+            ModularTraceEvent::ResolutionCompleted { intent_id, capability } => {
+                println!("   ✓ Resolved: {} → {}", &intent_id[..16.min(intent_id.len())], capability);
+            }
+            ModularTraceEvent::ResolutionFailed { intent_id, reason } => {
+                println!("   ✗ Failed: {} - {}", &intent_id[..16.min(intent_id.len())], reason);
             }
         }
     }
 
-    // Dump Trace
-    println!("\n🔍 Planning Trace:");
-    println!("{}", serde_json::to_string_pretty(&planner.trace)?);
+    // 7. Execute
+    println!("\n⚡ Executing Plan...");
+    println!("───────────────────────────────────────────────────────────────");
     
+    let plan_obj = ccos::types::Plan {
+        plan_id: format!("modular-plan-{}", uuid::Uuid::new_v4()),
+        name: Some("Modular Plan".to_string()),
+        body: ccos::types::PlanBody::Rtfs(plan_result.rtfs_plan.clone()),
+        intent_ids: plan_result.intent_ids.clone(),
+        ..Default::default()
+    };
+
+    let context = RuntimeContext::full();
+    match ccos.validate_and_execute_plan(plan_obj, &context).await {
+        Ok(exec_result) => {
+            println!("\n🏁 Execution Result:");
+            println!("   Success: {}", exec_result.success);
+            
+            // Use existing value_to_rtfs_literal for nicer output if available, else debug
+            println!("   Result: {:?}", exec_result.value);
+            
+            if !exec_result.success {
+                if let Some(err) = exec_result.metadata.get("error") {
+                    println!("   Error: {:?}", err);
+                }
+            }
+        },
+        Err(e) => {
+            println!("\n❌ Execution Failed: {}", e);
+        }
+    }
+    
+    println!("\n✅ Modular Planner run complete!");
     Ok(())
 }

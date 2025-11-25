@@ -4,7 +4,7 @@
 //! to a concrete capability that can execute it.
 
 pub mod semantic;
-mod mcp;
+pub mod mcp;
 mod catalog;
 
 pub use semantic::{SemanticResolution, CapabilityCatalog, CapabilityInfo};
@@ -98,6 +98,7 @@ pub enum ResolvedCapability {
         capability_id: String,
         server_url: String,
         arguments: HashMap<String, String>,
+        input_schema: Option<serde_json::Value>,
         confidence: f64,
     },
     

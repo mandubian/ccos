@@ -5,6 +5,7 @@
 //! 2. Properly stores all intents in the IntentGraph as real nodes
 //! 3. Uses resolution strategies to map semantic intents to capabilities
 //! 4. Generates executable RTFS plans from resolved capabilities
+//! 5. EXECUTES the generated plan using the CCOS runtime
 //!
 //! The key difference from autonomous_agent_demo is that this architecture:
 //! - Separates WHAT (decomposition produces semantic intents) from HOW (resolution finds capabilities)
@@ -15,13 +16,11 @@
 //! Usage:
 //!   cargo run --example modular_planner_demo -- --goal "list issues in mandubian/ccos but ask me for the page size"
 
-use std::collections::HashMap;
 use std::error::Error;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use clap::Parser;
-use ccos::intent_graph::IntentGraph;
-use ccos::intent_graph::config::IntentGraphConfig;
+use ccos::CCOS;
 use ccos::planner::modular_planner::{
     ModularPlanner, PlannerConfig,
     PatternDecomposition,
@@ -29,8 +28,15 @@ use ccos::planner::modular_planner::{
     ResolvedCapability,
     DecompositionStrategy,
 };
+use ccos::planner::modular_planner::resolution::{
+    CompositeResolution, McpResolution,
+};
+use ccos::synthesis::mcp_session::MCPSessionManager;
 use ccos::planner::modular_planner::resolution::semantic::{CapabilityCatalog, CapabilityInfo};
 use ccos::planner::modular_planner::orchestrator::{PlanResult, TraceEvent};
+use ccos::capabilities::{SessionPoolManager, MCPSessionHandler};
+use rtfs::runtime::security::RuntimeContext;
+use rtfs::config::types::AgentConfig;
 
 // ============================================================================
 // CLI Arguments
@@ -49,166 +55,62 @@ struct Args {
     /// Discover tools from MCP servers (requires GITHUB_TOKEN)
     #[arg(long)]
     discover_mcp: bool,
+
+    /// Path to agent config file
+    #[arg(long, default_value = "config/agent_config.toml")]
+    config: String,
+    
+    /// Execute the plan after generation
+    #[arg(long, default_value_t = true)]
+    execute: bool,
 }
 
 // ============================================================================
-// MCP Tool Catalog (bridges to MCP discovery)
+// CCOS Catalog Adapter
 // ============================================================================
 
-/// A catalog that queries MCP servers for available tools
-struct McpToolCatalog {
-    /// Discovered MCP tools
-    tools: Vec<CapabilityInfo>,
+/// Adapts the CCOS CatalogService to the CapabilityCatalog trait required by the planner
+struct CcosCatalogAdapter {
+    catalog: Arc<ccos::catalog::CatalogService>,
 }
 
-impl McpToolCatalog {
-    fn new() -> Self {
-        Self { tools: Vec::new() }
-    }
-
-    /// Discover tools from configured MCP servers
-    async fn discover_from_servers(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        // Try to discover from GitHub MCP server
-        if let Some((server_url, server_name)) = resolve_mcp_server("github") {
-            println!("  📡 Discovering tools from MCP server: {}", server_name);
-            
-            match discover_mcp_tools(&server_url, &server_name).await {
-                Ok(tools) => {
-                    println!("     Found {} tools", tools.len());
-                    self.tools.extend(tools);
-                }
-                Err(e) => {
-                    println!("     ⚠️ Failed to discover tools: {}", e);
-                }
-            }
-        } else {
-            println!("  ⚠️ No MCP server configured (check capabilities/mcp/overrides.json)");
-        }
-        
-        Ok(())
+impl CcosCatalogAdapter {
+    fn new(catalog: Arc<ccos::catalog::CatalogService>) -> Self {
+        Self { catalog }
     }
 }
 
 #[async_trait::async_trait(?Send)]
-impl CapabilityCatalog for McpToolCatalog {
-    async fn list_capabilities(&self, domain: Option<&str>) -> Vec<CapabilityInfo> {
-        match domain {
-            Some(d) => self.tools.iter()
-                .filter(|t| t.id.to_lowercase().contains(&d.to_lowercase()))
-                .cloned()
-                .collect(),
-            None => self.tools.clone(),
-        }
+impl CapabilityCatalog for CcosCatalogAdapter {
+    async fn list_capabilities(&self, _domain: Option<&str>) -> Vec<CapabilityInfo> {
+        // Return all capabilities (limit to 100 for sanity)
+        let hits = self.catalog.search_keyword("", None, 100);
+        hits.into_iter().map(catalog_hit_to_info).collect()
     }
 
     async fn get_capability(&self, id: &str) -> Option<CapabilityInfo> {
-        self.tools.iter().find(|t| t.id == id).cloned()
+        // Search specifically for this ID
+        let hits = self.catalog.search_keyword(id, None, 10);
+        hits.into_iter()
+            .find(|h| h.entry.id == id)
+            .map(catalog_hit_to_info)
     }
 
     async fn search(&self, query: &str, limit: usize) -> Vec<CapabilityInfo> {
-        let query_lower = query.to_lowercase();
-        let query_words: Vec<&str> = query_lower.split_whitespace().collect();
-        
-        let mut scored: Vec<(CapabilityInfo, usize)> = self.tools.iter()
-            .map(|t| {
-                let text = format!("{} {}", t.name, t.description).to_lowercase();
-                let score = query_words.iter()
-                    .filter(|w| w.len() > 2 && text.contains(*w))
-                    .count();
-                (t.clone(), score)
-            })
-            .filter(|(_, score)| *score > 0)
-            .collect();
-        
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
-        scored.into_iter().take(limit).map(|(t, _)| t).collect()
+        // Use semantic search from CCOS catalog
+        let hits = self.catalog.search_semantic(query, None, limit);
+        hits.into_iter().map(catalog_hit_to_info).collect()
     }
 }
 
-// ============================================================================
-// MCP Discovery Helpers
-// ============================================================================
-
-/// Resolve MCP server URL from overrides file
-fn resolve_mcp_server(hint: &str) -> Option<(String, String)> {
-    let overrides_path = std::path::Path::new("capabilities/mcp/overrides.json");
-    if !overrides_path.exists() {
-        // Try parent directory
-        let parent_path = std::path::Path::new("../capabilities/mcp/overrides.json");
-        if !parent_path.exists() {
-            return None;
-        }
+/// Helper to convert catalog hit to capability info
+fn catalog_hit_to_info(hit: ccos::catalog::CatalogHit) -> CapabilityInfo {
+    CapabilityInfo {
+        id: hit.entry.id,
+        name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
+        description: hit.entry.description.unwrap_or_default(),
+        input_schema: None, // We don't need full schema for resolution matching
     }
-    
-    let path = if overrides_path.exists() {
-        overrides_path
-    } else {
-        std::path::Path::new("../capabilities/mcp/overrides.json")
-    };
-    
-    let content = std::fs::read_to_string(path).ok()?;
-    let overrides: serde_json::Value = serde_json::from_str(&content).ok()?;
-    
-    let hint_lower = hint.to_lowercase();
-    
-    if let Some(servers) = overrides.get("servers").and_then(|s| s.as_object()) {
-        for (name, info) in servers {
-            if name.to_lowercase().contains(&hint_lower) {
-                if let Some(url) = info.get("url").and_then(|u| u.as_str()) {
-                    return Some((url.to_string(), name.clone()));
-                }
-            }
-        }
-    }
-    
-    None
-}
-
-/// Discover tools from an MCP server
-async fn discover_mcp_tools(server_url: &str, server_name: &str) -> Result<Vec<CapabilityInfo>, Box<dyn Error + Send + Sync>> {
-    use ccos::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo};
-    
-    let auth_headers = get_mcp_auth_headers();
-    let session_manager = MCPSessionManager::new(Some(auth_headers));
-    
-    let client_info = MCPServerInfo {
-        name: "modular-planner-demo".to_string(),
-        version: "1.0.0".to_string(),
-    };
-    
-    let session = session_manager.initialize_session(server_url, &client_info).await?;
-    let tools_resp = session_manager.make_request(&session, "tools/list", serde_json::json!({})).await?;
-    
-    let mut capabilities = Vec::new();
-    
-    if let Some(tools) = tools_resp.get("tools").and_then(|t| t.as_array()) {
-        for tool in tools {
-            let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
-            let description = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");
-            
-            capabilities.push(CapabilityInfo {
-                id: format!("mcp.{}.{}", server_name, name),
-                name: name.to_string(),
-                description: description.to_string(),
-                input_schema: tool.get("inputSchema").map(|s| s.to_string()),
-            });
-        }
-    }
-    
-    Ok(capabilities)
-}
-
-/// Get authentication headers for MCP requests
-fn get_mcp_auth_headers() -> HashMap<String, String> {
-    let mut headers = HashMap::new();
-    
-    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-        headers.insert("Authorization".to_string(), format!("Bearer {}", token));
-    } else if let Ok(token) = std::env::var("MCP_AUTH_TOKEN") {
-        headers.insert("Authorization".to_string(), format!("Bearer {}", token));
-    }
-    
-    headers
 }
 
 // ============================================================================
@@ -225,30 +127,81 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     
     println!("📋 Goal: \"{}\"\n", args.goal);
     
-    // 1. Initialize IntentGraph
-    println!("🔧 Initializing IntentGraph...");
-    let intent_graph = Arc::new(Mutex::new(
-        IntentGraph::with_config(IntentGraphConfig::with_in_memory_storage())?
-    ));
+    // 0. Initialize CCOS Environment
+    println!("🔧 Initializing CCOS Environment...");
+    let agent_config = load_agent_config(&args.config)?;
     
-    // 2. Build capability catalog
-    println!("\n🔍 Setting up capability catalog...");
-    let mut catalog = McpToolCatalog::new();
-    
-    if args.discover_mcp {
-        catalog.discover_from_servers().await?;
-    } else {
-        println!("  ⏭️ Skipping MCP discovery (use --discover-mcp to enable)");
+    // Ensure delegation is enabled for LLM
+    std::env::set_var("CCOS_DELEGATION_ENABLED", "true");
+    if std::env::var("CCOS_DELEGATING_MODEL").is_err() {
+        std::env::set_var("CCOS_DELEGATING_MODEL", "deepseek/deepseek-v3.2-exp");
     }
+
+    let ccos = Arc::new(
+        CCOS::new_with_agent_config_and_configs_and_debug_callback(
+            Default::default(),
+            None,
+            Some(agent_config),
+            None,
+        )
+        .await?,
+    );
     
-    let catalog = Arc::new(catalog);
+    // Register basic tools (like ccos.user.ask)
+    ccos::capabilities::defaults::register_default_capabilities(&ccos.get_capability_marketplace()).await?;
+
+    // Configure session pool for MCP execution
+    let mut session_pool_manager = SessionPoolManager::new();
+    session_pool_manager.register_handler("mcp", std::sync::Arc::new(MCPSessionHandler::new()));
+    let session_pool = std::sync::Arc::new(session_pool_manager);
+    ccos.get_capability_marketplace().set_session_pool(session_pool.clone()).await;
+    println!("   ✅ Session pool configured with MCPSessionHandler");
+
+    // 1. Use IntentGraph from CCOS
+    println!("🔧 Using IntentGraph from CCOS...");
+    let intent_graph = ccos.get_intent_graph();
+    
+    // 2. Build capability catalog using adapter
+    println!("\n🔍 Setting up capability catalog...");
+    // Wrap the real CCOS catalog
+    let catalog = Arc::new(CcosCatalogAdapter::new(ccos.get_catalog()));
     
     // 3. Create decomposition strategy (pattern-only for this demo)
     println!("\n📐 Using PatternDecomposition (fast, deterministic)");
     let decomposition: Box<dyn DecompositionStrategy> = Box::new(PatternDecomposition::new());
     
-    // 4. Create resolution strategy (catalog with builtin support)
-    let resolution = Box::new(CatalogResolution::new(catalog.clone()));
+    // 4. Create resolution strategy (Composite: Catalog + MCP)
+    let mut composite_resolution = CompositeResolution::new();
+    
+    // A. Catalog Resolution (for local/builtin)
+    composite_resolution.add_strategy(Box::new(CatalogResolution::new(catalog.clone())));
+    
+    // B. MCP Resolution (for remote tools)
+    // Create separate session manager for discovery
+    let mut auth_headers = std::collections::HashMap::new();
+    if let Ok(token) = std::env::var("MCP_AUTH_TOKEN") {
+        if !token.is_empty() {
+             auth_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+        }
+    }
+    let discovery_session_manager = Arc::new(MCPSessionManager::new(Some(auth_headers)));
+    
+    // Create runtime MCP discovery using our real session pool
+    use ccos::planner::modular_planner::resolution::mcp::RuntimeMcpDiscovery;
+    let mcp_discovery = Arc::new(RuntimeMcpDiscovery::new(
+        discovery_session_manager,
+        ccos.get_capability_marketplace(),
+    ));
+    
+    let mcp_resolution = McpResolution::new(mcp_discovery);
+    // TODO: Add embedding provider if available
+    
+    if args.discover_mcp {
+        println!("   ✅ Enabled MCP Resolution");
+        composite_resolution.add_strategy(Box::new(mcp_resolution));
+    } else {
+        println!("   ⏭️ Skipping MCP Resolution (use --discover-mcp to enable)");
+    }
     
     // 5. Create the modular planner
     let config = PlannerConfig {
@@ -258,13 +211,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         intent_namespace: "demo".to_string(),
     };
     
-    let mut planner = ModularPlanner::new(decomposition, resolution, intent_graph.clone())
+    let mut planner = ModularPlanner::new(decomposition, Box::new(composite_resolution), intent_graph.clone())
         .with_config(config);
     
     // 6. Plan!
     println!("\n🚀 Planning...\n");
     
-    match planner.plan(&args.goal).await {
+    let plan_result = match planner.plan(&args.goal).await {
         Ok(result) => {
             print_plan_result(&result, args.verbose);
             
@@ -277,6 +230,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             if let Some(root) = graph.get_intent(&result.root_intent_id) {
                 println!("   Root goal: \"{}\"", root.goal);
             }
+            
+            Some(result)
         }
         Err(e) => {
             println!("\n❌ Planning failed: {}", e);
@@ -285,11 +240,79 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             println!("   - \"ask me for X then Y\"");
             println!("   - \"X then Y\"");
             println!("   - \"X and filter/sort by Y\"");
+            None
+        }
+    };
+    
+    // 7. Execute!
+    if let Some(result) = plan_result {
+        if args.execute {
+            println!("\n⚡ Executing Plan...");
+            println!("───────────────────────────────────────────────────────────────");
+            
+            let plan_obj = ccos::types::Plan {
+                plan_id: format!("modular-plan-{}", uuid::Uuid::new_v4()),
+                name: Some("Modular Plan".to_string()),
+                body: ccos::types::PlanBody::Rtfs(result.rtfs_plan.clone()),
+                intent_ids: result.intent_ids.clone(),
+                ..Default::default()
+            };
+
+            let context = RuntimeContext::full();
+            match ccos.validate_and_execute_plan(plan_obj, &context).await {
+                Ok(exec_result) => {
+                    println!("\n🏁 Execution Result:");
+                    println!("   Success: {}", exec_result.success);
+                    
+                    // Format output nicely
+                    let output_str = value_to_string(&exec_result.value);
+                    println!("   Result: {}", output_str);
+                    
+                    if !exec_result.success {
+                        if let Some(err) = exec_result.metadata.get("error") {
+                            println!("   Error: {:?}", err);
+                        }
+                    }
+                },
+                Err(e) => {
+                    println!("\n❌ Execution Failed: {}", e);
+                }
+            }
         }
     }
     
     println!("\n✅ Demo complete!");
     Ok(())
+}
+
+/// Helper to load config (copied from autonomous_agent_demo)
+fn load_agent_config(config_path: &str) -> Result<AgentConfig, Box<dyn Error + Send + Sync>> {
+    let path = std::path::Path::new(config_path);
+    let actual_path = if path.exists() {
+        path.to_path_buf()
+    } else {
+        let parent_path = std::path::Path::new("..").join(config_path);
+        if parent_path.exists() {
+            parent_path
+        } else {
+            return Err(format!(
+                "Config file not found: '{}' (also tried '../{}'). Run from the workspace root directory.",
+                config_path, config_path
+            ).into());
+        }
+    };
+    
+    let mut content = std::fs::read_to_string(&actual_path)
+        .map_err(|e| format!("Failed to read config file '{}': {}", actual_path.display(), e))?;
+    if content.starts_with("# RTFS") {
+        content = content.lines().skip(1).collect::<Vec<_>>().join("\n");
+    }
+    toml::from_str(&content).map_err(|e| format!("failed to parse agent config: {}", e).into())
+}
+
+/// Convert RTFS value to string for display
+fn value_to_string(v: &rtfs::runtime::values::Value) -> String {
+    format!("{:?}", v)
 }
 
 /// Print the plan result
@@ -350,21 +373,28 @@ fn print_plan_result(result: &PlanResult, verbose: bool) {
     }
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
     
     #[tokio::test]
     async fn test_pattern_decomposition() {
+        use ccos::intent_graph::{IntentGraph, config::IntentGraphConfig};
+        use std::sync::Mutex;
+
         let intent_graph = Arc::new(Mutex::new(
             IntentGraph::with_config(IntentGraphConfig::with_in_memory_storage()).unwrap()
         ));
         
-        let catalog = Arc::new(McpToolCatalog::new());
+        // Mock catalog for test (since we can't easily spin up CCOS here)
+        struct MockCatalog;
+        #[async_trait::async_trait(?Send)]
+        impl CapabilityCatalog for MockCatalog {
+            async fn list_capabilities(&self, _domain: Option<&str>) -> Vec<CapabilityInfo> { vec![] }
+            async fn get_capability(&self, _id: &str) -> Option<CapabilityInfo> { None }
+            async fn search(&self, _query: &str, _limit: usize) -> Vec<CapabilityInfo> { vec![] }
+        }
+        let catalog = Arc::new(MockCatalog);
         
         let mut planner = ModularPlanner::new(
             Box::new(PatternDecomposition::new()),
@@ -376,20 +406,5 @@ mod tests {
         
         assert_eq!(result.intent_ids.len(), 2);
         assert!(result.rtfs_plan.contains("ccos.user.ask"));
-    }
-    
-    #[tokio::test]
-    async fn test_mcp_catalog_search() {
-        let mut catalog = McpToolCatalog::new();
-        catalog.tools.push(CapabilityInfo {
-            id: "mcp.github.list_issues".to_string(),
-            name: "list_issues".to_string(),
-            description: "List issues in a GitHub repository".to_string(),
-            input_schema: None,
-        });
-        
-        let results = catalog.search("list issues repository", 5).await;
-        assert!(!results.is_empty());
-        assert_eq!(results[0].id, "mcp.github.list_issues");
     }
 }
