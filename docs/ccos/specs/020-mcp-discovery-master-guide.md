@@ -164,3 +164,4 @@ capabilities/
 *   **Fix**: Ensure `MCP_AUTH_TOKEN` or provider-specific tokens are set in the shell.
 
 
+

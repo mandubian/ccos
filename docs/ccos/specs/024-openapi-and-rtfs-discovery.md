@@ -103,3 +103,4 @@ The **Missing Capability Resolver** orchestrates all these methods:
 | **Best For** | AI Agents, CLI Tools | Legacy REST APIs | Core Logic, Manual Code |
 
 
+
