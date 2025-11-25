@@ -28,23 +28,24 @@ pub enum EmbeddingProvider {
 
 impl EmbeddingProvider {
     /// Create provider from environment variables and optional discovery configuration
+    /// Priority: LOCAL_EMBEDDING_URL (Ollama) > OPENROUTER_API_KEY (remote)
     pub fn from_env(config: Option<&DiscoveryConfig>) -> Option<Self> {
-        // Try OpenRouter first
-        if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
-            let model = std::env::var("EMBEDDING_MODEL")
-                .ok()
-                .or_else(|| config.and_then(|c| c.embedding_model.clone()))
-                .unwrap_or_else(|| "text-embedding-ada-002".to_string());
-            return Some(EmbeddingProvider::OpenRouter { api_key, model });
-        }
-
-        // Try local model
+        // Try local model first (Ollama - cheaper and faster)
         if let Ok(base_url) = std::env::var("LOCAL_EMBEDDING_URL") {
             let model = std::env::var("LOCAL_EMBEDDING_MODEL")
                 .ok()
                 .or_else(|| config.and_then(|c| c.local_embedding_model.clone()))
                 .unwrap_or_else(|| "nomic-embed-text".to_string());
             return Some(EmbeddingProvider::Local { base_url, model });
+        }
+
+        // Fallback to OpenRouter
+        if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
+            let model = std::env::var("EMBEDDING_MODEL")
+                .ok()
+                .or_else(|| config.and_then(|c| c.embedding_model.clone()))
+                .unwrap_or_else(|| "text-embedding-ada-002".to_string());
+            return Some(EmbeddingProvider::OpenRouter { api_key, model });
         }
 
         None
@@ -76,6 +77,14 @@ impl EmbeddingService {
     /// Create from discovery configuration + environment overrides
     pub fn from_settings(config: Option<&DiscoveryConfig>) -> Option<Self> {
         EmbeddingProvider::from_env(config).map(Self::new)
+    }
+
+    /// Get a description of the current provider (for logging)
+    pub fn provider_description(&self) -> String {
+        match &self.provider {
+            EmbeddingProvider::OpenRouter { model, .. } => format!("OpenRouter ({})", model),
+            EmbeddingProvider::Local { base_url, model } => format!("Local ({} @ {})", model, base_url),
+        }
     }
 
     /// Generate embedding for a text string

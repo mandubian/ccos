@@ -40,6 +40,7 @@ use ccos::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo};
 use ccos::synthesis::mcp_registry_client::McpRegistryClient;
 use ccos::synthesis::mcp_introspector::{MCPIntrospector, DiscoveredMCPTool};
 use ccos::discovery::capability_matcher::{compute_mcp_tool_score, keyword_overlap};
+use ccos::discovery::embedding_service::EmbeddingService;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 use rtfs::runtime::error::RuntimeResult;
@@ -66,9 +67,9 @@ struct Args {
     #[arg(long)]
     simulate_error: bool,
     
-    /// Disable mock fallback to force synthesis for missing capabilities
+    /// Enable mock fallback for missing capabilities (disabled by default)
     #[arg(long)]
-    no_mock: bool,
+    allow_mock: bool,
 }
 
 // ============================================================================
@@ -84,6 +85,18 @@ struct PlannedStep {
 #[derive(Debug, serde::Deserialize)]
 struct Decomposition {
     steps: Vec<PlannedStep>,
+}
+
+/// Primary intent extracted from a goal - the main action and object
+#[derive(Debug, Clone, serde::Deserialize)]
+struct PrimaryIntent {
+    /// The main action verb (e.g., "list", "check", "get", "create")
+    action: String,
+    /// The main object/target (e.g., "pull requests", "issues", "user")
+    object: String,
+    /// Alternative phrasings for the object (e.g., "PRs" for "pull requests")
+    #[serde(default)]
+    object_synonyms: Vec<String>,
 }
 
 /// Resolution status for a planning step
@@ -129,15 +142,25 @@ struct IterativePlanner {
     catalog: Arc<CatalogService>,
     trace: PlanningTrace,
     simulate_error: bool,
-    no_mock: bool,
+    allow_mock: bool,
+    embedding_service: Option<EmbeddingService>,
 }
 
 impl IterativePlanner {
-    fn new(ccos: Arc<CCOS>, simulate_error: bool, no_mock: bool) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    fn new(ccos: Arc<CCOS>, simulate_error: bool, allow_mock: bool) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let arbiter = ccos.get_delegating_arbiter()
             .ok_or::<Box<dyn Error + Send + Sync>>("Delegating arbiter not available".into())?;
         let marketplace = ccos.get_capability_marketplace();
         let catalog = ccos.get_catalog();
+
+        // Initialize embedding service for semantic tool matching
+        // Priority: LOCAL_EMBEDDING_URL (Ollama) > OPENROUTER_API_KEY
+        let embedding_service = EmbeddingService::from_env();
+        if let Some(ref svc) = embedding_service {
+            println!("     🧬 Embedding service initialized: {}", svc.provider_description());
+        } else {
+            println!("     ⚠️  No embedding service available (set LOCAL_EMBEDDING_URL or OPENROUTER_API_KEY)");
+        }
 
         Ok(Self {
             _ccos: ccos,
@@ -149,7 +172,8 @@ impl IterativePlanner {
                 decisions: Vec::new(),
             },
             simulate_error,
-            no_mock,
+            allow_mock,
+            embedding_service,
         })
     }
 
@@ -322,6 +346,12 @@ Respond ONLY with a JSON object in this format:
         
         let goal_lower = goal.to_lowercase();
         
+        // First, extract the primary intent from the goal using LLM
+        let primary_intent = self.extract_primary_intent(goal).await?;
+        if let Some(ref intent) = primary_intent {
+            println!("     🎯 Primary intent: action='{}', object='{}'", intent.action, intent.object);
+        }
+        
         // Try to get MCP server from overrides
         // Use a generic hint like "github" to match the github MCP server
         let keywords: Vec<&str> = goal.split_whitespace()
@@ -406,23 +436,105 @@ Respond ONLY with a JSON object in this format:
             .and_then(|t| t.as_array())
             .unwrap_or(&empty_vec);
         
-        // Score each tool against the goal
-        let mut best_match: Option<(String, f64, serde_json::Value)> = None;
+        // Score each tool against the goal using keyword + embedding matching
+        let mut best_match: Option<(String, f64, serde_json::Value, String)> = None; // (name, score, schema, description)
+        
+        // Prepare goal text for embedding (expand to natural language)
+        let goal_expanded = goal.replace('.', " ").replace('_', " ");
+        
         for tool in tools_array {
             let tool_name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let tool_description = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");
             
-            let score = compute_mcp_tool_score(goal, tool_name, tool_description);
+            // Compute embedding-based similarity if available
+            let embedding_score = if let Some(ref mut emb_svc) = self.embedding_service {
+                let tool_text = format!("{} {}", tool_name.replace('_', " "), tool_description);
+                match (emb_svc.embed(&goal_expanded).await, emb_svc.embed(&tool_text).await) {
+                    (Ok(goal_emb), Ok(tool_emb)) => {
+                        let similarity = EmbeddingService::cosine_similarity(&goal_emb, &tool_emb);
+                        // Scale similarity (0-1) to score range (0-5)
+                        similarity * 5.0
+                    }
+                    _ => 0.0
+                }
+            } else {
+                0.0
+            };
+            
+            // Combine keyword score with embedding score
+            let keyword_score = compute_mcp_tool_score(goal, tool_name, tool_description);
+            let score = keyword_score + embedding_score;
             
             if score > 3.0 {  // Threshold for direct match
                 if best_match.is_none() || score > best_match.as_ref().unwrap().1 {
-                    best_match = Some((tool_name.to_string(), score, tool.clone()));
+                    best_match = Some((tool_name.to_string(), score, tool.clone(), tool_description.to_string()));
                 }
             }
         }
         
-        if let Some((tool_name, score, _tool_schema)) = best_match {
+        if let Some((tool_name, score, _tool_schema, tool_description)) = best_match {
             println!("     ✨ Found direct MCP match: {} (score: {:.2})", tool_name, score);
+            
+            // IMPORTANT: Validate the match against the primary intent
+            // This prevents returning a completely unrelated tool (e.g., get_me when user asks about PRs)
+            if let Some(ref intent) = primary_intent {
+                if !self.validate_tool_against_intent(&tool_name, &tool_description, intent) {
+                    println!("     ❌ Tool '{}' doesn't match primary intent (action='{}', object='{}')", 
+                             tool_name, intent.action, intent.object);
+                    println!("     🔄 Searching for better match among all tools...");
+                    
+                    // Try to find a tool that actually matches the intent
+                    let mut intent_match: Option<(String, f64, serde_json::Value)> = None;
+                    for tool in tools_array {
+                        let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let desc = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                        
+                        if self.validate_tool_against_intent(name, desc, intent) {
+                            // Compute embedding-based similarity if available
+                            let embedding_score = if let Some(ref mut emb_svc) = self.embedding_service {
+                                let tool_text = format!("{} {}", name.replace('_', " "), desc);
+                                match (emb_svc.embed(&goal_expanded).await, emb_svc.embed(&tool_text).await) {
+                                    (Ok(goal_emb), Ok(tool_emb)) => {
+                                        EmbeddingService::cosine_similarity(&goal_emb, &tool_emb) * 5.0
+                                    }
+                                    _ => 0.0
+                                }
+                            } else {
+                                0.0
+                            };
+                            
+                            let s = compute_mcp_tool_score(goal, name, desc) + embedding_score;
+                            if s > 2.0 {
+                                if intent_match.is_none() || s > intent_match.as_ref().unwrap().1 {
+                                    intent_match = Some((name.to_string(), s, tool.clone()));
+                                }
+                            }
+                        }
+                    }
+                    
+                    if let Some((matched_name, matched_score, _)) = intent_match {
+                        println!("     ✅ Found intent-matching tool: {} (score: {:.2})", matched_name, matched_score);
+                        let cap_id = format!("mcp.{}.{}", server_name, matched_name);
+                        
+                        // Check if already registered
+                        if let Some(manifest) = self.marketplace.get_capability(&cap_id).await {
+                            let args = self.extract_args_for_capability(&manifest, goal).await?;
+                            return Ok(Some((cap_id, args)));
+                        }
+                        
+                        // Not registered yet - run full discovery
+                        if let Ok(Some(manifest)) = self.try_real_mcp_discovery(&server_url, auth_headers, &matched_name, &server_name).await {
+                            let args = self.extract_args_for_capability(&manifest, goal).await?;
+                            return Ok(Some((manifest.id, args)));
+                        }
+                    } else {
+                        println!("     ⚠️  No tool found matching intent. Cannot proceed with direct MCP match.");
+                        println!("     💡 Available tools may not support '{}' on '{}'", intent.action, intent.object);
+                        return Ok(None);
+                    }
+                    return Ok(None);
+                }
+            }
             
             let cap_id = format!("mcp.{}.{}", server_name, tool_name);
             
@@ -444,6 +556,140 @@ Respond ONLY with a JSON object in this format:
         Ok(None)
     }
     
+    /// Extract the primary intent (action + object) from a goal using LLM
+    /// This helps validate that a matched tool actually corresponds to the user's intent
+    async fn extract_primary_intent(&self, goal: &str) -> Result<Option<PrimaryIntent>, Box<dyn Error + Send + Sync>> {
+        let prompt = format!(
+            r#"Analyze this goal and extract the PRIMARY action and object.
+
+Goal: "{}"
+
+Respond with ONLY a JSON object:
+{{
+  "action": "the main verb (list, check, get, create, search, etc.)",
+  "object": "the main target/object (pull requests, issues, user, files, etc.)",
+  "object_synonyms": ["alternative names for the object, e.g. 'PRs' for 'pull requests'"]
+}}
+
+Examples:
+- "check PR in repository" → {{"action": "check", "object": "pull requests", "object_synonyms": ["PR", "PRs"]}}
+- "list issues from repo" → {{"action": "list", "object": "issues", "object_synonyms": []}}
+- "get my user info" → {{"action": "get", "object": "user", "object_synonyms": ["me", "profile"]}}
+"#,
+            goal
+        );
+        
+        match self.arbiter.generate_raw_text(&prompt).await {
+            Ok(response) => {
+                let json_str = extract_json(&response);
+                match serde_json::from_str::<PrimaryIntent>(json_str) {
+                    Ok(intent) => Ok(Some(intent)),
+                    Err(e) => {
+                        eprintln!("     ⚠️  Failed to parse primary intent: {}", e);
+                        Ok(None)
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("     ⚠️  Failed to extract primary intent: {}", e);
+                Ok(None)
+            }
+        }
+    }
+    
+    /// Validate that a matched tool actually corresponds to the primary intent
+    /// Returns true if the match is valid, false if it's likely a mismatch
+    fn validate_tool_against_intent(&self, tool_name: &str, tool_description: &str, intent: &PrimaryIntent) -> bool {
+        let tool_lower = tool_name.to_lowercase();
+        let desc_lower = tool_description.to_lowercase();
+        let action_lower = intent.action.to_lowercase();
+        let object_lower = intent.object.to_lowercase();
+        
+        // First, validate ACTION compatibility
+        // Define read/query actions vs write/mutate actions
+        let read_actions = ["check", "list", "get", "show", "view", "search", "find", "fetch", "read", "query", "display", "see", "retrieve"];
+        let write_actions = ["create", "add", "update", "delete", "remove", "merge", "push", "commit", "edit", "modify", "assign", "close", "open"];
+        
+        let intent_is_read = read_actions.iter().any(|a| action_lower.contains(a));
+        let intent_is_write = write_actions.iter().any(|a| action_lower.contains(a));
+        
+        // Check tool's action from its name/description
+        let tool_is_read = tool_lower.starts_with("list_") 
+            || tool_lower.starts_with("get_") 
+            || tool_lower.starts_with("search_") 
+            || tool_lower.ends_with("_read")
+            || desc_lower.contains("get ") 
+            || desc_lower.contains("list ") 
+            || desc_lower.contains("search ")
+            || desc_lower.contains("retrieve");
+            
+        let tool_is_write = tool_lower.starts_with("create_") 
+            || tool_lower.starts_with("add_") 
+            || tool_lower.starts_with("update_") 
+            || tool_lower.starts_with("delete_") 
+            || tool_lower.starts_with("merge_")
+            || tool_lower.starts_with("push_")
+            || tool_lower.ends_with("_write")
+            || desc_lower.contains("create ") 
+            || desc_lower.contains("add ") 
+            || desc_lower.contains("update ")
+            || desc_lower.contains("delete ")
+            || desc_lower.contains("merge ");
+        
+        // Reject read intent + write tool (and vice versa)
+        if intent_is_read && tool_is_write && !tool_is_read {
+            return false;
+        }
+        if intent_is_write && tool_is_read && !tool_is_write {
+            return false;
+        }
+        
+        // Normalize common synonyms
+        let object_variants: Vec<String> = {
+            let mut variants = vec![object_lower.clone()];
+            // Add synonyms
+            for syn in &intent.object_synonyms {
+                variants.push(syn.to_lowercase());
+            }
+            // Add common variations
+            if object_lower.contains("pull request") || object_lower == "pr" || object_lower == "prs" {
+                variants.extend(["pull_request", "pull_requests", "pr", "prs"].iter().map(|s| s.to_string()));
+            }
+            if object_lower == "issues" || object_lower == "issue" {
+                variants.extend(["issue", "issues"].iter().map(|s| s.to_string()));
+            }
+            if object_lower == "user" || object_lower == "me" || object_lower == "profile" {
+                variants.extend(["user", "me", "profile", "authenticated"].iter().map(|s| s.to_string()));
+            }
+            variants
+        };
+        
+        // Check if the tool name or description contains the object or its variants
+        let object_match = object_variants.iter().any(|variant| {
+            tool_lower.contains(variant) || desc_lower.contains(variant)
+        });
+        
+        // If object doesn't match at all, this is likely a wrong tool
+        if !object_match {
+            return false;
+        }
+        
+        // Additional check: if intent is about PRs but tool is about issues (or vice versa), reject
+        let intent_is_pr = object_variants.iter().any(|v| v.contains("pull") || v == "pr" || v == "prs");
+        let intent_is_issue = object_lower == "issue" || object_lower == "issues";
+        let tool_is_pr = tool_lower.contains("pull") || tool_lower.contains("_pr");
+        let tool_is_issue = tool_lower.contains("issue") && !tool_lower.contains("pull");
+        
+        if intent_is_pr && tool_is_issue && !tool_is_pr {
+            return false;
+        }
+        if intent_is_issue && tool_is_pr && !tool_is_issue {
+            return false;
+        }
+        
+        true
+    }
+
     /// Extract arguments for a capability based on the goal description
     async fn extract_args_for_capability(&self, capability: &CapabilityManifest, goal: &str) -> Result<HashMap<String, String>, Box<dyn Error + Send + Sync>> {
         // For MCP capabilities, parameters are stored in metadata as JSON schema
@@ -466,9 +712,12 @@ Input Schema (JSON): {}
 
 And this goal: "{}"
 
-Extract parameter values from the goal. Respond with ONLY a JSON object mapping parameter names to values.
-If a parameter value cannot be determined from the goal, omit it.
-Example: {{"owner": "github", "repo": "copilot"}}
+Extract parameter values from the goal. IMPORTANT:
+- Use the EXACT parameter names from the Input Schema above.
+- Do NOT use synonyms or alternative names from the goal text.
+- The parameter names in your response must match the schema exactly.
+- Respond with ONLY a JSON object mapping schema parameter names to extracted values.
+- If a parameter value cannot be determined from the goal, omit it.
 "#,
             capability.id,
             &capability.description,
@@ -1021,9 +1270,9 @@ Respond ONLY with the RTFS expression.
         }
         
         // Fallback to generic mock if real MCP fails or no server config found
-        // Skip mock if --no-mock flag is set (force synthesis instead)
-        if self.no_mock {
-            println!("     🚫 Mock fallback disabled (--no-mock). Will try synthesis.");
+        // Only use mock if --allow-mock flag is explicitly set
+        if !self.allow_mock {
+            println!("     🚫 Mock fallback disabled (use --allow-mock to enable). Will try synthesis.");
             self.trace.decisions.push(TraceEvent::MCPDiscovery { hint: hint.to_string(), found: false });
             return Ok(None);
         }
@@ -1072,7 +1321,20 @@ Respond ONLY with the RTFS expression.
         }
         
         // 3. Fallback: check environment variable for explicit endpoint
-        if hint.contains("github") || hint.contains("repository") || hint.contains("issue") {
+        // Match GitHub-related hints: github, repository, issue, pull_request, pr, commit, branch, etc.
+        let hint_lower = hint.to_ascii_lowercase();
+        let is_github_related = hint_lower.contains("github") 
+            || hint_lower.contains("repository") 
+            || hint_lower.contains("repo")
+            || hint_lower.contains("issue") 
+            || hint_lower.contains("pull_request")
+            || hint_lower.contains("pull-request")
+            || hint_lower.starts_with("pr.")
+            || hint_lower.contains(".pr")
+            || hint_lower.contains("commit")
+            || hint_lower.contains("branch");
+        
+        if is_github_related {
             if let Ok(endpoint) = std::env::var("GITHUB_MCP_ENDPOINT") {
                 println!("     🔧 Using GITHUB_MCP_ENDPOINT from environment: {}", endpoint);
                 let auth_headers = get_mcp_auth_headers();
@@ -1113,8 +1375,11 @@ Respond ONLY with the RTFS expression.
         
         println!("     🔍 Found {} tools from MCP server", tools_array.len());
         
-        // Build list of tool candidates with scores using existing helpers
+        // Build list of tool candidates with scores using embedding + keyword matching
         let mut candidates: Vec<(f64, String, serde_json::Value)> = Vec::new();
+        
+        // Prepare query for embedding (expand hint to natural language)
+        let hint_expanded = hint.replace('.', " ").replace('_', " ");
         
         for tool_json in tools_array {
             let tool_name = tool_json
@@ -1127,11 +1392,27 @@ Respond ONLY with the RTFS expression.
                 .and_then(|d| d.as_str())
                 .unwrap_or("");
             
-            // Use existing scoring helpers from discovery module
-            let score = compute_mcp_tool_score(hint, &tool_name, description);
+            // Compute embedding-based similarity if available
+            let embedding_score = if let Some(ref mut emb_svc) = self.embedding_service {
+                let tool_text = format!("{} {}", tool_name.replace('_', " "), description);
+                match (emb_svc.embed(&hint_expanded).await, emb_svc.embed(&tool_text).await) {
+                    (Ok(hint_emb), Ok(tool_emb)) => {
+                        let similarity = EmbeddingService::cosine_similarity(&hint_emb, &tool_emb);
+                        // Scale similarity (0-1) to score range (0-5)
+                        similarity * 5.0
+                    }
+                    _ => 0.0
+                }
+            } else {
+                0.0
+            };
             
-            if score > 0.0 {
-                candidates.push((score, tool_name, tool_json.clone()));
+            // Combine keyword score with embedding score
+            let keyword_score = compute_mcp_tool_score(hint, &tool_name, description);
+            let combined_score = keyword_score + embedding_score;
+            
+            if combined_score > 0.0 {
+                candidates.push((combined_score, tool_name, tool_json.clone()));
             }
         }
         
@@ -1739,7 +2020,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("✅ Session pool configured with MCPSessionHandler");
 
     // Initialize Planner
-    let mut planner = IterativePlanner::new(ccos.clone(), args.simulate_error, args.no_mock)?;
+    let mut planner = IterativePlanner::new(ccos.clone(), args.simulate_error, args.allow_mock)?;
 
     // Plan
     println!("\n🏗️  Building Plan...");
