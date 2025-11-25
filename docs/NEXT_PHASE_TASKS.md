@@ -278,6 +278,23 @@ cargo run --example modular_planner_demo -- \
 ### Next Steps (Phase K)
 1.  [ ] Integrate modular planner into `autonomous_agent_demo` as optional mode.
 2.  [ ] Add LLM provider to HybridDecomposition for fallback.
-3.  [ ] Connect McpResolution to real MCP session pool.
-4.  [ ] Add execution support to `modular_planner_demo`.
-5.  [ ] Implement composite resolution (try multiple strategies).
+3.  [x] Connect McpResolution to real MCP session pool.
+    *   Implemented `RuntimeMcpDiscovery` using `MCPSessionManager` for discovery.
+    *   Integrated `SessionPoolManager` with `MCPSessionHandler` for execution.
+    *   Verified 401 auth flow works (proving connectivity).
+    *   Implemented `CcosCatalogAdapter` to bridge core CatalogService to planner's CapabilityCatalog.
+4.  [x] Add execution support to `modular_planner_demo`.
+    *   Added `CCOS` initialization and `SessionPoolManager` setup.
+    *   Connected `ModularPlanner` to `CCOS` IntentGraph.
+    *   Plan execution via `validate_and_execute_plan` works.
+    *   Replaced placeholder `McpToolCatalog` with real `CcosCatalogAdapter`.
+5.  [x] Implement composite resolution (try multiple strategies).
+    *   `CompositeResolution` strategy tries Catalog first, then MCP.
+    *   Working in `modular_planner_demo`.
+6.  [x] Integrate modular planner into `autonomous_agent_demo` as optional mode.
+    *   Added `--use-modular-planner` flag.
+    *   Configured `CompositeResolution` with catalog and MCP strategies.
+    *   Connected to real `SessionPool` and `IntentGraph`.
+    *   Verified end-to-end execution works (e.g., `ccos.user.ask` + `mcp.github.list_issues`).
+
+## Phase 3: Robustness & Scaling (Next)

@@ -206,6 +206,8 @@ impl MCPSessionHandler {
             ));
         };
 
+        eprintln!("📝 MCP Arguments: {}", serde_json::to_string_pretty(&mcp_args).unwrap_or_default());
+
         // Build MCP JSON-RPC request
         let mcp_request = serde_json::json!({
             "jsonrpc": "2.0",

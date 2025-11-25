@@ -416,21 +416,21 @@ impl ModularPlanner {
             let var_name = format!("step_{}", idx + 1);
 
             let call_expr = match resolutions.get(intent_id) {
-                Some(ResolvedCapability::Local { capability_id, arguments, .. }) |
-                Some(ResolvedCapability::Remote { capability_id, arguments, .. }) => {
-                    self.generate_call_expr(capability_id, arguments, sub_intent, &bindings)
-                }
-                Some(ResolvedCapability::BuiltIn { capability_id, arguments }) => {
-                    self.generate_call_expr(capability_id, arguments, sub_intent, &bindings)
-                }
-                Some(ResolvedCapability::Synthesized { capability_id, arguments, .. }) => {
-                    self.generate_call_expr(capability_id, arguments, sub_intent, &bindings)
-                }
-                Some(ResolvedCapability::NeedsReferral { reason, .. }) => {
-                    format!(
-                        r#"(call "ccos.user.ask" {{:prompt "Cannot proceed: {}"}})"#,
-                        reason.replace('"', "\\\"")
-                    )
+                Some(resolved) => {
+                    match resolved {
+                        ResolvedCapability::Local { .. } |
+                        ResolvedCapability::Remote { .. } |
+                        ResolvedCapability::BuiltIn { .. } |
+                        ResolvedCapability::Synthesized { .. } => {
+                            self.generate_call_expr(resolved, sub_intent, &bindings, sub_intents)
+                        }
+                        ResolvedCapability::NeedsReferral { suggested_action, .. } => {
+                            format!(
+                                r#"(call "ccos.user.ask" {{:prompt "Cannot proceed: {}"}})"#,
+                                suggested_action.replace('"', "\\\"")
+                            )
+                        }
+                    }
                 }
                 None => {
                     format!(
@@ -461,15 +461,18 @@ impl ModularPlanner {
     /// Generate a call expression for a capability
     fn generate_call_expr(
         &self,
-        capability_id: &str,
-        arguments: &HashMap<String, String>,
+        resolved_capability: &ResolvedCapability,
         sub_intent: &SubIntent,
         previous_bindings: &[(String, String)],
+        all_sub_intents: &[SubIntent],
     ) -> String {
+        let capability_id = resolved_capability.capability_id().unwrap_or("unknown");
+        let arguments = resolved_capability.arguments().unwrap();
+
         // Check if this step depends on previous outputs
         let has_dependencies = !sub_intent.dependencies.is_empty();
 
-        let args_map = if has_dependencies && !sub_intent.dependencies.is_empty() {
+        let args_map = if has_dependencies {
             // Build args that reference previous step outputs
             let mut args_parts: Vec<String> = Vec::new();
             
@@ -486,7 +489,13 @@ impl ModularPlanner {
                     let dep_var = &previous_bindings[dep_idx].0;
                     // Only add if we don't already have this as an argument
                     if !arguments.values().any(|v| v == dep_var) {
-                        args_parts.push(format!(":_previous_result {}", dep_var));
+                        // Attempt to infer parameter name from dependency and schema
+                        let param_name = if let Some(dep_intent) = all_sub_intents.get(dep_idx) {
+                             self.infer_param_name(dep_intent, resolved_capability)
+                        } else {
+                            "_previous_result".to_string()
+                        };
+                        args_parts.push(format!(":{} {}", param_name, dep_var));
                     }
                 }
             }
@@ -510,6 +519,88 @@ impl ModularPlanner {
         };
 
         format!(r#"(call "{}" {})"#, capability_id, args_map)
+    }
+
+    /// Helper to infer a parameter name from a dependency intent and consumer capability schema
+    fn infer_param_name(&self, producer_intent: &SubIntent, consumer_capability: &ResolvedCapability) -> String {
+        // 1. Try schema-based matching if available
+        if let ResolvedCapability::Remote { input_schema: Some(schema), .. } = consumer_capability {
+            if let Some(best_match) = self.match_topic_to_schema(producer_intent, schema) {
+                return best_match;
+            }
+        }
+
+        // 2. Fallback to simple heuristic
+        match &producer_intent.intent_type {
+            IntentType::UserInput { prompt_topic } => {
+                let normalized = prompt_topic.trim().to_lowercase();
+                
+                // Manual overrides for common terms
+                if normalized.contains("page size") || normalized == "limit" || normalized == "count" {
+                    return "per_page".to_string();
+                }
+                if normalized == "page" {
+                    return "page".to_string();
+                }
+
+                // Fallback: use topic as snake_case param
+                normalized.replace(' ', "_")
+            }
+            _ => "_previous_result".to_string(),
+        }
+    }
+
+    /// Match intent topic to schema properties using fuzzy matching
+    fn match_topic_to_schema(&self, intent: &SubIntent, schema: &serde_json::Value) -> Option<String> {
+        let topic = match &intent.intent_type {
+            IntentType::UserInput { prompt_topic } => prompt_topic.to_lowercase(),
+            _ => return None,
+        };
+
+        // Get properties from JSON schema
+        let properties = schema.get("properties")?.as_object()?;
+        
+        let mut best_match = None;
+        let mut best_score = 0.0;
+
+        for (prop_name, prop_def) in properties {
+            let prop_lower = prop_name.to_lowercase();
+            let mut score = 0.0;
+
+            // 1. Exact match
+            if prop_lower == topic {
+                return Some(prop_name.clone());
+            }
+
+            // 2. Contains match (e.g. "page size" contains "page")
+            if topic.contains(&prop_lower) || prop_lower.contains(&topic) {
+                score += 0.6;
+            }
+
+            // 3. Token overlap
+            let topic_tokens: Vec<&str> = topic.split_whitespace().collect();
+            let prop_tokens: Vec<&str> = prop_lower.split('_').collect(); // snake_case
+            
+            let matches = topic_tokens.iter().filter(|t| prop_tokens.contains(t)).count();
+            if matches > 0 {
+                score += 0.3 * (matches as f64);
+            }
+
+            // 4. Description match (if available in schema)
+            if let Some(desc) = prop_def.get("description").and_then(|d| d.as_str()) {
+                let desc_lower = desc.to_lowercase();
+                if desc_lower.contains(&topic) {
+                    score += 0.5;
+                }
+            }
+
+            if score > best_score && score > 0.5 {
+                best_score = score;
+                best_match = Some(prop_name.clone());
+            }
+        }
+
+        best_match
     }
 }
 
@@ -595,11 +686,19 @@ mod tests {
             action: crate::planner::modular_planner::types::ApiAction::List 
         });
 
+        let resolved = ResolvedCapability::Remote {
+            capability_id: "mcp.github.list_issues".to_string(),
+            server_url: "http://test".to_string(),
+            arguments: args,
+            input_schema: None,
+            confidence: 1.0,
+        };
+
         let expr = planner.generate_call_expr(
-            "mcp.github.list_issues",
-            &args,
+            &resolved,
             &sub_intent,
             &[],
+            &[sub_intent.clone()],
         );
 
         assert!(expr.contains("mcp.github.list_issues"));
