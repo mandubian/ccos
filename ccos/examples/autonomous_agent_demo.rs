@@ -41,6 +41,7 @@ use ccos::synthesis::mcp_registry_client::McpRegistryClient;
 use ccos::synthesis::mcp_introspector::{MCPIntrospector, DiscoveredMCPTool};
 use ccos::discovery::capability_matcher::{
     calculate_action_verb_match_score, calculate_description_match_score, extract_action_verbs,
+    compute_mcp_tool_score, keyword_overlap,
 };
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
@@ -1540,129 +1541,7 @@ fn get_capabilities_discovered_dir() -> std::path::PathBuf {
 }
 
 /// Compute MCP tool match score using existing scoring helpers
-/// Mirrors the logic from MissingCapabilityResolver::compute_tool_score
-fn compute_mcp_tool_score(hint: &str, tool_name: &str, description: &str) -> f64 {
-    let mut score = 0.0;
-    
-    // Use existing description matcher
-    score += calculate_description_match_score(hint, description, tool_name);
-    
-    // Keyword overlap between hint and tool name
-    let overlap = keyword_overlap(hint, tool_name);
-    score += overlap * 2.5;
-    
-    // Also check keyword overlap between hint and description
-    // This helps match hints like "github.api.get_user" with tools described as "Get details of the authenticated GitHub user"
-    let desc_overlap = keyword_overlap(hint, description);
-    score += desc_overlap * 2.0;
-    
-    // Extract last part of hint (e.g., "list" from "github.issues.list")
-    let hint_last = hint
-        .split('.')
-        .last()
-        .unwrap_or(hint)
-        .to_ascii_lowercase();
-    let tool_lower = tool_name.to_ascii_lowercase();
-    
-    // Exact match bonus
-    if tool_lower == hint_last {
-        score += 2.0;
-    } else if tool_lower.contains(&hint_last) || hint_last.contains(&tool_lower) {
-        score += 1.0;
-    }
-    
-    // Normalized hint match
-    if hint.replace('.', "_").to_ascii_lowercase().contains(&tool_lower) {
-        score += 1.0;
-    }
-    
-    // Check if description contains important keywords from the hint
-    let hint_keywords: Vec<&str> = hint.split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|s| s.len() > 2)
-        .collect();
-    let desc_lower = description.to_ascii_lowercase();
-    for keyword in &hint_keywords {
-        if desc_lower.contains(&keyword.to_ascii_lowercase()) {
-            score += 0.5;
-        }
-    }
-    
-    // Special semantic equivalences for common patterns
-    // "user" in hint matches "me" in tool name (GitHub API pattern)
-    // "authenticate"/"auth" matches tools with "authenticated" in description
-    let hint_lower = hint.to_ascii_lowercase();
-    if hint_lower.contains("user") && (tool_lower.contains("me") || desc_lower.contains("authenticated user")) {
-        score += 2.0;
-    }
-    if (hint_lower.contains("auth") || hint_lower.contains("profile")) && desc_lower.contains("authenticated") {
-        score += 1.5;
-    }
-    
-    // STRONG MATCH: Tool name contains ALL significant words from the hint
-    // e.g., "list issues" -> tool_name "list_issues" should get high score
-    let hint_words: HashSet<String> = hint_lower
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| w.len() >= 3 && !["the", "and", "for", "from", "with", "latest", "recent"].contains(w))
-        .map(|s| s.to_string())
-        .collect();
-    
-    let tool_words: HashSet<String> = tool_lower
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| w.len() >= 2)
-        .map(|s| s.to_string())
-        .collect();
-    
-    // Count how many hint words appear in tool name
-    let matched_words: usize = hint_words.iter()
-        .filter(|w| tool_words.contains(*w) || tool_lower.contains(w.as_str()))
-        .count();
-    
-    if !hint_words.is_empty() && matched_words == hint_words.len() {
-        // ALL significant words from hint found in tool name - very strong match
-        score += 3.0;
-    } else if matched_words > 0 {
-        // Partial match
-        score += matched_words as f64 * 1.0;
-    }
-    
-    // Action verb synonym matching using existing helper
-    let hint_verbs = extract_action_verbs(&hint_last);
-    let tool_verbs = extract_action_verbs(&tool_lower);
-    let action_verb_score = calculate_action_verb_match_score(&hint_verbs, &tool_verbs);
-    if action_verb_score > 0.0 {
-        score += action_verb_score * 2.0;
-    }
-    
-    score
-}
-
-/// Calculate keyword overlap between two identifiers
-/// Mirrors MissingCapabilityResolver::keyword_overlap
-fn keyword_overlap(lhs: &str, rhs: &str) -> f64 {
-    // Split on dots, underscores, and other non-alphanumeric chars
-    let lhs_tokens: HashSet<String> = lhs
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .map(|token| token.to_ascii_lowercase())
-        .collect();
-    
-    let rhs_tokens: HashSet<String> = rhs
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .map(|token| token.to_ascii_lowercase())
-        .collect();
-    
-    if lhs_tokens.is_empty() || rhs_tokens.is_empty() {
-        return 0.0;
-    }
-    
-    let intersection = lhs_tokens.intersection(&rhs_tokens).count();
-    if intersection == 0 {
-        return 0.0;
-    }
-    
-    intersection as f64 / lhs_tokens.len().max(rhs_tokens.len()) as f64
-}
+// Note: compute_mcp_tool_score and keyword_overlap are imported from ccos::discovery::capability_matcher
 
 /// Convert serde_json::Value to rtfs::Value
 fn json_to_rtfs_value(v: serde_json::Value) -> Value {
@@ -1805,8 +1684,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     apply_llm_profile(&agent_config, args.profile.as_deref())?;
 
     if std::env::var("CCOS_DELEGATING_MODEL").is_err() {
-        println!("⚠️ CCOS_DELEGATING_MODEL not set, defaulting to 'gpt-4o'");
-        std::env::set_var("CCOS_DELEGATING_MODEL", "gpt-4o");
+        println!("⚠️ CCOS_DELEGATING_MODEL not set, defaulting to 'deepseek/deepseek-v3.2-exp'");
+        std::env::set_var("CCOS_DELEGATING_MODEL", "deepseek/deepseek-v3.2-exp");
     }
     std::env::set_var("CCOS_DELEGATION_ENABLED", "true");
 
