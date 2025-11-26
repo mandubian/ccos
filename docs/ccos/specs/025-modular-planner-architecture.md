@@ -14,6 +14,63 @@ The **Modular Planner** is the next-generation planning engine for CCOS. It deco
 2.  **Intent-Centric**: Every step in a plan is first instantiated as a semantic **Intent** in the IntentGraph before any tool is selected.
 3.  **Pluggable Strategies**: Both decomposition and resolution are strategy-based, allowing mixed modes (e.g., Regex patterns for speed + LLM for complexity).
 4.  **Schema-Driven**: Resolution and Plan Generation rely heavily on capability schemas to ensure correctness (parameter mapping, type coercion).
+5.  **"Ask, Don't Guess"**: When uncertain, the system should ask for clarification rather than produce garbage silently. Strategies should be *humble* about their limitations.
+
+## "Ask, Don't Guess" Principle
+
+This principle pervades the entire planning architecture:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Better to ask and refine than to produce garbage silently      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Pattern Matching: Be Humble
+
+Pattern decomposition is **fast and deterministic**, but it must know its limits:
+- ✅ Simple: `"list issues in owner/repo"` → Pattern handles it (confidence 0.9)
+- ⚠️ Complex: `"list issues and filter per X asked to user"` → Pattern detects user interaction signals, admits uncertainty (confidence 0.0), defers to LLM
+
+**Complexity signals** that trigger deferral:
+- User interaction: "asked to user", "user provides", "prompt me"
+- Multiple clauses: More than one "and" conjunction
+- Temporal sequences: "then", "after", "before"
+
+### Iterative Refinement (Future)
+
+The architecture supports iterative decomposition:
+1. **Granularity Check**: After decomposition, verify each intent is truly atomic (maps to ONE capability)
+2. **Recursive Decomposition**: If an intent is too coarse, decompose it further
+3. **Validation Loop**: Present plan to user/arbiter for confirmation; refine with hints if rejected
+
+```
+                    Goal
+                      │
+                      ▼
+              ┌──────────────┐
+              │ Decompose    │
+              └──────────────┘
+                      │
+                      ▼
+              ┌──────────────┐         ┌─────────────────┐
+              │ Granularity  │────NO──▶│ Re-decompose    │
+              │ Check        │         │ (recursive)     │
+              └──────────────┘         └─────────────────┘
+                      │ YES
+                      ▼
+              ┌──────────────┐         ┌─────────────────┐
+              │ Confidence   │───LOW──▶│ Ask Arbiter/    │
+              │ Check        │         │ User/Judge LLM  │
+              └──────────────┘         └────────┬────────┘
+                      │ HIGH                    │
+                      │◀────────────────────────┘
+                      │     (with hints if needed)
+                      ▼
+              ┌──────────────┐
+              │ Resolution   │
+              └──────────────┘
+```
 
 ## Architecture
 
@@ -47,11 +104,13 @@ graph TD
 Decomposition strategies accept a natural language goal and produce a list of `SubIntent` objects. These intents are semantic descriptions of *what* needs to be done, without specifying *how*.
 
 ### Strategies
-*   **`PatternDecomposition`**: Uses regex patterns for high-speed, deterministic handling of common phrases (e.g., "list X and filter by Y").
+*   **`PatternDecomposition`**: Uses regex patterns for high-speed, deterministic handling of common phrases (e.g., "list X but ask me for Y").
+    *   **Humble Matching**: Patterns check for "complexity signals" (user interaction, multiple clauses) and defer to LLM when detected. A regex match is not enough—the pattern must be *fully handleable*.
 *   **`IntentFirstDecomposition`**: Uses an LLM to break down complex goals into abstract intents. Does not see available tools to prevent hallucination of non-existent tool IDs.
-*   **`GroundedLlmDecomposition`**: Retrieves relevant tool summaries from the `CapabilityCatalog` *before* prompting the LLM. This "grounds" the decomposition, encouraging the LLM to generate intents that map directly to available tools (e.g., `github.list_issues`) rather than abstract descriptions.
+*   **`GroundedLlmDecomposition`**: Retrieves relevant tool summaries (with schemas) from the `CapabilityCatalog` *before* prompting the LLM. This "grounds" the decomposition, encouraging the LLM to generate intents that map directly to available tools and their specific parameters (e.g., `perPage` not "page size").
+    *   **Schema-Aware Prompts**: Tool summaries include input schema parameters so the LLM can ask for specific values (e.g., "Ask user for perPage" rather than "Ask user for pagination").
     *   **Pre-Discovery Requirement**: For dynamic tools (like MCP) to be visible to `GroundedLlmDecomposition`, they must be discovered and registered in the `CapabilityMarketplace` *before* the planning phase begins. Lazy discovery (during resolution) is too late for grounding.
-*   **`HybridDecomposition`**: The default production strategy. Attempts `PatternDecomposition` first; if no pattern matches, falls back to `GroundedLlm` (if tools are available) or `IntentFirst`.
+*   **`HybridDecomposition`**: The default production strategy. Attempts `PatternDecomposition` first; if no pattern matches (or pattern detects complexity it can't handle), falls back to `GroundedLlm` (if tools are available) or `IntentFirst`.
 
 ## 2. IntentGraph Integration
 
