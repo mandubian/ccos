@@ -669,7 +669,7 @@ impl ModularPlanner {
                 if !used_params.contains(param_name) {
                     let dep_var = &previous_bindings[*dep_idx].0;
                     
-                    // Check what kind of coercion is needed
+                    // Determine coercion type and transform value accordingly
                     let value_expr = match self.get_coercion_type(param_name, resolved_capability) {
                         Some("json") => {
                             // Parse string as JSON (for numbers, booleans)
@@ -679,6 +679,16 @@ impl ModularPlanner {
                             // Wrap single value in array: "rtfs" -> ["rtfs"]
                             // Use vector syntax in RTFS
                             format!("[{}]", dep_var)
+                        }
+                        Some("array_upper") => {
+                            // Wrap in array AND uppercase (for GraphQL enums like IssueState)
+                            // "open" -> ["OPEN"]
+                            format!("[(string-upper {})]", dep_var)
+                        }
+                        Some("enum_upper") => {
+                            // Uppercase for GraphQL enum (but not array)
+                            // "open" -> "OPEN"
+                            format!("(string-upper {})", dep_var)
                         }
                         _ => dep_var.clone(),
                     };
@@ -749,7 +759,9 @@ impl ModularPlanner {
     }
 
     /// Determine what kind of coercion is needed for a parameter
-    /// Returns: None (no coercion), Some("json") for numbers/bools, Some("array") for arrays
+    /// Returns: None (no coercion), Some("json") for numbers/bools, 
+    /// Some("array") for arrays, Some("array_upper") for enum arrays needing uppercase,
+    /// Some("enum_upper") for string enums needing uppercase
     fn get_coercion_type(&self, param_name: &str, capability: &ResolvedCapability) -> Option<&'static str> {
         let schema = match capability {
             ResolvedCapability::Remote { input_schema: Some(schema), .. } => Some(schema),
@@ -759,19 +771,40 @@ impl ModularPlanner {
         
         if let Some(schema) = schema {
             if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
-                // Find property using flexible matching if needed, but here we have the exact name
-                // determined by infer_param_name (which might be perPage or per_page)
-                // If infer_param_name did its job, param_name matches a key in properties.
-                
                 // Try exact match first
                 if let Some(prop_def) = props.get(param_name) {
-                    if let Some(type_val) = prop_def.get("type").and_then(|t| t.as_str()) {
-                        return match type_val {
-                            "integer" | "number" | "boolean" => Some("json"),
-                            "array" => Some("array"),
-                            _ => None,
-                        };
-                    }
+                    let type_val = prop_def.get("type").and_then(|t| t.as_str());
+                    let has_enum = prop_def.get("enum").is_some();
+                    
+                    // Check if enum values are uppercase (indicates GraphQL enum)
+                    let is_uppercase_enum = if let Some(enum_arr) = prop_def.get("enum").and_then(|e| e.as_array()) {
+                        enum_arr.iter()
+                            .filter_map(|v| v.as_str())
+                            .any(|s| s.chars().all(|c| c.is_uppercase() || !c.is_alphabetic()))
+                    } else {
+                        false
+                    };
+                    
+                    return match type_val {
+                        Some("integer") | Some("number") | Some("boolean") => Some("json"),
+                        Some("array") => {
+                            // Check if array items need uppercasing
+                            let needs_uppercase = is_uppercase_enum || matches!(
+                                param_name.to_lowercase().as_str(),
+                                "state" | "states" | "direction"
+                            );
+                            if needs_uppercase {
+                                Some("array_upper")
+                            } else {
+                                Some("array")
+                            }
+                        }
+                        Some("string") if is_uppercase_enum => {
+                            // String with uppercase enum values - need to uppercase user input
+                            Some("enum_upper")
+                        }
+                        _ => None,
+                    };
                 }
             }
         }

@@ -332,8 +332,8 @@ impl CatalogResolution {
     /// GitHub-specific prompts
     fn github_prompt(topic: &str) -> Option<String> {
         Some(match topic {
-            "state" => "Issue/PR state: open, closed, or all?".to_string(),
-            "labels" => "Labels to filter by (comma-separated, e.g., bug, enhancement)".to_string(),
+            "state" => "Issue/PR state: OPEN, CLOSED, or leave blank for all (use UPPERCASE)".to_string(),
+            "labels" => "Labels to filter by (e.g., bug, enhancement)".to_string(),
             "assignee" => "Assignee username (or 'none' for unassigned, '*' for any)".to_string(),
             "creator" | "author" => "Creator/author GitHub username".to_string(),
             "milestone" => "Milestone number or title".to_string(),
