@@ -89,40 +89,29 @@ impl CcosCatalogAdapter {
 #[async_trait::async_trait(?Send)]
 impl CapabilityCatalog for CcosCatalogAdapter {
     async fn list_capabilities(&self, _domain: Option<&str>) -> Vec<CapabilityInfo> {
-        // Return all capabilities (limit to 100 for sanity)
-        let hits = self.catalog.search_keyword("", None, 100);
-        let mut results = Vec::new();
+        // Fetch from Marketplace directly to ensure we get everything (including non-indexed MCP tools)
+        let manifests = self.marketplace.list_capabilities().await;
         
-        for hit in hits {
-            // Fetch manifest to get schema
-            let manifest = self.marketplace.get_capability(&hit.entry.id).await;
-            let schema = manifest.and_then(|m| m.input_schema).map(|s| type_expr_to_json_schema(&s));
-            
-            results.push(CapabilityInfo {
-                id: hit.entry.id,
-                name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
-                description: hit.entry.description.unwrap_or_default(),
-                input_schema: schema,
-            });
-        }
-        results
+        manifests.into_iter().map(|m| {
+            CapabilityInfo {
+                id: m.id,
+                name: m.name,
+                description: m.description,
+                input_schema: m.input_schema.map(|s| type_expr_to_json_schema(&s)),
+            }
+        }).collect()
     }
 
     async fn get_capability(&self, id: &str) -> Option<CapabilityInfo> {
-        // Search specifically for this ID
-        let hits = self.catalog.search_keyword(id, None, 10);
-        if let Some(hit) = hits.into_iter().find(|h| h.entry.id == id) {
-            let manifest = self.marketplace.get_capability(id).await;
-            let schema = manifest.and_then(|m| m.input_schema).map(|s| type_expr_to_json_schema(&s));
-            
-            return Some(CapabilityInfo {
-                id: hit.entry.id,
-                name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
-                description: hit.entry.description.unwrap_or_default(),
-                input_schema: schema,
-            });
-        }
-        None
+        // Fetch from Marketplace directly
+        let manifest = self.marketplace.get_capability(id).await?;
+        
+        Some(CapabilityInfo {
+            id: manifest.id,
+            name: manifest.name,
+            description: manifest.description,
+            input_schema: manifest.input_schema.map(|s| type_expr_to_json_schema(&s)),
+        })
     }
 
     async fn search(&self, query: &str, limit: usize) -> Vec<CapabilityInfo> {
@@ -132,15 +121,35 @@ impl CapabilityCatalog for CcosCatalogAdapter {
         
         for hit in hits {
             let manifest = self.marketplace.get_capability(&hit.entry.id).await;
-            let schema = manifest.and_then(|m| m.input_schema).map(|s| type_expr_to_json_schema(&s));
-            
-            results.push(CapabilityInfo {
-                id: hit.entry.id,
-                name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
-                description: hit.entry.description.unwrap_or_default(),
-                input_schema: schema,
-            });
+            // If not in marketplace, skip (or use catalog entry)
+            if let Some(m) = manifest {
+                results.push(CapabilityInfo {
+                    id: m.id,
+                    name: m.name,
+                    description: m.description,
+                    input_schema: m.input_schema.map(|s| type_expr_to_json_schema(&s)),
+                });
+            }
         }
+        
+        // Also simplistic fallback search in marketplace if catalog didn't yield enough
+        if results.len() < limit {
+            let all_caps = self.marketplace.list_capabilities().await;
+            for cap in all_caps {
+                if results.iter().any(|r| r.id == cap.id) { continue; }
+                if cap.name.to_lowercase().contains(&query.to_lowercase()) || 
+                   cap.description.to_lowercase().contains(&query.to_lowercase()) {
+                    results.push(CapabilityInfo {
+                        id: cap.id,
+                        name: cap.name,
+                        description: cap.description,
+                        input_schema: cap.input_schema.map(|s| type_expr_to_json_schema(&s)),
+                    });
+                    if results.len() >= limit { break; }
+                }
+            }
+        }
+        
         results
     }
 }
@@ -349,6 +358,29 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         discovery_session_manager,
         ccos.get_capability_marketplace(),
     ));
+
+    // Pre-discover MCP tools for GitHub if enabled to populate marketplace for Grounded Decomposition
+    if args.discover_mcp {
+        if let Ok(_) = std::env::var("MCP_AUTH_TOKEN") {
+            println!("🔄 Pre-discovering GitHub MCP tools for grounding...");
+            use ccos::planner::modular_planner::types::DomainHint;
+            use ccos::planner::modular_planner::resolution::mcp::McpDiscovery;
+            
+            if let Some(server) = mcp_discovery.get_server_for_domain(&DomainHint::GitHub).await {
+                println!("   Found GitHub server: {}", server.url);
+                match mcp_discovery.discover_tools(&server).await {
+                    Ok(tools) => {
+                        println!("   Found {} tools", tools.len());
+                        for tool in tools {
+                            let _ = mcp_discovery.register_tool(&tool).await;
+                        }
+                        println!("   ✅ Tools registered in marketplace");
+                    },
+                    Err(e) => println!("   ❌ Discovery failed: {}", e),
+                }
+            }
+        }
+    }
     
     let mcp_resolution = McpResolution::new(mcp_discovery);
     // TODO: Add embedding provider if available

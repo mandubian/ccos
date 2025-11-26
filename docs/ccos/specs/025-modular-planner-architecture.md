@@ -50,6 +50,7 @@ Decomposition strategies accept a natural language goal and produce a list of `S
 *   **`PatternDecomposition`**: Uses regex patterns for high-speed, deterministic handling of common phrases (e.g., "list X and filter by Y").
 *   **`IntentFirstDecomposition`**: Uses an LLM to break down complex goals into abstract intents. Does not see available tools to prevent hallucination of non-existent tool IDs.
 *   **`GroundedLlmDecomposition`**: Retrieves relevant tool summaries from the `CapabilityCatalog` *before* prompting the LLM. This "grounds" the decomposition, encouraging the LLM to generate intents that map directly to available tools (e.g., `github.list_issues`) rather than abstract descriptions.
+    *   **Pre-Discovery Requirement**: For dynamic tools (like MCP) to be visible to `GroundedLlmDecomposition`, they must be discovered and registered in the `CapabilityMarketplace` *before* the planning phase begins. Lazy discovery (during resolution) is too late for grounding.
 *   **`HybridDecomposition`**: The default production strategy. Attempts `PatternDecomposition` first; if no pattern matches, falls back to `GroundedLlm` (if tools are available) or `IntentFirst`.
 
 ## 2. IntentGraph Integration
