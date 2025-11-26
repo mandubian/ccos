@@ -248,21 +248,56 @@ impl CatalogService {
         limit: usize,
     ) -> Vec<CatalogHit> {
         let filter = filter.cloned().unwrap_or_default();
-        let needle = query.to_lowercase();
+        let query_lower = query.to_lowercase();
+        
+        // Split query into tokens, ignoring short words to reduce noise
+        let tokens: Vec<&str> = query_lower
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| t.len() > 2)
+            .collect();
+            
         let mut hits = Vec::new();
 
         let entries = self.entries.read().expect("catalog entries poisoned");
-        for entry in entries.values() {
-            if !filter.matches(entry) {
-                continue;
+        
+        // If no query or no tokens, return all matching entries
+        if query.is_empty() || tokens.is_empty() {
+            for entry in entries.values() {
+                if filter.matches(entry) {
+                    hits.push(CatalogHit {
+                        entry: entry.clone(),
+                        score: 1.0,
+                    });
+                }
             }
-            let haystack = entry.search_blob.to_lowercase();
-            if haystack.contains(&needle) {
-                let score = haystack.matches(&needle).count() as f32;
-                hits.push(CatalogHit {
-                    entry: entry.clone(),
-                    score,
-                });
+        } else {
+            // Score-based search for non-empty queries
+            for entry in entries.values() {
+                if !filter.matches(entry) {
+                    continue;
+                }
+                let haystack = entry.search_blob.to_lowercase();
+                
+                let mut score = 0.0;
+                
+                // Check for exact phrase match first (highest priority)
+                if !query_lower.is_empty() && haystack.contains(&query_lower) {
+                    score += 10.0;
+                }
+                
+                // Check for token matches
+                for token in &tokens {
+                    if haystack.contains(token) {
+                        score += 1.0;
+                    }
+                }
+
+                if score > 0.0 {
+                    hits.push(CatalogHit {
+                        entry: entry.clone(),
+                        score,
+                    });
+                }
             }
         }
 

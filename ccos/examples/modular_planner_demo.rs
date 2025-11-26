@@ -28,20 +28,19 @@ use ccos::planner::modular_planner::{
     ResolvedCapability,
     DecompositionStrategy,
 };
-use ccos::planner::modular_planner::decomposition::HybridDecomposition;
-use ccos::planner::modular_planner::decomposition::llm_adapter::CcosLlmAdapter;
-use ccos::arbiter::llm_provider::{LlmProviderFactory, LlmProviderConfig, LlmProviderType};
 use ccos::planner::modular_planner::resolution::{
-    CompositeResolution, McpResolution,
+    CompositeResolution, McpResolution, CatalogConfig, ScoringMethod,
 };
 use ccos::synthesis::mcp_session::MCPSessionManager;
 use ccos::planner::modular_planner::resolution::semantic::{CapabilityCatalog, CapabilityInfo};
 use ccos::planner::modular_planner::orchestrator::{PlanResult, TraceEvent};
 use ccos::capabilities::{SessionPoolManager, MCPSessionHandler};
-use ccos::capability_marketplace::{CapabilityMarketplace, CapabilityManifest};
+use ccos::discovery::embedding_service::EmbeddingService;
 use rtfs::runtime::security::RuntimeContext;
-use rtfs::config::types::AgentConfig;
-use rtfs::ast::TypeExpr;
+use rtfs::config::types::{AgentConfig, LlmProfile};
+use ccos::arbiter::llm_provider::{LlmProviderConfig, LlmProviderType, LlmProviderFactory};
+use ccos::planner::modular_planner::decomposition::llm_adapter::CcosLlmAdapter;
+use ccos::planner::modular_planner::decomposition::HybridDecomposition;
 
 // ============================================================================
 // CLI Arguments
@@ -68,6 +67,14 @@ struct Args {
     /// Execute the plan after generation
     #[arg(long, default_value_t = true)]
     execute: bool,
+
+    /// Force pure LLM decomposition (skip patterns)
+    #[arg(long)]
+    pure_llm: bool,
+    
+    /// Use embedding-based scoring (requires LOCAL_EMBEDDING_URL or OPENROUTER_API_KEY)
+    #[arg(long)]
+    use_embeddings: bool,
 }
 
 // ============================================================================
@@ -77,126 +84,44 @@ struct Args {
 /// Adapts the CCOS CatalogService to the CapabilityCatalog trait required by the planner
 struct CcosCatalogAdapter {
     catalog: Arc<ccos::catalog::CatalogService>,
-    marketplace: Arc<CapabilityMarketplace>,
 }
 
 impl CcosCatalogAdapter {
-    fn new(catalog: Arc<ccos::catalog::CatalogService>, marketplace: Arc<CapabilityMarketplace>) -> Self {
-        Self { catalog, marketplace }
+    fn new(catalog: Arc<ccos::catalog::CatalogService>) -> Self {
+        Self { catalog }
     }
 }
 
 #[async_trait::async_trait(?Send)]
 impl CapabilityCatalog for CcosCatalogAdapter {
     async fn list_capabilities(&self, _domain: Option<&str>) -> Vec<CapabilityInfo> {
-        // Fetch from Marketplace directly to ensure we get everything (including non-indexed MCP tools)
-        let manifests = self.marketplace.list_capabilities().await;
-        
-        manifests.into_iter().map(|m| {
-            CapabilityInfo {
-                id: m.id,
-                name: m.name,
-                description: m.description,
-                input_schema: m.input_schema.map(|s| type_expr_to_json_schema(&s)),
-            }
-        }).collect()
+        // Return all capabilities (limit to 100 for sanity)
+        let hits = self.catalog.search_keyword("", None, 100);
+        hits.into_iter().map(catalog_hit_to_info).collect()
     }
 
     async fn get_capability(&self, id: &str) -> Option<CapabilityInfo> {
-        // Fetch from Marketplace directly
-        let manifest = self.marketplace.get_capability(id).await?;
-        
-        Some(CapabilityInfo {
-            id: manifest.id,
-            name: manifest.name,
-            description: manifest.description,
-            input_schema: manifest.input_schema.map(|s| type_expr_to_json_schema(&s)),
-        })
+        // Search specifically for this ID
+        let hits = self.catalog.search_keyword(id, None, 10);
+        hits.into_iter()
+            .find(|h| h.entry.id == id)
+            .map(catalog_hit_to_info)
     }
 
     async fn search(&self, query: &str, limit: usize) -> Vec<CapabilityInfo> {
-        // Use semantic search from CCOS catalog
-        let hits = self.catalog.search_semantic(query, None, limit);
-        let mut results = Vec::new();
-        
-        for hit in hits {
-            let manifest = self.marketplace.get_capability(&hit.entry.id).await;
-            // If not in marketplace, skip (or use catalog entry)
-            if let Some(m) = manifest {
-                results.push(CapabilityInfo {
-                    id: m.id,
-                    name: m.name,
-                    description: m.description,
-                    input_schema: m.input_schema.map(|s| type_expr_to_json_schema(&s)),
-                });
-            }
-        }
-        
-        // Also simplistic fallback search in marketplace if catalog didn't yield enough
-        if results.len() < limit {
-            let all_caps = self.marketplace.list_capabilities().await;
-            for cap in all_caps {
-                if results.iter().any(|r| r.id == cap.id) { continue; }
-                if cap.name.to_lowercase().contains(&query.to_lowercase()) || 
-                   cap.description.to_lowercase().contains(&query.to_lowercase()) {
-                    results.push(CapabilityInfo {
-                        id: cap.id,
-                        name: cap.name,
-                        description: cap.description,
-                        input_schema: cap.input_schema.map(|s| type_expr_to_json_schema(&s)),
-                    });
-                    if results.len() >= limit { break; }
-                }
-            }
-        }
-        
-        results
+        // Use keyword search which has been improved for tokenized matching
+        let hits = self.catalog.search_keyword(query, None, limit);
+        hits.into_iter().map(catalog_hit_to_info).collect()
     }
 }
 
-/// Convert TypeExpr to JSON Schema (simplified)
-fn type_expr_to_json_schema(expr: &TypeExpr) -> serde_json::Value {
-    use rtfs::ast::PrimitiveType;
-
-    match expr {
-        TypeExpr::Map { entries, .. } => {
-            let mut props = serde_json::Map::new();
-            let mut required = Vec::new();
-            for entry in entries {
-                let name = entry.key.0.clone();
-                
-                // Simple type mapping
-                let type_val = match entry.value_type.as_ref() {
-                    TypeExpr::Primitive(PrimitiveType::String) => "string",
-                    TypeExpr::Primitive(PrimitiveType::Int) | 
-                    TypeExpr::Primitive(PrimitiveType::Float) => "number",
-                    TypeExpr::Primitive(PrimitiveType::Bool) => "boolean",
-                    TypeExpr::Vector(_) | TypeExpr::Array { .. } => "array",
-                    TypeExpr::Map { .. } => "object",
-                    _ => "string",
-                };
-                
-                props.insert(name.clone(), serde_json::json!({ "type": type_val }));
-                
-                if !entry.optional {
-                    required.push(name);
-                }
-            }
-            
-            if required.is_empty() {
-                serde_json::json!({
-                    "type": "object",
-                    "properties": props
-                })
-            } else {
-                serde_json::json!({
-                    "type": "object",
-                    "properties": props,
-                    "required": required
-                })
-            }
-        },
-        _ => serde_json::json!({ "type": "string" })
+/// Helper to convert catalog hit to capability info
+fn catalog_hit_to_info(hit: ccos::catalog::CatalogHit) -> CapabilityInfo {
+    CapabilityInfo {
+        id: hit.entry.id,
+        name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
+        description: hit.entry.description.unwrap_or_default(),
+        input_schema: None, // We don't need full schema for resolution matching
     }
 }
 
@@ -233,6 +158,160 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         )
         .await?,
     );
+
+    // Register synthesized capabilities for demo purposes
+    // These are needed for specific demo scenarios like "list repositories" or "extract data"
+    // In a real system, these would be loaded from the capabilities directory automatically
+    
+    // 1. Register ccos.synthesized.repository_list_user_repos
+    // Note: We're using a dummy implementation here since we can't easily load the RTFS file in this example context
+    // without the full loader infrastructure. In a real app, use the loader.
+    ccos.get_capability_marketplace().register_local_capability(
+        "ccos.synthesized.repository_list_user_repos".to_string(),
+        "Synthesized: repository.list_fetch_user_repos".to_string(),
+        "Lists all repositories owned by a specific GitHub user. Returns repository objects including name and stargazer counts. repository repositories repo repos user username owner list fetch get find listing fetching getting finding mandubian".to_string(),
+        Arc::new(|_args| {
+            // Mock implementation returning a list of repos with stars
+            use rtfs::runtime::values::Value;
+            use rtfs::ast::MapKey;
+            use std::collections::HashMap;
+            
+            let mut repo1 = HashMap::new();
+            repo1.insert(MapKey::String("name".to_string()), Value::String("ccos".to_string()));
+            repo1.insert(MapKey::String("stargazers_count".to_string()), Value::Integer(150));
+            
+            let mut repo2 = HashMap::new();
+            repo2.insert(MapKey::String("name".to_string()), Value::String("rtfs".to_string()));
+            repo2.insert(MapKey::String("stargazers_count".to_string()), Value::Integer(42));
+            
+            let mut repo3 = HashMap::new();
+            repo3.insert(MapKey::String("name".to_string()), Value::String("other".to_string()));
+            repo3.insert(MapKey::String("stargazers_count".to_string()), Value::Integer(10));
+            
+            Ok(Value::List(vec![
+                Value::Map(repo1),
+                Value::Map(repo2),
+                Value::Map(repo3),
+            ]))
+        })
+    ).await?;
+    
+    // 2. Register ccos.synthesized.data_extract (generic filter/sort)
+    ccos.get_capability_marketplace().register_local_capability(
+        "ccos.synthesized.data_extract".to_string(),
+        "Synthesized: data_repository.sort_filter_extract_select_keep".to_string(),
+        "Processes lists of data. Arguments: 'data' (list), 'operation' (sort, keep_first, filter), 'field' (e.g. stargazers_count). Perfect for finding items with most stars, highest counts, or best ranking. Works on repositories, issues, pull requests. data items list sort sorting order ordering filter filtering extract extracting select selecting maximum max highest most best top first star stars count counts stargazer stargazers ranking repository repositories keep keeping".to_string(),
+        Arc::new(|input| {
+            // Simple implementation that handles "keep" / "filter" / "sort"
+            // Expects input map with: data (list), operation (string), field (string)
+            use rtfs::runtime::values::Value;
+            use rtfs::ast::{MapKey, Keyword};
+            
+            let map = match input {
+                Value::Map(m) => m,
+                _ => return Err(rtfs::runtime::error::RuntimeError::TypeError { 
+                    expected: "map".to_string(), 
+                    actual: input.type_name().to_string(), 
+                    operation: "data_extract".to_string() 
+                }),
+            };
+            
+            // Extract args
+            let data = map.get(&MapKey::Keyword(Keyword("data".to_string())))
+                .or_else(|| map.get(&MapKey::String("data".to_string())))
+                .or_else(|| map.get(&MapKey::Keyword(Keyword("_previous_result".to_string()))))
+                .or_else(|| map.get(&MapKey::String("_previous_result".to_string())));
+                
+            let operation = map.get(&MapKey::Keyword(Keyword("operation".to_string())))
+                .or_else(|| map.get(&MapKey::String("operation".to_string())))
+                .map(|v| v.to_string());
+                
+            let field = map.get(&MapKey::Keyword(Keyword("field".to_string())))
+                .or_else(|| map.get(&MapKey::String("field".to_string())))
+                .map(|v| v.to_string());
+            
+            // Handle transform_target from LLM if operation is missing
+            let transform_target = map.get(&MapKey::Keyword(Keyword("transform_target".to_string())))
+                .or_else(|| map.get(&MapKey::String("transform_target".to_string())))
+                .map(|v| v.to_string());
+
+            let (op, fld) = if operation.is_some() {
+                (operation, field)
+            } else if let Some(target) = transform_target {
+                if target.contains("most stars") || target.contains("highest stars") {
+                    (Some("sort_and_keep_first".to_string()), Some("stargazers_count".to_string()))
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+
+            match (data, op.as_deref(), fld.as_deref()) {
+                (Some(Value::List(items)), Some("sort"), Some(field_name)) => {
+                    // Sort logic (descending for stars)
+                    let mut sorted = items.clone();
+                    sorted.sort_by(|a, b| {
+                        let val_a = match a {
+                            Value::Map(m) => m.get(&MapKey::String(field_name.to_string()))
+                                .and_then(|v| match v {
+                                    Value::Integer(i) => Some(*i),
+                                    _ => None
+                                }).unwrap_or(0),
+                            _ => 0,
+                        };
+                        let val_b = match b {
+                            Value::Map(m) => m.get(&MapKey::String(field_name.to_string()))
+                                .and_then(|v| match v {
+                                    Value::Integer(i) => Some(*i),
+                                    _ => None
+                                }).unwrap_or(0),
+                            _ => 0,
+                        };
+                        val_b.cmp(&val_a) // Descending
+                    });
+                    Ok(Value::List(sorted))
+                },
+                (Some(Value::List(items)), Some("sort_and_keep_first"), Some(field_name)) => {
+                    // Sort logic (descending for stars)
+                    let mut sorted = items.clone();
+                    sorted.sort_by(|a, b| {
+                        let val_a = match a {
+                            Value::Map(m) => m.get(&MapKey::String(field_name.to_string()))
+                                .and_then(|v| match v {
+                                    Value::Integer(i) => Some(*i),
+                                    _ => None
+                                }).unwrap_or(0),
+                            _ => 0,
+                        };
+                        let val_b = match b {
+                            Value::Map(m) => m.get(&MapKey::String(field_name.to_string()))
+                                .and_then(|v| match v {
+                                    Value::Integer(i) => Some(*i),
+                                    _ => None
+                                }).unwrap_or(0),
+                            _ => 0,
+                        };
+                        val_b.cmp(&val_a) // Descending
+                    });
+                    if sorted.is_empty() {
+                        Ok(Value::List(vec![]))
+                    } else {
+                        Ok(sorted[0].clone())
+                    }
+                },
+                (Some(Value::List(items)), Some("keep_first"), _) => {
+                    if items.is_empty() {
+                        Ok(Value::List(vec![]))
+                    } else {
+                        Ok(items[0].clone())
+                    }
+                },
+                (Some(val), _, _) => Ok(val.clone()), // Pass through
+                _ => Ok(Value::Nil),
+            }
+        })
+    ).await?;
     
     // Register basic tools (like ccos.user.ask)
     ccos::capabilities::defaults::register_default_capabilities(&ccos.get_capability_marketplace()).await?;
@@ -250,103 +329,118 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     
     // 2. Build capability catalog using adapter
     println!("\n🔍 Setting up capability catalog...");
-    // Wrap the real CCOS catalog and marketplace
-    let catalog = Arc::new(CcosCatalogAdapter::new(ccos.get_catalog(), ccos.get_capability_marketplace()));
     
-    // 3. Create decomposition strategy
+    // CRITICAL: Refresh the catalog with all registered capabilities
+    ccos.get_catalog().ingest_marketplace(&ccos.get_capability_marketplace()).await;
+    
+    // Wrap the real CCOS catalog
+    let catalog = Arc::new(CcosCatalogAdapter::new(ccos.get_catalog()));
+    
+    // 3. Create decomposition strategy (Hybrid: Pattern + LLM)
     println!("\n📐 Setting up decomposition strategy...");
     
-    // Create LLM provider from agent config
-    // Try to find a configured profile, otherwise fall back to defaults
-    let llm_config = if let Some(ref profiles) = agent_config.llm_profiles {
-        if let Some(default_name) = &profiles.default {
-            // First try finding in explicit profiles list
-            if let Some(profile) = profiles.profiles.iter().find(|p| &p.name == default_name) {
-                println!("   Using LLM Profile: {}", profile.name);
+    let decomposition: Box<dyn DecompositionStrategy> = {
+        // Use profile from config
+        let profile_name = "openrouter_free:balanced";
+        
+        if let Some(profile) = find_llm_profile(&agent_config, profile_name) {
+            println!("   ✅ Found LLM profile '{}', enabling HybridDecomposition", profile_name);
+            
+            // Resolve API key
+            let api_key = profile.api_key.clone()
+                .or_else(|| profile.api_key_env.as_ref().and_then(|env| std::env::var(env).ok()));
+                
+            if let Some(key) = api_key {
+                // Map provider string to enum
                 let provider_type = match profile.provider.as_str() {
                     "openai" => LlmProviderType::OpenAI,
                     "anthropic" => LlmProviderType::Anthropic,
                     "stub" => LlmProviderType::Stub,
-                    _ => LlmProviderType::OpenAI, 
+                    "local" => LlmProviderType::Local,
+                    "openrouter" => LlmProviderType::OpenAI, // OpenRouter uses OpenAI client
+                    _ => {
+                        println!("   ⚠️ Unknown provider '{}', defaulting to OpenAI", profile.provider);
+                        LlmProviderType::OpenAI
+                    }
                 };
                 
-                LlmProviderConfig {
+                let provider_config = LlmProviderConfig {
                     provider_type,
-                    model: profile.model.clone(),
-                    api_key: profile.api_key.clone().or_else(|| {
-                        profile.api_key_env.as_ref().and_then(|env| std::env::var(env).ok())
-                    }),
-                    base_url: profile.base_url.clone(),
-                    max_tokens: profile.max_tokens,
-                    temperature: profile.temperature,
-                    timeout_seconds: None,
+                    model: profile.model,
+                    api_key: Some(key),
+                    base_url: profile.base_url,
+                    max_tokens: profile.max_tokens.or(Some(4096)),
+                    temperature: profile.temperature.or(Some(0.0)),
+                    timeout_seconds: Some(60),
                     retry_config: Default::default(),
-                }
-            } 
-            // Then try parsing as set:model (e.g. "openrouter_free:balanced")
-            else if let Some((set_name, model_name)) = default_name.split_once(':') {
-                let set = profiles.model_sets.as_ref().and_then(|sets| sets.iter().find(|s| s.name == set_name));
-                let model_spec = set.and_then(|s| s.models.iter().find(|m| m.name == model_name));
-
-                if let (Some(set), Some(spec)) = (set, model_spec) {
-                    println!("   Using LLM Profile: {}:{} ({})", set.name, spec.name, spec.model);
-                    let provider_type = match set.provider.as_str() {
-                        "openrouter" | "openai" => LlmProviderType::OpenAI,
-                        "anthropic" => LlmProviderType::Anthropic,
-                        "stub" => LlmProviderType::Stub,
-                        _ => LlmProviderType::OpenAI,
-                    };
-
-                    LlmProviderConfig {
-                        provider_type,
-                        model: spec.model.clone(),
-                        api_key: set.api_key.clone().or_else(|| {
-                            set.api_key_env.as_ref().and_then(|env| std::env::var(env).ok())
-                        }),
-                        base_url: set.base_url.clone(),
-                        max_tokens: spec.max_output_tokens, // Map max_output_tokens to max_tokens
-                        temperature: None, // Specs don't have temp currently
-                        timeout_seconds: None,
-                        retry_config: Default::default(),
+                };
+                
+                match LlmProviderFactory::create_provider(provider_config).await {
+                    Ok(provider) => {
+                        let adapter = Arc::new(CcosLlmAdapter::new(provider));
+                        let mut hybrid = HybridDecomposition::new().with_llm(adapter);
+                        
+                        // If pure LLM requested, configure hybrid to skip patterns
+                        if args.pure_llm {
+                            println!("   🤖 Pure LLM mode enabled (skipping patterns)");
+                            // Set pattern threshold > 1.0 to ensure patterns never match
+                            hybrid = hybrid.with_config(ccos::planner::modular_planner::decomposition::hybrid::HybridConfig {
+                                pattern_confidence_threshold: 2.0, 
+                                prefer_grounded: true,
+                                max_grounded_tools: 20,
+                            });
+                        }
+                        
+                        Box::new(hybrid)
+                    },
+                    Err(e) => {
+                        println!("   ⚠️ Failed to create LLM provider: {}. Falling back to Pattern.", e);
+                        Box::new(PatternDecomposition::new())
                     }
-                } else {
-                    println!("   ⚠️  Profile '{}' not found. Falling back to default hardcoded.", default_name);
-                    fallback_llm_config()
                 }
             } else {
-                 println!("   ⚠️  Profile '{}' not found. Falling back to default hardcoded.", default_name);
-                 fallback_llm_config()
+                println!("   ⚠️ No API key found for profile '{}'. Using PatternDecomposition only.", profile_name);
+                Box::new(PatternDecomposition::new())
             }
         } else {
-             fallback_llm_config()
+            println!("   ⚠️ Profile '{}' not found in config. Using PatternDecomposition only.", profile_name);
+            Box::new(PatternDecomposition::new())
         }
-    } else {
-         fallback_llm_config()
     };
-    
-    let mut decomposition: Box<dyn DecompositionStrategy> = Box::new(PatternDecomposition::new());
-
-    // Try to create LLM provider and upgrade to Hybrid
-    match LlmProviderFactory::create_provider(llm_config).await {
-        Ok(provider) => {
-            println!("   ✅ LLM Provider initialized for Hybrid Decomposition");
-            let adapter = Arc::new(CcosLlmAdapter::new(provider));
-            
-            let hybrid = HybridDecomposition::new()
-                .with_llm(adapter);
-                
-            decomposition = Box::new(hybrid);
-        },
-        Err(e) => {
-            println!("   ⚠️  Failed to init LLM provider: {}. Falling back to Pattern-only.", e);
-        }
-    }
     
     // 4. Create resolution strategy (Composite: Catalog + MCP)
     let mut composite_resolution = CompositeResolution::new();
     
-    // A. Catalog Resolution (for local/builtin)
-    composite_resolution.add_strategy(Box::new(CatalogResolution::new(catalog.clone())));
+    // A. Catalog Resolution (for local/builtin) - disable schema validation for mock capabilities
+    let catalog_config = CatalogConfig {
+        validate_schema: false,
+        allow_adaptation: true,
+        scoring_method: if args.use_embeddings { ScoringMethod::Hybrid } else { ScoringMethod::Heuristic },
+        embedding_threshold: 0.5,
+    };
+    
+    // Create catalog resolution, optionally with embedding service
+    let catalog_resolution = {
+        let base = CatalogResolution::new(catalog.clone()).with_config(catalog_config);
+        
+        if args.use_embeddings {
+            if let Some(embedding_service) = EmbeddingService::from_env() {
+                println!("   ✅ Using embedding-based scoring ({})", embedding_service.provider_description());
+                base.with_embedding_service(embedding_service)
+            } else {
+                println!("   ⚠️ --use-embeddings specified but no embedding provider configured.");
+                println!("      Set LOCAL_EMBEDDING_URL (e.g., http://localhost:11434/api) for Ollama");
+                println!("      Or OPENROUTER_API_KEY for remote embeddings");
+                println!("      Falling back to heuristic scoring.");
+                base
+            }
+        } else {
+            println!("   📊 Using heuristic-based scoring (use --use-embeddings for semantic matching)");
+            base
+        }
+    };
+    
+    composite_resolution.add_strategy(Box::new(catalog_resolution));
     
     // B. MCP Resolution (for remote tools)
     // Create separate session manager for discovery
@@ -364,29 +458,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         discovery_session_manager,
         ccos.get_capability_marketplace(),
     ));
-
-    // Pre-discover MCP tools for GitHub if enabled to populate marketplace for Grounded Decomposition
-    if args.discover_mcp {
-        if let Ok(_) = std::env::var("MCP_AUTH_TOKEN") {
-            println!("🔄 Pre-discovering GitHub MCP tools for grounding...");
-            use ccos::planner::modular_planner::types::DomainHint;
-            use ccos::planner::modular_planner::resolution::mcp::McpDiscovery;
-            
-            if let Some(server) = mcp_discovery.get_server_for_domain(&DomainHint::GitHub).await {
-                println!("   Found GitHub server: {}", server.url);
-                match mcp_discovery.discover_tools(&server).await {
-                    Ok(tools) => {
-                        println!("   Found {} tools", tools.len());
-                        for tool in tools {
-                            let _ = mcp_discovery.register_tool(&tool).await;
-                        }
-                        println!("   ✅ Tools registered in marketplace");
-                    },
-                    Err(e) => println!("   ❌ Discovery failed: {}", e),
-                }
-            }
-        }
-    }
     
     let mcp_resolution = McpResolution::new(mcp_discovery);
     // TODO: Add embedding provider if available
@@ -406,13 +477,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         intent_namespace: "demo".to_string(),
     };
     
-    // 5b. Create plan verifier (rule-based for now)
-    use ccos::planner::modular_planner::RuleBasedVerifier;
-    let verifier = Arc::new(RuleBasedVerifier::new());
-    
     let mut planner = ModularPlanner::new(decomposition, Box::new(composite_resolution), intent_graph.clone())
-        .with_catalog(catalog.clone())
-        .with_verifier(verifier)
         .with_config(config);
     
     // 6. Plan!
@@ -511,20 +576,6 @@ fn load_agent_config(config_path: &str) -> Result<AgentConfig, Box<dyn Error + S
     toml::from_str(&content).map_err(|e| format!("failed to parse agent config: {}", e).into())
 }
 
-/// Fallback LLM configuration
-fn fallback_llm_config() -> LlmProviderConfig {
-    LlmProviderConfig {
-        provider_type: LlmProviderType::OpenAI,
-        model: "openai/gpt-4o".to_string(),
-        api_key: std::env::var("OPENROUTER_API_KEY").ok(),
-        base_url: Some("https://openrouter.ai/api/v1".to_string()),
-        max_tokens: None,
-        temperature: None,
-        timeout_seconds: None,
-        retry_config: Default::default(),
-    }
-}
-
 /// Convert RTFS value to string for display
 fn value_to_string(v: &rtfs::runtime::values::Value) -> String {
     format!("{:?}", v)
@@ -583,45 +634,42 @@ fn print_plan_result(result: &PlanResult, verbose: bool) {
                 TraceEvent::ResolutionFailed { intent_id, reason } => {
                     println!("   ✗ Failed: {} - {}", &intent_id[..16.min(intent_id.len())], reason);
                 }
-                TraceEvent::VerificationStarted => {
-                    println!("   🔎 Plan verification started...");
-                }
-                TraceEvent::VerificationCompleted { verdict, issues_count } => {
-                    println!("   ✓ Verification: {} ({} issues)", verdict, issues_count);
+            }
+        }
+    }
+}
+
+/// Find an LLM profile in the agent config by name (e.g. "gpt4" or "openrouter:fast")
+fn find_llm_profile(config: &AgentConfig, profile_name: &str) -> Option<LlmProfile> {
+    let profiles_config = config.llm_profiles.as_ref()?;
+    
+    // 1. Check explicit profiles
+    if let Some(profile) = profiles_config.profiles.iter().find(|p| p.name == profile_name) {
+        return Some(profile.clone());
+    }
+    
+    // 2. Check model sets (format: "set_name:spec_name")
+    if let Some(model_sets) = &profiles_config.model_sets {
+        if let Some((set_name, spec_name)) = profile_name.split_once(':') {
+            if let Some(set) = model_sets.iter().find(|s| s.name == set_name) {
+                if let Some(spec) = set.models.iter().find(|m| m.name == spec_name) {
+                    // Construct synthetic profile
+                    return Some(LlmProfile {
+                        name: profile_name.to_string(),
+                        provider: set.provider.clone(),
+                        model: spec.model.clone(),
+                        base_url: set.base_url.clone(),
+                        api_key_env: set.api_key_env.clone(),
+                        api_key: set.api_key.clone(),
+                        temperature: None, // Could be added to spec if needed
+                        max_tokens: spec.max_output_tokens,
+                    });
                 }
             }
         }
     }
     
-    // Show verification results if available
-    if let Some(ref verification) = result.verification {
-        println!("\n🔎 Plan Verification:");
-        println!("   Verdict: {:?}", verification.verdict);
-        println!("   Confidence: {:.0}%", verification.confidence * 100.0);
-        
-        if !verification.issues.is_empty() {
-            println!("   Issues:");
-            for issue in &verification.issues {
-                let icon = match issue.severity {
-                    ccos::planner::modular_planner::IssueSeverity::Info => "ℹ️ ",
-                    ccos::planner::modular_planner::IssueSeverity::Warning => "⚠️ ",
-                    ccos::planner::modular_planner::IssueSeverity::Error => "❌",
-                    ccos::planner::modular_planner::IssueSeverity::Critical => "🚫",
-                };
-                println!("      {} {:?}: {}", icon, issue.category, issue.description);
-                if let Some(ref fix) = issue.suggested_fix {
-                    println!("         💡 Suggestion: {}", fix);
-                }
-            }
-        }
-        
-        if !verification.suggestions.is_empty() {
-            println!("   Suggestions:");
-            for suggestion in &verification.suggestions {
-                println!("      💡 {}", suggestion);
-            }
-        }
-    }
+    None
 }
 
 #[cfg(test)]

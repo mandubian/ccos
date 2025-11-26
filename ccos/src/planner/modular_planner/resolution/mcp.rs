@@ -335,57 +335,18 @@ impl McpResolution {
     }
     
     /// Extract arguments from intent to pass to tool
-    fn extract_arguments(&self, intent: &SubIntent, tool: &McpToolInfo) -> HashMap<String, String> {
+    fn extract_arguments(&self, intent: &SubIntent, _tool: &McpToolInfo) -> HashMap<String, String> {
         let mut args = HashMap::new();
         
-        // Get valid properties from schema if available
-        let valid_props: Vec<String> = if let Some(schema) = &tool.input_schema {
-            if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
-                props.keys().cloned().collect()
-            } else {
-                vec![]
-            }
-        } else {
-            vec![]
-        };
-
-        // Helper to find matching property
-        let find_match = |key: &str| -> Option<String> {
-            if valid_props.is_empty() {
-                return None;
-            }
-            // 1. Exact match
-            if valid_props.contains(&key.to_string()) {
-                return Some(key.to_string());
-            }
-            // 2. Case insensitive match
-            if let Some(match_prop) = valid_props.iter().find(|p| p.eq_ignore_ascii_case(key)) {
-                return Some(match_prop.clone());
-            }
-            // 3. Snake case to camel case (per_page -> perPage)
-            let camel = key.split('_').enumerate().map(|(i, s)| {
-                if i == 0 { s.to_string() } else { 
-                    let mut c = s.chars(); 
-                    match c.next() {
-                        None => String::new(),
-                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                    }
-                }
-            }).collect::<String>();
-            if valid_props.contains(&camel) {
-                return Some(camel);
-            }
-            
-            None
-        };
-        
-        // Copy all non-internal params with mapping
+        // Copy all non-internal params
         for (key, value) in &intent.extracted_params {
             if !key.starts_with('_') {
-                let final_key = find_match(key).unwrap_or_else(|| key.clone());
-                args.insert(final_key, value.clone());
+                args.insert(key.clone(), value.clone());
             }
         }
+        
+        // If tool has input schema, we could validate/transform args here
+        // For now, pass through as-is
         
         args
     }

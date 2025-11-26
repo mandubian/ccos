@@ -5,11 +5,11 @@
 
 pub mod semantic;
 pub mod mcp;
-mod catalog;
+pub mod catalog;
 
 pub use semantic::{SemanticResolution, CapabilityCatalog, CapabilityInfo};
 pub use mcp::McpResolution;
-pub use catalog::CatalogResolution;
+pub use catalog::{CatalogResolution, CatalogConfig, ScoringMethod};
 
 use std::collections::HashMap;
 use async_trait::async_trait;
@@ -91,7 +91,6 @@ pub enum ResolvedCapability {
         capability_id: String,
         arguments: HashMap<String, String>,
         confidence: f64,
-        input_schema: Option<serde_json::Value>,
     },
     
     /// Remote MCP capability (discovered and registered)

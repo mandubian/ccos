@@ -1,13 +1,34 @@
 //! Catalog resolution strategy
 //!
 //! Resolves intents using the CCOS capability catalog (registered capabilities).
+//! Supports both heuristic-based and embedding-based scoring.
 
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use async_trait::async_trait;
+use serde_json::Value;
 
 use super::semantic::{CapabilityCatalog, CapabilityInfo};
 use super::{ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability};
 use crate::planner::modular_planner::types::{DomainHint, IntentType, SubIntent};
+use crate::discovery::embedding_service::EmbeddingService;
+
+/// Scoring method for capability matching
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScoringMethod {
+    /// Heuristic-based scoring using token matching
+    Heuristic,
+    /// Embedding-based scoring using cosine similarity
+    Embedding,
+    /// Hybrid: use embeddings if available, fallback to heuristic
+    Hybrid,
+}
+
+impl Default for ScoringMethod {
+    fn default() -> Self {
+        Self::Hybrid
+    }
+}
 
 /// Catalog resolution configuration
 #[derive(Debug, Clone)]
@@ -16,6 +37,10 @@ pub struct CatalogConfig {
     pub validate_schema: bool,
     /// Whether to attempt adapting missing parameters
     pub allow_adaptation: bool,
+    /// Scoring method to use
+    pub scoring_method: ScoringMethod,
+    /// Minimum embedding similarity threshold (0.0 to 1.0)
+    pub embedding_threshold: f64,
 }
 
 impl Default for CatalogConfig {
@@ -23,6 +48,8 @@ impl Default for CatalogConfig {
         Self {
             validate_schema: true,
             allow_adaptation: true,
+            scoring_method: ScoringMethod::Hybrid,
+            embedding_threshold: 0.5,
         }
     }
 }
@@ -30,10 +57,12 @@ impl Default for CatalogConfig {
 /// Catalog resolution strategy.
 /// 
 /// Searches the local capability catalog for matching capabilities.
-/// This is simpler than SemanticResolution and doesn't use embeddings.
+/// Supports both heuristic and embedding-based scoring.
 pub struct CatalogResolution {
     catalog: Arc<dyn CapabilityCatalog>,
     config: CatalogConfig,
+    /// Optional embedding service for semantic matching
+    embedding_service: Option<Arc<Mutex<EmbeddingService>>>,
 }
 
 impl CatalogResolution {
@@ -41,12 +70,24 @@ impl CatalogResolution {
         Self { 
             catalog,
             config: CatalogConfig::default(),
+            embedding_service: None,
         }
     }
 
     pub fn with_config(mut self, config: CatalogConfig) -> Self {
         self.config = config;
         self
+    }
+    
+    /// Add embedding service for semantic matching
+    pub fn with_embedding_service(mut self, service: EmbeddingService) -> Self {
+        self.embedding_service = Some(Arc::new(Mutex::new(service)));
+        self
+    }
+    
+    /// Check if embedding service is available
+    pub fn has_embedding_service(&self) -> bool {
+        self.embedding_service.is_some()
     }
     
     /// Map intent to built-in capability if applicable
@@ -87,32 +128,34 @@ impl CatalogResolution {
             return true;
         }
 
-        if let Some(schema) = &cap.input_schema {
+        if let Some(schema_str) = &cap.input_schema {
             // Basic JSON schema check for required fields
-            if let Some(required) = schema.get("required").and_then(|v| v.as_array()) {
-                for field in required {
-                    if let Some(field_name) = field.as_str() {
-                        if !args.contains_key(field_name) {
-                            // Missing required field!
-                            if self.config.allow_adaptation {
-                                // Attempt adaptation for common patterns
-                                if field_name == "prompt" || field_name == "question" {
-                                    // Synthesize prompt from description
-                                    args.insert(field_name.to_string(), intent.description.clone());
-                                    continue;
+            if let Ok(schema) = serde_json::from_str::<serde_json::Value>(schema_str) {
+                if let Some(required) = schema.get("required").and_then(|v| v.as_array()) {
+                    for field in required {
+                        if let Some(field_name) = field.as_str() {
+                            if !args.contains_key(field_name) {
+                                // Missing required field!
+                                if self.config.allow_adaptation {
+                                    // Attempt adaptation for common patterns
+                                    if field_name == "prompt" || field_name == "question" {
+                                        // Synthesize prompt from description
+                                        args.insert(field_name.to_string(), intent.description.clone());
+                                        continue;
+                                    }
+                                    if field_name == "message" {
+                                        args.insert(field_name.to_string(), intent.description.clone());
+                                        continue;
+                                    }
                                 }
-                                if field_name == "message" {
-                                    args.insert(field_name.to_string(), intent.description.clone());
-                                    continue;
-                                }
-                            }
-                            
-                            // If we get here, we failed to adapt
+                                
+                                // If we get here, we failed to adapt
                             // println!("DEBUG: Rejected capability {} due to missing required param: {}", cap.id, field_name);
                             return false;
                         }
                     }
                 }
+            }
             }
         }
         true
@@ -156,8 +199,15 @@ impl CatalogResolution {
         let mut scored: Vec<(CapabilityInfo, f64, std::collections::HashMap<String, String>)> = Vec::new();
         
         for cap in candidates {
-            let score = self.score_capability(intent, &cap);
-            if score > 0.2 {
+            let score = self.score_capability(intent, &cap).await;
+            
+            // For embedding, use threshold; for heuristic, accept non-negative
+            let threshold = match self.config.scoring_method {
+                ScoringMethod::Embedding => self.config.embedding_threshold,
+                _ => 0.0,
+            };
+            
+            if score >= threshold {
                 // Prepare arguments
                 let mut arguments: std::collections::HashMap<String, String> = intent.extracted_params
                     .iter()
@@ -177,8 +227,74 @@ impl CatalogResolution {
         scored.into_iter().next()
     }
     
-    /// Score capability match with improved algorithm
-    fn score_capability(&self, intent: &SubIntent, cap: &CapabilityInfo) -> f64 {
+    /// Score capability match - dispatches to appropriate method based on config
+    async fn score_capability(&self, intent: &SubIntent, cap: &CapabilityInfo) -> f64 {
+        match self.config.scoring_method {
+            ScoringMethod::Heuristic => self.score_capability_heuristic(intent, cap),
+            ScoringMethod::Embedding => {
+                if let Some(score) = self.score_capability_embedding(intent, cap).await {
+                    score
+                } else {
+                    // Fallback to heuristic if embedding fails
+                    println!("   [Embedding failed, using heuristic fallback]");
+                    self.score_capability_heuristic(intent, cap)
+                }
+            }
+            ScoringMethod::Hybrid => {
+                // Try embedding first, fallback to heuristic
+                if self.embedding_service.is_some() {
+                    if let Some(emb_score) = self.score_capability_embedding(intent, cap).await {
+                        // Combine embedding score with heuristic bonus for action/noun match
+                        let heuristic_score = self.score_capability_heuristic(intent, cap);
+                        // Weight: 70% embedding, 30% normalized heuristic
+                        let normalized_heuristic = (heuristic_score.max(-1.0).min(1.0) + 1.0) / 2.0; // Map [-1,1] to [0,1]
+                        let combined = 0.7 * emb_score + 0.3 * normalized_heuristic;
+                        println!("   -> Score: {:.3} (emb: {:.3}, heur: {:.3})", combined, emb_score, heuristic_score);
+                        return combined;
+                    }
+                }
+                // Fallback to pure heuristic
+                self.score_capability_heuristic(intent, cap)
+            }
+        }
+    }
+    
+    /// Score using embedding-based semantic similarity
+    async fn score_capability_embedding(&self, intent: &SubIntent, cap: &CapabilityInfo) -> Option<f64> {
+        let service = self.embedding_service.as_ref()?;
+        let mut service = service.lock().await;
+        
+        // Create text representations
+        let intent_text = &intent.description;
+        let cap_text = format!("{}: {}", cap.name, cap.description);
+        
+        // Generate embeddings
+        let intent_emb = match service.embed(intent_text).await {
+            Ok(emb) => emb,
+            Err(e) => {
+                log::debug!("Failed to embed intent: {}", e);
+                return None;
+            }
+        };
+        
+        let cap_emb = match service.embed(&cap_text).await {
+            Ok(emb) => emb,
+            Err(e) => {
+                log::debug!("Failed to embed capability: {}", e);
+                return None;
+            }
+        };
+        
+        // Calculate cosine similarity
+        let similarity = EmbeddingService::cosine_similarity(&intent_emb, &cap_emb);
+        
+        println!("   -> Embedding score for '{}': {:.3}", cap.id, similarity);
+        
+        Some(similarity)
+    }
+    
+    /// Score capability match with heuristic algorithm (BACKUP)
+    fn score_capability_heuristic(&self, intent: &SubIntent, cap: &CapabilityInfo) -> f64 {
         let cap_name_lower = cap.name.to_lowercase();
         let cap_desc_lower = cap.description.to_lowercase();
         let desc_lower = intent.description.to_lowercase();
@@ -199,20 +315,33 @@ impl CatalogResolution {
         }
         
         // Common action verbs (not nouns) - used to identify the "object" of the action
-        let action_verbs = ["list", "get", "search", "create", "update", "delete", "find", "retrieve", "fetch", "read", "write", "add", "remove"];
-        let stop_words = ["the", "and", "for", "with", "from", "into", "user", "provided", "filters", "pagination"];
+        let action_verbs = ["list", "get", "search", "create", "update", "delete", "find", "retrieve", "fetch", "read", "write", "add", "remove", "extract", "sort", "filter", "select", "keep"];
+        let stop_words = ["the", "and", "for", "with", "from", "into", "user", "provided", "filters", "pagination", "synthesized", "generated", "ccos", "local", "one", "most", "by"];
         
         let mut score: f64 = 0.0;
         let mut _matched_name_words = 0;
         
         // 1. Action verb alignment
-        let intent_action = intent_words.iter().find(|w| action_verbs.contains(&w.to_lowercase().as_str()));
-        let cap_action = cap_name_words.iter().find(|w| action_verbs.contains(&w.to_lowercase().as_str()));
+        // Check if ANY action verb in intent matches ANY action verb in capability
+        let intent_actions: Vec<&str> = intent_words.iter()
+            .filter(|w| action_verbs.contains(&w.to_lowercase().as_str()))
+            .copied()
+            .collect();
+            
+        let cap_actions: Vec<&str> = cap_name_words.iter()
+            .filter(|w| action_verbs.contains(&w.to_lowercase().as_str()))
+            .copied()
+            .collect();
+            
+        let action_match = intent_actions.iter().any(|ia| {
+            cap_actions.iter().any(|ca| ia.to_lowercase() == ca.to_lowercase())
+        });
         
-        if let (Some(ia), Some(ca)) = (intent_action, cap_action) {
-            if ia.to_lowercase() == ca.to_lowercase() {
-                score += 0.2;
-            }
+        if action_match {
+            score += 0.5; // Increased bonus for action match
+        } else if !intent_actions.is_empty() {
+            // Penalty if intent has explicit action that doesn't match capability
+            score -= 0.1; // Reduced penalty
         }
         
         // 2. Find the "object noun" in capability name (the non-verb, non-stop word)
@@ -230,23 +359,29 @@ impl CatalogResolution {
                 continue;
             }
             
-            // Check for match in capability name (exact or singular/plural)
+            // Check for match in capability name (exact or singular/plural or substring)
             let name_match = cap_object_nouns.iter().any(|cw| {
                 let cw_lower = cw.to_lowercase();
                 cw_lower == word_lower || 
                 cw_lower == format!("{}s", word_lower) ||
                 word_lower == format!("{}s", cw_lower) ||
                 cw_lower == format!("{}es", word_lower) ||
-                word_lower == format!("{}es", cw_lower)
+                word_lower == format!("{}es", cw_lower) ||
+                // Handle y -> ies
+                (word_lower.ends_with("ies") && cw_lower == word_lower.trim_end_matches("ies").to_string() + "y") ||
+                (cw_lower.ends_with("ies") && word_lower == cw_lower.trim_end_matches("ies").to_string() + "y") ||
+                // Handle abbreviations/substrings (e.g. repos vs repositories)
+                (cw_lower.len() > 3 && word_lower.contains(&cw_lower)) ||
+                (word_lower.len() > 3 && cw_lower.contains(&word_lower))
             });
             
             if name_match {
-                score += 0.4; // Strong bonus for object noun match in name
+                score += 0.3; // Good bonus for object noun match in name
                 _matched_name_words += 1;
             }
             // Partial match in description (lower weight)
             else if cap_desc_lower.contains(&word_lower) {
-                score += 0.05;
+                score += 0.1;
             }
         }
         
@@ -255,28 +390,42 @@ impl CatalogResolution {
         for cap_noun in &cap_object_nouns {
             let cap_noun_lower = cap_noun.to_lowercase();
             
+            // Skip if noun is a stop word (double check)
+            if stop_words.contains(&cap_noun_lower.as_str()) {
+                continue;
+            }
+            
             let intent_has_noun = intent_words.iter().any(|w| {
                 let w_lower = w.to_lowercase();
                 w_lower == cap_noun_lower ||
                 w_lower == format!("{}s", cap_noun_lower) ||
                 cap_noun_lower == format!("{}s", w_lower) ||
                 w_lower == format!("{}es", cap_noun_lower) ||
-                cap_noun_lower == format!("{}es", w_lower)
+                cap_noun_lower == format!("{}es", w_lower) ||
+                (w_lower.ends_with("ies") && cap_noun_lower == w_lower.trim_end_matches("ies").to_string() + "y") ||
+                (cap_noun_lower.ends_with("ies") && w_lower == cap_noun_lower.trim_end_matches("ies").to_string() + "y") ||
+                (cap_noun_lower.len() > 3 && w_lower.contains(&cap_noun_lower)) ||
+                (w_lower.len() > 3 && cap_noun_lower.contains(&w_lower))
             });
             
             if !intent_has_noun {
-                score -= 0.5; // Strong penalty for unmentioned object nouns
+                score -= 0.15; // Reduced penalty
             }
         }
         
         // 5. Penalize extra specificity (e.g., "types" suffix)
         for cap_word in &cap_name_words {
             let cap_word_lower = cap_word.to_lowercase();
+            
+            if stop_words.contains(&cap_word_lower.as_str()) {
+                continue;
+            }
+
             // If capability has a qualifier word not in intent, penalize
             if !intent_words.iter().any(|w| w.to_lowercase() == cap_word_lower) {
                 // Small penalty for each unmatched word in capability name
                 if !action_verbs.contains(&cap_word_lower.as_str()) {
-                    score -= 0.15;
+                    score -= 0.1; // Reduced penalty
                 }
             }
         }
@@ -288,7 +437,8 @@ impl CatalogResolution {
             }
         }
         
-        score.max(0.0_f64).min(1.0_f64)
+        // Return raw score (no clamping) so threshold filtering can work properly
+        score
     }
     
     /// Generate human-friendly prompt text from a parameter name
@@ -500,7 +650,6 @@ impl ResolutionStrategy for CatalogResolution {
                 capability_id: cap.id,
                 arguments,
                 confidence: score,
-                input_schema: cap.input_schema,
             });
         }
         

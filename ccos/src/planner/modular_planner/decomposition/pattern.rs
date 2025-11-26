@@ -30,7 +30,7 @@ static PATTERN_SEQUENTIAL_ACTIONS: Lazy<Regex> = Lazy::new(|| {
 });
 
 static PATTERN_ACTION_WITH_TRANSFORM: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^(.+?)\s+and\s+(filter|sort|group|count|aggregate)\s+(?:by|for|on)?\s*(.*)$").unwrap()
+    Regex::new(r"(?i)^(.+?)\s+and\s+(filter|sort|group|count|aggregate|keep)\s+(?:by|for|on)?\s*(.*)$").unwrap()
 });
 
 static OWNER_REPO_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -95,55 +95,12 @@ impl PatternDecomposition {
         None
     }
     
-    /// Check if any pattern matches AND can be fully handled
-    /// Returns false if pattern matches but contains complexity we can't handle
+    /// Check if any pattern matches
     fn has_pattern_match(&self, goal: &str) -> bool {
-        // First check: does any regex match?
-        let has_regex_match = PATTERN_ACTION_WITH_USER_INPUT.is_match(goal) ||
-            PATTERN_USER_INPUT_THEN_ACTION.is_match(goal) ||
-            PATTERN_SEQUENTIAL_ACTIONS.is_match(goal) ||
-            PATTERN_ACTION_WITH_TRANSFORM.is_match(goal);
-        
-        if !has_regex_match {
-            return false;
-        }
-        
-        // Second check: does the goal contain complexity signals that patterns can't handle?
-        // If so, we should defer to LLM even though regex matched.
-        // "Ask, don't guess" principle.
-        if Self::has_unhandled_complexity(goal) {
-            log::debug!("[pattern] Goal has complexity signals that patterns can't fully handle");
-            return false;
-        }
-        
-        true
-    }
-    
-    /// Check if goal contains complexity signals that patterns can't handle properly
-    fn has_unhandled_complexity(goal: &str) -> bool {
-        let lower = goal.to_lowercase();
-        
-        // User interaction signals that require proper decomposition
-        let user_signals = [
-            "asked to the user", "asked to user", "ask the user", "ask user",
-            "user provides", "user input", "user chooses", "user selects",
-            "prompt the user", "prompt user",
-        ];
-        
-        // Multiple "and" clauses often indicate complex multi-step goals
-        let and_count = lower.matches(" and ").count();
-        
-        // Check for user signals
-        if user_signals.iter().any(|s| lower.contains(s)) {
-            return true;
-        }
-        
-        // Multiple "and" clauses suggest complexity beyond simple patterns
-        if and_count > 1 {
-            return true;
-        }
-        
-        false
+        PATTERN_ACTION_WITH_USER_INPUT.is_match(goal) ||
+        PATTERN_USER_INPUT_THEN_ACTION.is_match(goal) ||
+        PATTERN_SEQUENTIAL_ACTIONS.is_match(goal) ||
+        PATTERN_ACTION_WITH_TRANSFORM.is_match(goal)
     }
     
     /// Extract parameters from goal (owner/repo, etc.)
@@ -255,15 +212,13 @@ fn handle_action_with_user_input(
     // Infer domain and action from main action text
     let domain = DomainHint::infer_from_text(main_action);
     let action = infer_api_action(main_action);
-    let domain_hint = domain.unwrap_or(DomainHint::Generic);
     
     Some(vec![
-        // Step 1: Ask user for input (also gets domain for context-aware prompts)
+        // Step 1: Ask user for input
         SubIntent::new(
             format!("Ask user for {}", user_input_topic),
             IntentType::UserInput { prompt_topic: user_input_topic.to_string() },
-        )
-        .with_domain(domain_hint.clone()),
+        ),
         
         // Step 2: Execute main action with user input
         SubIntent::new(
@@ -271,7 +226,7 @@ fn handle_action_with_user_input(
             IntentType::ApiCall { action },
         )
         .with_dependencies(vec![0])
-        .with_domain(domain_hint),
+        .with_domain(domain.unwrap_or(DomainHint::Generic)),
     ])
 }
 
@@ -286,20 +241,18 @@ fn handle_user_input_then_action(
     
     let domain = DomainHint::infer_from_text(action_text);
     let action = infer_api_action(action_text);
-    let domain_hint = domain.unwrap_or(DomainHint::Generic);
     
     Some(vec![
         SubIntent::new(
             format!("Ask user for {}", user_input_topic),
             IntentType::UserInput { prompt_topic: user_input_topic.to_string() },
-        )
-        .with_domain(domain_hint.clone()),
+        ),
         SubIntent::new(
             action_text.to_string(),
             IntentType::ApiCall { action },
         )
         .with_dependencies(vec![0])
-        .with_domain(domain_hint),
+        .with_domain(domain.unwrap_or(DomainHint::Generic)),
     ])
 }
 
@@ -347,27 +300,10 @@ fn handle_action_with_transform(
     let transform_type = captures.get(2)?.as_str().trim().to_lowercase();
     let transform_target = captures.get(3).map(|m| m.as_str().trim()).unwrap_or("");
     
-    // HUMBLE CHECK: If the transform target contains complexity we can't handle,
-    // return None to let a smarter strategy (LLM) decompose this properly.
-    // "Ask, don't guess" principle.
-    let complexity_signals = [
-        "ask me", "asked to", "ask user", "ask the user", "prompt me", "prompt user",
-        "user provides", "user input", "user chooses", "user selects",
-        " and then ", " then ", " after ", " before ",
-    ];
-    let target_lower = transform_target.to_lowercase();
-    if complexity_signals.iter().any(|s| target_lower.contains(s)) {
-        log::debug!(
-            "[pattern] Transform target '{}' contains complexity signals, deferring to LLM",
-            transform_target
-        );
-        return None; // Let LLM handle this
-    }
-    
     let domain = DomainHint::infer_from_text(main_action);
     
     let transform = match transform_type.as_str() {
-        "filter" => TransformType::Filter,
+        "filter" | "keep" => TransformType::Filter,
         "sort" => TransformType::Sort,
         "group" => TransformType::GroupBy,
         "count" => TransformType::Count,

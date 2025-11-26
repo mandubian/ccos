@@ -70,80 +70,35 @@ impl GroundedLlmDecomposition {
         self
     }
     
-    /// Filter tools by relevance to goal using embeddings or keyword matching
+    /// Filter tools by relevance to goal using embeddings
     async fn filter_relevant_tools<'a>(
         &self,
         goal: &str,
         available_tools: &'a [ToolSummary],
     ) -> Result<Vec<&'a ToolSummary>, DecompositionError> {
-        // If embedding provider available, use semantic matching
-        if let Some(embedding_provider) = &self.embedding_provider {
-            let goal_embedding = embedding_provider.embed(goal).await?;
-            
-            let mut scored_tools: Vec<(&'a ToolSummary, f64)> = Vec::new();
-            
-            for tool in available_tools {
-                let tool_text = format!("{} {}", tool.name, tool.description);
-                let tool_embedding = embedding_provider.embed(&tool_text).await?;
-                let similarity = cosine_similarity(&goal_embedding, &tool_embedding);
-                
-                if similarity >= self.similarity_threshold {
-                    scored_tools.push((tool, similarity));
-                }
+        let embedding_provider = match &self.embedding_provider {
+            Some(p) => p,
+            None => {
+                // No embedding provider, return all tools (up to max)
+                return Ok(available_tools.iter().take(self.max_tools_in_prompt).collect());
             }
-            
-            scored_tools.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            
-            return Ok(scored_tools
-                .into_iter()
-                .take(self.max_tools_in_prompt)
-                .map(|(tool, _)| tool)
-                .collect());
-        }
+        };
         
-        // Fallback: keyword-based filtering
-        let goal_lower = goal.to_lowercase();
-        let goal_words: Vec<&str> = goal_lower
-            .split(|c: char| c.is_whitespace() || c == '_' || c == '-')
-            .filter(|w| w.len() > 2)
-            .collect();
+        let goal_embedding = embedding_provider.embed(goal).await?;
         
         let mut scored_tools: Vec<(&'a ToolSummary, f64)> = Vec::new();
         
         for tool in available_tools {
-            let tool_name_lower = tool.name.to_lowercase();
-            let tool_desc_lower = tool.description.to_lowercase();
+            let tool_text = format!("{} {}", tool.name, tool.description);
+            let tool_embedding = embedding_provider.embed(&tool_text).await?;
+            let similarity = cosine_similarity(&goal_embedding, &tool_embedding);
             
-            // Extract words from tool name (split on . _ -)
-            let tool_words: Vec<&str> = tool_name_lower
-                .split(|c: char| c == '.' || c == '_' || c == '-')
-                .filter(|w| w.len() > 1)
-                .collect();
-            
-            let mut score = 0.0;
-            
-            // Check for goal word matches in tool name/description
-            for goal_word in &goal_words {
-                // Match in tool name words (high score)
-                if tool_words.iter().any(|tw| {
-                    tw == goal_word || 
-                    *tw == format!("{}s", goal_word) || 
-                    format!("{}s", tw) == *goal_word
-                }) {
-                    score += 2.0;
-                }
-                // Match in description (lower score)
-                else if tool_desc_lower.contains(goal_word) {
-                    score += 0.5;
-                }
-            }
-            
-            if score > 0.0 {
-                scored_tools.push((tool, score));
+            if similarity >= self.similarity_threshold {
+                scored_tools.push((tool, similarity));
             }
         }
         
-        // Sort by score descending
+        // Sort by similarity descending
         scored_tools.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         
         // Take top N
@@ -158,37 +113,9 @@ impl GroundedLlmDecomposition {
         let tools_list = if tools.is_empty() {
             "No specific tools available - decompose into abstract steps.".to_string()
         } else {
-            let mut list = String::from("AVAILABLE TOOLS (prefer these for api_call steps):\n");
+            let mut list = String::from("Available tools (use these for api_call steps):\n");
             for tool in tools {
                 list.push_str(&format!("- {}: {}\n", tool.name, tool.description));
-                // Include schema parameters if available
-                if let Some(schema) = &tool.input_schema {
-                    if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
-                        let required: Vec<&str> = schema.get("required")
-                            .and_then(|r| r.as_array())
-                            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-                            .unwrap_or_default();
-                        
-                        let params: Vec<String> = props.iter()
-                            .map(|(name, spec)| {
-                                let typ = spec.get("type").and_then(|t| t.as_str()).unwrap_or("any");
-                                let desc = spec.get("description").and_then(|d| d.as_str()).unwrap_or("");
-                                let req = if required.contains(&name.as_str()) { "*" } else { "" };
-                                if desc.is_empty() {
-                                    format!("    {}{}: {}", name, req, typ)
-                                } else {
-                                    format!("    {}{}: {} - {}", name, req, typ, desc)
-                                }
-                            })
-                            .collect();
-                        
-                        if !params.is_empty() {
-                            list.push_str("  Parameters (* = required):\n");
-                            list.push_str(&params.join("\n"));
-                            list.push('\n');
-                        }
-                    }
-                }
             }
             list
         };
@@ -199,25 +126,20 @@ impl GroundedLlmDecomposition {
             format!("\n\nAlready extracted parameters: {:?}", context.pre_extracted_params)
         };
         
-        format!(r#"You are a goal decomposition expert. Break down the following goal into a MINIMAL number of steps.
+        format!(r#"You are a goal decomposition expert. Break down the following goal into steps.
 
 {tools_list}
 
-CRITICAL RULES:
-1. MINIMIZE STEPS: Use the fewest steps possible to accomplish the goal.
-2. PREFER TOOLS: If a tool above can accomplish part of the goal, use it! Include the tool name in the "tool" field.
-3. FILTERING/PAGINATION ARE PARAMS: See tool parameters above. Do NOT create separate "filter" or "paginate" steps.
-4. USER INPUT - ONE STEP PER PARAMETER: When you need user input for MULTIPLE parameters, create SEPARATE "user_input" steps for EACH parameter.
-   - NEVER combine multiple parameters into one prompt (e.g., "filter and page size" is WRONG)
-   - Each "prompt_topic" MUST be ONE EXACT parameter name from the tool schema (e.g., "perPage", "state", "labels")
-   - Example: If goal needs "filter" AND "page size", create TWO user_input steps: one for "state" or "labels", one for "perPage"
-5. Use "data_transform" ONLY for client-side processing that no API tool can do.
-6. Match tool names EXACTLY from the list above (e.g., "list_issues" not "github.list_issues").
+IMPORTANT RULES:
+1. For api_call steps, prefer using the available tools above when they match.
+2. Include the tool name in the "tool" field if you're recommending a specific tool.
+3. If no tool matches, use intent_type "api_call" without a specific tool.
+4. Focus on WHAT needs to be done - the tool is just a hint, not required.
 
 INTENT TYPES:
-- "user_input": Ask the user for information. Use "prompt_topic" = exact param name from schema.
-- "api_call": External API operation - ALWAYS include "tool" field if a matching tool exists above
-- "data_transform": ONLY for client-side processing (avoid if API can do it)
+- "user_input": Ask the user for information
+- "api_call": External API operation (optionally with tool name)
+- "data_transform": Process data (filter, sort, count, format)
 - "output": Display results
 
 GOAL: "{goal}"
@@ -229,46 +151,13 @@ Respond with ONLY a JSON object:
     {{
       "description": "Step description",
       "intent_type": "user_input|api_call|data_transform|output",
-      "action": "list|get|create|update|delete|search",
-      "tool": "EXACT_tool_name_from_list_above",
+      "action": "list|get|create|update|delete|search|filter|sort|...",
+      "tool": "optional_tool_name_from_list_above",
       "depends_on": [],
-      "params": {{"prompt_topic": "perPage"}}
+      "params": {{}}
     }}
   ],
   "domain": "github|slack|filesystem|database|web|generic"
-}}
-
-Example for "list items with filter and limit asked to user":
-{{
-  "steps": [
-    {{
-      "description": "Ask user for limit",
-      "intent_type": "user_input",
-      "params": {{"prompt_topic": "limit"}}
-    }},
-    {{
-      "description": "Ask user for filter",
-      "intent_type": "user_input",
-      "params": {{"prompt_topic": "filter"}}
-    }},
-    {{
-      "description": "List items with user-provided parameters",
-      "intent_type": "api_call",
-      "action": "list",
-      "tool": "list_items",
-      "depends_on": [0, 1],
-      "params": {{}}
-    }},
-    {{
-      "description": "Display results",
-      "intent_type": "output",
-      "action": "display",
-      "tool": null,
-      "depends_on": [1],
-      "params": {{}}
-    }}
-  ],
-  "domain": "github"
 }}
 "#, tools_list = tools_list, goal = goal, params_hint = params_hint)
     }
@@ -305,7 +194,14 @@ impl DecompositionStrategy for GroundedLlmDecomposition {
         };
         
         let prompt = self.build_grounded_prompt(goal, &filtered_tools, context);
+        
+        // DEBUG: Print prompt
+        println!("\n🤖 LLM Prompt:\n--------------------------------------------------\n{}\n--------------------------------------------------", prompt);
+        
         let response = self.llm_provider.generate_text(&prompt).await?;
+        
+        // DEBUG: Print response
+        println!("\n🤖 LLM Response:\n--------------------------------------------------\n{}\n--------------------------------------------------", response);
         
         // Parse response (reuse logic from intent_first)
         let parsed = parse_grounded_response(&response)?;

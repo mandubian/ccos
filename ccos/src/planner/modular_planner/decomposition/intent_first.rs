@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::{DecompositionContext, DecompositionError, DecompositionResult, DecompositionStrategy};
 use crate::planner::modular_planner::types::{
@@ -58,7 +58,14 @@ impl DecompositionStrategy for IntentFirstDecomposition {
         }
         
         let prompt = build_decomposition_prompt(goal, context);
+        
+        // DEBUG: Print prompt
+        println!("\n🤖 LLM Prompt (IntentFirst):\n--------------------------------------------------\n{}\n--------------------------------------------------", prompt);
+        
         let response = self.llm_provider.generate_text(&prompt).await?;
+        
+        // DEBUG: Print response
+        println!("\n🤖 LLM Response (IntentFirst):\n--------------------------------------------------\n{}\n--------------------------------------------------", response);
         
         let parsed = parse_llm_response(&response)?;
         
@@ -85,20 +92,19 @@ fn build_decomposition_prompt(goal: &str, context: &DecompositionContext) -> Str
         )
     };
     
-    format!(r#"You are a goal decomposition expert. Break down the following goal into a MINIMAL sequence of steps.
+    format!(r#"You are a goal decomposition expert. Break down the following goal into a sequence of simple, atomic steps.
 
-CRITICAL RULES:
-1. MINIMIZE STEPS: Most APIs support filtering/pagination as parameters. Do NOT create separate "filter" or "paginate" steps.
-2. Filtering/sorting/pagination are typically API PARAMETERS, not separate data_transform steps.
-3. Only use "data_transform" for client-side processing that APIs cannot do (e.g., custom calculations, complex formatting).
-4. Focus on WHAT needs to be done, not specific tools or APIs.
-5. Each step should have ONE clear purpose.
-6. Identify dependencies between steps (what step needs output from another).
+IMPORTANT RULES:
+1. Focus on WHAT needs to be done, not specific tools or APIs.
+2. Each step should have ONE clear purpose.
+3. Use semantic intent types, not tool names.
+4. Identify dependencies between steps (what step needs output from another).
+5. Extract any parameters mentioned in the goal.
 
 INTENT TYPES (use these exactly):
 - "user_input": Ask the user for information
-- "api_call": Fetch or modify external data. Include filter/sort/pagination as params when the API supports it.
-- "data_transform": ONLY for client-side processing that cannot be done by the API
+- "api_call": Fetch or modify external data (list, get, create, update, delete, search)
+- "data_transform": Process data (filter, sort, count, format, extract)
 - "output": Display results to user
 
 GOAL: "{goal}"
@@ -115,32 +121,25 @@ Respond with ONLY a JSON object in this exact format:
       "params": {{"key": "value"}}  // any parameters relevant to this step
     }}
   ],
-  "domain": "github|slack|filesystem|database|web|generic"
+  "domain": "github|slack|filesystem|database|web|generic"  // inferred domain
 }}
 
-Example for "filter issues in mandubian/ccos per filter asked to the user and paginate it":
+Example for "list issues in mandubian/ccos but ask me for page size":
 {{
   "steps": [
     {{
-      "description": "Ask user for filter criteria and pagination preferences",
+      "description": "Ask user for desired page size",
       "intent_type": "user_input",
       "action": null,
       "depends_on": [],
-      "params": {{"prompt_topic": "filter criteria and page size"}}
+      "params": {{"prompt_topic": "page size"}}
     }},
     {{
-      "description": "Search issues with user-provided filter and pagination",
+      "description": "List issues from repository",
       "intent_type": "api_call",
-      "action": "search",
+      "action": "list",
       "depends_on": [0],
       "params": {{"owner": "mandubian", "repo": "ccos", "resource": "issues"}}
-    }},
-    {{
-      "description": "Display filtered issues to user",
-      "intent_type": "output",
-      "action": "display",
-      "depends_on": [1],
-      "params": {{}}
     }}
   ],
   "domain": "github"

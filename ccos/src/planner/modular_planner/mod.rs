@@ -39,7 +39,6 @@ pub mod decomposition;
 pub mod resolution;
 pub mod orchestrator;
 pub mod types;
-pub mod verification;
 
 // Re-exports
 pub use decomposition::{
@@ -77,17 +76,4 @@ pub use types::{
     DomainHint,
     ToolSummary,
     ApiAction,
-};
-
-pub use verification::{
-    PlanVerifier,
-    RuleBasedVerifier,
-    LlmVerifier,
-    CompositeVerifier,
-    VerificationResult,
-    VerificationVerdict,
-    VerificationIssue,
-    IssueSeverity,
-    IssueCategory,
-    VerificationError,
 };
