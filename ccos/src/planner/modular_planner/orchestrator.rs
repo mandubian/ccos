@@ -495,7 +495,15 @@ impl ModularPlanner {
                         } else {
                             "_previous_result".to_string()
                         };
-                        args_parts.push(format!(":{} {}", param_name, dep_var));
+                        
+                        // Check if coercion is needed (e.g. string -> number)
+                        let value_expr = if self.should_coerce(&param_name, resolved_capability) {
+                            format!("(parse-json {})", dep_var)
+                        } else {
+                            dep_var.clone()
+                        };
+                        
+                        args_parts.push(format!(":{} {}", param_name, value_expr));
                     }
                 }
             }
@@ -550,6 +558,29 @@ impl ModularPlanner {
         }
     }
 
+    /// Check if a parameter should be coerced from string to JSON value (number/bool)
+    fn should_coerce(&self, param_name: &str, capability: &ResolvedCapability) -> bool {
+        if let ResolvedCapability::Remote { input_schema: Some(schema), .. } = capability {
+            if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+                // Find property using flexible matching if needed, but here we have the exact name
+                // determined by infer_param_name (which might be perPage or per_page)
+                // If infer_param_name did its job, param_name matches a key in properties.
+                
+                // Try exact match first
+                if let Some(prop_def) = props.get(param_name) {
+                    if let Some(type_val) = prop_def.get("type").and_then(|t| t.as_str()) {
+                        return matches!(type_val, "integer" | "number" | "boolean");
+                    }
+                }
+                
+                // If infer returned snake_case fallback but schema has camelCase, we might miss it here.
+                // But infer_param_name logic tries to return the schema key.
+                // If we are here, we assume param_name is correct or close enough.
+            }
+        }
+        false
+    }
+
     /// Match intent topic to schema properties using fuzzy matching
     fn match_topic_to_schema(&self, intent: &SubIntent, schema: &serde_json::Value) -> Option<String> {
         let topic = match &intent.intent_type {
@@ -579,11 +610,36 @@ impl ModularPlanner {
 
             // 3. Token overlap
             let topic_tokens: Vec<&str> = topic.split_whitespace().collect();
-            let prop_tokens: Vec<&str> = prop_lower.split('_').collect(); // snake_case
             
-            let matches = topic_tokens.iter().filter(|t| prop_tokens.contains(t)).count();
+            // Split property by underscore and camelCase
+            let mut prop_tokens = Vec::new();
+            let mut current_token = String::new();
+            for c in prop_name.chars() {
+                if c == '_' {
+                    if !current_token.is_empty() {
+                        prop_tokens.push(current_token.to_lowercase());
+                        current_token = String::new();
+                    }
+                } else if c.is_uppercase() {
+                    if !current_token.is_empty() {
+                        prop_tokens.push(current_token.to_lowercase());
+                    }
+                    current_token = String::new();
+                    current_token.push(c);
+                } else {
+                    current_token.push(c);
+                }
+            }
+            if !current_token.is_empty() {
+                prop_tokens.push(current_token.to_lowercase());
+            }
+            
+            let matches = topic_tokens.iter().filter(|t| 
+                prop_tokens.iter().any(|pt| pt == *t)
+            ).count();
+
             if matches > 0 {
-                score += 0.3 * (matches as f64);
+                score += 0.6 * (matches as f64);
             }
 
             // 4. Description match (if available in schema)

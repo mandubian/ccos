@@ -28,6 +28,9 @@ use ccos::planner::modular_planner::{
     ResolvedCapability,
     DecompositionStrategy,
 };
+use ccos::planner::modular_planner::decomposition::HybridDecomposition;
+use ccos::planner::modular_planner::decomposition::llm_adapter::CcosLlmAdapter;
+use ccos::arbiter::llm_provider::{LlmProviderFactory, LlmProviderConfig, LlmProviderType};
 use ccos::planner::modular_planner::resolution::{
     CompositeResolution, McpResolution,
 };
@@ -141,7 +144,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         CCOS::new_with_agent_config_and_configs_and_debug_callback(
             Default::default(),
             None,
-            Some(agent_config),
+            Some(agent_config.clone()),
             None,
         )
         .await?,
@@ -166,9 +169,88 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Wrap the real CCOS catalog
     let catalog = Arc::new(CcosCatalogAdapter::new(ccos.get_catalog()));
     
-    // 3. Create decomposition strategy (pattern-only for this demo)
-    println!("\n📐 Using PatternDecomposition (fast, deterministic)");
-    let decomposition: Box<dyn DecompositionStrategy> = Box::new(PatternDecomposition::new());
+    // 3. Create decomposition strategy
+    println!("\n📐 Setting up decomposition strategy...");
+    
+    // Create LLM provider from agent config
+    // Try to find a configured profile, otherwise fall back to defaults
+    let llm_config = if let Some(ref profiles) = agent_config.llm_profiles {
+        if let Some(default_name) = &profiles.default {
+            if let Some(profile) = profiles.profiles.iter().find(|p| &p.name == default_name) {
+                println!("   Using LLM Profile: {}", profile.name);
+                let provider_type = match profile.provider.as_str() {
+                    "openai" => LlmProviderType::OpenAI,
+                    "anthropic" => LlmProviderType::Anthropic,
+                    "stub" => LlmProviderType::Stub,
+                    _ => LlmProviderType::OpenAI, 
+                };
+                
+                LlmProviderConfig {
+                    provider_type,
+                    model: profile.model.clone(),
+                    api_key: profile.api_key.clone().or_else(|| {
+                        profile.api_key_env.as_ref().and_then(|env| std::env::var(env).ok())
+                    }),
+                    base_url: profile.base_url.clone(),
+                    max_tokens: profile.max_tokens,
+                    temperature: profile.temperature,
+                    timeout_seconds: None,
+                    retry_config: Default::default(),
+                }
+            } else {
+                 LlmProviderConfig {
+                    provider_type: LlmProviderType::OpenAI,
+                    model: "openai/gpt-4o".to_string(),
+                    api_key: std::env::var("OPENROUTER_API_KEY").ok(),
+                    base_url: Some("https://openrouter.ai/api/v1".to_string()),
+                    max_tokens: None,
+                    temperature: None,
+                    timeout_seconds: None,
+                    retry_config: Default::default(),
+                }
+            }
+        } else {
+             LlmProviderConfig {
+                provider_type: LlmProviderType::OpenAI,
+                model: "openai/gpt-4o".to_string(),
+                api_key: std::env::var("OPENROUTER_API_KEY").ok(),
+                base_url: Some("https://openrouter.ai/api/v1".to_string()),
+                max_tokens: None,
+                temperature: None,
+                timeout_seconds: None,
+                retry_config: Default::default(),
+            }
+        }
+    } else {
+         LlmProviderConfig {
+            provider_type: LlmProviderType::OpenAI,
+            model: "openai/gpt-4o".to_string(),
+            api_key: std::env::var("OPENROUTER_API_KEY").ok(),
+            base_url: Some("https://openrouter.ai/api/v1".to_string()),
+            max_tokens: None,
+            temperature: None,
+            timeout_seconds: None,
+            retry_config: Default::default(),
+        }
+    };
+    
+    let mut decomposition: Box<dyn DecompositionStrategy> = Box::new(PatternDecomposition::new());
+
+    // Try to create LLM provider and upgrade to Hybrid
+    match LlmProviderFactory::create_provider(llm_config).await {
+        Ok(provider) => {
+            println!("   ✅ LLM Provider initialized for Hybrid Decomposition");
+            let adapter = Arc::new(CcosLlmAdapter::new(provider));
+            
+            let hybrid = HybridDecomposition::new()
+                .with_llm(adapter);
+                
+            decomposition = Box::new(hybrid);
+        },
+        Err(e) => {
+            println!("   ⚠️  Failed to init LLM provider: {}. Falling back to Pattern-only.", e);
+        }
+    }
     
     // 4. Create resolution strategy (Composite: Catalog + MCP)
     let mut composite_resolution = CompositeResolution::new();
