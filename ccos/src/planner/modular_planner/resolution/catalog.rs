@@ -181,7 +181,7 @@ impl CatalogResolution {
         let cap_desc_lower = cap.description.to_lowercase();
         let desc_lower = intent.description.to_lowercase();
         
-        // Tokenize intent and capability
+        // Tokenize intent and capability name
         let intent_words: Vec<&str> = desc_lower
             .split(|c: char| c.is_whitespace() || c == '_' || c == '-' || c == '.')
             .filter(|w| w.len() > 2)
@@ -196,63 +196,97 @@ impl CatalogResolution {
             return 0.0;
         }
         
-        let mut score = 0.0;
-        let mut matched_words = 0;
+        // Common action verbs (not nouns) - used to identify the "object" of the action
+        let action_verbs = ["list", "get", "search", "create", "update", "delete", "find", "retrieve", "fetch", "read", "write", "add", "remove"];
+        let stop_words = ["the", "and", "for", "with", "from", "into", "user", "provided", "filters", "pagination"];
         
-        // Check for action verb alignment (list, get, search, etc.)
-        let action_verbs = ["list", "get", "search", "create", "update", "delete", "find", "retrieve", "fetch"];
+        let mut score: f64 = 0.0;
+        let mut _matched_name_words = 0;
+        
+        // 1. Action verb alignment
         let intent_action = intent_words.iter().find(|w| action_verbs.contains(&w.to_lowercase().as_str()));
         let cap_action = cap_name_words.iter().find(|w| action_verbs.contains(&w.to_lowercase().as_str()));
         
         if let (Some(ia), Some(ca)) = (intent_action, cap_action) {
             if ia.to_lowercase() == ca.to_lowercase() {
-                score += 0.3; // Action verb match bonus
+                score += 0.2;
             }
         }
         
-        // Check for resource noun alignment (issues, users, repos, etc.)
+        // 2. Find the "object noun" in capability name (the non-verb, non-stop word)
+        let cap_object_nouns: Vec<&str> = cap_name_words.iter()
+            .filter(|w| !action_verbs.contains(&w.to_lowercase().as_str()))
+            .copied()
+            .collect();
+        
+        // 3. Check for object noun matches between intent and capability
         for word in &intent_words {
             let word_lower = word.to_lowercase();
             
-            // Exact match in capability name (higher weight)
-            if cap_name_words.iter().any(|cw| {
+            // Skip stop words and action verbs
+            if stop_words.contains(&word_lower.as_str()) || action_verbs.contains(&word_lower.as_str()) {
+                continue;
+            }
+            
+            // Check for match in capability name (exact or singular/plural)
+            let name_match = cap_object_nouns.iter().any(|cw| {
                 let cw_lower = cw.to_lowercase();
-                // Exact match or singular/plural match
                 cw_lower == word_lower || 
                 cw_lower == format!("{}s", word_lower) ||
-                word_lower == format!("{}s", cw_lower)
-            }) {
-                score += 0.25;
-                matched_words += 1;
+                word_lower == format!("{}s", cw_lower) ||
+                cw_lower == format!("{}es", word_lower) ||
+                word_lower == format!("{}es", cw_lower)
+            });
+            
+            if name_match {
+                score += 0.4; // Strong bonus for object noun match in name
+                _matched_name_words += 1;
             }
             // Partial match in description (lower weight)
             else if cap_desc_lower.contains(&word_lower) {
-                score += 0.1;
-                matched_words += 1;
+                score += 0.05;
             }
         }
         
-        // Penalize capabilities with extra specificity not in intent
-        // e.g., "list_issue_types" vs "list_issues" when intent says "issues"
-        let intent_has_types = intent_words.iter().any(|w| w.to_lowercase() == "types" || w.to_lowercase() == "type");
-        let cap_has_types = cap_name_lower.contains("type");
-        
-        if cap_has_types && !intent_has_types {
-            score -= 0.4; // Penalty for unwanted specificity
+        // 4. Penalize if capability has object nouns NOT mentioned in intent
+        // This prevents "list_branches" matching "list issues"
+        for cap_noun in &cap_object_nouns {
+            let cap_noun_lower = cap_noun.to_lowercase();
+            
+            let intent_has_noun = intent_words.iter().any(|w| {
+                let w_lower = w.to_lowercase();
+                w_lower == cap_noun_lower ||
+                w_lower == format!("{}s", cap_noun_lower) ||
+                cap_noun_lower == format!("{}s", w_lower) ||
+                w_lower == format!("{}es", cap_noun_lower) ||
+                cap_noun_lower == format!("{}es", w_lower)
+            });
+            
+            if !intent_has_noun {
+                score -= 0.5; // Strong penalty for unmentioned object nouns
+            }
         }
         
-        // Bonus for suggested tool match
+        // 5. Penalize extra specificity (e.g., "types" suffix)
+        for cap_word in &cap_name_words {
+            let cap_word_lower = cap_word.to_lowercase();
+            // If capability has a qualifier word not in intent, penalize
+            if !intent_words.iter().any(|w| w.to_lowercase() == cap_word_lower) {
+                // Small penalty for each unmatched word in capability name
+                if !action_verbs.contains(&cap_word_lower.as_str()) {
+                    score -= 0.15;
+                }
+            }
+        }
+        
+        // 6. Bonus for suggested tool match
         if let Some(suggested) = intent.extracted_params.get("_suggested_tool") {
             if cap.id.contains(suggested) || cap.name.to_lowercase().contains(&suggested.to_lowercase()) {
-                score += 0.5; // Strong bonus for LLM-suggested tool
+                score += 0.5;
             }
         }
         
-        // Normalize by coverage
-        let coverage = matched_words as f64 / intent_words.len() as f64;
-        score += coverage * 0.2;
-        
-        score.min(1.0).max(0.0)
+        score.max(0.0_f64).min(1.0_f64)
     }
 }
 

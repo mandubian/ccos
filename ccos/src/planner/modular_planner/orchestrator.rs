@@ -653,22 +653,30 @@ impl ModularPlanner {
                 return best_match;
             }
         }
+        if let ResolvedCapability::Local { .. } = consumer_capability {
+            // Local capabilities might have schema in catalog, but we don't have it here
+            // Fall through to heuristics
+        }
 
-        // 2. Fallback to simple heuristic
+        // 2. Fallback: extract first meaningful word from prompt topic
+        // This prevents invalid parameter names with special characters
         match &producer_intent.intent_type {
             IntentType::UserInput { prompt_topic } => {
                 let normalized = prompt_topic.trim().to_lowercase();
                 
-                // Manual overrides for common terms
-                if normalized.contains("page size") || normalized == "limit" || normalized == "count" {
-                    return "per_page".to_string();
-                }
-                if normalized == "page" {
-                    return "page".to_string();
-                }
-
-                // Fallback: use topic as snake_case param
-                normalized.replace(' ', "_")
+                // Common stop words to skip
+                let stop_words = ["the", "for", "and", "please", "provide", "etc", "with", "from", "your", "enter"];
+                
+                // Extract meaningful words (alphanumeric only, length > 2)
+                let words: Vec<&str> = normalized
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|w| w.len() > 2 && !stop_words.contains(w))
+                    .collect();
+                
+                // Return first meaningful word, or fallback
+                words.first()
+                    .map(|w| w.to_string())
+                    .unwrap_or_else(|| "_input".to_string())
             }
             _ => "_previous_result".to_string(),
         }
