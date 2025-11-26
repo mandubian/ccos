@@ -54,7 +54,9 @@ impl CatalogResolution {
         match &intent.intent_type {
             IntentType::UserInput { prompt_topic } => {
                 let mut args = std::collections::HashMap::new();
-                args.insert("prompt".to_string(), format!("Please provide: {}", prompt_topic));
+                // Generate a more descriptive prompt based on common parameter names
+                let prompt = Self::humanize_prompt(prompt_topic);
+                args.insert("prompt".to_string(), prompt);
                 
                 Some(ResolvedCapability::BuiltIn {
                     capability_id: "ccos.user.ask".to_string(),
@@ -287,6 +289,82 @@ impl CatalogResolution {
         }
         
         score.max(0.0_f64).min(1.0_f64)
+    }
+    
+    /// Generate human-friendly prompt text from a parameter name
+    fn humanize_prompt(topic: &str) -> String {
+        // Clean up topic - remove common filler words and normalize
+        let filler_words = ["first", "please", "the", "a", "an", "now", "then"];
+        let topic_lower: String = topic.to_lowercase()
+            .replace(['_', '-'], " ")
+            .split_whitespace()
+            .filter(|w| !filler_words.contains(w))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let topic_lower = topic_lower.trim();
+        
+        // Common API parameter patterns with descriptive prompts
+        match topic_lower {
+            // Pagination
+            "perpage" | "per page" | "page size" | "limit" => {
+                "How many items per page? (e.g., 10, 25, 50)".to_string()
+            }
+            "page" | "page number" => {
+                "Which page number? (starting from 1)".to_string()
+            }
+            "cursor" | "after" | "before" => {
+                format!("Pagination cursor for '{}' (or leave blank for first page)", topic)
+            }
+            
+            // GitHub-specific filters
+            "state" => {
+                "Issue state: open, closed, or all?".to_string()
+            }
+            "labels" => {
+                "Labels to filter by (comma-separated, e.g., bug, enhancement)".to_string()
+            }
+            "assignee" => {
+                "Assignee username (or 'none' for unassigned, '*' for any)".to_string()
+            }
+            "creator" | "author" => {
+                "Creator/author username".to_string()
+            }
+            "milestone" => {
+                "Milestone number or title".to_string()
+            }
+            "sort" => {
+                "Sort by: created, updated, or comments?".to_string()
+            }
+            "direction" | "order" => {
+                "Sort direction: asc (ascending) or desc (descending)?".to_string()
+            }
+            "since" => {
+                "Show items since date (YYYY-MM-DD format)".to_string()
+            }
+            
+            // Generic API params
+            "query" | "q" | "search" => {
+                "Search query (keywords to find)".to_string()
+            }
+            "filter" | "filters" => {
+                "Filter criteria (e.g., state:open, label:bug)".to_string()
+            }
+            "owner" => {
+                "Repository owner (username or organization)".to_string()
+            }
+            "repo" | "repository" => {
+                "Repository name".to_string()
+            }
+            
+            // Default: use the topic with basic formatting
+            _ => {
+                if topic.len() <= 10 {
+                    format!("Please provide: {} (enter a value)", topic)
+                } else {
+                    topic.to_string()
+                }
+            }
+        }
     }
 }
 

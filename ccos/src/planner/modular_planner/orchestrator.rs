@@ -81,6 +81,8 @@ pub struct PlanResult {
     pub rtfs_plan: String,
     /// Planning trace for debugging
     pub trace: PlanningTrace,
+    /// Verification result (if verification was performed)
+    pub verification: Option<super::verification::VerificationResult>,
 }
 
 /// Trace of planning decisions for debugging/audit
@@ -99,6 +101,8 @@ pub enum TraceEvent {
     ResolutionStarted { intent_id: String },
     ResolutionCompleted { intent_id: String, capability: String },
     ResolutionFailed { intent_id: String, reason: String },
+    VerificationStarted,
+    VerificationCompleted { verdict: String, issues_count: usize },
 }
 
 /// The main modular planner orchestrator.
@@ -113,6 +117,8 @@ pub struct ModularPlanner {
     resolution: Box<dyn ResolutionStrategy>,
     /// Capability catalog for listing tools (optional, for grounded decomposition)
     catalog: Option<Arc<dyn CapabilityCatalog>>,
+    /// Plan verifier (optional, for consistency checking)
+    verifier: Option<Arc<dyn super::verification::PlanVerifier>>,
     /// Intent graph for storing intents and edges
     intent_graph: Arc<Mutex<IntentGraph>>,
     /// Configuration
@@ -130,6 +136,7 @@ impl ModularPlanner {
             decomposition,
             resolution,
             catalog: None,
+            verifier: None,
             intent_graph,
             config: PlannerConfig::default(),
         }
@@ -141,6 +148,7 @@ impl ModularPlanner {
             decomposition: Box::new(HybridDecomposition::pattern_only()),
             resolution: Box::new(CompositeResolution::new()),
             catalog: None,
+            verifier: None,
             intent_graph,
             config: PlannerConfig::default(),
         }
@@ -148,6 +156,12 @@ impl ModularPlanner {
 
     pub fn with_catalog(mut self, catalog: Arc<dyn CapabilityCatalog>) -> Self {
         self.catalog = Some(catalog);
+        self
+    }
+
+    /// Add a plan verifier for consistency checking
+    pub fn with_verifier(mut self, verifier: Arc<dyn super::verification::PlanVerifier>) -> Self {
+        self.verifier = Some(verifier);
         self
     }
 
@@ -245,12 +259,34 @@ impl ModularPlanner {
         // 4. Generate RTFS plan from resolved intents
         let rtfs_plan = self.generate_rtfs_plan(&optimized_intents, &intent_ids, &resolutions)?;
 
+        // 5. Optional: Verify the plan for consistency
+        let verification = if let Some(ref verifier) = self.verifier {
+            trace.events.push(TraceEvent::VerificationStarted);
+            
+            match verifier.verify(goal, &optimized_intents, &resolutions, &rtfs_plan).await {
+                Ok(result) => {
+                    trace.events.push(TraceEvent::VerificationCompleted {
+                        verdict: format!("{:?}", result.verdict),
+                        issues_count: result.issues.len(),
+                    });
+                    Some(result)
+                }
+                Err(e) => {
+                    log::warn!("Plan verification failed: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(PlanResult {
             root_intent_id: root_id,
             intent_ids,
             resolutions,
             rtfs_plan,
             trace,
+            verification,
         })
     }
 
