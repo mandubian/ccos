@@ -195,13 +195,23 @@ impl DecompositionStrategy for GroundedLlmDecomposition {
         
         let prompt = self.build_grounded_prompt(goal, &filtered_tools, context);
         
-        // DEBUG: Print prompt
-        println!("\n🤖 LLM Prompt:\n--------------------------------------------------\n{}\n--------------------------------------------------", prompt);
+        // Print tool count always, but prompt/response only if verbose
+        println!("\n📋 Grounded LLM decomposition: {} tools available for grounding", filtered_tools.len());
+        if !filtered_tools.is_empty() {
+            println!("   Tools: {}", filtered_tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
+        }
+        
+        // DEBUG: Print prompt only if verbose_llm is enabled
+        if context.verbose_llm {
+            println!("\n🤖 LLM Prompt:\n--------------------------------------------------\n{}\n--------------------------------------------------", prompt);
+        }
         
         let response = self.llm_provider.generate_text(&prompt).await?;
         
-        // DEBUG: Print response
-        println!("\n🤖 LLM Response:\n--------------------------------------------------\n{}\n--------------------------------------------------", response);
+        // DEBUG: Print response only if verbose_llm is enabled
+        if context.verbose_llm {
+            println!("\n🤖 LLM Response:\n--------------------------------------------------\n{}\n--------------------------------------------------", response);
+        }
         
         // Parse response (reuse logic from intent_first)
         let parsed = parse_grounded_response(&response)?;

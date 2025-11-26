@@ -246,6 +246,10 @@ pub struct ToolSummary {
     
     /// Primary action this tool performs
     pub action: ApiAction,
+    
+    /// Optional input schema for argument validation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Value>,
 }
 
 impl ToolSummary {
@@ -275,11 +279,17 @@ impl ToolSummary {
             description: desc_str,
             domain: DomainHint::Generic,
             action,
+            input_schema: None,
         }
     }
     
     pub fn with_domain(mut self, domain: DomainHint) -> Self {
         self.domain = domain;
+        self
+    }
+    
+    pub fn with_input_schema(mut self, schema: serde_json::Value) -> Self {
+        self.input_schema = Some(schema);
         self
     }
 }

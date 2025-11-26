@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use thiserror::Error;
 
-use super::types::{SubIntent, DomainHint};
+use super::types::{SubIntent, DomainHint, ToolSummary};
 
 /// Error type for resolution failures
 #[derive(Debug, Error)]
@@ -37,6 +37,9 @@ pub enum ResolutionError {
     
     #[error("Capability requires external referral: {0}")]
     NeedsReferral(String),
+    
+    #[error("Cache I/O error: {0}")]
+    CacheError(String),
     
     #[error("Internal error: {0}")]
     Internal(String),
@@ -159,7 +162,7 @@ impl ResolvedCapability {
 /// Implementations map SubIntents to concrete capabilities that can
 /// execute them.
 #[async_trait(?Send)]
-pub trait ResolutionStrategy {
+pub trait ResolutionStrategy: Send + Sync {
     /// Name of this strategy for logging/debugging
     fn name(&self) -> &str;
     
@@ -172,6 +175,14 @@ pub trait ResolutionStrategy {
         intent: &SubIntent,
         context: &ResolutionContext,
     ) -> Result<ResolvedCapability, ResolutionError>;
+    
+    /// List all available tools/capabilities from this resolution source.
+    /// 
+    /// This enables eager discovery for grounded LLM decomposition.
+    /// Returns empty vec if not supported or no tools available.
+    async fn list_available_tools(&self) -> Vec<ToolSummary> {
+        vec![] // Default: no pre-listing
+    }
 }
 
 /// Combined resolution that tries multiple strategies
@@ -245,5 +256,14 @@ impl ResolutionStrategy for CompositeResolution {
         Err(last_error.unwrap_or_else(|| {
             ResolutionError::NotFound(format!("No strategy could resolve: {}", intent.description))
         }))
+    }
+    
+    async fn list_available_tools(&self) -> Vec<ToolSummary> {
+        let mut all_tools = Vec::new();
+        for strategy in &self.strategies {
+            let tools = strategy.list_available_tools().await;
+            all_tools.extend(tools);
+        }
+        all_tools
     }
 }
