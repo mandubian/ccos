@@ -7,7 +7,7 @@ use async_trait::async_trait;
 
 use super::semantic::{CapabilityCatalog, CapabilityInfo};
 use super::{ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability};
-use crate::planner::modular_planner::types::{IntentType, SubIntent};
+use crate::planner::modular_planner::types::{DomainHint, IntentType, SubIntent};
 
 /// Catalog resolution configuration
 #[derive(Debug, Clone)]
@@ -54,8 +54,8 @@ impl CatalogResolution {
         match &intent.intent_type {
             IntentType::UserInput { prompt_topic } => {
                 let mut args = std::collections::HashMap::new();
-                // Generate a more descriptive prompt based on common parameter names
-                let prompt = Self::humanize_prompt(prompt_topic);
+                // Generate a more descriptive prompt based on common parameter names and domain
+                let prompt = Self::humanize_prompt(prompt_topic, intent.domain_hint.as_ref());
                 args.insert("prompt".to_string(), prompt);
                 
                 Some(ResolvedCapability::BuiltIn {
@@ -292,7 +292,8 @@ impl CatalogResolution {
     }
     
     /// Generate human-friendly prompt text from a parameter name
-    fn humanize_prompt(topic: &str) -> String {
+    /// Generate human-friendly prompt text from a parameter name, considering domain context
+    fn humanize_prompt(topic: &str, domain: Option<&DomainHint>) -> String {
         // Clean up topic - remove common filler words and normalize
         let filler_words = ["first", "please", "the", "a", "an", "now", "then"];
         let topic_lower: String = topic.to_lowercase()
@@ -303,9 +304,130 @@ impl CatalogResolution {
             .join(" ");
         let topic_lower = topic_lower.trim();
         
-        // Common API parameter patterns with descriptive prompts
-        match topic_lower {
-            // Pagination
+        // 1. Try domain-specific prompts first
+        if let Some(domain) = domain {
+            if let Some(prompt) = Self::domain_specific_prompt(topic_lower, domain) {
+                return prompt;
+            }
+        }
+        
+        // 2. Fall back to generic/universal prompts
+        Self::generic_prompt(topic_lower, topic)
+    }
+    
+    /// Domain-specific prompt generation
+    fn domain_specific_prompt(topic: &str, domain: &DomainHint) -> Option<String> {
+        match domain {
+            DomainHint::GitHub => Self::github_prompt(topic),
+            DomainHint::Slack => Self::slack_prompt(topic),
+            DomainHint::FileSystem => Self::filesystem_prompt(topic),
+            DomainHint::Database => Self::database_prompt(topic),
+            DomainHint::Web => Self::web_prompt(topic),
+            DomainHint::Email => Self::email_prompt(topic),
+            DomainHint::Calendar => Self::calendar_prompt(topic),
+            DomainHint::Generic | DomainHint::Custom(_) => None,
+        }
+    }
+    
+    /// GitHub-specific prompts
+    fn github_prompt(topic: &str) -> Option<String> {
+        Some(match topic {
+            "state" => "Issue/PR state: open, closed, or all?".to_string(),
+            "labels" => "Labels to filter by (comma-separated, e.g., bug, enhancement)".to_string(),
+            "assignee" => "Assignee username (or 'none' for unassigned, '*' for any)".to_string(),
+            "creator" | "author" => "Creator/author GitHub username".to_string(),
+            "milestone" => "Milestone number or title".to_string(),
+            "sort" => "Sort by: created, updated, or comments?".to_string(),
+            "owner" => "Repository owner (username or organization)".to_string(),
+            "repo" | "repository" => "Repository name".to_string(),
+            "branch" => "Branch name (e.g., main, develop)".to_string(),
+            "base" => "Base branch for PR (e.g., main)".to_string(),
+            "head" => "Head branch for PR (your feature branch)".to_string(),
+            _ => return None,
+        })
+    }
+    
+    /// Slack-specific prompts
+    fn slack_prompt(topic: &str) -> Option<String> {
+        Some(match topic {
+            "channel" => "Slack channel name or ID (e.g., #general)".to_string(),
+            "user" | "username" => "Slack username or user ID".to_string(),
+            "message" | "text" => "Message text to send".to_string(),
+            "thread ts" | "thread" => "Thread timestamp (for replies)".to_string(),
+            "emoji" => "Emoji name (e.g., thumbsup, rocket)".to_string(),
+            _ => return None,
+        })
+    }
+    
+    /// File system-specific prompts
+    fn filesystem_prompt(topic: &str) -> Option<String> {
+        Some(match topic {
+            "path" | "file" | "filepath" => "File or directory path".to_string(),
+            "directory" | "folder" | "dir" => "Directory path".to_string(),
+            "filename" | "name" => "File name".to_string(),
+            "extension" | "ext" => "File extension (e.g., .txt, .json)".to_string(),
+            "content" | "contents" => "File content to write".to_string(),
+            "pattern" | "glob" => "File pattern (e.g., *.txt, **/*.rs)".to_string(),
+            _ => return None,
+        })
+    }
+    
+    /// Database-specific prompts
+    fn database_prompt(topic: &str) -> Option<String> {
+        Some(match topic {
+            "table" => "Database table name".to_string(),
+            "query" | "sql" => "SQL query to execute".to_string(),
+            "column" | "field" => "Column/field name".to_string(),
+            "where" | "condition" => "WHERE condition (e.g., id = 1)".to_string(),
+            "limit" => "Maximum number of rows to return".to_string(),
+            "offset" => "Number of rows to skip".to_string(),
+            _ => return None,
+        })
+    }
+    
+    /// Web/HTTP-specific prompts
+    fn web_prompt(topic: &str) -> Option<String> {
+        Some(match topic {
+            "url" | "endpoint" => "URL or API endpoint".to_string(),
+            "method" => "HTTP method: GET, POST, PUT, DELETE".to_string(),
+            "headers" => "HTTP headers (JSON format)".to_string(),
+            "body" | "payload" => "Request body/payload".to_string(),
+            "timeout" => "Request timeout in seconds".to_string(),
+            _ => return None,
+        })
+    }
+    
+    /// Email-specific prompts
+    fn email_prompt(topic: &str) -> Option<String> {
+        Some(match topic {
+            "to" | "recipient" => "Recipient email address".to_string(),
+            "from" | "sender" => "Sender email address".to_string(),
+            "subject" => "Email subject line".to_string(),
+            "body" | "content" => "Email body content".to_string(),
+            "cc" => "CC recipients (comma-separated)".to_string(),
+            "bcc" => "BCC recipients (comma-separated)".to_string(),
+            _ => return None,
+        })
+    }
+    
+    /// Calendar-specific prompts
+    fn calendar_prompt(topic: &str) -> Option<String> {
+        Some(match topic {
+            "title" | "summary" => "Event title/summary".to_string(),
+            "start" | "start time" => "Event start time (YYYY-MM-DD HH:MM)".to_string(),
+            "end" | "end time" => "Event end time (YYYY-MM-DD HH:MM)".to_string(),
+            "date" => "Event date (YYYY-MM-DD)".to_string(),
+            "duration" => "Event duration (e.g., 1h, 30m)".to_string(),
+            "location" => "Event location".to_string(),
+            "attendees" => "Attendees (comma-separated emails)".to_string(),
+            _ => return None,
+        })
+    }
+    
+    /// Generic/universal prompts (domain-agnostic)
+    fn generic_prompt(topic: &str, original: &str) -> String {
+        match topic {
+            // Universal pagination
             "perpage" | "per page" | "page size" | "limit" => {
                 "How many items per page? (e.g., 10, 25, 50)".to_string()
             }
@@ -313,55 +435,39 @@ impl CatalogResolution {
                 "Which page number? (starting from 1)".to_string()
             }
             "cursor" | "after" | "before" => {
-                format!("Pagination cursor for '{}' (or leave blank for first page)", topic)
+                format!("Pagination cursor (or leave blank for first page)")
             }
             
-            // GitHub-specific filters
-            "state" => {
-                "Issue state: open, closed, or all?".to_string()
-            }
-            "labels" => {
-                "Labels to filter by (comma-separated, e.g., bug, enhancement)".to_string()
-            }
-            "assignee" => {
-                "Assignee username (or 'none' for unassigned, '*' for any)".to_string()
-            }
-            "creator" | "author" => {
-                "Creator/author username".to_string()
-            }
-            "milestone" => {
-                "Milestone number or title".to_string()
-            }
-            "sort" => {
-                "Sort by: created, updated, or comments?".to_string()
+            // Universal sorting/ordering
+            "sort" | "sort by" | "order by" => {
+                "Sort by which field?".to_string()
             }
             "direction" | "order" => {
                 "Sort direction: asc (ascending) or desc (descending)?".to_string()
             }
-            "since" => {
-                "Show items since date (YYYY-MM-DD format)".to_string()
-            }
             
-            // Generic API params
+            // Universal filtering
             "query" | "q" | "search" => {
                 "Search query (keywords to find)".to_string()
             }
             "filter" | "filters" => {
-                "Filter criteria (e.g., state:open, label:bug)".to_string()
+                "Filter criteria".to_string()
             }
-            "owner" => {
-                "Repository owner (username or organization)".to_string()
+            
+            // Universal time
+            "since" | "from" | "start date" => {
+                "Start date (YYYY-MM-DD format)".to_string()
             }
-            "repo" | "repository" => {
-                "Repository name".to_string()
+            "until" | "to" | "end date" => {
+                "End date (YYYY-MM-DD format)".to_string()
             }
             
             // Default: use the topic with basic formatting
             _ => {
-                if topic.len() <= 10 {
-                    format!("Please provide: {} (enter a value)", topic)
+                if original.len() <= 15 {
+                    format!("Please provide: {}", original)
                 } else {
-                    topic.to_string()
+                    original.to_string()
                 }
             }
         }

@@ -255,13 +255,15 @@ fn handle_action_with_user_input(
     // Infer domain and action from main action text
     let domain = DomainHint::infer_from_text(main_action);
     let action = infer_api_action(main_action);
+    let domain_hint = domain.unwrap_or(DomainHint::Generic);
     
     Some(vec![
-        // Step 1: Ask user for input
+        // Step 1: Ask user for input (also gets domain for context-aware prompts)
         SubIntent::new(
             format!("Ask user for {}", user_input_topic),
             IntentType::UserInput { prompt_topic: user_input_topic.to_string() },
-        ),
+        )
+        .with_domain(domain_hint.clone()),
         
         // Step 2: Execute main action with user input
         SubIntent::new(
@@ -269,7 +271,7 @@ fn handle_action_with_user_input(
             IntentType::ApiCall { action },
         )
         .with_dependencies(vec![0])
-        .with_domain(domain.unwrap_or(DomainHint::Generic)),
+        .with_domain(domain_hint),
     ])
 }
 
@@ -284,18 +286,20 @@ fn handle_user_input_then_action(
     
     let domain = DomainHint::infer_from_text(action_text);
     let action = infer_api_action(action_text);
+    let domain_hint = domain.unwrap_or(DomainHint::Generic);
     
     Some(vec![
         SubIntent::new(
             format!("Ask user for {}", user_input_topic),
             IntentType::UserInput { prompt_topic: user_input_topic.to_string() },
-        ),
+        )
+        .with_domain(domain_hint.clone()),
         SubIntent::new(
             action_text.to_string(),
             IntentType::ApiCall { action },
         )
         .with_dependencies(vec![0])
-        .with_domain(domain.unwrap_or(DomainHint::Generic)),
+        .with_domain(domain_hint),
     ])
 }
 
