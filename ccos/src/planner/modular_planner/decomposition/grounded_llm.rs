@@ -113,7 +113,7 @@ impl GroundedLlmDecomposition {
         let tools_list = if tools.is_empty() {
             "No specific tools available - decompose into abstract steps.".to_string()
         } else {
-            let mut list = String::from("Available tools (use these for api_call steps):\n");
+            let mut list = String::from("AVAILABLE TOOLS (prefer these for api_call steps):\n");
             for tool in tools {
                 list.push_str(&format!("- {}: {}\n", tool.name, tool.description));
             }
@@ -126,20 +126,21 @@ impl GroundedLlmDecomposition {
             format!("\n\nAlready extracted parameters: {:?}", context.pre_extracted_params)
         };
         
-        format!(r#"You are a goal decomposition expert. Break down the following goal into steps.
+        format!(r#"You are a goal decomposition expert. Break down the following goal into a MINIMAL number of steps.
 
 {tools_list}
 
-IMPORTANT RULES:
-1. For api_call steps, prefer using the available tools above when they match.
-2. Include the tool name in the "tool" field if you're recommending a specific tool.
-3. If no tool matches, use intent_type "api_call" without a specific tool.
-4. Focus on WHAT needs to be done - the tool is just a hint, not required.
+CRITICAL RULES:
+1. MINIMIZE STEPS: Use the fewest steps possible to accomplish the goal.
+2. PREFER TOOLS: If a tool above can accomplish part of the goal, use it! Include the tool name in the "tool" field.
+3. FILTERING/PAGINATION ARE PARAMS: Most APIs support filter/sort/pagination as parameters. Do NOT create separate "filter" or "paginate" steps.
+4. Use "data_transform" ONLY for client-side processing that no API tool can do.
+5. Match tool names EXACTLY from the list above (e.g., "list_issues" not "github.list_issues").
 
 INTENT TYPES:
 - "user_input": Ask the user for information
-- "api_call": External API operation (optionally with tool name)
-- "data_transform": Process data (filter, sort, count, format)
+- "api_call": External API operation - ALWAYS include "tool" field if a matching tool exists above
+- "data_transform": ONLY for client-side processing (avoid if API can do it)
 - "output": Display results
 
 GOAL: "{goal}"
@@ -151,13 +152,44 @@ Respond with ONLY a JSON object:
     {{
       "description": "Step description",
       "intent_type": "user_input|api_call|data_transform|output",
-      "action": "list|get|create|update|delete|search|filter|sort|...",
-      "tool": "optional_tool_name_from_list_above",
+      "action": "list|get|create|update|delete|search",
+      "tool": "EXACT_tool_name_from_list_above",
       "depends_on": [],
-      "params": {{}}
+      "params": {{"filter": "user_value", "perPage": "user_value"}}
     }}
   ],
   "domain": "github|slack|filesystem|database|web|generic"
+}}
+
+Example for "filter issues in mandubian/ccos per filter asked to user and paginate":
+{{
+  "steps": [
+    {{
+      "description": "Ask user for filter and pagination preferences",
+      "intent_type": "user_input",
+      "action": null,
+      "tool": null,
+      "depends_on": [],
+      "params": {{"prompt_topic": "filter criteria and page size"}}
+    }},
+    {{
+      "description": "Search issues with user filter and pagination",
+      "intent_type": "api_call",
+      "action": "search",
+      "tool": "search_issues",
+      "depends_on": [0],
+      "params": {{"owner": "mandubian", "repo": "ccos"}}
+    }},
+    {{
+      "description": "Display results",
+      "intent_type": "output",
+      "action": "display",
+      "tool": null,
+      "depends_on": [1],
+      "params": {{}}
+    }}
+  ],
+  "domain": "github"
 }}
 "#, tools_list = tools_list, goal = goal, params_hint = params_hint)
     }
