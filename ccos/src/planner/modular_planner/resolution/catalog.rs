@@ -41,6 +41,9 @@ pub struct CatalogConfig {
     pub scoring_method: ScoringMethod,
     /// Minimum embedding similarity threshold (0.0 to 1.0)
     pub embedding_threshold: f64,
+    /// Minimum overall resolution score - below this, return NotFound
+    /// allowing other strategies to try (default: 0.4)
+    pub min_resolution_score: f64,
 }
 
 impl Default for CatalogConfig {
@@ -50,6 +53,7 @@ impl Default for CatalogConfig {
             allow_adaptation: true,
             scoring_method: ScoringMethod::Hybrid,
             embedding_threshold: 0.5,
+            min_resolution_score: 0.4,
         }
     }
 }
@@ -648,6 +652,18 @@ impl ResolutionStrategy for CatalogResolution {
         
         // Search catalog
         if let Some((cap, score, arguments)) = self.search_catalog(intent).await {
+            // Check minimum resolution score - if too low, let other strategies try
+            if score < self.config.min_resolution_score {
+                log::debug!(
+                    "[catalog] Score {} below threshold {} for '{}', allowing fallback",
+                    score, self.config.min_resolution_score, cap.id
+                );
+                return Err(ResolutionError::NotFound(format!(
+                    "Best match '{}' scored {} below threshold {}",
+                    cap.id, score, self.config.min_resolution_score
+                )));
+            }
+            
             return Ok(ResolvedCapability::Local {
                 capability_id: cap.id,
                 arguments,
