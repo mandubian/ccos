@@ -15,7 +15,7 @@ pub struct CapabilityInfo {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub input_schema: Option<String>,
+    pub input_schema: Option<serde_json::Value>,
 }
 
 /// Catalog trait for querying available capabilities
@@ -219,9 +219,10 @@ impl ResolutionStrategy for SemanticResolution {
         let arguments = self.extract_arguments(intent);
         
         Ok(ResolvedCapability::Local {
-            capability_id: best.id,
+            capability_id: best.id.clone(),
             arguments,
             confidence: best_score,
+            input_schema: best.input_schema,
         })
     }
 }

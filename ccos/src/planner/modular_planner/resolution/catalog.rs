@@ -316,6 +316,7 @@ impl ResolutionStrategy for CatalogResolution {
                 capability_id: cap.id,
                 arguments,
                 confidence: score,
+                input_schema: cap.input_schema,
             });
         }
         
