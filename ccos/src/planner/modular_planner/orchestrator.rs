@@ -16,7 +16,8 @@ use super::decomposition::{
 use super::resolution::{
     CompositeResolution, ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability,
 };
-use super::types::{IntentType, SubIntent};
+use super::resolution::semantic::CapabilityCatalog;
+use super::types::{IntentType, SubIntent, ToolSummary};
 use crate::intent_graph::IntentGraph;
 use crate::intent_graph::storage::Edge;
 use crate::types::{EdgeType, GenerationContext, IntentStatus, StorableIntent, TriggerSource};
@@ -110,6 +111,8 @@ pub struct ModularPlanner {
     decomposition: Box<dyn DecompositionStrategy>,
     /// Resolution strategy (how to map intents to capabilities)
     resolution: Box<dyn ResolutionStrategy>,
+    /// Capability catalog for listing tools (optional, for grounded decomposition)
+    catalog: Option<Arc<dyn CapabilityCatalog>>,
     /// Intent graph for storing intents and edges
     intent_graph: Arc<Mutex<IntentGraph>>,
     /// Configuration
@@ -126,6 +129,7 @@ impl ModularPlanner {
         Self {
             decomposition,
             resolution,
+            catalog: None,
             intent_graph,
             config: PlannerConfig::default(),
         }
@@ -136,9 +140,15 @@ impl ModularPlanner {
         Self {
             decomposition: Box::new(HybridDecomposition::pattern_only()),
             resolution: Box::new(CompositeResolution::new()),
+            catalog: None,
             intent_graph,
             config: PlannerConfig::default(),
         }
+    }
+
+    pub fn with_catalog(mut self, catalog: Arc<dyn CapabilityCatalog>) -> Self {
+        self.catalog = Some(catalog);
+        self
     }
 
     pub fn with_config(mut self, config: PlannerConfig) -> Self {
@@ -160,7 +170,17 @@ impl ModularPlanner {
 
         let decomp_context = DecompositionContext::new().with_max_depth(self.config.max_depth);
 
-        let decomp_result = self.decomposition.decompose(goal, None, &decomp_context).await?;
+        // Fetch tools if catalog is available
+        let tools = if let Some(catalog) = &self.catalog {
+            let caps = catalog.list_capabilities(None).await;
+            Some(caps.into_iter().map(|c| {
+                ToolSummary::new(&c.id, &c.description)
+            }).collect::<Vec<_>>())
+        } else {
+            None
+        };
+
+        let decomp_result = self.decomposition.decompose(goal, tools.as_deref(), &decomp_context).await?;
 
         trace.events.push(TraceEvent::DecompositionCompleted {
             num_intents: decomp_result.sub_intents.len(),

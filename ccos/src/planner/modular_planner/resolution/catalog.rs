@@ -9,17 +9,44 @@ use super::semantic::{CapabilityCatalog, CapabilityInfo};
 use super::{ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability};
 use crate::planner::modular_planner::types::{IntentType, SubIntent};
 
+/// Catalog resolution configuration
+#[derive(Debug, Clone)]
+pub struct CatalogConfig {
+    /// Whether to validate input schema
+    pub validate_schema: bool,
+    /// Whether to attempt adapting missing parameters
+    pub allow_adaptation: bool,
+}
+
+impl Default for CatalogConfig {
+    fn default() -> Self {
+        Self {
+            validate_schema: true,
+            allow_adaptation: true,
+        }
+    }
+}
+
 /// Catalog resolution strategy.
 /// 
 /// Searches the local capability catalog for matching capabilities.
 /// This is simpler than SemanticResolution and doesn't use embeddings.
 pub struct CatalogResolution {
     catalog: Arc<dyn CapabilityCatalog>,
+    config: CatalogConfig,
 }
 
 impl CatalogResolution {
     pub fn new(catalog: Arc<dyn CapabilityCatalog>) -> Self {
-        Self { catalog }
+        Self { 
+            catalog,
+            config: CatalogConfig::default(),
+        }
+    }
+
+    pub fn with_config(mut self, config: CatalogConfig) -> Self {
+        self.config = config;
+        self
     }
     
     /// Map intent to built-in capability if applicable
@@ -47,8 +74,50 @@ impl CatalogResolution {
         }
     }
     
+    /// Validate and adapt arguments against capability schema
+    fn validate_and_adapt(
+        &self, 
+        intent: &SubIntent, 
+        cap: &CapabilityInfo, 
+        args: &mut std::collections::HashMap<String, String>
+    ) -> bool {
+        if !self.config.validate_schema {
+            return true;
+        }
+
+        if let Some(schema) = &cap.input_schema {
+            // Basic JSON schema check for required fields
+            if let Some(required) = schema.get("required").and_then(|v| v.as_array()) {
+                for field in required {
+                    if let Some(field_name) = field.as_str() {
+                        if !args.contains_key(field_name) {
+                            // Missing required field!
+                            if self.config.allow_adaptation {
+                                // Attempt adaptation for common patterns
+                                if field_name == "prompt" || field_name == "question" {
+                                    // Synthesize prompt from description
+                                    args.insert(field_name.to_string(), intent.description.clone());
+                                    continue;
+                                }
+                                if field_name == "message" {
+                                    args.insert(field_name.to_string(), intent.description.clone());
+                                    continue;
+                                }
+                            }
+                            
+                            // If we get here, we failed to adapt
+                            // println!("DEBUG: Rejected capability {} due to missing required param: {}", cap.id, field_name);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
+
     /// Search catalog for matching capability
-    async fn search_catalog(&self, intent: &SubIntent) -> Option<(CapabilityInfo, f64)> {
+    async fn search_catalog(&self, intent: &SubIntent) -> Option<(CapabilityInfo, f64, std::collections::HashMap<String, String>)> {
         let query = &intent.description;
         let candidates = self.catalog.search(query, 5).await;
         
@@ -56,11 +125,21 @@ impl CatalogResolution {
             return None;
         }
         
-        // Simple scoring - first match with basic validation
+        // Simple scoring - first match with validation
         for cap in candidates {
             let score = self.score_capability(intent, &cap);
             if score > 0.2 {
-                return Some((cap, score));
+                // Prepare arguments
+                let mut arguments: std::collections::HashMap<String, String> = intent.extracted_params
+                    .iter()
+                    .filter(|(k, _)| !k.starts_with('_'))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+
+                // Validate and adapt
+                if self.validate_and_adapt(intent, &cap, &mut arguments) {
+                    return Some((cap, score, arguments));
+                }
             }
         }
         
@@ -110,13 +189,7 @@ impl ResolutionStrategy for CatalogResolution {
         }
         
         // Search catalog
-        if let Some((cap, score)) = self.search_catalog(intent).await {
-            let arguments = intent.extracted_params
-                .iter()
-                .filter(|(k, _)| !k.starts_with('_'))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            
+        if let Some((cap, score, arguments)) = self.search_catalog(intent).await {
             return Ok(ResolvedCapability::Local {
                 capability_id: cap.id,
                 arguments,
