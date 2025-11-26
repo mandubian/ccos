@@ -669,11 +669,18 @@ impl ModularPlanner {
                 if !used_params.contains(param_name) {
                     let dep_var = &previous_bindings[*dep_idx].0;
                     
-                    // Check if coercion is needed (e.g. string -> number)
-                    let value_expr = if self.should_coerce(param_name, resolved_capability) {
-                        format!("(parse-json {})", dep_var)
-                    } else {
-                        dep_var.clone()
+                    // Check what kind of coercion is needed
+                    let value_expr = match self.get_coercion_type(param_name, resolved_capability) {
+                        Some("json") => {
+                            // Parse string as JSON (for numbers, booleans)
+                            format!("(parse-json {})", dep_var)
+                        }
+                        Some("array") => {
+                            // Wrap single value in array: "rtfs" -> ["rtfs"]
+                            // Use vector syntax in RTFS
+                            format!("[{}]", dep_var)
+                        }
+                        _ => dep_var.clone(),
                     };
                     
                     args_parts.push(format!(":{} {}", param_name, value_expr));
@@ -741,8 +748,9 @@ impl ModularPlanner {
         }
     }
 
-    /// Check if a parameter should be coerced from string to JSON value (number/bool)
-    fn should_coerce(&self, param_name: &str, capability: &ResolvedCapability) -> bool {
+    /// Determine what kind of coercion is needed for a parameter
+    /// Returns: None (no coercion), Some("json") for numbers/bools, Some("array") for arrays
+    fn get_coercion_type(&self, param_name: &str, capability: &ResolvedCapability) -> Option<&'static str> {
         let schema = match capability {
             ResolvedCapability::Remote { input_schema: Some(schema), .. } => Some(schema),
             ResolvedCapability::Local { input_schema: Some(schema), .. } => Some(schema),
@@ -758,12 +766,22 @@ impl ModularPlanner {
                 // Try exact match first
                 if let Some(prop_def) = props.get(param_name) {
                     if let Some(type_val) = prop_def.get("type").and_then(|t| t.as_str()) {
-                        return matches!(type_val, "integer" | "number" | "boolean");
+                        return match type_val {
+                            "integer" | "number" | "boolean" => Some("json"),
+                            "array" => Some("array"),
+                            _ => None,
+                        };
                     }
                 }
             }
         }
-        false
+        None
+    }
+    
+    /// Check if a parameter should be coerced from string to JSON value (number/bool)
+    /// Legacy helper - delegates to get_coercion_type
+    fn should_coerce(&self, param_name: &str, capability: &ResolvedCapability) -> bool {
+        self.get_coercion_type(param_name, capability) == Some("json")
     }
 
     /// Match intent topic to schema properties using fuzzy matching
@@ -947,3 +965,4 @@ mod tests {
         assert!(expr.contains("mandubian"));
     }
 }
+
