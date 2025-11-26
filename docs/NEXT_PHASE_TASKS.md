@@ -302,5 +302,11 @@ cargo run --example modular_planner_demo -- \
     *   Handles missing required arguments by checking intent description (e.g., auto-filling `prompt` or `question`).
     *   Prevents runtime crashes due to rigid schema mismatches.
     *   Wired `GroundedLlmDecomposition` to use `CapabilityCatalog` for tool-aware planning.
+7.  [x] **Improved Tool Scoring & Plan Quality**:
+    *   Enhanced `CatalogResolution` scoring with action verb alignment, singular/plural matching, and specificity penalties.
+    *   Updated LLM prompts to recognize filter/pagination as API parameters (not separate steps).
+    *   Added `collapse_transform_intents()` to merge DataTransform intents into preceding ApiCall.
+    *   Added direct `_suggested_tool` lookup from GroundedLlmDecomposition.
+    *   Result: "filter issues..." goal now produces 3 clean steps instead of 6 with 2 referrals.
 
 ## Phase 3: Robustness & Scaling (Next)
