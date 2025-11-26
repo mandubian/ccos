@@ -13,6 +13,7 @@ use uuid::Uuid;
 use super::decomposition::{
     DecompositionContext, DecompositionError, DecompositionStrategy, HybridDecomposition,
 };
+use super::types::ToolSummary;
 use super::resolution::{
     CompositeResolution, ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability,
 };
@@ -54,6 +55,10 @@ pub struct PlannerConfig {
     pub create_edges: bool,
     /// Namespace prefix for generated intent IDs
     pub intent_namespace: String,
+    /// Whether to show verbose LLM prompts/responses
+    pub verbose_llm: bool,
+    /// Whether to eagerly discover tools before decomposition
+    pub eager_discovery: bool,
 }
 
 impl Default for PlannerConfig {
@@ -63,6 +68,8 @@ impl Default for PlannerConfig {
             persist_intents: true,
             create_edges: true,
             intent_namespace: "plan".to_string(),
+            verbose_llm: false,
+            eager_discovery: true,
         }
     }
 }
@@ -145,6 +152,74 @@ impl ModularPlanner {
         self.config = config;
         self
     }
+    
+    /// Create a fallback resolution when no capability is found.
+    /// 
+    /// This can either:
+    /// 1. Ask the user for guidance (if the intent seems user-actionable)
+    /// 2. Mark as NeedsReferral for arbiter escalation
+    fn create_fallback_resolution(
+        &self,
+        sub_intent: &SubIntent,
+        error: &ResolutionError,
+    ) -> ResolvedCapability {
+        use crate::planner::modular_planner::types::IntentType;
+        
+        // If the intent is about data transformation or output, we might synthesize it
+        match &sub_intent.intent_type {
+            IntentType::DataTransform { .. } | IntentType::Output { .. } => {
+                // These could potentially be synthesized with RTFS
+                log::info!(
+                    "Could potentially synthesize capability for: {}",
+                    sub_intent.description
+                );
+                ResolvedCapability::NeedsReferral {
+                    reason: format!("No capability found: {}", error),
+                    suggested_action: format!(
+                        "Consider synthesizing RTFS for data transform: {}",
+                        sub_intent.description
+                    ),
+                }
+            }
+            IntentType::UserInput { .. } => {
+                // User input should always resolve to builtin, something is wrong
+                ResolvedCapability::NeedsReferral {
+                    reason: format!("User input resolution failed: {}", error),
+                    suggested_action: "Check ccos.user.ask registration".to_string(),
+                }
+            }
+            IntentType::ApiCall { .. } => {
+                // API calls that don't resolve -> ask user for guidance
+                let mut args = std::collections::HashMap::new();
+                args.insert(
+                    "prompt".to_string(),
+                    format!(
+                        "I couldn't find a capability for '{}'. How should I proceed?\n\
+                         Options:\n\
+                         1. Skip this step\n\
+                         2. Provide an alternative approach\n\
+                         3. Abort the plan",
+                        sub_intent.description
+                    ),
+                );
+                
+                ResolvedCapability::BuiltIn {
+                    capability_id: "ccos.user.ask".to_string(),
+                    arguments: args,
+                }
+            }
+            IntentType::Composite => {
+                // Composite intents need further decomposition
+                ResolvedCapability::NeedsReferral {
+                    reason: "Composite intent requires further decomposition".to_string(),
+                    suggested_action: format!(
+                        "Break down '{}' into smaller steps",
+                        sub_intent.description
+                    ),
+                }
+            }
+        }
+    }
 
     /// Plan a goal: decompose → store intents → resolve → generate RTFS
     pub async fn plan(&mut self, goal: &str) -> Result<PlanResult, PlannerError> {
@@ -152,15 +227,34 @@ impl ModularPlanner {
             goal: goal.to_string(),
             events: vec![],
         };
+        
+        // 0. Eager tool discovery (if enabled)
+        let available_tools: Option<Vec<ToolSummary>> = if self.config.eager_discovery {
+            println!("\n📦 Discovering available tools...");
+            let tools = self.resolution.list_available_tools().await;
+            if !tools.is_empty() {
+                println!("   ✅ Found {} tools for grounded decomposition", tools.len());
+                Some(tools)
+            } else {
+                println!("   ⚠️ No tools discovered, using abstract decomposition");
+                None
+            }
+        } else {
+            None
+        };
 
         // 1. Decompose goal into sub-intents
         trace.events.push(TraceEvent::DecompositionStarted {
             strategy: self.decomposition.name().to_string(),
         });
 
-        let decomp_context = DecompositionContext::new().with_max_depth(self.config.max_depth);
+        let decomp_context = DecompositionContext::new()
+            .with_max_depth(self.config.max_depth)
+            .with_verbose_llm(self.config.verbose_llm);
+        
+        let tools_slice = available_tools.as_ref().map(|v| v.as_slice());
 
-        let decomp_result = self.decomposition.decompose(goal, None, &decomp_context).await?;
+        let decomp_result = self.decomposition.decompose(goal, tools_slice, &decomp_context).await?;
 
         trace.events.push(TraceEvent::DecompositionCompleted {
             num_intents: decomp_result.sub_intents.len(),
@@ -200,17 +294,10 @@ impl ModularPlanner {
                         intent_id: intent_id.clone(),
                         reason: e.to_string(),
                     });
-                    // Create a NeedsReferral for unresolved intents
-                    resolutions.insert(
-                        intent_id.clone(),
-                        ResolvedCapability::NeedsReferral {
-                            reason: e.to_string(),
-                            suggested_action: format!(
-                                "Could not resolve capability for: {}",
-                                sub_intent.description
-                            ),
-                        },
-                    );
+                    
+                    // Try to create a fallback: ask user for help or mark as needs referral
+                    let fallback = self.create_fallback_resolution(sub_intent, &e);
+                    resolutions.insert(intent_id.clone(), fallback);
                 }
             }
         }

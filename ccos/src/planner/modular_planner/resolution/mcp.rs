@@ -4,10 +4,12 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::path::PathBuf;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use super::{ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability};
-use crate::planner::modular_planner::types::{IntentType, SubIntent, DomainHint};
+use crate::planner::modular_planner::types::{IntentType, SubIntent, DomainHint, ToolSummary, ApiAction};
 use crate::planner::modular_planner::decomposition::grounded_llm::{EmbeddingProvider, cosine_similarity};
 
 // Imports for RuntimeMcpDiscovery
@@ -222,6 +224,85 @@ impl McpDiscovery for RuntimeMcpDiscovery {
     }
 }
 
+/// Cached tool info for file persistence
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedToolInfo {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Option<serde_json::Value>,
+    pub server_name: String,
+    pub server_url: String,
+    pub server_namespace: String,
+    pub cached_at: u64,
+}
+
+impl From<&McpToolInfo> for CachedToolInfo {
+    fn from(tool: &McpToolInfo) -> Self {
+        Self {
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            input_schema: tool.input_schema.clone(),
+            server_name: tool.server.name.clone(),
+            server_url: tool.server.url.clone(),
+            server_namespace: tool.server.namespace.clone(),
+            cached_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }
+    }
+}
+
+impl CachedToolInfo {
+    pub fn to_mcp_tool_info(&self) -> McpToolInfo {
+        McpToolInfo {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            input_schema: self.input_schema.clone(),
+            server: McpServerInfo {
+                name: self.server_name.clone(),
+                url: self.server_url.clone(),
+                namespace: self.server_namespace.clone(),
+            },
+        }
+    }
+    
+    pub fn to_tool_summary(&self) -> ToolSummary {
+        // Infer domain from server name
+        let domain = match self.server_name.to_lowercase().as_str() {
+            s if s.contains("github") => DomainHint::GitHub,
+            s if s.contains("slack") => DomainHint::Slack,
+            s if s.contains("file") || s.contains("fs") => DomainHint::FileSystem,
+            _ => DomainHint::Generic,
+        };
+        
+        // Infer action from tool name
+        let action = if self.name.starts_with("list_") || self.name.starts_with("get_all") || self.name.contains("_list") {
+            ApiAction::List
+        } else if self.name.starts_with("get_") || self.name.starts_with("read_") {
+            ApiAction::Get
+        } else if self.name.starts_with("create_") || self.name.starts_with("add_") {
+            ApiAction::Create
+        } else if self.name.starts_with("update_") || self.name.starts_with("edit_") {
+            ApiAction::Update
+        } else if self.name.starts_with("delete_") || self.name.starts_with("remove_") {
+            ApiAction::Delete
+        } else if self.name.starts_with("search_") || self.name.starts_with("find_") {
+            ApiAction::Search
+        } else {
+            ApiAction::Other(self.name.clone())
+        };
+        
+        ToolSummary {
+            name: self.name.clone(),
+            description: self.description.clone(),
+            domain,
+            action,
+            input_schema: self.input_schema.clone(),
+        }
+    }
+}
+
 /// MCP resolution strategy.
 /// 
 /// Discovers capabilities from MCP servers based on domain hints.
@@ -230,8 +311,12 @@ pub struct McpResolution {
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
     /// Minimum score to accept match
     min_score: f64,
-    /// Cache of discovered tools
+    /// Cache of discovered tools (in-memory)
     tool_cache: std::sync::Mutex<HashMap<String, Vec<McpToolInfo>>>,
+    /// Path to file cache directory
+    cache_dir: Option<PathBuf>,
+    /// Whether to skip loading from cache
+    no_cache: bool,
 }
 
 impl McpResolution {
@@ -241,6 +326,8 @@ impl McpResolution {
             embedding_provider: None,
             min_score: 0.3,
             tool_cache: std::sync::Mutex::new(HashMap::new()),
+            cache_dir: None,
+            no_cache: false,
         }
     }
     
@@ -249,9 +336,82 @@ impl McpResolution {
         self
     }
     
+    /// Enable file-based caching to specified directory
+    pub fn with_cache_dir(mut self, dir: PathBuf) -> Self {
+        self.cache_dir = Some(dir);
+        self
+    }
+    
+    /// Disable loading from cache (will still save)
+    pub fn with_no_cache(mut self, no_cache: bool) -> Self {
+        self.no_cache = no_cache;
+        self
+    }
+    
+    /// Load tools from file cache
+    fn load_from_file_cache(&self, server_name: &str) -> Option<Vec<McpToolInfo>> {
+        if self.no_cache {
+            return None;
+        }
+        
+        let cache_dir = self.cache_dir.as_ref()?;
+        let cache_file = cache_dir.join(format!("{}_tools.json", server_name));
+        
+        if !cache_file.exists() {
+            return None;
+        }
+        
+        let content = std::fs::read_to_string(&cache_file).ok()?;
+        let cached: Vec<CachedToolInfo> = serde_json::from_str(&content).ok()?;
+        
+        // Check cache age (24 hours max)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        if let Some(first) = cached.first() {
+            if now - first.cached_at > 86400 {
+                println!("   ⏰ Cache for {} is stale, will refresh", server_name);
+                return None;
+            }
+        }
+        
+        println!("   📂 Loaded {} tools from cache for {}", cached.len(), server_name);
+        Some(cached.into_iter().map(|c| c.to_mcp_tool_info()).collect())
+    }
+    
+    /// Save tools to file cache
+    fn save_to_file_cache(&self, server_name: &str, tools: &[McpToolInfo]) {
+        let cache_dir = match &self.cache_dir {
+            Some(d) => d,
+            None => return,
+        };
+        
+        // Create directory if needed
+        if let Err(e) = std::fs::create_dir_all(cache_dir) {
+            log::warn!("Failed to create cache dir: {}", e);
+            return;
+        }
+        
+        let cache_file = cache_dir.join(format!("{}_tools.json", server_name));
+        let cached: Vec<CachedToolInfo> = tools.iter().map(CachedToolInfo::from).collect();
+        
+        match serde_json::to_string_pretty(&cached) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&cache_file, json) {
+                    log::warn!("Failed to write cache: {}", e);
+                } else {
+                    println!("   💾 Saved {} tools to cache: {}", tools.len(), cache_file.display());
+                }
+            }
+            Err(e) => log::warn!("Failed to serialize cache: {}", e),
+        }
+    }
+    
     /// Get or discover tools from cache
     async fn get_tools(&self, server: &McpServerInfo) -> Result<Vec<McpToolInfo>, ResolutionError> {
-        // Check cache first
+        // Check in-memory cache first
         {
             let cache = self.tool_cache.lock().unwrap();
             if let Some(tools) = cache.get(&server.url) {
@@ -259,11 +419,25 @@ impl McpResolution {
             }
         }
         
-        // Discover tools
+        // Check file cache
+        if let Some(tools) = self.load_from_file_cache(&server.name) {
+            // Store in memory cache
+            let mut cache = self.tool_cache.lock().unwrap();
+            cache.insert(server.url.clone(), tools.clone());
+            return Ok(tools);
+        }
+        
+        // Discover tools from server
+        println!("   🔍 Discovering tools from MCP server: {}", server.name);
         let tools = self.discovery.discover_tools(server).await
             .map_err(|e| ResolutionError::McpError(e))?;
         
-        // Cache them
+        println!("   ✅ Discovered {} tools from {}", tools.len(), server.name);
+        
+        // Save to file cache
+        self.save_to_file_cache(&server.name, &tools);
+        
+        // Cache in memory
         {
             let mut cache = self.tool_cache.lock().unwrap();
             cache.insert(server.url.clone(), tools.clone());
@@ -430,6 +604,39 @@ impl ResolutionStrategy for McpResolution {
             input_schema: best_tool.input_schema.clone(),
             confidence: best_score,
         })
+    }
+    
+    async fn list_available_tools(&self) -> Vec<ToolSummary> {
+        // Try to get tools from all known MCP servers
+        let mut all_tools = Vec::new();
+        
+        // Check known domains
+        let domains = [
+            DomainHint::GitHub,
+            DomainHint::Slack,
+            DomainHint::FileSystem,
+            DomainHint::Database,
+            DomainHint::Web,
+        ];
+        
+        for domain in &domains {
+            if let Some(server) = self.discovery.get_server_for_domain(domain).await {
+                match self.get_tools(&server).await {
+                    Ok(tools) => {
+                        for tool in tools {
+                            // Use the proper conversion that includes all fields
+                            let cached = CachedToolInfo::from(&tool);
+                            all_tools.push(cached.to_tool_summary());
+                        }
+                    }
+                    Err(e) => {
+                        log::debug!("Failed to get tools for {:?}: {}", domain, e);
+                    }
+                }
+            }
+        }
+        
+        all_tools
     }
 }
 

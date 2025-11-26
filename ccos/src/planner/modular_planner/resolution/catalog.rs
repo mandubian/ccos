@@ -624,6 +624,8 @@ impl CatalogResolution {
     }
 }
 
+use crate::planner::modular_planner::types::ToolSummary;
+
 #[async_trait(?Send)]
 impl ResolutionStrategy for CatalogResolution {
     fn name(&self) -> &str {
@@ -657,6 +659,46 @@ impl ResolutionStrategy for CatalogResolution {
             "No catalog capability found for: {}",
             intent.description
         )))
+    }
+    
+    async fn list_available_tools(&self) -> Vec<ToolSummary> {
+        use crate::planner::modular_planner::types::{DomainHint, ApiAction};
+        
+        // Get all capabilities from catalog
+        let capabilities = self.catalog.list_capabilities(None).await;
+        
+        capabilities.into_iter().map(|cap| {
+            // Infer domain from capability name/description
+            let domain = DomainHint::infer_from_text(&cap.description)
+                .or_else(|| DomainHint::infer_from_text(&cap.name))
+                .unwrap_or(DomainHint::Generic);
+            
+            // Infer action from name
+            let action = if cap.name.starts_with("list_") || cap.name.contains("_list") {
+                ApiAction::List
+            } else if cap.name.starts_with("get_") || cap.name.starts_with("read_") {
+                ApiAction::Get
+            } else if cap.name.starts_with("create_") || cap.name.starts_with("add_") {
+                ApiAction::Create
+            } else if cap.name.starts_with("search_") || cap.name.starts_with("find_") {
+                ApiAction::Search
+            } else {
+                ApiAction::Other(cap.name.clone())
+            };
+            
+            // Convert string schema to JSON Value if present
+            let input_schema = cap.input_schema
+                .as_ref()
+                .and_then(|s| serde_json::from_str(s).ok());
+            
+            ToolSummary {
+                name: cap.name,
+                description: cap.description,
+                domain,
+                action,
+                input_schema,
+            }
+        }).collect()
     }
 }
 

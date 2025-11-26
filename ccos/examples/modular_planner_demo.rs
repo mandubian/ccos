@@ -55,6 +55,10 @@ struct Args {
     /// Show detailed planning trace
     #[arg(long)]
     verbose: bool,
+    
+    /// Show LLM prompts and responses (verbose LLM debugging)
+    #[arg(long)]
+    verbose_llm: bool,
 
     /// Discover tools from MCP servers (requires GITHUB_TOKEN)
     #[arg(long)]
@@ -72,9 +76,13 @@ struct Args {
     #[arg(long)]
     pure_llm: bool,
     
-    /// Use embedding-based scoring (requires LOCAL_EMBEDDING_URL or OPENROUTER_API_KEY)
-    #[arg(long)]
+    /// Use embedding-based scoring (default: true, use --no-embeddings to disable)
+    #[arg(long, default_value_t = true)]
     use_embeddings: bool,
+    
+    /// Disable tool cache (force fresh MCP discovery)
+    #[arg(long)]
+    no_cache: bool,
 }
 
 // ============================================================================
@@ -305,11 +313,17 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         ccos.get_capability_marketplace(),
     ));
     
-    let mcp_resolution = McpResolution::new(mcp_discovery);
-    // TODO: Add embedding provider if available
+    // Setup cache directory for MCP tools
+    let cache_dir = std::path::PathBuf::from("capabilities/discovered/mcp");
+    let mcp_resolution = McpResolution::new(mcp_discovery)
+        .with_cache_dir(cache_dir)
+        .with_no_cache(args.no_cache);
     
     if args.discover_mcp {
-        println!("   ✅ Enabled MCP Resolution");
+        println!("   ✅ Enabled MCP Resolution (cache: capabilities/discovered/mcp/)");
+        if args.no_cache {
+            println!("   🔄 Cache disabled, will refresh from server");
+        }
         composite_resolution.add_strategy(Box::new(mcp_resolution));
     } else {
         println!("   ⏭️ Skipping MCP Resolution (use --discover-mcp to enable)");
@@ -321,6 +335,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         persist_intents: true,
         create_edges: true,
         intent_namespace: "demo".to_string(),
+        verbose_llm: args.verbose_llm,
+        eager_discovery: true,
     };
     
     let mut planner = ModularPlanner::new(decomposition, Box::new(composite_resolution), intent_graph.clone())

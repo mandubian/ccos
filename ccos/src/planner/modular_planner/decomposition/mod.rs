@@ -58,6 +58,9 @@ pub struct DecompositionContext {
     
     /// Pre-extracted parameters from the goal
     pub pre_extracted_params: HashMap<String, String>,
+    
+    /// Whether to print verbose LLM debug info (prompts/responses)
+    pub verbose_llm: bool,
 }
 
 impl DecompositionContext {
@@ -68,7 +71,13 @@ impl DecompositionContext {
             max_depth: 3,
             current_depth: 0,
             pre_extracted_params: HashMap::new(),
+            verbose_llm: false,
         }
+    }
+    
+    pub fn with_verbose_llm(mut self, verbose: bool) -> Self {
+        self.verbose_llm = verbose;
+        self
     }
     
     pub fn with_max_depth(mut self, depth: usize) -> Self {
@@ -88,6 +97,7 @@ impl DecompositionContext {
             max_depth: self.max_depth,
             current_depth: self.current_depth + 1,
             pre_extracted_params: self.pre_extracted_params.clone(),
+            verbose_llm: self.verbose_llm,
         }
     }
     
