@@ -170,11 +170,15 @@ impl ModularPlanner {
 
         let decomp_context = DecompositionContext::new().with_max_depth(self.config.max_depth);
 
-        // Fetch tools if catalog is available
+        // Fetch tools if catalog is available (with schemas for grounded decomposition)
         let tools = if let Some(catalog) = &self.catalog {
             let caps = catalog.list_capabilities(None).await;
             Some(caps.into_iter().map(|c| {
-                ToolSummary::new(&c.id, &c.description)
+                let mut summary = ToolSummary::new(&c.id, &c.description);
+                if let Some(schema) = c.input_schema {
+                    summary = summary.with_schema(schema);
+                }
+                summary
             }).collect::<Vec<_>>())
         } else {
             None
@@ -591,10 +595,31 @@ impl ModularPlanner {
         let args_map = if has_dependencies {
             // Build args that reference previous step outputs
             let mut args_parts: Vec<String> = Vec::new();
+            let mut used_params: std::collections::HashSet<String> = std::collections::HashSet::new();
             
-            // Add explicit arguments
+            // Infer which param the dependency should map to
+            let dep_param_name = if sub_intent.dependencies.len() == 1 {
+                let dep_idx = sub_intent.dependencies[0];
+                all_sub_intents.get(dep_idx)
+                    .map(|dep_intent| self.infer_param_name(dep_intent, resolved_capability))
+            } else {
+                None
+            };
+            
+            // Add explicit arguments (skip placeholders and params that will come from deps)
             for (key, value) in arguments {
-                args_parts.push(format!(":{} \"{}\"", key, value.replace('"', "\\\"")));
+                // Skip placeholder values that indicate "will come from user/previous step"
+                let is_placeholder = value == "null" || value == "user_value" || 
+                                     value == "user" || value.is_empty() ||
+                                     value == "step_1" || value.starts_with("step_");
+                
+                // Skip if this param will be filled by a dependency
+                let is_dep_target = dep_param_name.as_ref().map(|p| p == key).unwrap_or(false);
+                
+                if !is_placeholder && !is_dep_target {
+                    args_parts.push(format!(":{} \"{}\"", key, value.replace('"', "\\\"")));
+                    used_params.insert(key.clone());
+                }
             }
             
             // Add reference to previous step if not already in args
@@ -603,15 +628,10 @@ impl ModularPlanner {
                 let dep_idx = sub_intent.dependencies[0];
                 if dep_idx < previous_bindings.len() {
                     let dep_var = &previous_bindings[dep_idx].0;
-                    // Only add if we don't already have this as an argument
-                    if !arguments.values().any(|v| v == dep_var) {
-                        // Attempt to infer parameter name from dependency and schema
-                        let param_name = if let Some(dep_intent) = all_sub_intents.get(dep_idx) {
-                             self.infer_param_name(dep_intent, resolved_capability)
-                        } else {
-                            "_previous_result".to_string()
-                        };
-                        
+                    let param_name = dep_param_name.unwrap_or_else(|| "_previous_result".to_string());
+                    
+                    // Only add if not already used
+                    if !used_params.contains(&param_name) {
                         // Check if coercion is needed (e.g. string -> number)
                         let value_expr = if self.should_coerce(&param_name, resolved_capability) {
                             format!("(parse-json {})", dep_var)
@@ -648,14 +668,16 @@ impl ModularPlanner {
     /// Helper to infer a parameter name from a dependency intent and consumer capability schema
     fn infer_param_name(&self, producer_intent: &SubIntent, consumer_capability: &ResolvedCapability) -> String {
         // 1. Try schema-based matching if available
-        if let ResolvedCapability::Remote { input_schema: Some(schema), .. } = consumer_capability {
+        let schema = match consumer_capability {
+            ResolvedCapability::Remote { input_schema: Some(schema), .. } => Some(schema),
+            ResolvedCapability::Local { input_schema: Some(schema), .. } => Some(schema),
+            _ => None,
+        };
+        
+        if let Some(schema) = schema {
             if let Some(best_match) = self.match_topic_to_schema(producer_intent, schema) {
                 return best_match;
             }
-        }
-        if let ResolvedCapability::Local { .. } = consumer_capability {
-            // Local capabilities might have schema in catalog, but we don't have it here
-            // Fall through to heuristics
         }
 
         // 2. Fallback: extract first meaningful word from prompt topic
@@ -684,7 +706,13 @@ impl ModularPlanner {
 
     /// Check if a parameter should be coerced from string to JSON value (number/bool)
     fn should_coerce(&self, param_name: &str, capability: &ResolvedCapability) -> bool {
-        if let ResolvedCapability::Remote { input_schema: Some(schema), .. } = capability {
+        let schema = match capability {
+            ResolvedCapability::Remote { input_schema: Some(schema), .. } => Some(schema),
+            ResolvedCapability::Local { input_schema: Some(schema), .. } => Some(schema),
+            _ => None,
+        };
+        
+        if let Some(schema) = schema {
             if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
                 // Find property using flexible matching if needed, but here we have the exact name
                 // determined by infer_param_name (which might be perPage or per_page)
@@ -696,10 +724,6 @@ impl ModularPlanner {
                         return matches!(type_val, "integer" | "number" | "boolean");
                     }
                 }
-                
-                // If infer returned snake_case fallback but schema has camelCase, we might miss it here.
-                // But infer_param_name logic tries to return the schema key.
-                // If we are here, we assume param_name is correct or close enough.
             }
         }
         false

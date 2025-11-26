@@ -91,6 +91,7 @@ pub enum ResolvedCapability {
         capability_id: String,
         arguments: HashMap<String, String>,
         confidence: f64,
+        input_schema: Option<serde_json::Value>,
     },
     
     /// Remote MCP capability (discovered and registered)
