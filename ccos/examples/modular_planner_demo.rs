@@ -38,8 +38,10 @@ use ccos::synthesis::mcp_session::MCPSessionManager;
 use ccos::planner::modular_planner::resolution::semantic::{CapabilityCatalog, CapabilityInfo};
 use ccos::planner::modular_planner::orchestrator::{PlanResult, TraceEvent};
 use ccos::capabilities::{SessionPoolManager, MCPSessionHandler};
+use ccos::capability_marketplace::{CapabilityMarketplace, CapabilityManifest};
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::config::types::AgentConfig;
+use rtfs::ast::TypeExpr;
 
 // ============================================================================
 // CLI Arguments
@@ -75,11 +77,12 @@ struct Args {
 /// Adapts the CCOS CatalogService to the CapabilityCatalog trait required by the planner
 struct CcosCatalogAdapter {
     catalog: Arc<ccos::catalog::CatalogService>,
+    marketplace: Arc<CapabilityMarketplace>,
 }
 
 impl CcosCatalogAdapter {
-    fn new(catalog: Arc<ccos::catalog::CatalogService>) -> Self {
-        Self { catalog }
+    fn new(catalog: Arc<ccos::catalog::CatalogService>, marketplace: Arc<CapabilityMarketplace>) -> Self {
+        Self { catalog, marketplace }
     }
 }
 
@@ -88,31 +91,103 @@ impl CapabilityCatalog for CcosCatalogAdapter {
     async fn list_capabilities(&self, _domain: Option<&str>) -> Vec<CapabilityInfo> {
         // Return all capabilities (limit to 100 for sanity)
         let hits = self.catalog.search_keyword("", None, 100);
-        hits.into_iter().map(catalog_hit_to_info).collect()
+        let mut results = Vec::new();
+        
+        for hit in hits {
+            // Fetch manifest to get schema
+            let manifest = self.marketplace.get_capability(&hit.entry.id).await;
+            let schema = manifest.and_then(|m| m.input_schema).map(|s| type_expr_to_json_schema(&s));
+            
+            results.push(CapabilityInfo {
+                id: hit.entry.id,
+                name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
+                description: hit.entry.description.unwrap_or_default(),
+                input_schema: schema,
+            });
+        }
+        results
     }
 
     async fn get_capability(&self, id: &str) -> Option<CapabilityInfo> {
         // Search specifically for this ID
         let hits = self.catalog.search_keyword(id, None, 10);
-        hits.into_iter()
-            .find(|h| h.entry.id == id)
-            .map(catalog_hit_to_info)
+        if let Some(hit) = hits.into_iter().find(|h| h.entry.id == id) {
+            let manifest = self.marketplace.get_capability(id).await;
+            let schema = manifest.and_then(|m| m.input_schema).map(|s| type_expr_to_json_schema(&s));
+            
+            return Some(CapabilityInfo {
+                id: hit.entry.id,
+                name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
+                description: hit.entry.description.unwrap_or_default(),
+                input_schema: schema,
+            });
+        }
+        None
     }
 
     async fn search(&self, query: &str, limit: usize) -> Vec<CapabilityInfo> {
         // Use semantic search from CCOS catalog
         let hits = self.catalog.search_semantic(query, None, limit);
-        hits.into_iter().map(catalog_hit_to_info).collect()
+        let mut results = Vec::new();
+        
+        for hit in hits {
+            let manifest = self.marketplace.get_capability(&hit.entry.id).await;
+            let schema = manifest.and_then(|m| m.input_schema).map(|s| type_expr_to_json_schema(&s));
+            
+            results.push(CapabilityInfo {
+                id: hit.entry.id,
+                name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
+                description: hit.entry.description.unwrap_or_default(),
+                input_schema: schema,
+            });
+        }
+        results
     }
 }
 
-/// Helper to convert catalog hit to capability info
-fn catalog_hit_to_info(hit: ccos::catalog::CatalogHit) -> CapabilityInfo {
-    CapabilityInfo {
-        id: hit.entry.id,
-        name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
-        description: hit.entry.description.unwrap_or_default(),
-        input_schema: None, // We don't need full schema for resolution matching
+/// Convert TypeExpr to JSON Schema (simplified)
+fn type_expr_to_json_schema(expr: &TypeExpr) -> serde_json::Value {
+    use rtfs::ast::PrimitiveType;
+
+    match expr {
+        TypeExpr::Map { entries, .. } => {
+            let mut props = serde_json::Map::new();
+            let mut required = Vec::new();
+            for entry in entries {
+                let name = entry.key.0.clone();
+                
+                // Simple type mapping
+                let type_val = match entry.value_type.as_ref() {
+                    TypeExpr::Primitive(PrimitiveType::String) => "string",
+                    TypeExpr::Primitive(PrimitiveType::Int) | 
+                    TypeExpr::Primitive(PrimitiveType::Float) => "number",
+                    TypeExpr::Primitive(PrimitiveType::Bool) => "boolean",
+                    TypeExpr::Vector(_) | TypeExpr::Array { .. } => "array",
+                    TypeExpr::Map { .. } => "object",
+                    _ => "string",
+                };
+                
+                props.insert(name.clone(), serde_json::json!({ "type": type_val }));
+                
+                if !entry.optional {
+                    required.push(name);
+                }
+            }
+            
+            if required.is_empty() {
+                serde_json::json!({
+                    "type": "object",
+                    "properties": props
+                })
+            } else {
+                serde_json::json!({
+                    "type": "object",
+                    "properties": props,
+                    "required": required
+                })
+            }
+        },
+        _ => serde_json::json!({ "type": "string" })
     }
 }
 
@@ -166,8 +241,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     
     // 2. Build capability catalog using adapter
     println!("\n🔍 Setting up capability catalog...");
-    // Wrap the real CCOS catalog
-    let catalog = Arc::new(CcosCatalogAdapter::new(ccos.get_catalog()));
+    // Wrap the real CCOS catalog and marketplace
+    let catalog = Arc::new(CcosCatalogAdapter::new(ccos.get_catalog(), ccos.get_capability_marketplace()));
     
     // 3. Create decomposition strategy
     println!("\n📐 Setting up decomposition strategy...");
@@ -294,6 +369,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     };
     
     let mut planner = ModularPlanner::new(decomposition, Box::new(composite_resolution), intent_graph.clone())
+        .with_catalog(catalog.clone())
         .with_config(config);
     
     // 6. Plan!

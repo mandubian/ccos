@@ -49,8 +49,8 @@ Decomposition strategies accept a natural language goal and produce a list of `S
 ### Strategies
 *   **`PatternDecomposition`**: Uses regex patterns for high-speed, deterministic handling of common phrases (e.g., "list X and filter by Y").
 *   **`IntentFirstDecomposition`**: Uses an LLM to break down complex goals into abstract intents. Does not see available tools to prevent hallucination of non-existent tool IDs.
-*   **`GroundedLlmDecomposition`**: Retrieves relevant tool summaries via embeddings *before* prompting the LLM, grounding the decomposition in reality.
-*   **`HybridDecomposition`**: The default production strategy. Attempts `PatternDecomposition` first; if no pattern matches, falls back to `IntentFirst` or `GroundedLlm`.
+*   **`GroundedLlmDecomposition`**: Retrieves relevant tool summaries from the `CapabilityCatalog` *before* prompting the LLM. This "grounds" the decomposition, encouraging the LLM to generate intents that map directly to available tools (e.g., `github.list_issues`) rather than abstract descriptions.
+*   **`HybridDecomposition`**: The default production strategy. Attempts `PatternDecomposition` first; if no pattern matches, falls back to `GroundedLlm` (if tools are available) or `IntentFirst`.
 
 ## 2. IntentGraph Integration
 
@@ -70,13 +70,14 @@ Resolution strategies take a `SubIntent` and find the best capability to fulfill
 
 ### Strategies
 *   **`McpResolution`**: Discovers and resolves tools from connected MCP servers (Model Context Protocol). Supports dynamic schema inspection.
-*   **`CatalogResolution`**: Searches the local CCOS capability catalog (built-ins, standard library).
+*   **`CatalogResolution`**: Searches the local CCOS capability catalog (built-ins, standard library). Includes **Soft Validation** to adapt intent parameters to schema requirements (e.g., mapping generic description to `prompt` or `question` arguments).
 *   **`SemanticResolution`**: Uses vector embeddings to match intent descriptions to capability documentation.
 *   **`CompositeResolution`**: Chains multiple strategies (e.g., try Catalog first, then MCP).
 
 ### Advanced Features
 *   **Schema-Aware Parameter Mapping**: `McpResolution` inspects the tool's JSON schema to map intent parameters (often `snake_case` from LLMs) to the exact property names required by the tool (often `camelCase`).
     *   *Example*: Maps `per_page` (intent) -> `perPage` (GitHub MCP schema).
+*   **Soft Schema Validation**: Resolution strategies (like `CatalogResolution`) perform "soft" validation. If a required argument is missing, they attempt to adapt the intent (e.g., using the intent's description as the value for a `prompt` argument) before rejecting the match. This prevents "brittle" failures where a capability is semantically correct but syntactically imperfect.
 
 ## 4. Plan Generation & Orchestration
 
@@ -99,10 +100,12 @@ As of **November 2025**, the Modular Planner is fully operational in `modular_pl
 
 ### Validated Capabilities
 *   **Hybrid Decomposition**: Successfully switches between Patterns and LLM based on goal complexity.
+*   **Grounded Decomposition**: Can utilize catalog tools to guide LLM decomposition.
 *   **Real MCP Integration**: Connects to live MCP servers (e.g., GitHub), discovers tools, and executes them.
 *   **Robustness**:
     *   Correctly handles snake_case/camelCase mismatches.
     *   Correctly coerces string inputs to numbers/booleans for strict APIs.
+    *   **Soft Validation**: Adapts intent parameters to prevent rigid schema failures (e.g., auto-filling `prompt` from description).
     *   Generates valid, executable RTFS plans.
 
 ### Usage Example
