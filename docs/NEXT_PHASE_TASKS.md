@@ -297,5 +297,10 @@ cargo run --example modular_planner_demo -- \
     *   Implemented fuzzy schema matching for dependency inference in `ModularPlanner` (e.g. "page size" -> `perPage`).
     *   Implemented generic type coercion in `generate_call_expr` using schema types (injects `parse-json` for numbers/booleans).
     *   Verified end-to-end in `modular_planner_demo` with GitHub MCP.
+6.  [x] **Soft Schema Validation**:
+    *   Implemented validation logic in `CatalogResolution` that adapts intents to capabilities.
+    *   Handles missing required arguments by checking intent description (e.g., auto-filling `prompt` or `question`).
+    *   Prevents runtime crashes due to rigid schema mismatches.
+    *   Wired `GroundedLlmDecomposition` to use `CapabilityCatalog` for tool-aware planning.
 
 ## Phase 3: Robustness & Scaling (Next)
