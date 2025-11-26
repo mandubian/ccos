@@ -271,6 +271,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         allow_adaptation: true,
         scoring_method: if args.use_embeddings { ScoringMethod::Hybrid } else { ScoringMethod::Heuristic },
         embedding_threshold: 0.5,
+        min_resolution_score: 0.4, // Below this, let other strategies (MCP) try
     };
     
     // Create catalog resolution, optionally with embedding service
@@ -283,6 +284,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 base.with_embedding_service(embedding_service)
             } else {
                 println!("   ⚠️ --use-embeddings specified but no embedding provider configured.");
+
                 println!("      Set LOCAL_EMBEDDING_URL (e.g., http://localhost:11434/api) for Ollama");
                 println!("      Or OPENROUTER_API_KEY for remote embeddings");
                 println!("      Falling back to heuristic scoring.");
