@@ -207,8 +207,10 @@ CRITICAL RULES:
 1. MINIMIZE STEPS: Use the fewest steps possible to accomplish the goal.
 2. PREFER TOOLS: If a tool above can accomplish part of the goal, use it! Include the tool name in the "tool" field.
 3. FILTERING/PAGINATION ARE PARAMS: See tool parameters above. Do NOT create separate "filter" or "paginate" steps.
-4. USER INPUT FOR PARAMS: When you need user input for a tool parameter, create ONE "user_input" step per parameter needed.
-   - The "prompt_topic" MUST be the EXACT parameter name from the tool schema (e.g., "perPage", "state", "labels").
+4. USER INPUT - ONE STEP PER PARAMETER: When you need user input for MULTIPLE parameters, create SEPARATE "user_input" steps for EACH parameter.
+   - NEVER combine multiple parameters into one prompt (e.g., "filter and page size" is WRONG)
+   - Each "prompt_topic" MUST be ONE EXACT parameter name from the tool schema (e.g., "perPage", "state", "labels")
+   - Example: If goal needs "filter" AND "page size", create TWO user_input steps: one for "state" or "labels", one for "perPage"
 5. Use "data_transform" ONLY for client-side processing that no API tool can do.
 6. Match tool names EXACTLY from the list above (e.g., "list_issues" not "github.list_issues").
 
@@ -236,24 +238,26 @@ Respond with ONLY a JSON object:
   "domain": "github|slack|filesystem|database|web|generic"
 }}
 
-Example for "list issues with pagination":
+Example for "list items with filter and limit asked to user":
 {{
   "steps": [
     {{
-      "description": "Ask user for page size",
+      "description": "Ask user for limit",
       "intent_type": "user_input",
-      "action": null,
-      "tool": null,
-      "depends_on": [],
-      "params": {{"prompt_topic": "perPage"}}
+      "params": {{"prompt_topic": "limit"}}
     }},
     {{
-      "description": "List issues with pagination",
+      "description": "Ask user for filter",
+      "intent_type": "user_input",
+      "params": {{"prompt_topic": "filter"}}
+    }},
+    {{
+      "description": "List items with user-provided parameters",
       "intent_type": "api_call",
       "action": "list",
-      "tool": "list_issues",
-      "depends_on": [0],
-      "params": {{"owner": "mandubian", "repo": "ccos"}}
+      "tool": "list_items",
+      "depends_on": [0, 1],
+      "params": {{}}
     }},
     {{
       "description": "Display results",
