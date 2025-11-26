@@ -597,14 +597,18 @@ impl ModularPlanner {
             let mut args_parts: Vec<String> = Vec::new();
             let mut used_params: std::collections::HashSet<String> = std::collections::HashSet::new();
             
-            // Infer which param the dependency should map to
-            let dep_param_name = if sub_intent.dependencies.len() == 1 {
-                let dep_idx = sub_intent.dependencies[0];
-                all_sub_intents.get(dep_idx)
-                    .map(|dep_intent| self.infer_param_name(dep_intent, resolved_capability))
-            } else {
-                None
-            };
+            // Pre-compute param names for ALL dependencies
+            let dep_param_names: Vec<(usize, String)> = sub_intent.dependencies.iter()
+                .filter_map(|&dep_idx| {
+                    if dep_idx < previous_bindings.len() {
+                        all_sub_intents.get(dep_idx).map(|dep_intent| {
+                            (dep_idx, self.infer_param_name(dep_intent, resolved_capability))
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             
             // Add explicit arguments (skip placeholders and params that will come from deps)
             for (key, value) in arguments {
@@ -614,7 +618,7 @@ impl ModularPlanner {
                                      value == "step_1" || value.starts_with("step_");
                 
                 // Skip if this param will be filled by a dependency
-                let is_dep_target = dep_param_name.as_ref().map(|p| p == key).unwrap_or(false);
+                let is_dep_target = dep_param_names.iter().any(|(_, p)| p == key);
                 
                 if !is_placeholder && !is_dep_target {
                     args_parts.push(format!(":{} \"{}\"", key, value.replace('"', "\\\"")));
@@ -622,25 +626,22 @@ impl ModularPlanner {
                 }
             }
             
-            // Add reference to previous step if not already in args
-            // This creates data flow from previous steps
-            if sub_intent.dependencies.len() == 1 {
-                let dep_idx = sub_intent.dependencies[0];
-                if dep_idx < previous_bindings.len() {
-                    let dep_var = &previous_bindings[dep_idx].0;
-                    let param_name = dep_param_name.unwrap_or_else(|| "_previous_result".to_string());
+            // Add references to ALL previous steps
+            // This creates data flow from previous steps to their inferred parameters
+            for (dep_idx, param_name) in &dep_param_names {
+                // Only add if not already used
+                if !used_params.contains(param_name) {
+                    let dep_var = &previous_bindings[*dep_idx].0;
                     
-                    // Only add if not already used
-                    if !used_params.contains(&param_name) {
-                        // Check if coercion is needed (e.g. string -> number)
-                        let value_expr = if self.should_coerce(&param_name, resolved_capability) {
-                            format!("(parse-json {})", dep_var)
-                        } else {
-                            dep_var.clone()
-                        };
-                        
-                        args_parts.push(format!(":{} {}", param_name, value_expr));
-                    }
+                    // Check if coercion is needed (e.g. string -> number)
+                    let value_expr = if self.should_coerce(param_name, resolved_capability) {
+                        format!("(parse-json {})", dep_var)
+                    } else {
+                        dep_var.clone()
+                    };
+                    
+                    args_parts.push(format!(":{} {}", param_name, value_expr));
+                    used_params.insert(param_name.clone());
                 }
             }
             
