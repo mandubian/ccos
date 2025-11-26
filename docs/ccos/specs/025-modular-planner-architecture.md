@@ -101,12 +101,15 @@ As of **November 2025**, the Modular Planner is fully operational in `modular_pl
 
 ### Validated Capabilities
 *   **Hybrid Decomposition**: Successfully switches between Patterns and LLM based on goal complexity.
-*   **Grounded Decomposition**: Can utilize catalog tools to guide LLM decomposition.
+*   **Grounded Decomposition**: Can utilize catalog tools to guide LLM decomposition. Supports `_suggested_tool` hints for direct capability lookup.
 *   **Real MCP Integration**: Connects to live MCP servers (e.g., GitHub), discovers tools, and executes them.
 *   **Robustness**:
     *   Correctly handles snake_case/camelCase mismatches.
     *   Correctly coerces string inputs to numbers/booleans for strict APIs.
     *   **Soft Validation**: Adapts intent parameters to prevent rigid schema failures (e.g., auto-filling `prompt` from description).
+    *   **Smart Tool Scoring**: Penalizes unwanted specificity (e.g., `list_issue_types` vs `list_issues`), aligns action verbs, handles singular/plural.
+    *   **Transform Collapse**: Automatically merges filter/sort/paginate intents into preceding API calls when appropriate.
+    *   **Minimal Step Generation**: LLM prompts teach models that filter/pagination are API parameters, not separate steps.
     *   Generates valid, executable RTFS plans.
 
 ### Usage Example
