@@ -276,37 +276,25 @@ cargo run --example modular_planner_demo -- \
 -   `ccos/examples/modular_planner_demo.rs` - Demo example
 
 ### Next Steps (Phase K)
-1.  [x] **Integrate HybridDecomposition in `modular_planner_demo`**:
-    *   Configured `LlmProviderFactory` with `AgentConfig` to enable LLM-based fallback.
-    *   Verified decomposition of complex goals (e.g. "list issues... but ask me for page size").
-2.  [x] **Connect McpResolution to real MCP session pool**:
+1.  [ ] Integrate modular planner into `autonomous_agent_demo` as optional mode.
+2.  [ ] Add LLM provider to HybridDecomposition for fallback.
+3.  [x] Connect McpResolution to real MCP session pool.
     *   Implemented `RuntimeMcpDiscovery` using `MCPSessionManager` for discovery.
     *   Integrated `SessionPoolManager` with `MCPSessionHandler` for execution.
     *   Verified 401 auth flow works (proving connectivity).
     *   Implemented `CcosCatalogAdapter` to bridge core CatalogService to planner's CapabilityCatalog.
-3.  [x] **Add execution support to `modular_planner_demo`**:
+4.  [x] Add execution support to `modular_planner_demo`.
     *   Added `CCOS` initialization and `SessionPoolManager` setup.
     *   Connected `ModularPlanner` to `CCOS` IntentGraph.
     *   Plan execution via `validate_and_execute_plan` works.
     *   Replaced placeholder `McpToolCatalog` with real `CcosCatalogAdapter`.
-4.  [x] **Implement composite resolution (try multiple strategies)**:
+5.  [x] Implement composite resolution (try multiple strategies).
     *   `CompositeResolution` strategy tries Catalog first, then MCP.
     *   Working in `modular_planner_demo`.
-5.  [x] **Robust Parameter Mapping & Type Coercion**:
-    *   Implemented schema-aware parameter mapping in `McpResolution` (e.g., `per_page` -> `perPage` handling snake_case/camelCase).
-    *   Implemented fuzzy schema matching for dependency inference in `ModularPlanner` (e.g. "page size" -> `perPage`).
-    *   Implemented generic type coercion in `generate_call_expr` using schema types (injects `parse-json` for numbers/booleans).
-    *   Verified end-to-end in `modular_planner_demo` with GitHub MCP.
-6.  [x] **Soft Schema Validation**:
-    *   Implemented validation logic in `CatalogResolution` that adapts intents to capabilities.
-    *   Handles missing required arguments by checking intent description (e.g., auto-filling `prompt` or `question`).
-    *   Prevents runtime crashes due to rigid schema mismatches.
-    *   Wired `GroundedLlmDecomposition` to use `CapabilityCatalog` for tool-aware planning.
-7.  [x] **Improved Tool Scoring & Plan Quality**:
-    *   Enhanced `CatalogResolution` scoring with action verb alignment, singular/plural matching, and specificity penalties.
-    *   Updated LLM prompts to recognize filter/pagination as API parameters (not separate steps).
-    *   Added `collapse_transform_intents()` to merge DataTransform intents into preceding ApiCall.
-    *   Added direct `_suggested_tool` lookup from GroundedLlmDecomposition.
-    *   Result: "filter issues..." goal now produces 3 clean steps instead of 6 with 2 referrals.
+6.  [x] Integrate modular planner into `autonomous_agent_demo` as optional mode.
+    *   Added `--use-modular-planner` flag.
+    *   Configured `CompositeResolution` with catalog and MCP strategies.
+    *   Connected to real `SessionPool` and `IntentGraph`.
+    *   Verified end-to-end execution works (e.g., `ccos.user.ask` + `mcp.github.list_issues`).
 
 ## Phase 3: Robustness & Scaling (Next)

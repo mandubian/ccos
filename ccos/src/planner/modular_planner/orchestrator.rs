@@ -16,8 +16,7 @@ use super::decomposition::{
 use super::resolution::{
     CompositeResolution, ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability,
 };
-use super::resolution::semantic::CapabilityCatalog;
-use super::types::{IntentType, SubIntent, ToolSummary};
+use super::types::{IntentType, SubIntent};
 use crate::intent_graph::IntentGraph;
 use crate::intent_graph::storage::Edge;
 use crate::types::{EdgeType, GenerationContext, IntentStatus, StorableIntent, TriggerSource};
@@ -81,8 +80,6 @@ pub struct PlanResult {
     pub rtfs_plan: String,
     /// Planning trace for debugging
     pub trace: PlanningTrace,
-    /// Verification result (if verification was performed)
-    pub verification: Option<super::verification::VerificationResult>,
 }
 
 /// Trace of planning decisions for debugging/audit
@@ -101,8 +98,6 @@ pub enum TraceEvent {
     ResolutionStarted { intent_id: String },
     ResolutionCompleted { intent_id: String, capability: String },
     ResolutionFailed { intent_id: String, reason: String },
-    VerificationStarted,
-    VerificationCompleted { verdict: String, issues_count: usize },
 }
 
 /// The main modular planner orchestrator.
@@ -115,10 +110,6 @@ pub struct ModularPlanner {
     decomposition: Box<dyn DecompositionStrategy>,
     /// Resolution strategy (how to map intents to capabilities)
     resolution: Box<dyn ResolutionStrategy>,
-    /// Capability catalog for listing tools (optional, for grounded decomposition)
-    catalog: Option<Arc<dyn CapabilityCatalog>>,
-    /// Plan verifier (optional, for consistency checking)
-    verifier: Option<Arc<dyn super::verification::PlanVerifier>>,
     /// Intent graph for storing intents and edges
     intent_graph: Arc<Mutex<IntentGraph>>,
     /// Configuration
@@ -135,8 +126,6 @@ impl ModularPlanner {
         Self {
             decomposition,
             resolution,
-            catalog: None,
-            verifier: None,
             intent_graph,
             config: PlannerConfig::default(),
         }
@@ -147,22 +136,9 @@ impl ModularPlanner {
         Self {
             decomposition: Box::new(HybridDecomposition::pattern_only()),
             resolution: Box::new(CompositeResolution::new()),
-            catalog: None,
-            verifier: None,
             intent_graph,
             config: PlannerConfig::default(),
         }
-    }
-
-    pub fn with_catalog(mut self, catalog: Arc<dyn CapabilityCatalog>) -> Self {
-        self.catalog = Some(catalog);
-        self
-    }
-
-    /// Add a plan verifier for consistency checking
-    pub fn with_verifier(mut self, verifier: Arc<dyn super::verification::PlanVerifier>) -> Self {
-        self.verifier = Some(verifier);
-        self
     }
 
     pub fn with_config(mut self, config: PlannerConfig) -> Self {
@@ -184,40 +160,23 @@ impl ModularPlanner {
 
         let decomp_context = DecompositionContext::new().with_max_depth(self.config.max_depth);
 
-        // Fetch tools if catalog is available (with schemas for grounded decomposition)
-        let tools = if let Some(catalog) = &self.catalog {
-            let caps = catalog.list_capabilities(None).await;
-            Some(caps.into_iter().map(|c| {
-                let mut summary = ToolSummary::new(&c.id, &c.description);
-                if let Some(schema) = c.input_schema {
-                    summary = summary.with_schema(schema);
-                }
-                summary
-            }).collect::<Vec<_>>())
-        } else {
-            None
-        };
-
-        let decomp_result = self.decomposition.decompose(goal, tools.as_deref(), &decomp_context).await?;
-
-        // Post-process: collapse DataTransform intents into preceding ApiCall
-        let optimized_intents = self.collapse_transform_intents(decomp_result.sub_intents);
+        let decomp_result = self.decomposition.decompose(goal, None, &decomp_context).await?;
 
         trace.events.push(TraceEvent::DecompositionCompleted {
-            num_intents: optimized_intents.len(),
+            num_intents: decomp_result.sub_intents.len(),
             confidence: decomp_result.confidence,
         });
 
         // 2. Store intents in graph and create edges
         let (root_id, intent_ids) = self
-            .store_intents_in_graph(goal, &optimized_intents, &mut trace)
+            .store_intents_in_graph(goal, &decomp_result.sub_intents, &mut trace)
             .await?;
 
         // 3. Resolve each intent to a capability
         let mut resolutions = HashMap::new();
         let resolution_context = ResolutionContext::new();
 
-        for (idx, sub_intent) in optimized_intents.iter().enumerate() {
+        for (idx, sub_intent) in decomp_result.sub_intents.iter().enumerate() {
             let intent_id = &intent_ids[idx];
 
             trace.events.push(TraceEvent::ResolutionStarted {
@@ -257,28 +216,7 @@ impl ModularPlanner {
         }
 
         // 4. Generate RTFS plan from resolved intents
-        let rtfs_plan = self.generate_rtfs_plan(&optimized_intents, &intent_ids, &resolutions)?;
-
-        // 5. Optional: Verify the plan for consistency
-        let verification = if let Some(ref verifier) = self.verifier {
-            trace.events.push(TraceEvent::VerificationStarted);
-            
-            match verifier.verify(goal, &optimized_intents, &resolutions, &rtfs_plan).await {
-                Ok(result) => {
-                    trace.events.push(TraceEvent::VerificationCompleted {
-                        verdict: format!("{:?}", result.verdict),
-                        issues_count: result.issues.len(),
-                    });
-                    Some(result)
-                }
-                Err(e) => {
-                    log::warn!("Plan verification failed: {}", e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let rtfs_plan = self.generate_rtfs_plan(&decomp_result.sub_intents, &intent_ids, &resolutions)?;
 
         Ok(PlanResult {
             root_intent_id: root_id,
@@ -286,101 +224,7 @@ impl ModularPlanner {
             resolutions,
             rtfs_plan,
             trace,
-            verification,
         })
-    }
-
-    /// Collapse DataTransform intents into preceding ApiCall intents when possible.
-    /// 
-    /// This optimization recognizes that filter/sort/paginate operations are typically
-    /// API parameters rather than separate client-side processing steps.
-    fn collapse_transform_intents(&self, intents: Vec<SubIntent>) -> Vec<SubIntent> {
-        use crate::planner::modular_planner::types::TransformType;
-        
-        if intents.len() <= 1 {
-            return intents;
-        }
-        
-        let mut result: Vec<SubIntent> = Vec::new();
-        let mut skip_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        
-        for (i, intent) in intents.iter().enumerate() {
-            if skip_indices.contains(&i) {
-                continue;
-            }
-            
-            // Check if this is a DataTransform that can be collapsed
-            if let IntentType::DataTransform { ref transform } = intent.intent_type {
-                // Only collapse filter/sort/paginate - these are typically API params
-                let is_collapsible = match transform {
-                    TransformType::Filter | TransformType::Sort => true,
-                    TransformType::Other(s) => {
-                        s.to_lowercase().contains("paginate") || s.to_lowercase().contains("page")
-                    }
-                    _ => false,
-                };
-                
-                if is_collapsible {
-                    // Find the preceding ApiCall this depends on
-                    if let Some(&dep_idx) = intent.dependencies.first() {
-                        if dep_idx < result.len() {
-                            if let IntentType::ApiCall { .. } = result[dep_idx].intent_type {
-                                // Merge transform params into the ApiCall
-                                let api_intent = &mut result[dep_idx];
-                                
-                                // Add transform info as params
-                                match transform {
-                                    TransformType::Filter => {
-                                        if let Some(filter_val) = intent.extracted_params.get("filter") {
-                                            api_intent.extracted_params.insert("filter".to_string(), filter_val.clone());
-                                        }
-                                        // Also check for query param
-                                        if let Some(query_val) = intent.extracted_params.get("query") {
-                                            api_intent.extracted_params.insert("query".to_string(), query_val.clone());
-                                        }
-                                    }
-                                    TransformType::Sort => {
-                                        if let Some(sort_val) = intent.extracted_params.get("sort") {
-                                            api_intent.extracted_params.insert("sort".to_string(), sort_val.clone());
-                                        }
-                                    }
-                                    TransformType::Other(ref s) if s.to_lowercase().contains("paginate") => {
-                                        if let Some(page_val) = intent.extracted_params.get("perPage") {
-                                            api_intent.extracted_params.insert("perPage".to_string(), page_val.clone());
-                                        }
-                                        if let Some(page_val) = intent.extracted_params.get("page") {
-                                            api_intent.extracted_params.insert("page".to_string(), page_val.clone());
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                                
-                                // Update description to reflect merged operation
-                                api_intent.description = format!(
-                                    "{} (with {})",
-                                    api_intent.description,
-                                    intent.description.to_lowercase()
-                                );
-                                
-                                // Skip this transform intent
-                                skip_indices.insert(i);
-                                continue;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Keep the intent as-is
-            let mut cloned = intent.clone();
-            // Adjust dependencies to account for skipped intents
-            cloned.dependencies = intent.dependencies.iter()
-                .map(|&d| d - skip_indices.iter().filter(|&&s| s < d).count())
-                .collect();
-            result.push(cloned);
-        }
-        
-        result
     }
 
     /// Store sub-intents as StorableIntent nodes in the IntentGraph
@@ -631,70 +475,28 @@ impl ModularPlanner {
         let args_map = if has_dependencies {
             // Build args that reference previous step outputs
             let mut args_parts: Vec<String> = Vec::new();
-            let mut used_params: std::collections::HashSet<String> = std::collections::HashSet::new();
             
-            // Pre-compute param names for ALL dependencies
-            let dep_param_names: Vec<(usize, String)> = sub_intent.dependencies.iter()
-                .filter_map(|&dep_idx| {
-                    if dep_idx < previous_bindings.len() {
-                        all_sub_intents.get(dep_idx).map(|dep_intent| {
-                            (dep_idx, self.infer_param_name(dep_intent, resolved_capability))
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            
-            // Add explicit arguments (skip placeholders and params that will come from deps)
+            // Add explicit arguments
             for (key, value) in arguments {
-                // Skip placeholder values that indicate "will come from user/previous step"
-                let is_placeholder = value == "null" || value == "user_value" || 
-                                     value == "user" || value.is_empty() ||
-                                     value == "step_1" || value.starts_with("step_");
-                
-                // Skip if this param will be filled by a dependency
-                let is_dep_target = dep_param_names.iter().any(|(_, p)| p == key);
-                
-                if !is_placeholder && !is_dep_target {
-                    args_parts.push(format!(":{} \"{}\"", key, value.replace('"', "\\\"")));
-                    used_params.insert(key.clone());
-                }
+                args_parts.push(format!(":{} \"{}\"", key, value.replace('"', "\\\"")));
             }
             
-            // Add references to ALL previous steps
-            // This creates data flow from previous steps to their inferred parameters
-            for (dep_idx, param_name) in &dep_param_names {
-                // Only add if not already used
-                if !used_params.contains(param_name) {
-                    let dep_var = &previous_bindings[*dep_idx].0;
-                    
-                    // Determine coercion type and transform value accordingly
-                    let value_expr = match self.get_coercion_type(param_name, resolved_capability) {
-                        Some("json") => {
-                            // Parse string as JSON (for numbers, booleans)
-                            format!("(parse-json {})", dep_var)
-                        }
-                        Some("array") => {
-                            // Wrap single value in array: "rtfs" -> ["rtfs"]
-                            // Use vector syntax in RTFS
-                            format!("[{}]", dep_var)
-                        }
-                        Some("array_upper") => {
-                            // Wrap in array AND uppercase (for GraphQL enums like IssueState)
-                            // "open" -> ["OPEN"]
-                            format!("[(string-upper {})]", dep_var)
-                        }
-                        Some("enum_upper") => {
-                            // Uppercase for GraphQL enum (but not array)
-                            // "open" -> "OPEN"
-                            format!("(string-upper {})", dep_var)
-                        }
-                        _ => dep_var.clone(),
-                    };
-                    
-                    args_parts.push(format!(":{} {}", param_name, value_expr));
-                    used_params.insert(param_name.clone());
+            // Add reference to previous step if not already in args
+            // This creates data flow from previous steps
+            if sub_intent.dependencies.len() == 1 {
+                let dep_idx = sub_intent.dependencies[0];
+                if dep_idx < previous_bindings.len() {
+                    let dep_var = &previous_bindings[dep_idx].0;
+                    // Only add if we don't already have this as an argument
+                    if !arguments.values().any(|v| v == dep_var) {
+                        // Attempt to infer parameter name from dependency and schema
+                        let param_name = if let Some(dep_intent) = all_sub_intents.get(dep_idx) {
+                             self.infer_param_name(dep_intent, resolved_capability)
+                        } else {
+                            "_previous_result".to_string()
+                        };
+                        args_parts.push(format!(":{} {}", param_name, dep_var));
+                    }
                 }
             }
             
@@ -722,99 +524,30 @@ impl ModularPlanner {
     /// Helper to infer a parameter name from a dependency intent and consumer capability schema
     fn infer_param_name(&self, producer_intent: &SubIntent, consumer_capability: &ResolvedCapability) -> String {
         // 1. Try schema-based matching if available
-        let schema = match consumer_capability {
-            ResolvedCapability::Remote { input_schema: Some(schema), .. } => Some(schema),
-            ResolvedCapability::Local { input_schema: Some(schema), .. } => Some(schema),
-            _ => None,
-        };
-        
-        if let Some(schema) = schema {
+        if let ResolvedCapability::Remote { input_schema: Some(schema), .. } = consumer_capability {
             if let Some(best_match) = self.match_topic_to_schema(producer_intent, schema) {
                 return best_match;
             }
         }
 
-        // 2. Fallback: extract first meaningful word from prompt topic
-        // This prevents invalid parameter names with special characters
+        // 2. Fallback to simple heuristic
         match &producer_intent.intent_type {
             IntentType::UserInput { prompt_topic } => {
                 let normalized = prompt_topic.trim().to_lowercase();
                 
-                // Common stop words to skip
-                let stop_words = ["the", "for", "and", "please", "provide", "etc", "with", "from", "your", "enter"];
-                
-                // Extract meaningful words (alphanumeric only, length > 2)
-                let words: Vec<&str> = normalized
-                    .split(|c: char| !c.is_alphanumeric())
-                    .filter(|w| w.len() > 2 && !stop_words.contains(w))
-                    .collect();
-                
-                // Return first meaningful word, or fallback
-                words.first()
-                    .map(|w| w.to_string())
-                    .unwrap_or_else(|| "_input".to_string())
+                // Manual overrides for common terms
+                if normalized.contains("page size") || normalized == "limit" || normalized == "count" {
+                    return "per_page".to_string();
+                }
+                if normalized == "page" {
+                    return "page".to_string();
+                }
+
+                // Fallback: use topic as snake_case param
+                normalized.replace(' ', "_")
             }
             _ => "_previous_result".to_string(),
         }
-    }
-
-    /// Determine what kind of coercion is needed for a parameter
-    /// Returns: None (no coercion), Some("json") for numbers/bools, 
-    /// Some("array") for arrays, Some("array_upper") for enum arrays needing uppercase,
-    /// Some("enum_upper") for string enums needing uppercase
-    fn get_coercion_type(&self, param_name: &str, capability: &ResolvedCapability) -> Option<&'static str> {
-        let schema = match capability {
-            ResolvedCapability::Remote { input_schema: Some(schema), .. } => Some(schema),
-            ResolvedCapability::Local { input_schema: Some(schema), .. } => Some(schema),
-            _ => None,
-        };
-        
-        if let Some(schema) = schema {
-            if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
-                // Try exact match first
-                if let Some(prop_def) = props.get(param_name) {
-                    let type_val = prop_def.get("type").and_then(|t| t.as_str());
-                    let has_enum = prop_def.get("enum").is_some();
-                    
-                    // Check if enum values are uppercase (indicates GraphQL enum)
-                    let is_uppercase_enum = if let Some(enum_arr) = prop_def.get("enum").and_then(|e| e.as_array()) {
-                        enum_arr.iter()
-                            .filter_map(|v| v.as_str())
-                            .any(|s| s.chars().all(|c| c.is_uppercase() || !c.is_alphabetic()))
-                    } else {
-                        false
-                    };
-                    
-                    return match type_val {
-                        Some("integer") | Some("number") | Some("boolean") => Some("json"),
-                        Some("array") => {
-                            // Check if array items need uppercasing
-                            let needs_uppercase = is_uppercase_enum || matches!(
-                                param_name.to_lowercase().as_str(),
-                                "state" | "states" | "direction"
-                            );
-                            if needs_uppercase {
-                                Some("array_upper")
-                            } else {
-                                Some("array")
-                            }
-                        }
-                        Some("string") if is_uppercase_enum => {
-                            // String with uppercase enum values - need to uppercase user input
-                            Some("enum_upper")
-                        }
-                        _ => None,
-                    };
-                }
-            }
-        }
-        None
-    }
-    
-    /// Check if a parameter should be coerced from string to JSON value (number/bool)
-    /// Legacy helper - delegates to get_coercion_type
-    fn should_coerce(&self, param_name: &str, capability: &ResolvedCapability) -> bool {
-        self.get_coercion_type(param_name, capability) == Some("json")
     }
 
     /// Match intent topic to schema properties using fuzzy matching
@@ -846,36 +579,11 @@ impl ModularPlanner {
 
             // 3. Token overlap
             let topic_tokens: Vec<&str> = topic.split_whitespace().collect();
+            let prop_tokens: Vec<&str> = prop_lower.split('_').collect(); // snake_case
             
-            // Split property by underscore and camelCase
-            let mut prop_tokens = Vec::new();
-            let mut current_token = String::new();
-            for c in prop_name.chars() {
-                if c == '_' {
-                    if !current_token.is_empty() {
-                        prop_tokens.push(current_token.to_lowercase());
-                        current_token = String::new();
-                    }
-                } else if c.is_uppercase() {
-                    if !current_token.is_empty() {
-                        prop_tokens.push(current_token.to_lowercase());
-                    }
-                    current_token = String::new();
-                    current_token.push(c);
-                } else {
-                    current_token.push(c);
-                }
-            }
-            if !current_token.is_empty() {
-                prop_tokens.push(current_token.to_lowercase());
-            }
-            
-            let matches = topic_tokens.iter().filter(|t| 
-                prop_tokens.iter().any(|pt| pt == *t)
-            ).count();
-
+            let matches = topic_tokens.iter().filter(|t| prop_tokens.contains(t)).count();
             if matches > 0 {
-                score += 0.6 * (matches as f64);
+                score += 0.3 * (matches as f64);
             }
 
             // 4. Description match (if available in schema)
@@ -998,4 +706,3 @@ mod tests {
         assert!(expr.contains("mandubian"));
     }
 }
-
