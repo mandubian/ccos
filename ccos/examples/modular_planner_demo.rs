@@ -406,8 +406,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         intent_namespace: "demo".to_string(),
     };
     
+    // 5b. Create plan verifier (rule-based for now)
+    use ccos::planner::modular_planner::RuleBasedVerifier;
+    let verifier = Arc::new(RuleBasedVerifier::new());
+    
     let mut planner = ModularPlanner::new(decomposition, Box::new(composite_resolution), intent_graph.clone())
         .with_catalog(catalog.clone())
+        .with_verifier(verifier)
         .with_config(config);
     
     // 6. Plan!
@@ -578,6 +583,42 @@ fn print_plan_result(result: &PlanResult, verbose: bool) {
                 TraceEvent::ResolutionFailed { intent_id, reason } => {
                     println!("   ✗ Failed: {} - {}", &intent_id[..16.min(intent_id.len())], reason);
                 }
+                TraceEvent::VerificationStarted => {
+                    println!("   🔎 Plan verification started...");
+                }
+                TraceEvent::VerificationCompleted { verdict, issues_count } => {
+                    println!("   ✓ Verification: {} ({} issues)", verdict, issues_count);
+                }
+            }
+        }
+    }
+    
+    // Show verification results if available
+    if let Some(ref verification) = result.verification {
+        println!("\n🔎 Plan Verification:");
+        println!("   Verdict: {:?}", verification.verdict);
+        println!("   Confidence: {:.0}%", verification.confidence * 100.0);
+        
+        if !verification.issues.is_empty() {
+            println!("   Issues:");
+            for issue in &verification.issues {
+                let icon = match issue.severity {
+                    ccos::planner::modular_planner::IssueSeverity::Info => "ℹ️ ",
+                    ccos::planner::modular_planner::IssueSeverity::Warning => "⚠️ ",
+                    ccos::planner::modular_planner::IssueSeverity::Error => "❌",
+                    ccos::planner::modular_planner::IssueSeverity::Critical => "🚫",
+                };
+                println!("      {} {:?}: {}", icon, issue.category, issue.description);
+                if let Some(ref fix) = issue.suggested_fix {
+                    println!("         💡 Suggestion: {}", fix);
+                }
+            }
+        }
+        
+        if !verification.suggestions.is_empty() {
+            println!("   Suggestions:");
+            for suggestion in &verification.suggestions {
+                println!("      💡 {}", suggestion);
             }
         }
     }
