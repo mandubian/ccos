@@ -182,21 +182,24 @@ impl ModularPlanner {
 
         let decomp_result = self.decomposition.decompose(goal, tools.as_deref(), &decomp_context).await?;
 
+        // Post-process: collapse DataTransform intents into preceding ApiCall
+        let optimized_intents = self.collapse_transform_intents(decomp_result.sub_intents);
+
         trace.events.push(TraceEvent::DecompositionCompleted {
-            num_intents: decomp_result.sub_intents.len(),
+            num_intents: optimized_intents.len(),
             confidence: decomp_result.confidence,
         });
 
         // 2. Store intents in graph and create edges
         let (root_id, intent_ids) = self
-            .store_intents_in_graph(goal, &decomp_result.sub_intents, &mut trace)
+            .store_intents_in_graph(goal, &optimized_intents, &mut trace)
             .await?;
 
         // 3. Resolve each intent to a capability
         let mut resolutions = HashMap::new();
         let resolution_context = ResolutionContext::new();
 
-        for (idx, sub_intent) in decomp_result.sub_intents.iter().enumerate() {
+        for (idx, sub_intent) in optimized_intents.iter().enumerate() {
             let intent_id = &intent_ids[idx];
 
             trace.events.push(TraceEvent::ResolutionStarted {
@@ -236,7 +239,7 @@ impl ModularPlanner {
         }
 
         // 4. Generate RTFS plan from resolved intents
-        let rtfs_plan = self.generate_rtfs_plan(&decomp_result.sub_intents, &intent_ids, &resolutions)?;
+        let rtfs_plan = self.generate_rtfs_plan(&optimized_intents, &intent_ids, &resolutions)?;
 
         Ok(PlanResult {
             root_intent_id: root_id,
@@ -245,6 +248,99 @@ impl ModularPlanner {
             rtfs_plan,
             trace,
         })
+    }
+
+    /// Collapse DataTransform intents into preceding ApiCall intents when possible.
+    /// 
+    /// This optimization recognizes that filter/sort/paginate operations are typically
+    /// API parameters rather than separate client-side processing steps.
+    fn collapse_transform_intents(&self, intents: Vec<SubIntent>) -> Vec<SubIntent> {
+        use crate::planner::modular_planner::types::TransformType;
+        
+        if intents.len() <= 1 {
+            return intents;
+        }
+        
+        let mut result: Vec<SubIntent> = Vec::new();
+        let mut skip_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        
+        for (i, intent) in intents.iter().enumerate() {
+            if skip_indices.contains(&i) {
+                continue;
+            }
+            
+            // Check if this is a DataTransform that can be collapsed
+            if let IntentType::DataTransform { ref transform } = intent.intent_type {
+                // Only collapse filter/sort/paginate - these are typically API params
+                let is_collapsible = match transform {
+                    TransformType::Filter | TransformType::Sort => true,
+                    TransformType::Other(s) => {
+                        s.to_lowercase().contains("paginate") || s.to_lowercase().contains("page")
+                    }
+                    _ => false,
+                };
+                
+                if is_collapsible {
+                    // Find the preceding ApiCall this depends on
+                    if let Some(&dep_idx) = intent.dependencies.first() {
+                        if dep_idx < result.len() {
+                            if let IntentType::ApiCall { .. } = result[dep_idx].intent_type {
+                                // Merge transform params into the ApiCall
+                                let api_intent = &mut result[dep_idx];
+                                
+                                // Add transform info as params
+                                match transform {
+                                    TransformType::Filter => {
+                                        if let Some(filter_val) = intent.extracted_params.get("filter") {
+                                            api_intent.extracted_params.insert("filter".to_string(), filter_val.clone());
+                                        }
+                                        // Also check for query param
+                                        if let Some(query_val) = intent.extracted_params.get("query") {
+                                            api_intent.extracted_params.insert("query".to_string(), query_val.clone());
+                                        }
+                                    }
+                                    TransformType::Sort => {
+                                        if let Some(sort_val) = intent.extracted_params.get("sort") {
+                                            api_intent.extracted_params.insert("sort".to_string(), sort_val.clone());
+                                        }
+                                    }
+                                    TransformType::Other(ref s) if s.to_lowercase().contains("paginate") => {
+                                        if let Some(page_val) = intent.extracted_params.get("perPage") {
+                                            api_intent.extracted_params.insert("perPage".to_string(), page_val.clone());
+                                        }
+                                        if let Some(page_val) = intent.extracted_params.get("page") {
+                                            api_intent.extracted_params.insert("page".to_string(), page_val.clone());
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                
+                                // Update description to reflect merged operation
+                                api_intent.description = format!(
+                                    "{} (with {})",
+                                    api_intent.description,
+                                    intent.description.to_lowercase()
+                                );
+                                
+                                // Skip this transform intent
+                                skip_indices.insert(i);
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Keep the intent as-is
+            let mut cloned = intent.clone();
+            // Adjust dependencies to account for skipped intents
+            cloned.dependencies = intent.dependencies.iter()
+                .map(|&d| d - skip_indices.iter().filter(|&&s| s < d).count())
+                .collect();
+            result.push(cloned);
+        }
+        
+        result
     }
 
     /// Store sub-intents as StorableIntent nodes in the IntentGraph

@@ -260,6 +260,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Try to find a configured profile, otherwise fall back to defaults
     let llm_config = if let Some(ref profiles) = agent_config.llm_profiles {
         if let Some(default_name) = &profiles.default {
+            // First try finding in explicit profiles list
             if let Some(profile) = profiles.profiles.iter().find(|p| &p.name == default_name) {
                 println!("   Using LLM Profile: {}", profile.name);
                 let provider_type = match profile.provider.as_str() {
@@ -281,41 +282,46 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     timeout_seconds: None,
                     retry_config: Default::default(),
                 }
-            } else {
-                 LlmProviderConfig {
-                    provider_type: LlmProviderType::OpenAI,
-                    model: "openai/gpt-4o".to_string(),
-                    api_key: std::env::var("OPENROUTER_API_KEY").ok(),
-                    base_url: Some("https://openrouter.ai/api/v1".to_string()),
-                    max_tokens: None,
-                    temperature: None,
-                    timeout_seconds: None,
-                    retry_config: Default::default(),
+            } 
+            // Then try parsing as set:model (e.g. "openrouter_free:balanced")
+            else if let Some((set_name, model_name)) = default_name.split_once(':') {
+                let set = profiles.model_sets.as_ref().and_then(|sets| sets.iter().find(|s| s.name == set_name));
+                let model_spec = set.and_then(|s| s.models.iter().find(|m| m.name == model_name));
+
+                if let (Some(set), Some(spec)) = (set, model_spec) {
+                    println!("   Using LLM Profile: {}:{} ({})", set.name, spec.name, spec.model);
+                    let provider_type = match set.provider.as_str() {
+                        "openrouter" | "openai" => LlmProviderType::OpenAI,
+                        "anthropic" => LlmProviderType::Anthropic,
+                        "stub" => LlmProviderType::Stub,
+                        _ => LlmProviderType::OpenAI,
+                    };
+
+                    LlmProviderConfig {
+                        provider_type,
+                        model: spec.model.clone(),
+                        api_key: set.api_key.clone().or_else(|| {
+                            set.api_key_env.as_ref().and_then(|env| std::env::var(env).ok())
+                        }),
+                        base_url: set.base_url.clone(),
+                        max_tokens: spec.max_output_tokens, // Map max_output_tokens to max_tokens
+                        temperature: None, // Specs don't have temp currently
+                        timeout_seconds: None,
+                        retry_config: Default::default(),
+                    }
+                } else {
+                    println!("   ⚠️  Profile '{}' not found. Falling back to default hardcoded.", default_name);
+                    fallback_llm_config()
                 }
+            } else {
+                 println!("   ⚠️  Profile '{}' not found. Falling back to default hardcoded.", default_name);
+                 fallback_llm_config()
             }
         } else {
-             LlmProviderConfig {
-                provider_type: LlmProviderType::OpenAI,
-                model: "openai/gpt-4o".to_string(),
-                api_key: std::env::var("OPENROUTER_API_KEY").ok(),
-                base_url: Some("https://openrouter.ai/api/v1".to_string()),
-                max_tokens: None,
-                temperature: None,
-                timeout_seconds: None,
-                retry_config: Default::default(),
-            }
+             fallback_llm_config()
         }
     } else {
-         LlmProviderConfig {
-            provider_type: LlmProviderType::OpenAI,
-            model: "openai/gpt-4o".to_string(),
-            api_key: std::env::var("OPENROUTER_API_KEY").ok(),
-            base_url: Some("https://openrouter.ai/api/v1".to_string()),
-            max_tokens: None,
-            temperature: None,
-            timeout_seconds: None,
-            retry_config: Default::default(),
-        }
+         fallback_llm_config()
     };
     
     let mut decomposition: Box<dyn DecompositionStrategy> = Box::new(PatternDecomposition::new());
@@ -498,6 +504,20 @@ fn load_agent_config(config_path: &str) -> Result<AgentConfig, Box<dyn Error + S
         content = content.lines().skip(1).collect::<Vec<_>>().join("\n");
     }
     toml::from_str(&content).map_err(|e| format!("failed to parse agent config: {}", e).into())
+}
+
+/// Fallback LLM configuration
+fn fallback_llm_config() -> LlmProviderConfig {
+    LlmProviderConfig {
+        provider_type: LlmProviderType::OpenAI,
+        model: "openai/gpt-4o".to_string(),
+        api_key: std::env::var("OPENROUTER_API_KEY").ok(),
+        base_url: Some("https://openrouter.ai/api/v1".to_string()),
+        max_tokens: None,
+        temperature: None,
+        timeout_seconds: None,
+        retry_config: Default::default(),
+    }
 }
 
 /// Convert RTFS value to string for display

@@ -118,14 +118,41 @@ impl CatalogResolution {
 
     /// Search catalog for matching capability
     async fn search_catalog(&self, intent: &SubIntent) -> Option<(CapabilityInfo, f64, std::collections::HashMap<String, String>)> {
+        // First, check for LLM-suggested tool (from GroundedLlmDecomposition)
+        if let Some(suggested_tool) = intent.extracted_params.get("_suggested_tool") {
+            // Try direct lookup by suggested tool name
+            let possible_ids = vec![
+                suggested_tool.clone(),
+                format!("mcp.github.{}", suggested_tool),
+                format!("ccos.{}", suggested_tool),
+            ];
+            
+            for possible_id in possible_ids {
+                if let Some(cap) = self.catalog.get_capability(&possible_id).await {
+                    let mut arguments: std::collections::HashMap<String, String> = intent.extracted_params
+                        .iter()
+                        .filter(|(k, _)| !k.starts_with('_'))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    
+                    if self.validate_and_adapt(intent, &cap, &mut arguments) {
+                        return Some((cap, 0.95, arguments)); // High confidence for direct match
+                    }
+                }
+            }
+        }
+        
+        // Fall back to search
         let query = &intent.description;
-        let candidates = self.catalog.search(query, 5).await;
+        let candidates = self.catalog.search(query, 10).await; // Increased limit for better coverage
         
         if candidates.is_empty() {
             return None;
         }
         
-        // Simple scoring - first match with validation
+        // Score all candidates and pick the best
+        let mut scored: Vec<(CapabilityInfo, f64, std::collections::HashMap<String, String>)> = Vec::new();
+        
         for cap in candidates {
             let score = self.score_capability(intent, &cap);
             if score > 0.2 {
@@ -138,33 +165,94 @@ impl CatalogResolution {
 
                 // Validate and adapt
                 if self.validate_and_adapt(intent, &cap, &mut arguments) {
-                    return Some((cap, score, arguments));
+                    scored.push((cap, score, arguments));
                 }
             }
         }
         
-        None
+        // Return the highest-scoring match
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.into_iter().next()
     }
     
-    /// Score capability match
+    /// Score capability match with improved algorithm
     fn score_capability(&self, intent: &SubIntent, cap: &CapabilityInfo) -> f64 {
-        let cap_lower = format!("{} {}", cap.name, cap.description).to_lowercase();
+        let cap_name_lower = cap.name.to_lowercase();
+        let cap_desc_lower = cap.description.to_lowercase();
         let desc_lower = intent.description.to_lowercase();
         
-        let words: Vec<&str> = desc_lower.split_whitespace().collect();
-        let mut matches = 0;
+        // Tokenize intent and capability
+        let intent_words: Vec<&str> = desc_lower
+            .split(|c: char| c.is_whitespace() || c == '_' || c == '-' || c == '.')
+            .filter(|w| w.len() > 2)
+            .collect();
         
-        for word in &words {
-            if word.len() > 2 && cap_lower.contains(word) {
-                matches += 1;
-            }
-        }
+        let cap_name_words: Vec<&str> = cap_name_lower
+            .split(|c: char| c == '_' || c == '-' || c == '.')
+            .filter(|w| w.len() > 1)
+            .collect();
         
-        if words.is_empty() {
+        if intent_words.is_empty() {
             return 0.0;
         }
         
-        matches as f64 / words.len() as f64
+        let mut score = 0.0;
+        let mut matched_words = 0;
+        
+        // Check for action verb alignment (list, get, search, etc.)
+        let action_verbs = ["list", "get", "search", "create", "update", "delete", "find", "retrieve", "fetch"];
+        let intent_action = intent_words.iter().find(|w| action_verbs.contains(&w.to_lowercase().as_str()));
+        let cap_action = cap_name_words.iter().find(|w| action_verbs.contains(&w.to_lowercase().as_str()));
+        
+        if let (Some(ia), Some(ca)) = (intent_action, cap_action) {
+            if ia.to_lowercase() == ca.to_lowercase() {
+                score += 0.3; // Action verb match bonus
+            }
+        }
+        
+        // Check for resource noun alignment (issues, users, repos, etc.)
+        for word in &intent_words {
+            let word_lower = word.to_lowercase();
+            
+            // Exact match in capability name (higher weight)
+            if cap_name_words.iter().any(|cw| {
+                let cw_lower = cw.to_lowercase();
+                // Exact match or singular/plural match
+                cw_lower == word_lower || 
+                cw_lower == format!("{}s", word_lower) ||
+                word_lower == format!("{}s", cw_lower)
+            }) {
+                score += 0.25;
+                matched_words += 1;
+            }
+            // Partial match in description (lower weight)
+            else if cap_desc_lower.contains(&word_lower) {
+                score += 0.1;
+                matched_words += 1;
+            }
+        }
+        
+        // Penalize capabilities with extra specificity not in intent
+        // e.g., "list_issue_types" vs "list_issues" when intent says "issues"
+        let intent_has_types = intent_words.iter().any(|w| w.to_lowercase() == "types" || w.to_lowercase() == "type");
+        let cap_has_types = cap_name_lower.contains("type");
+        
+        if cap_has_types && !intent_has_types {
+            score -= 0.4; // Penalty for unwanted specificity
+        }
+        
+        // Bonus for suggested tool match
+        if let Some(suggested) = intent.extracted_params.get("_suggested_tool") {
+            if cap.id.contains(suggested) || cap.name.to_lowercase().contains(&suggested.to_lowercase()) {
+                score += 0.5; // Strong bonus for LLM-suggested tool
+            }
+        }
+        
+        // Normalize by coverage
+        let coverage = matched_words as f64 / intent_words.len() as f64;
+        score += coverage * 0.2;
+        
+        score.min(1.0).max(0.0)
     }
 }
 
