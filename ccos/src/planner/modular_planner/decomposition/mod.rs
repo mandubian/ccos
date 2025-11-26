@@ -7,6 +7,7 @@ mod pattern;
 mod intent_first;
 pub mod grounded_llm;
 mod hybrid;
+pub mod llm_adapter;
 
 pub use pattern::PatternDecomposition;
 pub use intent_first::IntentFirstDecomposition;

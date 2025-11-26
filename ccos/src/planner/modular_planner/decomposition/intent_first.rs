@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::{DecompositionContext, DecompositionError, DecompositionResult, DecompositionStrategy};
 use crate::planner::modular_planner::types::{

@@ -276,25 +276,26 @@ cargo run --example modular_planner_demo -- \
 -   `ccos/examples/modular_planner_demo.rs` - Demo example
 
 ### Next Steps (Phase K)
-1.  [ ] Integrate modular planner into `autonomous_agent_demo` as optional mode.
-2.  [ ] Add LLM provider to HybridDecomposition for fallback.
-3.  [x] Connect McpResolution to real MCP session pool.
+1.  [x] **Integrate HybridDecomposition in `modular_planner_demo`**:
+    *   Configured `LlmProviderFactory` with `AgentConfig` to enable LLM-based fallback.
+    *   Verified decomposition of complex goals (e.g. "list issues... but ask me for page size").
+2.  [x] **Connect McpResolution to real MCP session pool**:
     *   Implemented `RuntimeMcpDiscovery` using `MCPSessionManager` for discovery.
     *   Integrated `SessionPoolManager` with `MCPSessionHandler` for execution.
     *   Verified 401 auth flow works (proving connectivity).
     *   Implemented `CcosCatalogAdapter` to bridge core CatalogService to planner's CapabilityCatalog.
-4.  [x] Add execution support to `modular_planner_demo`.
+3.  [x] **Add execution support to `modular_planner_demo`**:
     *   Added `CCOS` initialization and `SessionPoolManager` setup.
     *   Connected `ModularPlanner` to `CCOS` IntentGraph.
     *   Plan execution via `validate_and_execute_plan` works.
     *   Replaced placeholder `McpToolCatalog` with real `CcosCatalogAdapter`.
-5.  [x] Implement composite resolution (try multiple strategies).
+4.  [x] **Implement composite resolution (try multiple strategies)**:
     *   `CompositeResolution` strategy tries Catalog first, then MCP.
     *   Working in `modular_planner_demo`.
-6.  [x] Integrate modular planner into `autonomous_agent_demo` as optional mode.
-    *   Added `--use-modular-planner` flag.
-    *   Configured `CompositeResolution` with catalog and MCP strategies.
-    *   Connected to real `SessionPool` and `IntentGraph`.
-    *   Verified end-to-end execution works (e.g., `ccos.user.ask` + `mcp.github.list_issues`).
+5.  [x] **Robust Parameter Mapping & Type Coercion**:
+    *   Implemented schema-aware parameter mapping in `McpResolution` (e.g., `per_page` -> `perPage` handling snake_case/camelCase).
+    *   Implemented fuzzy schema matching for dependency inference in `ModularPlanner` (e.g. "page size" -> `perPage`).
+    *   Implemented generic type coercion in `generate_call_expr` using schema types (injects `parse-json` for numbers/booleans).
+    *   Verified end-to-end in `modular_planner_demo` with GitHub MCP.
 
 ## Phase 3: Robustness & Scaling (Next)
