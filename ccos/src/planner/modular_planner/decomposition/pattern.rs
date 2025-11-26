@@ -95,12 +95,55 @@ impl PatternDecomposition {
         None
     }
     
-    /// Check if any pattern matches
+    /// Check if any pattern matches AND can be fully handled
+    /// Returns false if pattern matches but contains complexity we can't handle
     fn has_pattern_match(&self, goal: &str) -> bool {
-        PATTERN_ACTION_WITH_USER_INPUT.is_match(goal) ||
-        PATTERN_USER_INPUT_THEN_ACTION.is_match(goal) ||
-        PATTERN_SEQUENTIAL_ACTIONS.is_match(goal) ||
-        PATTERN_ACTION_WITH_TRANSFORM.is_match(goal)
+        // First check: does any regex match?
+        let has_regex_match = PATTERN_ACTION_WITH_USER_INPUT.is_match(goal) ||
+            PATTERN_USER_INPUT_THEN_ACTION.is_match(goal) ||
+            PATTERN_SEQUENTIAL_ACTIONS.is_match(goal) ||
+            PATTERN_ACTION_WITH_TRANSFORM.is_match(goal);
+        
+        if !has_regex_match {
+            return false;
+        }
+        
+        // Second check: does the goal contain complexity signals that patterns can't handle?
+        // If so, we should defer to LLM even though regex matched.
+        // "Ask, don't guess" principle.
+        if Self::has_unhandled_complexity(goal) {
+            log::debug!("[pattern] Goal has complexity signals that patterns can't fully handle");
+            return false;
+        }
+        
+        true
+    }
+    
+    /// Check if goal contains complexity signals that patterns can't handle properly
+    fn has_unhandled_complexity(goal: &str) -> bool {
+        let lower = goal.to_lowercase();
+        
+        // User interaction signals that require proper decomposition
+        let user_signals = [
+            "asked to the user", "asked to user", "ask the user", "ask user",
+            "user provides", "user input", "user chooses", "user selects",
+            "prompt the user", "prompt user",
+        ];
+        
+        // Multiple "and" clauses often indicate complex multi-step goals
+        let and_count = lower.matches(" and ").count();
+        
+        // Check for user signals
+        if user_signals.iter().any(|s| lower.contains(s)) {
+            return true;
+        }
+        
+        // Multiple "and" clauses suggest complexity beyond simple patterns
+        if and_count > 1 {
+            return true;
+        }
+        
+        false
     }
     
     /// Extract parameters from goal (owner/repo, etc.)
@@ -299,6 +342,23 @@ fn handle_action_with_transform(
     let main_action = captures.get(1)?.as_str().trim();
     let transform_type = captures.get(2)?.as_str().trim().to_lowercase();
     let transform_target = captures.get(3).map(|m| m.as_str().trim()).unwrap_or("");
+    
+    // HUMBLE CHECK: If the transform target contains complexity we can't handle,
+    // return None to let a smarter strategy (LLM) decompose this properly.
+    // "Ask, don't guess" principle.
+    let complexity_signals = [
+        "ask me", "asked to", "ask user", "ask the user", "prompt me", "prompt user",
+        "user provides", "user input", "user chooses", "user selects",
+        " and then ", " then ", " after ", " before ",
+    ];
+    let target_lower = transform_target.to_lowercase();
+    if complexity_signals.iter().any(|s| target_lower.contains(s)) {
+        log::debug!(
+            "[pattern] Transform target '{}' contains complexity signals, deferring to LLM",
+            transform_target
+        );
+        return None; // Let LLM handle this
+    }
     
     let domain = DomainHint::infer_from_text(main_action);
     
