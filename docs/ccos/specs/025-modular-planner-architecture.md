@@ -143,6 +143,20 @@ Resolution strategies take a `SubIntent` and find the best capability to fulfill
 
 The `ModularPlanner` orchestrator converts the list of `ResolvedCapability` objects into executable **RTFS** code.
 
+### Multi-Dependency Wiring
+When a step depends on multiple previous steps (e.g., step 3 depends on step 1 AND step 2), all dependencies must be correctly wired:
+*   **Pre-compute all dependencies**: For each dependency, infer the target parameter name
+*   **Wire each dependency**: Map each preceding step's output to its inferred parameter
+*   **Apply coercion per-parameter**: Type coercion is applied individually to each wired dependency
+
+*Example*: Step 3 (`list_issues`) depends on step 1 (user's `perPage`) and step 2 (user's `labels`):
+```clojure
+(let [step_1 (call "ccos.user.ask" {:prompt "..."})]
+  (let [step_2 (call "ccos.user.ask" {:prompt "..."})]
+    (call "mcp.github.list_issues" 
+      {:perPage (parse-json step_1) :labels step_2})))
+```
+
 ### Dependency Inference
 When Step B depends on Step A, the planner must pass Step A's result to Step B.
 *   **Fuzzy Schema Matching**: The planner attempts to infer the correct input parameter name for Step B by fuzzy-matching Step A's "topic" against Step B's input schema.
@@ -154,6 +168,47 @@ LLMs and user inputs often provide data as strings (e.g., "10", "true"). Strict 
 *   **Injection**: If the schema expects `integer`, `number`, or `boolean` but the input is dynamic/string, the planner injects `(parse-json ...)` into the generated RTFS.
     *   *Result*: `(call "mcp.tool" {:count (parse-json input_var)})` instead of passing a string.
 
+## 5. Plan Verification
+
+After RTFS plan generation, an optional **Verification** step checks for consistency issues before execution.
+
+```
+                    Generated Plan
+                          │
+                          ▼
+                ┌─────────────────┐
+                │ Verification    │
+                │ (Arbiter/Judge) │
+                └─────────────────┘
+                          │
+            ┌─────────────┼─────────────┐
+            ▼             ▼             ▼
+         ✅ OK       ⚠️ Warning     ❌ Invalid
+      (proceed)    (warn user)    (re-plan)
+```
+
+### Verification Strategies
+
+*   **`RuleBasedVerifier`** (default, fast):
+    - **Data Flow**: Are all dependencies correctly wired?
+    - **Goal Coverage**: Does the plan address all parts of the goal?
+    - **Semantic Clarity**: Are user prompts understandable?
+*   **`LlmVerifier`** (optional, thorough): Uses an Arbiter/Judge LLM to analyze the plan
+*   **`CompositeVerifier`**: Runs rule-based first, optionally LLM for deeper analysis
+
+### Prompt Humanization
+
+When generating user prompts, cryptic parameter names are converted to human-friendly text:
+
+| Parameter | Generated Prompt |
+|-----------|-----------------|
+| `perPage` | "How many items per page? (e.g., 10, 25, 50)" |
+| `state` | "Issue state: open, closed, or all?" |
+| `labels` | "Labels to filter by (comma-separated, e.g., bug, enhancement)" |
+| `assignee` | "Assignee username (or 'none' for unassigned)" |
+
+Filler words (`first`, `please`, `the`) are stripped from topics before matching.
+
 ## Current Implementation State (Phase K)
 
 As of **November 2025**, the Modular Planner is fully operational in `modular_planner_demo`.
@@ -162,13 +217,16 @@ As of **November 2025**, the Modular Planner is fully operational in `modular_pl
 *   **Hybrid Decomposition**: Successfully switches between Patterns and LLM based on goal complexity.
 *   **Grounded Decomposition**: Can utilize catalog tools to guide LLM decomposition. Supports `_suggested_tool` hints for direct capability lookup.
 *   **Real MCP Integration**: Connects to live MCP servers (e.g., GitHub), discovers tools, and executes them.
+*   **Plan Verification**: Rule-based checks for data flow, goal coverage, and semantic clarity.
 *   **Robustness**:
     *   Correctly handles snake_case/camelCase mismatches.
     *   Correctly coerces string inputs to numbers/booleans for strict APIs.
+    *   **Multi-Dependency Wiring**: Correctly passes multiple user inputs to a single API call.
     *   **Soft Validation**: Adapts intent parameters to prevent rigid schema failures (e.g., auto-filling `prompt` from description).
     *   **Smart Tool Scoring**: Penalizes unwanted specificity (e.g., `list_issue_types` vs `list_issues`), aligns action verbs, handles singular/plural.
     *   **Transform Collapse**: Automatically merges filter/sort/paginate intents into preceding API calls when appropriate.
     *   **Minimal Step Generation**: LLM prompts teach models that filter/pagination are API parameters, not separate steps.
+    *   **Human-Friendly Prompts**: Cryptic parameter names are converted to descriptive prompts.
     *   Generates valid, executable RTFS plans.
 
 ### Usage Example
