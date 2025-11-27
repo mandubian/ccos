@@ -276,7 +276,7 @@ cargo run --example modular_planner_demo -- \
 -   `ccos/examples/modular_planner_demo.rs` - Demo example
 
 ### Next Steps (Phase K)
-1.  [ ] Integrate modular planner into `autonomous_agent_demo` as optional mode.
+1.  [x] Integrate modular planner into `autonomous_agent_demo` as optional mode.
 2.  [ ] Add LLM provider to HybridDecomposition for fallback.
 3.  [x] Connect McpResolution to real MCP session pool.
     *   Implemented `RuntimeMcpDiscovery` using `MCPSessionManager` for discovery.
@@ -297,4 +297,103 @@ cargo run --example modular_planner_demo -- \
     *   Connected to real `SessionPool` and `IntentGraph`.
     *   Verified end-to-end execution works (e.g., `ccos.user.ask` + `mcp.github.list_issues`).
 
-## Phase 3: Robustness & Scaling (Next)
+## Phase K: MCP Catalog Indexing & Data Pipeline Fixes (Completed 2025-11-27) ✅
+**Goal**: Fix MCP tool resolution and data processing pipeline for end-to-end multi-step workflows.
+
+### Problem Statement
+Multiple issues blocked successful execution of complex goals like "list repositories and keep the one with most stars":
+1. MCP tools resolved to wrong capabilities (e.g., `get_me` → `ccos.user.ask` score 0.4)
+2. MCP tools re-discovered on every request instead of being cached
+3. LLM used display names instead of capability IDs in plans
+4. Data pipeline failed with "expected list, got string" for step chaining
+5. `extract_list_from_value` was too GitHub-specific
+
+### Tasks Completed
+1.  [x] **MCP Tool Catalog Indexing**:
+    *   Added `catalog: Option<Arc<CatalogService>>` to `RuntimeMcpDiscovery`.
+    *   New `with_catalog()` builder method to inject catalog reference.
+    *   `register_tool()` now automatically indexes discovered MCP tools in catalog.
+    *   `list_available_tools()` triggers tool registration → catalog population.
+    *   Deferred resolution: `search_catalog()` returns `None` when `_suggested_tool` exists but not found, letting MCP resolution try.
+
+2.  [x] **Tool ID vs Display Name Fix**:
+    *   `list_available_tools()` now uses `cap.id` instead of `cap.name` for tool summaries.
+    *   Added display name fallback lookup in `search_catalog()` for LLM compatibility.
+    *   LLM prompts now show correct capability IDs for resolution.
+
+3.  [x] **Data Pipeline with `_previous_result`**:
+    *   Updated `extract_data_and_params()` to detect string references like `"step_0_result"`.
+    *   When `data` parameter is a string reference, prefers `_previous_result` from params.
+    *   Fixes data flow between steps in RTFS execution.
+
+4.  [x] **Generic List Extraction**:
+    *   Refactored `extract_list_from_value()` to recursively search any map for list values.
+    *   No longer GitHub-specific - works with any API response structure.
+    *   Returns first list found in nested object structure.
+
+### Files Modified
+-   `ccos/src/planner/modular_planner/resolution/catalog.rs` - Deferred MCP resolution, display name fallback
+-   `ccos/src/planner/modular_planner/resolution/mcp.rs` - Catalog injection, tool indexing
+-   `ccos/src/capabilities/data_processing.rs` - `_previous_result` support, generic list extraction
+-   `ccos/src/examples_common/builder.rs` - Wired catalog into RuntimeMcpDiscovery
+
+### Test Results
+```bash
+cargo run --example modular_planner_demo --quiet -- \
+  --pure-llm --goal "list repositories of user mandubian and keep the one with most stars" \
+  --config config/agent_config.toml --discover-mcp
+```
+**Result**: Successful execution - resolves `mcp.github.list_user_repos`, chains through `ccos.data.sort` and `ccos.data.select`, returns repository data.
+
+### Known Remaining Issues
+1.  [ ] **`ccos.io.println` Output**: Currently displays description text instead of `_previous_result` data. Need to fix println to output actual value.
+2.  [ ] **Repair Loop Integration**: Execution repair loop exists but not wired into `modular_planner_demo`.
+3.  [ ] **RTFS Step References**: LLM outputs `"data": "step_0_result"` as string literal instead of proper RTFS variable reference.
+
+## Phase L: Polish & Remaining Issues (Next)
+
+### HIGH Priority
+1.  [ ] **Fix `ccos.io.println` Output**:
+    *   Modify println capability to display `_previous_result` data, not description text.
+    *   Add proper formatting for structured data output.
+
+2.  [ ] **Integrate Repair Loop**:
+    *   Wire existing repair loop from `autonomous_agent_demo` into `modular_planner_demo`.
+    *   Enable self-correction for execution failures.
+
+### MEDIUM Priority
+3.  [ ] **MCP Error Handling**:
+    *   Parse MCP error responses and convert to RuntimeError.
+    *   Handle rate limiting, auth errors, network failures gracefully.
+    *   Integrate with repair loop for MCP-specific failures.
+
+4.  [x] **Domain-Based Tool Filtering**:
+    *   Implemented `infer_all_from_text` in `DomainHint`.
+    *   Updated `GroundedLlmDecomposition` to pre-filter tools by domain.
+    *   Reduces token usage and noise for LLM when many tools are available.
+    *   Includes `Generic` tools (e.g. `println`, `ask`) in all contexts.
+
+5.  [x] **Centralized & Session-Aware MCP Discovery**:
+    *   Refactored MCP discovery to use `MCPSessionManager` instead of raw HTTP requests.
+    *   Centralized configuration in `LocalConfigMcpDiscovery` (`overrides.json` + ENV).
+    *   Unified planner discovery logic (`RuntimeMcpDiscovery`) to delegate to `MCPDiscoveryProvider`.
+    *   Ensures consistent session lifecycle, auth, and error handling across all discovery paths.
+
+6.  [ ] **Improve RTFS Variable References**:
+    *   Teach LLM to use proper RTFS syntax for step references.
+    *   Or: Post-process generated RTFS to fix string literals to variable refs.
+
+7.  [ ] **HybridDecomposition LLM Fallback**:
+    *   Add LLM provider to HybridDecomposition for complex goals.
+    *   Pattern-first, LLM-fallback architecture.
+
+### LOW Priority
+8.  [ ] **Stdio MCP Server Support**:
+    *   Implement `StdioSessionHandler` for local MCP servers.
+    *   Support process-based MCP tools.
+
+9.  [ ] **MCP Capability Caching**:
+    *   Cache discovered MCP capabilities across sessions.
+    *   Handle capability version changes.
+
+## Phase 3: Robustness & Scaling (Future)
