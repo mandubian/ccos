@@ -570,7 +570,30 @@ impl ResolutionStrategy for McpResolution {
             ));
         }
         
-        // Score all tools
+        // Check if LLM already suggested a tool (grounded decomposition)
+        if let Some(suggested_tool) = intent.extracted_params.get("_suggested_tool") {
+            // Direct lookup by tool name - trust the LLM's grounded choice
+            if let Some(tool) = tools.iter().find(|t| t.name == *suggested_tool) {
+                println!("   🎯 Using LLM-suggested tool: {}", suggested_tool);
+                
+                let capability_id = self.discovery.register_tool(tool).await
+                    .map_err(|e| ResolutionError::McpError(e))?;
+                
+                let arguments = self.extract_arguments(intent, tool);
+                
+                return Ok(ResolvedCapability::Remote {
+                    capability_id,
+                    server_url: tool.server.url.clone(),
+                    arguments,
+                    input_schema: tool.input_schema.clone(),
+                    confidence: 1.0, // High confidence - LLM chose from exact tool list
+                });
+            } else {
+                println!("   ⚠️ Suggested tool '{}' not found, falling back to scoring", suggested_tool);
+            }
+        }
+        
+        // Fallback: Score all tools (for non-grounded decomposition)
         let mut scored: Vec<(McpToolInfo, f64)> = Vec::new();
         for tool in tools {
             let score = self.score_tool(intent, &tool).await;

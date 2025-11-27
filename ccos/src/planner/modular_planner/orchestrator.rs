@@ -545,6 +545,45 @@ impl ModularPlanner {
         Ok(expr)
     }
 
+    /// Format a single argument value for RTFS, using schema for type coercion
+    fn format_arg_value(&self, key: &str, value: &str, schema: Option<&serde_json::Value>) -> String {
+        // Check if schema tells us this should be a number
+        if let Some(schema) = schema {
+            if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+                if let Some(prop_def) = props.get(key) {
+                    let prop_type = prop_def.get("type").and_then(|t| t.as_str());
+                    match prop_type {
+                        Some("number") | Some("integer") => {
+                            // Try to parse as number, output without quotes
+                            if value.parse::<i64>().is_ok() || value.parse::<f64>().is_ok() {
+                                return format!(":{} {}", key, value);
+                            }
+                        }
+                        Some("boolean") => {
+                            let lower = value.to_lowercase();
+                            if lower == "true" || lower == "false" {
+                                return format!(":{} {}", key, lower);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        
+        // Also try to infer from value itself if it looks like a number or boolean
+        if value.parse::<i64>().is_ok() || value.parse::<f64>().is_ok() {
+            return format!(":{} {}", key, value);
+        }
+        let lower = value.to_lowercase();
+        if lower == "true" || lower == "false" {
+            return format!(":{} {}", key, lower);
+        }
+        
+        // Default: quote as string
+        format!(":{} \"{}\"", key, value.replace('"', "\\\""))
+    }
+
     /// Generate a call expression for a capability
     fn generate_call_expr(
         &self,
@@ -555,6 +594,12 @@ impl ModularPlanner {
     ) -> String {
         let capability_id = resolved_capability.capability_id().unwrap_or("unknown");
         let arguments = resolved_capability.arguments().unwrap();
+        
+        // Get input schema if available (for type coercion)
+        let input_schema = match resolved_capability {
+            ResolvedCapability::Remote { input_schema, .. } => input_schema.as_ref(),
+            _ => None,
+        };
 
         // Check if this step depends on previous outputs
         let has_dependencies = !sub_intent.dependencies.is_empty();
@@ -563,9 +608,9 @@ impl ModularPlanner {
             // Build args that reference previous step outputs
             let mut args_parts: Vec<String> = Vec::new();
             
-            // Add explicit arguments
+            // Add explicit arguments (with type coercion)
             for (key, value) in arguments {
-                args_parts.push(format!(":{} \"{}\"", key, value.replace('"', "\\\"")));
+                args_parts.push(self.format_arg_value(key, value, input_schema));
             }
             
             // Add reference to previous step if not already in args
@@ -593,13 +638,13 @@ impl ModularPlanner {
                 format!("{{{}}}", args_parts.join(" "))
             }
         } else {
-            // Simple args map
+            // Simple args map (with type coercion)
             if arguments.is_empty() {
                 "{}".to_string()
             } else {
                 let parts: Vec<String> = arguments
                     .iter()
-                    .map(|(k, v)| format!(":{} \"{}\"", k, v.replace('"', "\\\"")))
+                    .map(|(k, v)| self.format_arg_value(k, v, input_schema))
                     .collect();
                 format!("{{{}}}", parts.join(" "))
             }
