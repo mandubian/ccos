@@ -177,43 +177,61 @@ pub enum DomainHint {
 }
 
 impl DomainHint {
-    /// Infer domain from goal text using keyword matching
-    pub fn infer_from_text(text: &str) -> Option<Self> {
+    /// Infer all possible domains from goal text using keyword matching
+    pub fn infer_all_from_text(text: &str) -> Vec<Self> {
         let lower = text.to_lowercase();
+        let mut domains = Vec::new();
         
         // GitHub indicators
         let github_keywords = ["github", "repo", "repository", "issue", "issues", 
                                "pull request", "pr", "prs", "commit", "branch", 
                                "fork", "star", "gist", "release", "workflow"];
         if github_keywords.iter().any(|k| lower.contains(k)) {
-            return Some(DomainHint::GitHub);
+            domains.push(DomainHint::GitHub);
         }
         
         // Slack indicators
         let slack_keywords = ["slack", "channel", "message", "dm", "thread", "emoji"];
         if slack_keywords.iter().any(|k| lower.contains(k)) {
-            return Some(DomainHint::Slack);
+            domains.push(DomainHint::Slack);
         }
         
         // File system indicators
         let fs_keywords = ["file", "folder", "directory", "path", "read file", "write file"];
         if fs_keywords.iter().any(|k| lower.contains(k)) {
-            return Some(DomainHint::FileSystem);
+            domains.push(DomainHint::FileSystem);
         }
         
         // Database indicators
         let db_keywords = ["database", "sql", "query", "table", "record", "row"];
         if db_keywords.iter().any(|k| lower.contains(k)) {
-            return Some(DomainHint::Database);
+            domains.push(DomainHint::Database);
         }
         
         // Web indicators
         let web_keywords = ["http", "url", "api", "endpoint", "request", "fetch url"];
         if web_keywords.iter().any(|k| lower.contains(k)) {
-            return Some(DomainHint::Web);
+            domains.push(DomainHint::Web);
         }
         
-        None
+        // Email indicators
+        let email_keywords = ["email", "mail", "send to", "inbox", "gmail", "outlook"];
+        if email_keywords.iter().any(|k| lower.contains(k)) {
+            domains.push(DomainHint::Email);
+        }
+
+        // Calendar indicators
+        let calendar_keywords = ["calendar", "event", "schedule", "meeting", "gcal"];
+        if calendar_keywords.iter().any(|k| lower.contains(k)) {
+            domains.push(DomainHint::Calendar);
+        }
+        
+        domains
+    }
+
+    /// Infer domain from goal text using keyword matching (returns first match)
+    pub fn infer_from_text(text: &str) -> Option<Self> {
+        Self::infer_all_from_text(text).into_iter().next()
     }
     
     /// Get MCP server names that might handle this domain

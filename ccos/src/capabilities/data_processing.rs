@@ -25,29 +25,23 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                     }),
                 };
 
-                match data {
-                    Value::List(items) | Value::Vector(items) => {
-                        if let Some(crit) = criteria_map {
-                            let filtered: Vec<Value> = items.iter().filter(|item| {
-                                if let Value::Map(item_map) = item {
-                                    crit.iter().all(|(k, v)| {
-                                        item_map.get(k).map_or(false, |val| val == v)
-                                    })
-                                } else {
-                                    false
-                                }
-                            }).cloned().collect();
-                            Ok(Value::List(filtered))
+                // Extract list from data - handle both direct lists and wrapped results
+                let items = extract_list_from_value(data)?;
+                
+                if let Some(crit) = criteria_map {
+                    let filtered: Vec<Value> = items.iter().filter(|item| {
+                        if let Value::Map(item_map) = item {
+                            crit.iter().all(|(k, v)| {
+                                item_map.get(k).map_or(false, |val| val == v)
+                            })
                         } else {
-                            // No criteria, return all
-                            Ok(Value::List(items.clone()))
+                            false
                         }
-                    }
-                    _ => Err(RuntimeError::TypeError {
-                        expected: "list".to_string(),
-                        actual: data.type_name().to_string(),
-                        operation: "ccos.data.filter param 'data'".to_string(),
-                    }),
+                    }).cloned().collect();
+                    Ok(Value::List(filtered))
+                } else {
+                    // No criteria, return all
+                    Ok(Value::List(items.clone()))
                 }
             }),
         )
@@ -66,11 +60,11 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                 let (key, order) = if let Some(Value::Map(params)) = params_val {
                     let k = params.get(&MapKey::String("key".to_string()))
                         .or_else(|| params.get(&MapKey::Keyword(Keyword("key".to_string()))))
-                        .map(|v| v.to_string());
+                        .map(|v| value_to_clean_string(v));
                     
                     let o = params.get(&MapKey::String("order".to_string()))
                         .or_else(|| params.get(&MapKey::Keyword(Keyword("order".to_string()))))
-                        .map(|v| v.to_string().to_lowercase())
+                        .map(|v| value_to_clean_string(v).to_lowercase())
                         .unwrap_or("asc".to_string());
                         
                     (k, o)
@@ -78,45 +72,40 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                     (None, "asc".to_string())
                 };
 
-                match data {
-                    Value::List(items) | Value::Vector(items) => {
-                        let mut sorted = items.clone();
-                        sorted.sort_by(|a, b| {
-                            let val_a = if let Some(ref k) = key {
-                                get_path(a, k)
-                            } else {
-                                Some(a)
-                            };
-                            let val_b = if let Some(ref k) = key {
-                                get_path(b, k)
-                            } else {
-                                Some(b)
-                            };
-                            
-                            match (val_a, val_b) {
-                                (Some(va), Some(vb)) => compare_values(va, vb),
-                                (Some(_), None) => Ordering::Less,
-                                (None, Some(_)) => Ordering::Greater,
-                                (None, None) => Ordering::Equal,
-                            }
-                        });
-                        
-                        if order == "desc" {
-                            sorted.reverse();
-                        }
-                        
-                        Ok(Value::List(sorted))
+                // Extract list from data - handle both direct lists and wrapped results like {"items": [...]}
+                let items = extract_list_from_value(data)?;
+                
+                let mut sorted = items.clone();
+                sorted.sort_by(|a, b| {
+                    let val_a = if let Some(ref k) = key {
+                        get_path(a, k)
+                    } else {
+                        Some(a)
+                    };
+                    let val_b = if let Some(ref k) = key {
+                        get_path(b, k)
+                    } else {
+                        Some(b)
+                    };
+                    
+                    match (val_a, val_b) {
+                        (Some(va), Some(vb)) => compare_values(va, vb),
+                        (Some(_), None) => Ordering::Less,
+                        (None, Some(_)) => Ordering::Greater,
+                        (None, None) => Ordering::Equal,
                     }
-                    _ => Err(RuntimeError::TypeError {
-                        expected: "list".to_string(),
-                        actual: data.type_name().to_string(),
-                        operation: "ccos.data.sort".to_string(),
-                    }),
+                });
+                
+                if order == "desc" {
+                    sorted.reverse();
                 }
+                
+                Ok(Value::List(sorted))
             }),
         )
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.data.sort: {:?}", e)))?;
+
 
     // ccos.data.select (limit/take)
     marketplace
@@ -132,6 +121,7 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                         .or_else(|| params.get(&MapKey::Keyword(Keyword("count".to_string()))))
                         .and_then(|v| match v {
                             Value::Integer(i) => Some(*i as usize),
+                            Value::String(s) => s.parse().ok(),
                             _ => None,
                         })
                         .unwrap_or(1)
@@ -139,22 +129,17 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                     1
                 };
 
-                match data {
-                    Value::List(items) | Value::Vector(items) => {
-                        let selected: Vec<Value> = items.iter().take(count).cloned().collect();
-                        // If count is 1 and we want a single item? 
-                        // The LLM prompt implies "Select the repository", singular. 
-                        // But usually data ops preserve collection type unless specified.
-                        // Let's return a list for consistency, or maybe value if singular?
-                        // For safety/composition, list is better. But if next step expects an object ID...
-                        // Let's stick to list.
-                        Ok(Value::List(selected))
-                    }
-                    _ => Err(RuntimeError::TypeError {
-                        expected: "list".to_string(),
-                        actual: data.type_name().to_string(),
-                        operation: "ccos.data.select".to_string(),
-                    }),
+                // Extract list from data - handle both direct lists and wrapped results
+                let items = extract_list_from_value(data)?;
+                
+                let selected: Vec<Value> = items.iter().take(count).cloned().collect();
+                
+                // If count is 1, return the single item directly for convenience
+                // This makes the output cleaner for "get the one with most stars" type queries
+                if count == 1 && selected.len() == 1 {
+                    Ok(selected.into_iter().next().unwrap())
+                } else {
+                    Ok(Value::List(selected))
                 }
             }),
         )
@@ -166,27 +151,96 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
 
 // Helpers
 
+/// Extract a list from a value, handling various wrapper formats.
+/// This function recursively unwraps common container patterns to find the underlying list.
+fn extract_list_from_value(data: &Value) -> RuntimeResult<Vec<Value>> {
+    // Direct list - return immediately
+    if let Value::List(items) | Value::Vector(items) = data {
+        return Ok(items.clone());
+    }
+    
+    // If it's a map, try to find a list inside
+    if let Value::Map(map) = data {
+        // First, try to find any key that contains a list
+        for (_key, val) in map.iter() {
+            match val {
+                Value::List(items) | Value::Vector(items) => {
+                    return Ok(items.clone());
+                }
+                // Recurse into nested maps (e.g., {"content": {"items": [...]}})
+                Value::Map(_) => {
+                    if let Ok(items) = extract_list_from_value(val) {
+                        return Ok(items);
+                    }
+                }
+                _ => continue,
+            }
+        }
+        
+        // No list found in any key
+        return Err(RuntimeError::TypeError {
+            expected: "list or map containing a list".to_string(),
+            actual: format!("map with keys: {:?}", map.keys().take(5).collect::<Vec<_>>()),
+            operation: "extract_list_from_value".to_string(),
+        });
+    }
+    
+    Err(RuntimeError::TypeError {
+        expected: "list or map containing a list".to_string(),
+        actual: data.type_name().to_string(),
+        operation: "extract_list_from_value".to_string(),
+    })
+}
+
+/// Convert a Value to a clean string (strips quotes)
+fn value_to_clean_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => {
+            let s = other.to_string();
+            // Remove surrounding quotes if present
+            s.trim_matches('"').to_string()
+        }
+    }
+}
+
 fn extract_data_and_params<'a>(input: &'a Value, op_name: &str, secondary_param: &str) -> RuntimeResult<(&'a Value, Option<&'a Value>)> {
     match input {
         Value::Map(map) => {
-            // Check for "data" or "_previous_result"
-            let data = map.get(&MapKey::String("data".to_string()))
-                .or_else(|| map.get(&MapKey::Keyword(Keyword("data".to_string()))))
-                .or_else(|| map.get(&MapKey::String("_previous_result".to_string())))
+            // Get _previous_result first (this is the actual data from pipeline)
+            let previous_result = map.get(&MapKey::String("_previous_result".to_string()))
                 .or_else(|| map.get(&MapKey::Keyword(Keyword("_previous_result".to_string()))));
+            
+            // Get "data" param (may be actual data or a string reference like "step_0_result")
+            let data_param = map.get(&MapKey::String("data".to_string()))
+                .or_else(|| map.get(&MapKey::Keyword(Keyword("data".to_string()))));
+            
+            // Determine actual data to use:
+            // 1. If "data" is a list/map (actual data), use it
+            // 2. If "data" is a string (reference like "step_0_result"), use _previous_result instead
+            // 3. If no "data", use _previous_result
+            let data = match data_param {
+                Some(Value::List(_)) | Some(Value::Vector(_)) | Some(Value::Map(_)) => data_param,
+                Some(Value::String(s)) => {
+                    // This is a reference string like "step_0_result", use _previous_result
+                    log::debug!("[data_processing] 'data' is string reference '{}', using _previous_result", s);
+                    previous_result
+                }
+                _ => previous_result,
+            };
                 
             let params = map.get(&MapKey::String(secondary_param.to_string()))
                 .or_else(|| map.get(&MapKey::Keyword(Keyword(secondary_param.to_string()))));
             
-            // If we didn't find data explicitly, but map has other keys, maybe the map IS the params and data is missing (or implicitly passed)?
-            // But usually we need data.
-            
             if let Some(d) = data {
-                // If params is not found, maybe look for flattened keys in the map itself?
+                // If params is not found, use the input map itself for param extraction
                 let p = if params.is_some() { params } else { Some(input) };
                 Ok((d, p))
             } else {
-                Err(RuntimeError::Generic(format!("Missing 'data' or '_previous_result' for {}", op_name)))
+                Err(RuntimeError::Generic(format!(
+                    "Missing data for {}. Provide 'data' (list/map) or ensure '_previous_result' is passed from previous step.",
+                    op_name
+                )))
             }
         }
         _ => Err(RuntimeError::TypeError {

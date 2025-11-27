@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use uuid::Uuid;
+use regex::Regex;
 
 use super::decomposition::{
     DecompositionContext, DecompositionError, DecompositionStrategy, HybridDecomposition,
@@ -17,7 +18,7 @@ use super::types::ToolSummary;
 use super::resolution::{
     CompositeResolution, ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability,
 };
-use super::types::{IntentType, SubIntent};
+use super::types::{IntentType, SubIntent, DomainHint};
 use crate::intent_graph::IntentGraph;
 use crate::intent_graph::storage::Edge;
 use crate::types::{EdgeType, GenerationContext, IntentStatus, StorableIntent, TriggerSource};
@@ -57,6 +58,10 @@ pub struct PlannerConfig {
     pub intent_namespace: String,
     /// Whether to show verbose LLM prompts/responses
     pub verbose_llm: bool,
+    /// Whether to show just the LLM prompt
+    pub show_prompt: bool,
+    /// Whether to confirm before each LLM call
+    pub confirm_llm: bool,
     /// Whether to eagerly discover tools before decomposition
     pub eager_discovery: bool,
 }
@@ -69,6 +74,8 @@ impl Default for PlannerConfig {
             create_edges: true,
             intent_namespace: "plan".to_string(),
             verbose_llm: false,
+            show_prompt: false,
+            confirm_llm: false,
             eager_discovery: true,
         }
     }
@@ -231,7 +238,15 @@ impl ModularPlanner {
         // 0. Eager tool discovery (if enabled)
         let available_tools: Option<Vec<ToolSummary>> = if self.config.eager_discovery {
             println!("\n📦 Discovering available tools...");
-            let tools = self.resolution.list_available_tools().await;
+            
+            // Infer domain hints to restrict search
+            let domain_hints = DomainHint::infer_all_from_text(goal);
+            if !domain_hints.is_empty() {
+                 println!("   🎯 Inferred domains: {:?}", domain_hints);
+            }
+            
+            let tools = self.resolution.list_available_tools(Some(&domain_hints)).await;
+            
             if !tools.is_empty() {
                 println!("   ✅ Found {} tools for grounded decomposition", tools.len());
                 Some(tools)
@@ -250,7 +265,9 @@ impl ModularPlanner {
 
         let decomp_context = DecompositionContext::new()
             .with_max_depth(self.config.max_depth)
-            .with_verbose_llm(self.config.verbose_llm);
+            .with_verbose_llm(self.config.verbose_llm)
+            .with_show_prompt(self.config.show_prompt)
+            .with_confirm_llm(self.config.confirm_llm);
         
         let tools_slice = available_tools.as_ref().map(|v| v.as_slice());
 
@@ -546,7 +563,32 @@ impl ModularPlanner {
     }
 
     /// Format a single argument value for RTFS, using schema for type coercion
-    fn format_arg_value(&self, key: &str, value: &str, schema: Option<&serde_json::Value>) -> String {
+    fn format_arg_value(
+        &self, 
+        key: &str, 
+        value: &str, 
+        schema: Option<&serde_json::Value>,
+        previous_bindings: &[(String, String)]
+    ) -> String {
+        // Check for LLM-generated step references like {{step0.result}}
+        // The LLM sometimes generates 0-based step indices in handlebars syntax
+        // We need to convert these to actual variable names (step_1, step_2, etc.)
+        lazy_static::lazy_static! {
+            static ref STEP_REF: Regex = Regex::new(r"\{\{step(\d+)\.result\}\}").unwrap();
+        }
+        
+        if let Some(captures) = STEP_REF.captures(value) {
+            if let Some(idx_str) = captures.get(1) {
+                if let Ok(idx) = idx_str.as_str().parse::<usize>() {
+                    // LLM uses 0-based index usually
+                    if idx < previous_bindings.len() {
+                        let var_name = &previous_bindings[idx].0;
+                        return format!(":{} {}", key, var_name);
+                    }
+                }
+            }
+        }
+        
         // Check if schema tells us this should be a number
         if let Some(schema) = schema {
             if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
@@ -604,26 +646,57 @@ impl ModularPlanner {
         // Check if this step depends on previous outputs
         let has_dependencies = !sub_intent.dependencies.is_empty();
 
-        let args_map = if has_dependencies {
-            // Build args that reference previous step outputs
-            let mut args_parts: Vec<String> = Vec::new();
+        let mut used_dependency_vars = std::collections::HashSet::new();
+
+        let mut args_parts: Vec<String> = Vec::new();
+        
+        // Add explicit arguments (with type coercion and ref replacement)
+        for (key, value) in arguments {
+            let formatted = self.format_arg_value(key, value, input_schema, previous_bindings);
             
-            // Add explicit arguments (with type coercion)
-            for (key, value) in arguments {
-                args_parts.push(self.format_arg_value(key, value, input_schema));
+            // Validate that the formatted argument adheres to RTFS syntax
+            // Only allow :keyword value pairs where value is either a quoted string, 
+            // a number, a boolean, or a variable reference (starting with step_)
+            // This is a safety check to ensure no raw handlebars or invalid syntax leaks through
+            if formatted.starts_with(':') {
+                args_parts.push(formatted);
+            } else {
+                log::warn!("Skipping invalid RTFS argument syntax: {}", formatted);
             }
             
+            // Check if this argument consumed a dependency
+            lazy_static::lazy_static! {
+                static ref STEP_REF: Regex = Regex::new(r"\{\{step(\d+)\.result\}\}").unwrap();
+            }
+            if let Some(captures) = STEP_REF.captures(value) {
+                if let Some(idx_str) = captures.get(1) {
+                    if let Ok(idx) = idx_str.as_str().parse::<usize>() {
+                        if idx < previous_bindings.len() {
+                            used_dependency_vars.insert(previous_bindings[idx].0.clone());
+                        }
+                    }
+                }
+            }
+        }
+        
+        if has_dependencies {
             // Add reference to previous step if not already in args
             // This creates data flow from previous steps
             if sub_intent.dependencies.len() == 1 {
                 let dep_idx = sub_intent.dependencies[0];
                 if dep_idx < previous_bindings.len() {
                     let dep_var = &previous_bindings[dep_idx].0;
-                    // Only add if we don't already have this as an argument
-                    if !arguments.values().any(|v| v == dep_var) {
+                    
+                    // Only inject if:
+                    // 1. We haven't used this dependency in an explicit argument (via {{step.result}})
+                    // 2. We don't have an explicit argument that matches the variable name (old logic)
+                    let already_used_explicitly = used_dependency_vars.contains(dep_var);
+                    let already_has_arg_value = arguments.values().any(|v| v == dep_var);
+                    
+                    if !already_used_explicitly && !already_has_arg_value {
                         // Attempt to infer parameter name from dependency and schema
                         let param_name = if let Some(dep_intent) = all_sub_intents.get(dep_idx) {
-                             self.infer_param_name(dep_intent, resolved_capability)
+                                self.infer_param_name(dep_intent, resolved_capability)
                         } else {
                             "_previous_result".to_string()
                         };
@@ -631,26 +704,13 @@ impl ModularPlanner {
                     }
                 }
             }
-            
-            if args_parts.is_empty() {
-                "{}".to_string()
-            } else {
-                format!("{{{}}}", args_parts.join(" "))
-            }
+        }
+        
+        if args_parts.is_empty() {
+            format!(r#"(call "{}" {{}})"#, capability_id)
         } else {
-            // Simple args map (with type coercion)
-            if arguments.is_empty() {
-                "{}".to_string()
-            } else {
-                let parts: Vec<String> = arguments
-                    .iter()
-                    .map(|(k, v)| self.format_arg_value(k, v, input_schema))
-                    .collect();
-                format!("{{{}}}", parts.join(" "))
-            }
-        };
-
-        format!(r#"(call "{}" {})"#, capability_id, args_map)
+            format!(r#"(call "{}" {{{}}})"#, capability_id, args_parts.join(" "))
+        }
     }
 
     /// Helper to infer a parameter name from a dependency intent and consumer capability schema

@@ -176,11 +176,12 @@ pub trait ResolutionStrategy: Send + Sync {
         context: &ResolutionContext,
     ) -> Result<ResolvedCapability, ResolutionError>;
     
-    /// List all available tools/capabilities from this resolution source.
+    /// List available tools/capabilities from this resolution source.
     /// 
     /// This enables eager discovery for grounded LLM decomposition.
+    /// Accepts optional domain hints to restrict the search.
     /// Returns empty vec if not supported or no tools available.
-    async fn list_available_tools(&self) -> Vec<ToolSummary> {
+    async fn list_available_tools(&self, _domain_hints: Option<&[DomainHint]>) -> Vec<ToolSummary> {
         vec![] // Default: no pre-listing
     }
 }
@@ -258,10 +259,10 @@ impl ResolutionStrategy for CompositeResolution {
         }))
     }
     
-    async fn list_available_tools(&self) -> Vec<ToolSummary> {
+    async fn list_available_tools(&self, domain_hints: Option<&[DomainHint]>) -> Vec<ToolSummary> {
         let mut all_tools = Vec::new();
         for strategy in &self.strategies {
-            let tools = strategy.list_available_tools().await;
+            let tools = strategy.list_available_tools(domain_hints).await;
             all_tools.extend(tools);
         }
         all_tools
