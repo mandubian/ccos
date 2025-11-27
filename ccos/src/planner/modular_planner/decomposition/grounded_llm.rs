@@ -38,15 +38,15 @@ pub trait EmbeddingProvider: Send + Sync {
 
 /// Grounded LLM decomposition strategy.
 /// 
-/// Pre-filters available tools using embeddings, then provides the most
-/// relevant ones to the LLM for decomposition. This grounds the LLM's
-/// knowledge in real available capabilities.
+/// Provides ALL available tools to the LLM for decomposition, similar to how
+/// MCP tools are provided to LLMs in production. The LLM does the semantic
+/// selection - no pre-filtering by embeddings.
 pub struct GroundedLlmDecomposition {
     llm_provider: Arc<dyn LlmProvider>,
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
-    /// Maximum number of tools to include in prompt
+    /// Maximum number of tools to include in prompt (0 = unlimited)
     max_tools_in_prompt: usize,
-    /// Similarity threshold for tool inclusion
+    /// Similarity threshold for tool inclusion (only used if max_tools > 0)
     similarity_threshold: f64,
 }
 
@@ -55,8 +55,8 @@ impl GroundedLlmDecomposition {
         Self {
             llm_provider,
             embedding_provider: None,
-            max_tools_in_prompt: 10,
-            similarity_threshold: 0.3,
+            max_tools_in_prompt: 0,  // 0 = pass ALL tools (like real MCP)
+            similarity_threshold: 0.0,
         }
     }
     
@@ -71,11 +71,17 @@ impl GroundedLlmDecomposition {
     }
     
     /// Filter tools by relevance to goal using embeddings
+    /// If max_tools_in_prompt is 0, returns ALL tools (like real MCP behavior)
     async fn filter_relevant_tools<'a>(
         &self,
         goal: &str,
         available_tools: &'a [ToolSummary],
     ) -> Result<Vec<&'a ToolSummary>, DecompositionError> {
+        // If max is 0, pass ALL tools (real MCP behavior)
+        if self.max_tools_in_prompt == 0 {
+            return Ok(available_tools.iter().collect());
+        }
+        
         let embedding_provider = match &self.embedding_provider {
             Some(p) => p,
             None => {
@@ -109,14 +115,34 @@ impl GroundedLlmDecomposition {
             .collect())
     }
     
+    /// Format tools like MCP tool definitions for the LLM
+    fn format_tool_for_prompt(tool: &ToolSummary) -> String {
+        // Format similar to how MCP tools are presented to LLMs
+        let schema_str = if let Some(ref schema) = tool.input_schema {
+            // Pretty print the schema, but compact
+            serde_json::to_string(schema).unwrap_or_default()
+        } else {
+            "{}".to_string()
+        };
+        
+        format!(
+            r#"<tool name="{}" description="{}" input_schema='{}'/>"#,
+            tool.name,
+            tool.description.replace('"', "'"),  // Escape quotes in description
+            schema_str
+        )
+    }
+    
     fn build_grounded_prompt(&self, goal: &str, tools: &[&ToolSummary], context: &DecompositionContext) -> String {
         let tools_list = if tools.is_empty() {
             "No specific tools available - decompose into abstract steps.".to_string()
         } else {
-            let mut list = String::from("Available tools (use these for api_call steps):\n");
+            let mut list = String::from("<available_tools>\n");
             for tool in tools {
-                list.push_str(&format!("- {}: {}\n", tool.name, tool.description));
+                list.push_str(&Self::format_tool_for_prompt(tool));
+                list.push('\n');
             }
+            list.push_str("</available_tools>");
             list
         };
         
@@ -126,35 +152,35 @@ impl GroundedLlmDecomposition {
             format!("\n\nAlready extracted parameters: {:?}", context.pre_extracted_params)
         };
         
-        format!(r#"You are a goal decomposition expert. Break down the following goal into steps.
+        format!(r#"You are a goal decomposition expert with access to tools. Break down the goal into executable steps.
 
 {tools_list}
 
-IMPORTANT RULES:
-1. For api_call steps, prefer using the available tools above when they match.
-2. Include the tool name in the "tool" field if you're recommending a specific tool.
-3. If no tool matches, use intent_type "api_call" without a specific tool.
-4. Focus on WHAT needs to be done - the tool is just a hint, not required.
+RULES:
+1. Examine the available tools above - each has a name, description, and input_schema.
+2. For each step, if a tool matches, set "tool" to the exact tool name.
+3. Extract parameters from the goal that match the tool's input_schema.
+4. If no tool matches exactly, use intent_type "api_call" or "data_transform" without a tool.
 
 INTENT TYPES:
-- "user_input": Ask the user for information
-- "api_call": External API operation (optionally with tool name)
-- "data_transform": Process data (filter, sort, count, format)
-- "output": Display results
+- "user_input": Ask the user for missing information
+- "api_call": External API operation - use tool name if available
+- "data_transform": Process/filter/sort data locally
+- "output": Display results to user
 
 GOAL: "{goal}"
 {params_hint}
 
-Respond with ONLY a JSON object:
+Respond with ONLY valid JSON:
 {{
   "steps": [
     {{
-      "description": "Step description",
-      "intent_type": "user_input|api_call|data_transform|output",
-      "action": "list|get|create|update|delete|search|filter|sort|...",
-      "tool": "optional_tool_name_from_list_above",
+      "description": "What this step does",
+      "intent_type": "api_call|data_transform|output|user_input",
+      "action": "search|list|get|create|filter|sort|display|...",
+      "tool": "exact_tool_name_from_list_or_null",
       "depends_on": [],
-      "params": {{}}
+      "params": {{"param_name": "value_from_goal"}}
     }}
   ],
   "domain": "github|slack|filesystem|database|web|generic"
