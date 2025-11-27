@@ -346,16 +346,17 @@ cargo run --example modular_planner_demo --quiet -- \
 **Result**: Successful execution - resolves `mcp.github.list_user_repos`, chains through `ccos.data.sort` and `ccos.data.select`, returns repository data.
 
 ### Known Remaining Issues
-1.  [ ] **`ccos.io.println` Output**: Currently displays description text instead of `_previous_result` data. Need to fix println to output actual value.
+1.  [x] **`ccos.io.println` Output**: Fixed to display `_previous_result` data instead of description text (completed 2025-11-27).
 2.  [ ] **Repair Loop Integration**: Execution repair loop exists but not wired into `modular_planner_demo`.
-3.  [ ] **RTFS Step References**: LLM outputs `"data": "step_0_result"` as string literal instead of proper RTFS variable reference.
+3.  [x] **RTFS Step References**: Implemented regex-based post-processing to convert `{{stepN.result}}` handlebars syntax into valid RTFS variable references (completed 2025-11-27).
 
 ## Phase L: Polish & Remaining Issues (Next)
 
 ### HIGH Priority
-1.  [ ] **Fix `ccos.io.println` Output**:
-    *   Modify println capability to display `_previous_result` data, not description text.
-    *   Add proper formatting for structured data output.
+1.  [x] **Fix `ccos.io.println` Output** (Completed 2025-11-27):
+    *   Modified println capability to check `_previous_result` first (data pipeline flow).
+    *   Updated Output intent resolution to only pass description when no dependencies exist.
+    *   Ensures "list issues and display them" actually displays the issues data.
 
 2.  [ ] **Integrate Repair Loop**:
     *   Wire existing repair loop from `autonomous_agent_demo` into `modular_planner_demo`.
@@ -398,7 +399,7 @@ cargo run --example modular_planner_demo --quiet -- \
     *   Implement `StdioSessionHandler` for local MCP servers.
     *   Support process-based MCP tools.
 
-9.  [ ] **MCP Capability Caching**:
+10. [ ] **MCP Capability Caching**:
     *   Cache discovered MCP capabilities across sessions.
     *   Handle capability version changes.
 
