@@ -109,7 +109,11 @@ impl CatalogResolution {
             }
             IntentType::Output { format: _ } => {
                 let mut args = std::collections::HashMap::new();
-                args.insert("message".to_string(), intent.description.clone());
+                // Only use description as message if there are no dependencies.
+                // If dependencies exist, we want println to output the dependency result (injected via _previous_result).
+                if intent.dependencies.is_empty() {
+                    args.insert("message".to_string(), intent.description.clone());
+                }
                 
                 Some(ResolvedCapability::BuiltIn {
                     capability_id: "ccos.io.println".to_string(),
