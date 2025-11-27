@@ -25,13 +25,42 @@ use crate::planner::modular_planner::resolution::{
 use crate::planner::modular_planner::resolution::semantic::{CapabilityCatalog, CapabilityInfo};
 use crate::planner::modular_planner::resolution::mcp::RuntimeMcpDiscovery;
 use crate::planner::modular_planner::decomposition::llm_adapter::CcosLlmAdapter;
-use crate::planner::modular_planner::decomposition::HybridDecomposition;
+use crate::planner::modular_planner::decomposition::{
+    HybridDecomposition, DecompositionError, EmbeddingProvider
+};
 use crate::planner::modular_planner::decomposition::hybrid::HybridConfig;
 use crate::synthesis::mcp_session::MCPSessionManager;
 use crate::capabilities::{SessionPoolManager, MCPSessionHandler};
 use crate::discovery::embedding_service::EmbeddingService;
 use crate::arbiter::llm_provider::{LlmProviderConfig, LlmProviderType, LlmProviderFactory, LlmProvider};
 use rtfs::config::types::{AgentConfig, LlmProfile};
+use async_trait::async_trait;
+use tokio::sync::Mutex as AsyncMutex;
+
+// ============================================================================
+// Embedding Adapter
+// ============================================================================
+
+/// Adapter to use CCOS EmbeddingService as a Decomposition EmbeddingProvider
+pub struct EmbeddingServiceAdapter {
+    service: Arc<AsyncMutex<EmbeddingService>>,
+}
+
+impl EmbeddingServiceAdapter {
+    pub fn new(service: EmbeddingService) -> Self {
+        Self {
+            service: Arc::new(AsyncMutex::new(service)),
+        }
+    }
+}
+
+#[async_trait(?Send)]
+impl EmbeddingProvider for EmbeddingServiceAdapter {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, DecompositionError> {
+        let mut service = self.service.lock().await;
+        service.embed(text).await.map_err(|e| DecompositionError::Internal(e.to_string()))
+    }
+}
 
 // ============================================================================
 // CCOS Environment Builder
@@ -287,6 +316,15 @@ impl ModularPlannerBuilder {
                             prefer_grounded: true,
                             max_grounded_tools: 20,
                         });
+                    }
+
+                    // Inject embedding provider if enabled
+                    if self.use_embeddings {
+                         if let Some(service_for_decomp) = EmbeddingService::from_env() {
+                             println!("   ✅ Enabled semantic tool filtering for decomposition");
+                             let adapter = Arc::new(EmbeddingServiceAdapter::new(service_for_decomp));
+                             hybrid = hybrid.with_embedding(adapter);
+                         }
                     }
                     
                     Box::new(hybrid)
