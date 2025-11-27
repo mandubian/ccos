@@ -64,6 +64,12 @@ The smart assistant demo has evolved from the original vision (`smart_assistant_
 - **Details**: Clear capability sections with tabulated search results, numbered steps, ✓/✗ indicators
 - **Impact**: Much easier to follow discovery process in logs
 
+#### 6. Centralized & Session-Aware MCP Discovery ✅
+- **Status**: Implemented (2025-11-27)
+- **Location**: `ccos/src/capability_marketplace/mcp_discovery.rs`, `ccos/src/planner/modular_planner/resolution/mcp.rs`
+- **Details**: Refactored MCP discovery to be centralized in `MCPDiscoveryProvider` and session-aware using `MCPSessionManager`. The modular planner now delegates discovery to this centralized provider, eliminating duplication and ensuring consistent session handling across the system.
+- **Impact**: More robust and maintainable MCP tool discovery.
+
 ### Phase 3: User Interaction & Experience ✅
 
 #### 6. Interactive Incomplete Capability Management ✅
