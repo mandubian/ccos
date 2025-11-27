@@ -7,6 +7,9 @@ use std::sync::Arc;
 pub async fn register_default_capabilities(
     marketplace: &CapabilityMarketplace,
 ) -> RuntimeResult<()> {
+    // Register data processing capabilities
+    crate::capabilities::data_processing::register_data_capabilities(marketplace).await?;
+
     // This function is extracted from the stdlib to keep stdlib focused on
     // language-level functions. Implementation preserved from original file.
 
