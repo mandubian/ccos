@@ -1,7 +1,10 @@
 //! Builder for setting up Modular Planner demos and examples
 //! 
-//! This module provides a reusable builder to configure and initialize
-//! the CCOS environment, Modular Planner, and related components.
+//! This module provides reusable builders to configure and initialize
+//! the CCOS environment and Modular Planner components.
+//!
+//! - `CcosEnvBuilder`: Generic builder for CCOS runtime, Catalog, IntentGraph, and LLM setup.
+//! - `ModularPlannerBuilder`: Specialized builder for the Modular Planner demo on top of `CcosEnv`.
 
 use std::error::Error;
 use std::sync::{Arc, Mutex};
@@ -27,10 +30,142 @@ use crate::planner::modular_planner::decomposition::hybrid::HybridConfig;
 use crate::synthesis::mcp_session::MCPSessionManager;
 use crate::capabilities::{SessionPoolManager, MCPSessionHandler};
 use crate::discovery::embedding_service::EmbeddingService;
-use crate::arbiter::llm_provider::{LlmProviderConfig, LlmProviderType, LlmProviderFactory};
+use crate::arbiter::llm_provider::{LlmProviderConfig, LlmProviderType, LlmProviderFactory, LlmProvider};
 use rtfs::config::types::{AgentConfig, LlmProfile};
 
-/// Environment created by the builder
+// ============================================================================
+// CCOS Environment Builder
+// ============================================================================
+
+/// Generic CCOS environment containing runtime, graph, config, and catalog access
+pub struct CcosEnv {
+    pub ccos: Arc<CCOS>,
+    pub intent_graph: Arc<Mutex<IntentGraph>>,
+    pub agent_config: AgentConfig,
+}
+
+impl CcosEnv {
+    /// Helper to create an LLM provider from a profile name in the config
+    pub async fn create_llm_provider(&self, profile_name: &str) -> Result<Box<dyn LlmProvider>, Box<dyn Error + Send + Sync>> {
+        if let Some(profile) = find_llm_profile(&self.agent_config, profile_name) {
+            println!("   ✅ Found LLM profile '{}'", profile_name);
+            
+            // Resolve API key
+            let api_key = profile.api_key.clone()
+                .or_else(|| profile.api_key_env.as_ref().and_then(|env| std::env::var(env).ok()));
+                
+            if let Some(key) = api_key {
+                // Map provider string to enum
+                let provider_type = match profile.provider.as_str() {
+                    "openai" => LlmProviderType::OpenAI,
+                    "anthropic" => LlmProviderType::Anthropic,
+                    "stub" => LlmProviderType::Stub,
+                    "local" => LlmProviderType::Local,
+                    "openrouter" => LlmProviderType::OpenAI, // OpenRouter uses OpenAI client
+                    _ => {
+                        println!("   ⚠️ Unknown provider '{}', defaulting to OpenAI", profile.provider);
+                        LlmProviderType::OpenAI
+                    }
+                };
+                
+                let provider_config = LlmProviderConfig {
+                    provider_type,
+                    model: profile.model,
+                    api_key: Some(key),
+                    base_url: profile.base_url,
+                    max_tokens: profile.max_tokens.or(Some(4096)),
+                    temperature: profile.temperature.or(Some(0.0)),
+                    timeout_seconds: Some(60),
+                    retry_config: Default::default(),
+                };
+                
+                match LlmProviderFactory::create_provider(provider_config).await {
+                    Ok(provider) => Ok(provider),
+                    Err(e) => Err(format!("Failed to create LLM provider: {}", e).into())
+                }
+            } else {
+                Err(format!("No API key found for profile '{}'", profile_name).into())
+            }
+        } else {
+            Err(format!("Profile '{}' not found in config", profile_name).into())
+        }
+    }
+}
+
+/// Builder for setting up a generic CCOS environment
+pub struct CcosEnvBuilder {
+    config_path: String,
+}
+
+impl Default for CcosEnvBuilder {
+    fn default() -> Self {
+        Self {
+            config_path: "config/agent_config.toml".to_string(),
+        }
+    }
+}
+
+impl CcosEnvBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_config(mut self, config_path: &str) -> Self {
+        self.config_path = config_path.to_string();
+        self
+    }
+
+    pub async fn build(self) -> Result<CcosEnv, Box<dyn Error + Send + Sync>> {
+        println!("🔧 Initializing CCOS Environment...");
+        let agent_config = load_agent_config(&self.config_path)?;
+        
+        // Ensure delegation is enabled for LLM
+        std::env::set_var("CCOS_DELEGATION_ENABLED", "true");
+        if std::env::var("CCOS_DELEGATING_MODEL").is_err() {
+            std::env::set_var("CCOS_DELEGATING_MODEL", "deepseek/deepseek-v3.2-exp");
+        }
+
+        let ccos = Arc::new(
+            CCOS::new_with_agent_config_and_configs_and_debug_callback(
+                Default::default(),
+                None,
+                Some(agent_config.clone()),
+                None,
+            )
+            .await?,
+        );
+
+        // Register basic tools
+        crate::capabilities::defaults::register_default_capabilities(&ccos.get_capability_marketplace()).await?;
+
+        // Configure session pool for MCP execution
+        let mut session_pool_manager = SessionPoolManager::new();
+        session_pool_manager.register_handler("mcp", std::sync::Arc::new(MCPSessionHandler::new()));
+        let session_pool = std::sync::Arc::new(session_pool_manager);
+        ccos.get_capability_marketplace().set_session_pool(session_pool.clone()).await;
+        println!("   ✅ Session pool configured with MCPSessionHandler");
+
+        // 1. Use IntentGraph from CCOS
+        println!("🔧 Using IntentGraph from CCOS...");
+        let intent_graph = ccos.get_intent_graph();
+        
+        // 2. Ingest marketplace into Catalog (so capabilities are searchable)
+        println!("🔍 Indexing capabilities in catalog...");
+        ccos.get_catalog().ingest_marketplace(&ccos.get_capability_marketplace()).await;
+        
+        Ok(CcosEnv {
+            ccos,
+            intent_graph,
+            agent_config,
+        })
+    }
+}
+
+// ============================================================================
+// Modular Planner Builder
+// ============================================================================
+
+/// Environment created by the planner builder
 pub struct ModularPlannerEnv {
     pub ccos: Arc<CCOS>,
     pub planner: ModularPlanner,
@@ -38,9 +173,18 @@ pub struct ModularPlannerEnv {
     pub agent_config: AgentConfig,
 }
 
+impl From<CcosEnv> for ModularPlannerEnv {
+    fn from(env: CcosEnv) -> Self {
+        // This is a partial conversion, planner needs to be added later.
+        // This impl is mainly to show relationship or help with destructuring if needed.
+        // But practically we construct ModularPlannerEnv directly in the builder.
+        unreachable!("Use ModularPlannerBuilder to create ModularPlannerEnv")
+    }
+}
+
 /// Builder for Modular Planner demo environment
 pub struct ModularPlannerBuilder {
-    config_path: String,
+    env_builder: CcosEnvBuilder,
     
     // Planner options
     pub use_embeddings: bool,
@@ -59,7 +203,7 @@ pub struct ModularPlannerBuilder {
 impl Default for ModularPlannerBuilder {
     fn default() -> Self {
         Self {
-            config_path: "config/agent_config.toml".to_string(),
+            env_builder: CcosEnvBuilder::default(),
             use_embeddings: true,
             discover_mcp: false,
             no_cache: false,
@@ -79,7 +223,7 @@ impl ModularPlannerBuilder {
     }
 
     pub fn with_config(mut self, config_path: &str) -> Self {
-        self.config_path = config_path.to_string();
+        self.env_builder = self.env_builder.with_config(config_path);
         self
     }
 
@@ -118,114 +262,39 @@ impl ModularPlannerBuilder {
     }
 
     pub async fn build(self) -> Result<ModularPlannerEnv, Box<dyn Error + Send + Sync>> {
-        println!("🔧 Initializing CCOS Environment...");
-        let agent_config = load_agent_config(&self.config_path)?;
+        // 1. Build base CCOS environment
+        let env = self.env_builder.build().await?;
         
-        // Ensure delegation is enabled for LLM
-        std::env::set_var("CCOS_DELEGATION_ENABLED", "true");
-        if std::env::var("CCOS_DELEGATING_MODEL").is_err() {
-            std::env::set_var("CCOS_DELEGATING_MODEL", "deepseek/deepseek-v3.2-exp");
-        }
-
-        let ccos = Arc::new(
-            CCOS::new_with_agent_config_and_configs_and_debug_callback(
-                Default::default(),
-                None,
-                Some(agent_config.clone()),
-                None,
-            )
-            .await?,
-        );
-
-        // Register basic tools
-        crate::capabilities::defaults::register_default_capabilities(&ccos.get_capability_marketplace()).await?;
-
-        // Configure session pool for MCP execution
-        let mut session_pool_manager = SessionPoolManager::new();
-        session_pool_manager.register_handler("mcp", std::sync::Arc::new(MCPSessionHandler::new()));
-        let session_pool = std::sync::Arc::new(session_pool_manager);
-        ccos.get_capability_marketplace().set_session_pool(session_pool.clone()).await;
-        println!("   ✅ Session pool configured with MCPSessionHandler");
-
-        // 1. Use IntentGraph from CCOS
-        println!("🔧 Using IntentGraph from CCOS...");
-        let intent_graph = ccos.get_intent_graph();
-        
-        // 2. Build capability catalog using adapter
-        println!("\n🔍 Setting up capability catalog...");
-        
-        // CRITICAL: Refresh the catalog with all registered capabilities
-        ccos.get_catalog().ingest_marketplace(&ccos.get_capability_marketplace()).await;
-        
-        // Wrap the real CCOS catalog
-        let catalog = Arc::new(CcosCatalogAdapter::new(ccos.get_catalog()));
+        // 2. Wrap the CCOS catalog for the planner
+        println!("\n🔍 Setting up capability catalog adapter...");
+        let catalog = Arc::new(CcosCatalogAdapter::new(env.ccos.get_catalog()));
         
         // 3. Create decomposition strategy (Hybrid: Pattern + LLM)
         println!("\n📐 Setting up decomposition strategy...");
         
         let decomposition: Box<dyn DecompositionStrategy> = {
-            if let Some(profile) = find_llm_profile(&agent_config, &self.profile_name) {
-                println!("   ✅ Found LLM profile '{}', enabling HybridDecomposition", self.profile_name);
-                
-                // Resolve API key
-                let api_key = profile.api_key.clone()
-                    .or_else(|| profile.api_key_env.as_ref().and_then(|env| std::env::var(env).ok()));
+            match env.create_llm_provider(&self.profile_name).await {
+                Ok(provider) => {
+                    let adapter = Arc::new(CcosLlmAdapter::new(provider));
+                    let mut hybrid = HybridDecomposition::new().with_llm(adapter);
                     
-                if let Some(key) = api_key {
-                    // Map provider string to enum
-                    let provider_type = match profile.provider.as_str() {
-                        "openai" => LlmProviderType::OpenAI,
-                        "anthropic" => LlmProviderType::Anthropic,
-                        "stub" => LlmProviderType::Stub,
-                        "local" => LlmProviderType::Local,
-                        "openrouter" => LlmProviderType::OpenAI, // OpenRouter uses OpenAI client
-                        _ => {
-                            println!("   ⚠️ Unknown provider '{}', defaulting to OpenAI", profile.provider);
-                            LlmProviderType::OpenAI
-                        }
-                    };
-                    
-                    let provider_config = LlmProviderConfig {
-                        provider_type,
-                        model: profile.model,
-                        api_key: Some(key),
-                        base_url: profile.base_url,
-                        max_tokens: profile.max_tokens.or(Some(4096)),
-                        temperature: profile.temperature.or(Some(0.0)),
-                        timeout_seconds: Some(60),
-                        retry_config: Default::default(),
-                    };
-                    
-                    match LlmProviderFactory::create_provider(provider_config).await {
-                        Ok(provider) => {
-                            let adapter = Arc::new(CcosLlmAdapter::new(provider));
-                            let mut hybrid = HybridDecomposition::new().with_llm(adapter);
-                            
-                            // If pure LLM requested, configure hybrid to skip patterns
-                            if self.pure_llm {
-                                println!("   🤖 Pure LLM mode enabled (skipping patterns)");
-                                // Set pattern threshold > 1.0 to ensure patterns never match
-                                hybrid = hybrid.with_config(HybridConfig {
-                                    pattern_confidence_threshold: 2.0, 
-                                    prefer_grounded: true,
-                                    max_grounded_tools: 20,
-                                });
-                            }
-                            
-                            Box::new(hybrid)
-                        },
-                        Err(e) => {
-                            println!("   ⚠️ Failed to create LLM provider: {}. Falling back to Pattern.", e);
-                            Box::new(PatternDecomposition::new())
-                        }
+                    // If pure LLM requested, configure hybrid to skip patterns
+                    if self.pure_llm {
+                        println!("   🤖 Pure LLM mode enabled (skipping patterns)");
+                        // Set pattern threshold > 1.0 to ensure patterns never match
+                        hybrid = hybrid.with_config(HybridConfig {
+                            pattern_confidence_threshold: 2.0, 
+                            prefer_grounded: true,
+                            max_grounded_tools: 20,
+                        });
                     }
-                } else {
-                    println!("   ⚠️ No API key found for profile '{}'. Using PatternDecomposition only.", self.profile_name);
+                    
+                    Box::new(hybrid)
+                },
+                Err(e) => {
+                    println!("   ⚠️ Failed to create LLM provider: {}. Falling back to Pattern.", e);
                     Box::new(PatternDecomposition::new())
                 }
-            } else {
-                println!("   ⚠️ Profile '{}' not found in config. Using PatternDecomposition only.", self.profile_name);
-                Box::new(PatternDecomposition::new())
             }
         };
         
@@ -280,8 +349,8 @@ impl ModularPlannerBuilder {
         let mcp_discovery = Arc::new(
             RuntimeMcpDiscovery::new(
                 discovery_session_manager,
-                ccos.get_capability_marketplace(),
-            ).with_catalog(ccos.get_catalog())
+                env.ccos.get_capability_marketplace(),
+            ).with_catalog(env.ccos.get_catalog())
         );
         
         // Setup cache directory for MCP tools
@@ -312,14 +381,14 @@ impl ModularPlannerBuilder {
             eager_discovery: true,
         };
         
-        let planner = ModularPlanner::new(decomposition, Box::new(composite_resolution), intent_graph.clone())
+        let planner = ModularPlanner::new(decomposition, Box::new(composite_resolution), env.intent_graph.clone())
             .with_config(config);
             
         Ok(ModularPlannerEnv {
-            ccos,
+            ccos: env.ccos,
             planner,
-            intent_graph,
-            agent_config,
+            intent_graph: env.intent_graph,
+            agent_config: env.agent_config,
         })
     }
 }
@@ -429,4 +498,3 @@ pub fn find_llm_profile(config: &AgentConfig, profile_name: &str) -> Option<LlmP
     
     None
 }
-
