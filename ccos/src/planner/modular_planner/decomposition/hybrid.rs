@@ -57,7 +57,10 @@ impl HybridDecomposition {
     
     pub fn with_llm(mut self, llm_provider: Arc<dyn LlmProvider>) -> Self {
         self.intent_first = Some(IntentFirstDecomposition::new(llm_provider.clone()));
-        self.grounded = Some(GroundedLlmDecomposition::new(llm_provider));
+        self.grounded = Some(
+            GroundedLlmDecomposition::new(llm_provider)
+                .with_max_tools(self.config.max_grounded_tools)
+        );
         self
     }
     
@@ -70,6 +73,10 @@ impl HybridDecomposition {
     
     pub fn with_config(mut self, config: HybridConfig) -> Self {
         self.config = config;
+        // Update grounded if it exists
+        if let Some(grounded) = self.grounded.take() {
+            self.grounded = Some(grounded.with_max_tools(self.config.max_grounded_tools));
+        }
         self
     }
     
