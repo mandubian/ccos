@@ -299,15 +299,28 @@ pub async fn register_default_capabilities(
                         } else {
                             // Fallback: check common keys
                             let mut msg = None;
-                            for key in &["message", "content", "text", "value"] {
-                                if let Some(val) = map.get(&MapKey::String(key.to_string()))
-                                    .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string())))) 
-                                {
-                                    msg = Some(match val {
-                                        Value::String(s) => s.clone(),
-                                        _ => format!("{}", val),
-                                    });
-                                    break;
+                            
+                            // Check _previous_result first (data pipeline flow)
+                            if let Some(val) = map.get(&MapKey::String("_previous_result".to_string()))
+                                .or_else(|| map.get(&MapKey::Keyword(Keyword("_previous_result".to_string()))))
+                            {
+                                msg = Some(match val {
+                                    Value::String(s) => s.clone(),
+                                    _ => format!("{}", val),
+                                });
+                            }
+
+                            if msg.is_none() {
+                                for key in &["message", "content", "text", "value"] {
+                                    if let Some(val) = map.get(&MapKey::String(key.to_string()))
+                                        .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string())))) 
+                                    {
+                                        msg = Some(match val {
+                                            Value::String(s) => s.clone(),
+                                            _ => format!("{}", val),
+                                        });
+                                        break;
+                                    }
                                 }
                             }
                             
