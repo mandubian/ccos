@@ -1,6 +1,7 @@
 use crate::capability_marketplace::types::CapabilityDiscovery;
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
 use crate::synthesis::mcp_introspector::{DiscoveredMCPTool, MCPIntrospector};
+use crate::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo, MCPSession};
 use async_trait::async_trait;
 use chrono::Utc;
 use rtfs::ast::{
@@ -97,7 +98,7 @@ pub struct RTFSModuleDefinition {
 /// MCP Discovery Provider for discovering MCP servers and their tools
 pub struct MCPDiscoveryProvider {
     config: MCPServerConfig,
-    client: reqwest::Client,
+    session_manager: std::sync::Arc<MCPSessionManager>,
 }
 
 impl MCPDiscoveryProvider {
@@ -244,86 +245,76 @@ impl MCPDiscoveryProvider {
 
     /// Create a new MCP discovery provider
     pub fn new(config: MCPServerConfig) -> RuntimeResult<Self> {
-        let mut client_builder =
-            reqwest::Client::builder().timeout(Duration::from_secs(config.timeout_seconds));
+        // Build auth headers if token provided
+        let auth_headers = config.auth_token.as_ref().map(|token| {
+            let mut headers = HashMap::new();
+            headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+            headers
+        });
 
-        // Add MCP-specific headers
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::USER_AGENT,
-            reqwest::header::HeaderValue::from_static("CCOS-MCP-Discovery/1.0"),
-        );
-        headers.insert(
-            reqwest::header::ACCEPT,
-            reqwest::header::HeaderValue::from_static("application/json"),
-        );
-        headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            reqwest::header::HeaderValue::from_static("application/json"),
-        );
+        let session_manager = std::sync::Arc::new(MCPSessionManager::new(auth_headers));
 
-        client_builder = client_builder.default_headers(headers);
+        Ok(Self { config, session_manager })
+    }
 
-        let client = client_builder.build().map_err(|e| {
-            RuntimeError::Generic(format!("Failed to create MCP HTTP client: {}", e))
-        })?;
+    /// Create a new MCP discovery provider with an existing session manager
+    pub fn with_session_manager(
+        config: MCPServerConfig,
+        session_manager: std::sync::Arc<MCPSessionManager>,
+    ) -> Self {
+        Self { config, session_manager }
+    }
 
-        Ok(Self { config, client })
+    /// Establish a session with the MCP server
+    async fn get_session(&self) -> RuntimeResult<MCPSession> {
+        // ... existing get_session logic ...
+        let client_info = MCPServerInfo {
+            name: "ccos-mcp-discovery".to_string(),
+            version: "1.0.0".to_string(),
+        };
+
+        self.session_manager
+            .initialize_session(&self.config.endpoint, &client_info)
+            .await
+    }
+
+    /// Discover raw tools from the MCP server without conversion to CapabilityManifest
+    pub async fn discover_raw_tools(&self) -> RuntimeResult<Vec<MCPTool>> {
+        let session = self.get_session().await?;
+
+        // Use session manager to make request
+        let response = self.session_manager
+            .make_request(&session, "tools/list", serde_json::json!({}))
+            .await?;
+
+        let tools_array = response
+            .get("result")
+            .and_then(|r| r.get("tools"))
+            .and_then(|t| t.as_array());
+
+        // Parse MCP tools
+        let mut tools = Vec::new();
+        if let Some(tools_val) = tools_array {
+            for tool_val in tools_val {
+                if let Ok(tool) = serde_json::from_value::<MCPTool>(tool_val.clone()) {
+                    tools.push(tool);
+                }
+            }
+        }
+
+        // Clean up session if needed
+        let _ = self.session_manager.terminate_session(&session).await;
+
+        Ok(tools)
     }
 
     /// Discover tools from the MCP server
     pub async fn discover_tools(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
-        let tools_url = format!("{}/tools", self.config.endpoint);
-
-        let mut request_builder = self.client.get(&tools_url);
-
-        // Add authentication if provided
-        if let Some(token) = &self.config.auth_token {
-            request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
-        }
-
-        let request = request_builder.build().map_err(|e| {
-            RuntimeError::Generic(format!("Failed to build MCP tools request: {}", e))
-        })?;
-
-        // Execute request with timeout
-        let response = timeout(
-            Duration::from_secs(self.config.timeout_seconds),
-            self.client.execute(request),
-        )
-        .await
-        .map_err(|_| RuntimeError::Generic("MCP tools request timeout".to_string()))?
-        .map_err(|e| RuntimeError::Generic(format!("MCP tools request failed: {}", e)))?;
-
-        // Check status code
-        if !response.status().is_success() {
-            return Err(RuntimeError::Generic(format!(
-                "MCP tools HTTP error: {} - {}",
-                response.status(),
-                response.text().await.unwrap_or_default()
-            )));
-        }
-
-        // Parse response
-        let response_text = response.text().await.map_err(|e| {
-            RuntimeError::Generic(format!("Failed to read MCP tools response: {}", e))
-        })?;
-
-        let tools_response: MCPToolsResponse =
-            serde_json::from_str(&response_text).map_err(|e| {
-                RuntimeError::Generic(format!("Failed to parse MCP tools response: {}", e))
-            })?;
-
-        if let Some(error) = tools_response.error {
-            return Err(RuntimeError::Generic(format!(
-                "MCP server error: {}",
-                error
-            )));
-        }
+        let tools = self.discover_raw_tools().await?;
 
         // Convert MCP tools to capability manifests
         let mut capabilities = Vec::new();
-        for tool in tools_response.tools {
+        for tool in tools {
             let capability = self
                 .convert_tool_to_capability_with_introspection(tool)
                 .await?;
@@ -335,61 +326,30 @@ impl MCPDiscoveryProvider {
 
     /// Discover resources from the MCP server
     pub async fn discover_resources(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
-        let resources_url = format!("{}/resources", self.config.endpoint);
+        let session = self.get_session().await?;
 
-        let mut request_builder = self.client.get(&resources_url);
+        // Use session manager to make request
+        let response = self.session_manager
+            .make_request(&session, "resources/list", serde_json::json!({}))
+            .await?;
 
-        // Add authentication if provided
-        if let Some(token) = &self.config.auth_token {
-            request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
-        }
-
-        let request = request_builder.build().map_err(|e| {
-            RuntimeError::Generic(format!("Failed to build MCP resources request: {}", e))
-        })?;
-
-        // Execute request with timeout
-        let response = timeout(
-            Duration::from_secs(self.config.timeout_seconds),
-            self.client.execute(request),
-        )
-        .await
-        .map_err(|_| RuntimeError::Generic("MCP resources request timeout".to_string()))?
-        .map_err(|e| RuntimeError::Generic(format!("MCP resources request failed: {}", e)))?;
-
-        // Check status code
-        if !response.status().is_success() {
-            return Err(RuntimeError::Generic(format!(
-                "MCP resources HTTP error: {} - {}",
-                response.status(),
-                response.text().await.unwrap_or_default()
-            )));
-        }
-
-        // Parse response
-        let response_text = response.text().await.map_err(|e| {
-            RuntimeError::Generic(format!("Failed to read MCP resources response: {}", e))
-        })?;
-
-        let resources_response: MCPResourcesResponse = serde_json::from_str(&response_text)
-            .map_err(|e| {
-                RuntimeError::Generic(format!("Failed to parse MCP resources response: {}", e))
-            })?;
-
-        if let Some(error) = resources_response.error {
-            return Err(RuntimeError::Generic(format!(
-                "MCP server error: {}",
-                error
-            )));
-        }
+        let resources_array = response
+            .get("result")
+            .and_then(|r| r.get("resources"))
+            .and_then(|t| t.as_array());
 
         // Convert MCP resources to capability manifests
         let mut capabilities = Vec::new();
-        for resource in resources_response.resources {
-            if let Ok(capability) = self.convert_resource_to_capability(resource) {
-                capabilities.push(capability);
+        if let Some(resources) = resources_array {
+            for resource in resources {
+                if let Ok(capability) = self.convert_resource_to_capability(resource.clone()) {
+                    capabilities.push(capability);
+                }
             }
         }
+
+        // Clean up session if needed
+        let _ = self.session_manager.terminate_session(&session).await;
 
         Ok(capabilities)
     }
@@ -2074,14 +2034,15 @@ impl MCPDiscoveryProvider {
     /// Health check for the MCP server
     pub async fn health_check(&self) -> RuntimeResult<bool> {
         let health_url = format!("{}/health", self.config.endpoint);
+        let client = reqwest::Client::new();
 
-        let request = self.client.get(&health_url).build().map_err(|e| {
+        let request = client.get(&health_url).build().map_err(|e| {
             RuntimeError::Generic(format!("Failed to build MCP health check request: {}", e))
         })?;
 
         match timeout(
             Duration::from_secs(5), // Shorter timeout for health checks
-            self.client.execute(request),
+            client.execute(request),
         )
         .await
         {

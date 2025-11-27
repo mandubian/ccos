@@ -292,11 +292,16 @@ impl CCOS {
         ));
         
         // Pass the full CCOS capability registry to the marketplace
-        let capability_marketplace = CapabilityMarketplace::with_causal_chain_and_debug_callback(
+        let mut capability_marketplace = CapabilityMarketplace::with_causal_chain_and_debug_callback(
             Arc::clone(&capability_registry),
             Some(Arc::clone(&causal_chain)),
             debug_callback.clone(),
         );
+
+        // Add Local Config MCP Discovery (centralized discovery)
+        capability_marketplace.add_discovery_agent(Box::new(
+            crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery::new()
+        ));
 
         // Bootstrap the marketplace with discovered capabilities
         capability_marketplace.bootstrap().await?;
