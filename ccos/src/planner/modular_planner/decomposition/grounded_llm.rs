@@ -55,7 +55,7 @@ impl GroundedLlmDecomposition {
         Self {
             llm_provider,
             embedding_provider: None,
-            max_tools_in_prompt: 0,  // 0 = pass ALL tools (like real MCP)
+            max_tools_in_prompt: 0,  // 0 = pass ALL tools (like real MCP behavior)
             similarity_threshold: 0.0,
         }
     }
@@ -182,8 +182,7 @@ Respond with ONLY valid JSON:
       "depends_on": [],
       "params": {{"param_name": "value_from_goal"}}
     }}
-  ],
-  "domain": "github|slack|filesystem|database|web|generic"
+  ]
 }}
 "#, tools_list = tools_list, goal = goal, params_hint = params_hint)
     }
@@ -227,16 +226,24 @@ impl DecompositionStrategy for GroundedLlmDecomposition {
             println!("   Tools: {}", filtered_tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
         }
         
-        // DEBUG: Print prompt only if verbose_llm is enabled
-        if context.verbose_llm {
-            println!("\n🤖 LLM Prompt:\n--------------------------------------------------\n{}\n--------------------------------------------------", prompt);
+        // DEBUG: Print prompt if show_prompt, verbose_llm, or confirm_llm is enabled
+        if context.show_prompt || context.verbose_llm || context.confirm_llm {
+            println!("\n🤖 LLM Prompt:\n══════════════════════════════════════════════════════════════════════════════\n{}\n══════════════════════════════════════════════════════════════════════════════", prompt);
+        }
+        
+        // If confirm_llm is enabled, wait for user confirmation before calling LLM
+        if context.confirm_llm {
+            println!("\n⏸️  Press Enter to send this prompt to LLM, or Ctrl+C to cancel...");
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).expect("Failed to read line");
+            println!("   Sending to LLM...");
         }
         
         let response = self.llm_provider.generate_text(&prompt).await?;
         
         // DEBUG: Print response only if verbose_llm is enabled
         if context.verbose_llm {
-            println!("\n🤖 LLM Response:\n--------------------------------------------------\n{}\n--------------------------------------------------", response);
+            println!("\n🤖 LLM Response:\n──────────────────────────────────────────────────────────────────────────────\n{}\n──────────────────────────────────────────────────────────────────────────────", response);
         }
         
         // Parse response (reuse logic from intent_first)
@@ -261,7 +268,6 @@ impl DecompositionStrategy for GroundedLlmDecomposition {
 #[derive(Debug, serde::Deserialize)]
 struct GroundedResponse {
     steps: Vec<GroundedStep>,
-    domain: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -307,18 +313,6 @@ fn convert_grounded_to_sub_intents(
     parsed: GroundedResponse,
     goal: &str,
 ) -> Result<Vec<SubIntent>, DecompositionError> {
-    let domain = parsed.domain
-        .as_ref()
-        .and_then(|d| match d.to_lowercase().as_str() {
-            "github" => Some(DomainHint::GitHub),
-            "slack" => Some(DomainHint::Slack),
-            "filesystem" => Some(DomainHint::FileSystem),
-            "database" => Some(DomainHint::Database),
-            "web" => Some(DomainHint::Web),
-            _ => None,
-        })
-        .or_else(|| DomainHint::infer_from_text(goal));
-    
     let mut sub_intents = Vec::new();
     
     for step in parsed.steps {
@@ -361,8 +355,14 @@ fn convert_grounded_to_sub_intents(
         let mut sub_intent = SubIntent::new(step.description.clone(), intent_type)
             .with_dependencies(step.depends_on.clone());
         
-        if let Some(ref d) = domain {
-            sub_intent = sub_intent.with_domain(d.clone());
+        // Infer domain from tool name, description, or goal
+        let domain_hint = step.tool.as_ref()
+            .and_then(|t| DomainHint::infer_from_text(t))
+            .or_else(|| DomainHint::infer_from_text(&step.description))
+            .or_else(|| DomainHint::infer_from_text(goal));
+
+        if let Some(d) = domain_hint {
+            sub_intent = sub_intent.with_domain(d);
         }
         
         // Add tool as a hint in params if provided
@@ -416,8 +416,7 @@ mod tests {
               "depends_on": [],
               "params": {"owner": "mandubian", "repo": "ccos"}
             }
-          ],
-          "domain": "github"
+          ]
         }
         "#;
         
@@ -439,6 +438,12 @@ mod tests {
         assert_eq!(
             result.sub_intents[0].extracted_params.get("_suggested_tool"),
             Some(&"list_issues".to_string())
+        );
+        // "list issues" in goal and "list issues" in tool name description implies GitHub domain via infer_from_text
+        // Actually, "issue" keyword in infer_from_text maps to GitHub.
+        assert_eq!(
+            result.sub_intents[0].domain_hint,
+            Some(DomainHint::GitHub)
         );
     }
 }
