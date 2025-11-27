@@ -77,16 +77,42 @@ impl GroundedLlmDecomposition {
         goal: &str,
         available_tools: &'a [ToolSummary],
     ) -> Result<Vec<&'a ToolSummary>, DecompositionError> {
-        // If max is 0, pass ALL tools (real MCP behavior)
+        // 1. Identify relevant domains from goal
+        let inferred_domains = DomainHint::infer_all_from_text(goal);
+        
+        // 2. Initial domain filtering (unless no domains inferred)
+        let domain_filtered_tools: Vec<&ToolSummary> = if !inferred_domains.is_empty() {
+            available_tools
+                .iter()
+                .filter(|t| {
+                    // Include if tool domain matches any inferred domain
+                    // OR if tool is Generic (always available)
+                    inferred_domains.contains(&t.domain) || t.domain == DomainHint::Generic
+                })
+                .collect()
+        } else {
+            // No specific domain inferred, use all tools
+            available_tools.iter().collect()
+        };
+
+        // If filtering resulted in no tools, fallback to all (to be safe)
+        // But only if we started with tools
+        let candidate_tools = if domain_filtered_tools.is_empty() && !available_tools.is_empty() {
+             available_tools.iter().collect()
+        } else {
+             domain_filtered_tools
+        };
+
+        // If max is 0, pass ALL candidate tools (real MCP behavior)
         if self.max_tools_in_prompt == 0 {
-            return Ok(available_tools.iter().collect());
+            return Ok(candidate_tools);
         }
         
         let embedding_provider = match &self.embedding_provider {
             Some(p) => p,
             None => {
                 // No embedding provider, return all tools (up to max)
-                return Ok(available_tools.iter().take(self.max_tools_in_prompt).collect());
+                return Ok(candidate_tools.into_iter().take(self.max_tools_in_prompt).collect());
             }
         };
         
@@ -94,7 +120,7 @@ impl GroundedLlmDecomposition {
         
         let mut scored_tools: Vec<(&'a ToolSummary, f64)> = Vec::new();
         
-        for tool in available_tools {
+        for tool in candidate_tools {
             let tool_text = format!("{} {}", tool.name, tool.description);
             let tool_embedding = embedding_provider.embed(&tool_text).await?;
             let similarity = cosine_similarity(&goal_embedding, &tool_embedding);
@@ -391,14 +417,26 @@ fn convert_grounded_to_sub_intents(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     
     struct MockLlmProvider {
         response: String,
+        last_prompt: Mutex<Option<String>>,
+    }
+    
+    impl MockLlmProvider {
+        fn new(response: &str) -> Self {
+            Self {
+                response: response.to_string(),
+                last_prompt: Mutex::new(None),
+            }
+        }
     }
     
     #[async_trait(?Send)]
     impl LlmProvider for MockLlmProvider {
-        async fn generate_text(&self, _prompt: &str) -> Result<String, DecompositionError> {
+        async fn generate_text(&self, prompt: &str) -> Result<String, DecompositionError> {
+            *self.last_prompt.lock().unwrap() = Some(prompt.to_string());
             Ok(self.response.clone())
         }
     }
@@ -420,7 +458,7 @@ mod tests {
         }
         "#;
         
-        let provider = Arc::new(MockLlmProvider { response: mock_response.to_string() });
+        let provider = Arc::new(MockLlmProvider::new(mock_response));
         let strategy = GroundedLlmDecomposition::new(provider);
         let context = DecompositionContext::new();
         
@@ -439,11 +477,55 @@ mod tests {
             result.sub_intents[0].extracted_params.get("_suggested_tool"),
             Some(&"list_issues".to_string())
         );
-        // "list issues" in goal and "list issues" in tool name description implies GitHub domain via infer_from_text
-        // Actually, "issue" keyword in infer_from_text maps to GitHub.
         assert_eq!(
             result.sub_intents[0].domain_hint,
             Some(DomainHint::GitHub)
         );
+    }
+
+    #[tokio::test]
+    async fn test_grounded_decomposition_domain_filtering() {
+        // Goal implies GitHub
+        let mock_response = r#"{"steps": []}"#;
+        
+        let provider = Arc::new(MockLlmProvider::new(mock_response));
+        let strategy = GroundedLlmDecomposition::new(provider.clone());
+        let context = DecompositionContext::new();
+        
+        let tools = vec![
+            ToolSummary::new("list_issues", "List GitHub issues").with_domain(DomainHint::GitHub),
+            ToolSummary::new("slack_send", "Send Slack message").with_domain(DomainHint::Slack),
+            ToolSummary::new("println", "Print to console").with_domain(DomainHint::Generic),
+        ];
+        
+        // 1. GitHub goal -> Should keep GitHub + Generic
+        let _ = strategy
+            .decompose("list issues in repo", Some(&tools), &context)
+            .await;
+            
+        let prompt = provider.last_prompt.lock().unwrap().clone().unwrap();
+        assert!(prompt.contains("list_issues"), "Should contain matching domain tool");
+        assert!(prompt.contains("println"), "Should contain Generic tool");
+        assert!(!prompt.contains("slack_send"), "Should NOT contain unrelated domain tool");
+        
+        // 2. Multi-domain goal -> Should keep both
+        let _ = strategy
+            .decompose("list issues and send to slack", Some(&tools), &context)
+            .await;
+            
+        let prompt = provider.last_prompt.lock().unwrap().clone().unwrap();
+        assert!(prompt.contains("list_issues"));
+        assert!(prompt.contains("slack_send"));
+        assert!(prompt.contains("println"));
+        
+        // 3. Unknown domain goal -> Should keep all (fallback)
+        let _ = strategy
+            .decompose("do something magical", Some(&tools), &context)
+            .await;
+            
+        let prompt = provider.last_prompt.lock().unwrap().clone().unwrap();
+        assert!(prompt.contains("list_issues"));
+        assert!(prompt.contains("slack_send"));
+        assert!(prompt.contains("println"));
     }
 }

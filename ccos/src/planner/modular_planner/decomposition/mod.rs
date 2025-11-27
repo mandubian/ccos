@@ -61,6 +61,12 @@ pub struct DecompositionContext {
     
     /// Whether to print verbose LLM debug info (prompts/responses)
     pub verbose_llm: bool,
+    
+    /// Whether to print just the prompt sent to LLM
+    pub show_prompt: bool,
+    
+    /// Whether to confirm before each LLM call
+    pub confirm_llm: bool,
 }
 
 impl DecompositionContext {
@@ -72,11 +78,23 @@ impl DecompositionContext {
             current_depth: 0,
             pre_extracted_params: HashMap::new(),
             verbose_llm: false,
+            show_prompt: false,
+            confirm_llm: false,
         }
     }
     
     pub fn with_verbose_llm(mut self, verbose: bool) -> Self {
         self.verbose_llm = verbose;
+        self
+    }
+    
+    pub fn with_show_prompt(mut self, show: bool) -> Self {
+        self.show_prompt = show;
+        self
+    }
+    
+    pub fn with_confirm_llm(mut self, confirm: bool) -> Self {
+        self.confirm_llm = confirm;
         self
     }
     
@@ -98,6 +116,8 @@ impl DecompositionContext {
             current_depth: self.current_depth + 1,
             pre_extracted_params: self.pre_extracted_params.clone(),
             verbose_llm: self.verbose_llm,
+            show_prompt: self.show_prompt,
+            confirm_llm: self.confirm_llm,
         }
     }
     

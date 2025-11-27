@@ -6,7 +6,6 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use async_trait::async_trait;
-use serde_json::Value;
 
 use super::semantic::{CapabilityCatalog, CapabilityInfo};
 use super::{ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability};
@@ -168,16 +167,20 @@ impl CatalogResolution {
     /// Search catalog for matching capability
     async fn search_catalog(&self, intent: &SubIntent) -> Option<(CapabilityInfo, f64, std::collections::HashMap<String, String>)> {
         // First, check for LLM-suggested tool (from GroundedLlmDecomposition)
-        if let Some(suggested_tool) = intent.extracted_params.get("_suggested_tool") {
-            // Try direct lookup by suggested tool name
+        let suggested_tool_name = intent.extracted_params.get("_suggested_tool");
+        
+        if let Some(suggested_tool) = suggested_tool_name {
+            // Try direct lookup by suggested tool name/ID
             let possible_ids = vec![
                 suggested_tool.clone(),
                 format!("mcp.github.{}", suggested_tool),
                 format!("ccos.{}", suggested_tool),
+                // Also try with data namespace for data processing capabilities
+                format!("ccos.data.{}", suggested_tool.to_lowercase().replace(" ", "_")),
             ];
             
-            for possible_id in possible_ids {
-                if let Some(cap) = self.catalog.get_capability(&possible_id).await {
+            for possible_id in &possible_ids {
+                if let Some(cap) = self.catalog.get_capability(possible_id).await {
                     let mut arguments: std::collections::HashMap<String, String> = intent.extracted_params
                         .iter()
                         .filter(|(k, _)| !k.starts_with('_'))
@@ -189,9 +192,36 @@ impl CatalogResolution {
                     }
                 }
             }
+            
+            // Try searching by display name as fallback (in case LLM used "Sort Data" instead of "ccos.data.sort")
+            let suggested_lower = suggested_tool.to_lowercase();
+            let all_caps = self.catalog.list_capabilities(None).await;
+            for cap in all_caps {
+                if cap.name.to_lowercase() == suggested_lower || 
+                   cap.name.to_lowercase().replace(" ", "_") == suggested_lower.replace(" ", "_") {
+                    let mut arguments: std::collections::HashMap<String, String> = intent.extracted_params
+                        .iter()
+                        .filter(|(k, _)| !k.starts_with('_'))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    
+                    if self.validate_and_adapt(intent, &cap, &mut arguments) {
+                        log::debug!("[catalog] Found capability by display name: {} -> {}", suggested_tool, cap.id);
+                        return Some((cap, 0.90, arguments)); // Slightly lower confidence for name match
+                    }
+                }
+            }
+            
+            // LLM suggested a specific tool but we didn't find it in catalog.
+            // Return None to let other strategies (e.g., MCP) try to find it.
+            log::debug!(
+                "[catalog] Suggested tool '{}' not found in catalog, deferring to other strategies",
+                suggested_tool
+            );
+            return None;
         }
         
-        // Fall back to search
+        // Fall back to search (only when no specific tool was suggested)
         let query = &intent.description;
         let candidates = self.catalog.search(query, 10).await; // Increased limit for better coverage
         
@@ -677,27 +707,90 @@ impl ResolutionStrategy for CatalogResolution {
         )))
     }
     
-    async fn list_available_tools(&self) -> Vec<ToolSummary> {
+    async fn list_available_tools(&self, domain_hints: Option<&[DomainHint]>) -> Vec<ToolSummary> {
         use crate::planner::modular_planner::types::{DomainHint, ApiAction};
         
-        // Get all capabilities from catalog
-        let capabilities = self.catalog.list_capabilities(None).await;
+        // If domain hints provided, only search relevant domains
+        // Currently CapabilityCatalog only supports single domain string, 
+        // so we might need multiple calls or just list all if generic
+        let capabilities = if let Some(hints) = domain_hints {
+            if hints.is_empty() {
+                // If empty hints provided (shouldn't happen with correct usage), get all
+                self.catalog.list_capabilities(None).await
+            } else {
+                let mut all_caps = Vec::new();
+                let mut fetched_generic = false;
+                
+                for hint in hints {
+                    let domain_str = match hint {
+                        DomainHint::GitHub => Some("github"),
+                        DomainHint::Slack => Some("slack"),
+                        DomainHint::FileSystem => Some("filesystem"),
+                        DomainHint::Database => Some("database"),
+                        DomainHint::Web => Some("web"),
+                        DomainHint::Email => Some("email"),
+                        DomainHint::Calendar => Some("calendar"),
+                        DomainHint::Custom(s) => Some(s.as_str()),
+                        DomainHint::Generic => {
+                            fetched_generic = true;
+                            None // List all/generic
+                        },
+                    };
+                    
+                    if let Some(d) = domain_str {
+                        // TODO: Update CapabilityCatalog to support strict domain filtering
+                        // For now, list_capabilities(None) returns everything, filtering happens here
+                        // Ideally we'd pass 'd' to list_capabilities if it supported filtering
+                        let caps = self.catalog.list_capabilities(Some(d)).await;
+                        all_caps.extend(caps);
+                    }
+                }
+                
+                // Always include Generic tools if requested or if we had to fallback
+                if fetched_generic || all_caps.is_empty() {
+                     // If we didn't find specific domain caps, or generic was requested, 
+                     // we might need to fetch more. 
+                     // But CapabilityCatalog::list_capabilities(None) usually returns ALL.
+                     // Let's just fetch all and filter in memory for now to be safe, 
+                     // since CapabilityCatalog interface is simple.
+                     if all_caps.is_empty() {
+                         all_caps = self.catalog.list_capabilities(None).await;
+                     }
+                }
+                
+                all_caps
+            }
+        } else {
+            self.catalog.list_capabilities(None).await
+        };
         
-        capabilities.into_iter().map(|cap| {
+        // Deduplicate by ID
+        let mut seen = std::collections::HashSet::new();
+        let unique_caps: Vec<_> = capabilities.into_iter()
+            .filter(|c| seen.insert(c.id.clone()))
+            .collect();
+
+        unique_caps.into_iter().map(|cap| {
             // Infer domain from capability name/description
             let domain = DomainHint::infer_from_text(&cap.description)
                 .or_else(|| DomainHint::infer_from_text(&cap.name))
                 .unwrap_or(DomainHint::Generic);
             
-            // Infer action from name
-            let action = if cap.name.starts_with("list_") || cap.name.contains("_list") {
+            // Infer action from ID (which has the verb)
+            let action = if cap.id.contains(".list") || cap.id.contains("_list") {
                 ApiAction::List
-            } else if cap.name.starts_with("get_") || cap.name.starts_with("read_") {
+            } else if cap.id.contains(".get") || cap.id.contains("_get") || cap.id.contains(".read") {
                 ApiAction::Get
-            } else if cap.name.starts_with("create_") || cap.name.starts_with("add_") {
+            } else if cap.id.contains(".create") || cap.id.contains("_create") || cap.id.contains(".add") {
                 ApiAction::Create
-            } else if cap.name.starts_with("search_") || cap.name.starts_with("find_") {
+            } else if cap.id.contains(".search") || cap.id.contains("_search") || cap.id.contains(".find") {
                 ApiAction::Search
+            } else if cap.id.contains(".sort") || cap.id.contains("_sort") {
+                ApiAction::Other("sort".to_string())
+            } else if cap.id.contains(".filter") || cap.id.contains("_filter") {
+                ApiAction::Other("filter".to_string())
+            } else if cap.id.contains(".select") || cap.id.contains("_select") {
+                ApiAction::Other("select".to_string())
             } else {
                 ApiAction::Other(cap.name.clone())
             };
@@ -707,8 +800,9 @@ impl ResolutionStrategy for CatalogResolution {
                 .as_ref()
                 .and_then(|s| serde_json::from_str(s).ok());
             
+            // IMPORTANT: Use cap.id as the tool name so LLM returns the correct identifier
             ToolSummary {
-                name: cap.name,
+                name: cap.id,  // Use ID, not display name
                 description: cap.description,
                 domain,
                 action,
