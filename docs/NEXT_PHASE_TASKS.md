@@ -379,16 +379,22 @@ cargo run --example modular_planner_demo --quiet -- \
     *   Unified planner discovery logic (`RuntimeMcpDiscovery`) to delegate to `MCPDiscoveryProvider`.
     *   Ensures consistent session lifecycle, auth, and error handling across all discovery paths.
 
-6.  [ ] **Improve RTFS Variable References**:
-    *   Teach LLM to use proper RTFS syntax for step references.
-    *   Or: Post-process generated RTFS to fix string literals to variable refs.
+6.  [x] **Semantic Tool Filtering Fallback**:
+    *   Fixed `HybridDecomposition` to respect `max_grounded_tools` configuration.
+    *   Injected `EmbeddingService` into decomposition strategy via `ModularPlannerBuilder`.
+    *   Ensures that when domain filtering yields no results (unknown domain), the system falls back to semantic embedding search instead of sending all tools to LLM.
 
-7.  [ ] **HybridDecomposition LLM Fallback**:
+7.  [x] **Improve RTFS Variable References**:
+    *   Implemented regex-based post-processing to convert `{{stepN.result}}` handlebars syntax from LLM into valid RTFS variable references (e.g. `step_1`).
+    *   Validates arguments to ensure only valid RTFS syntax is generated.
+
+8.  [x] **HybridDecomposition LLM Fallback**:
     *   Add LLM provider to HybridDecomposition for complex goals.
     *   Pattern-first, LLM-fallback architecture.
+    *   Added semantic tool filtering to the fallback path.
 
 ### LOW Priority
-8.  [ ] **Stdio MCP Server Support**:
+9.  [ ] **Stdio MCP Server Support**:
     *   Implement `StdioSessionHandler` for local MCP servers.
     *   Support process-based MCP tools.
 
