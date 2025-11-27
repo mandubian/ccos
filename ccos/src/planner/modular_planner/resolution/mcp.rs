@@ -46,13 +46,23 @@ pub trait McpDiscovery: Send + Sync {
     
     /// Register a discovered tool as a capability
     async fn register_tool(&self, tool: &McpToolInfo) -> Result<String, String>;
+    
+    /// List all known MCP servers
+    async fn list_known_servers(&self) -> Vec<McpServerInfo>;
 }
+use crate::catalog::CatalogService;
+
+use crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery;
 
 /// Runtime implementation of McpDiscovery using real MCP servers
 pub struct RuntimeMcpDiscovery {
     registry_client: McpRegistryClient,
     session_manager: Arc<MCPSessionManager>,
     marketplace: Arc<CapabilityMarketplace>,
+    /// Optional catalog for indexing discovered tools
+    catalog: Option<Arc<CatalogService>>,
+    /// Local config discovery agent for resolving servers
+    config_discovery: LocalConfigMcpDiscovery,
 }
 
 impl RuntimeMcpDiscovery {
@@ -64,53 +74,15 @@ impl RuntimeMcpDiscovery {
             registry_client: McpRegistryClient::new(),
             session_manager,
             marketplace,
+            catalog: None,
+            config_discovery: LocalConfigMcpDiscovery::new(),
         }
     }
-
-    /// Resolve MCP server URL from overrides.json
-    fn resolve_server_url_from_overrides(&self, hint: &str) -> Option<(String, String)> {
-        // Try to load curated overrides from 'capabilities/mcp/overrides.json' (in workspace root)
-        let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let overrides_path = if root.join("ccos/Cargo.toml").exists() {
-            root.join("capabilities/mcp/overrides.json")
-        } else if root.join("Cargo.toml").exists() && root.ends_with("ccos") {
-            root.parent().unwrap_or(&root).join("capabilities/mcp/overrides.json")
-        } else {
-            root.join("capabilities/mcp/overrides.json")
-        };
-
-        if !overrides_path.exists() {
-            return None;
-        }
-
-        let content = std::fs::read_to_string(&overrides_path).ok()?;
-        let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
-        let entries = parsed.get("entries")?.as_array()?;
-
-        for entry in entries {
-            if let Some(server) = entry.get("server") {
-                if let Some(matches) = entry.get("matches").and_then(|m| m.as_array()) {
-                    for pat in matches {
-                        if let Some(p) = pat.as_str() {
-                            let pattern_clean = p.trim_end_matches(".*").trim_end_matches('*');
-                            if hint.contains(pattern_clean) || pattern_clean.contains(hint) {
-                                if let Some(remotes) = server.get("remotes").and_then(|r| r.as_array()) {
-                                    for remote in remotes {
-                                        if let Some(url) = remote.get("url").and_then(|u| u.as_str()) {
-                                            if url.starts_with("http") {
-                                                let server_name = pattern_clean.to_string();
-                                                return Some((url.to_string(), server_name));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        None
+    
+    /// Add catalog for indexing discovered tools
+    pub fn with_catalog(mut self, catalog: Arc<CatalogService>) -> Self {
+        self.catalog = Some(catalog);
+        self
     }
 }
 
@@ -129,24 +101,17 @@ impl McpDiscovery for RuntimeMcpDiscovery {
             DomainHint::Custom(s) => s.as_str(),
         };
 
-        // 1. Check overrides
-        if let Some((url, name)) = self.resolve_server_url_from_overrides(hint) {
-            return Some(McpServerInfo {
-                name: name.clone(),
-                url,
-                namespace: name,
-            });
-        }
-
-        // 2. Check registry
-        // TODO: Implement registry search based on domain hint
-        // For now, if it's GitHub, try environment variable
-        if hint == "github" {
-            if let Ok(endpoint) = std::env::var("GITHUB_MCP_ENDPOINT") {
+        // Get all known servers from centralized discovery
+        let configs = self.config_discovery.get_all_server_configs();
+        
+        // Find matching server
+        for config in configs {
+            // Simple fuzzy match on name or endpoint
+            if config.name.contains(hint) || hint.contains(&config.name) {
                 return Some(McpServerInfo {
-                    name: "github".to_string(),
-                    url: endpoint,
-                    namespace: "github".to_string(),
+                    name: config.name.clone(),
+                    url: config.endpoint.clone(),
+                    namespace: config.name.clone(),
                 });
             }
         }
@@ -155,35 +120,30 @@ impl McpDiscovery for RuntimeMcpDiscovery {
     }
 
     async fn discover_tools(&self, server: &McpServerInfo) -> Result<Vec<McpToolInfo>, String> {
-        let client_info = SessionServerInfo {
-            name: "modular-planner".to_string(),
-            version: "1.0.0".to_string(),
+        // Create config for provider
+        let config = crate::capability_marketplace::mcp_discovery::MCPServerConfig {
+            name: server.name.clone(),
+            endpoint: server.url.clone(),
+            auth_token: None, // Auth token is handled by the shared session manager if configured
+            timeout_seconds: 30,
+            protocol_version: "2024-11-05".to_string(),
         };
 
-        let session = self.session_manager.initialize_session(&server.url, &client_info).await
-            .map_err(|e| format!("MCP init failed: {}", e))?;
+        // Reuse the session manager from RuntimeMcpDiscovery
+        let provider = crate::capability_marketplace::mcp_discovery::MCPDiscoveryProvider::with_session_manager(
+            config,
+            self.session_manager.clone(),
+        );
 
-        let tools_resp = self.session_manager
-            .make_request(&session, "tools/list", serde_json::json!({}))
-            .await
+        // Discover raw tools
+        let raw_tools = provider.discover_raw_tools().await
             .map_err(|e| format!("MCP tools/list failed: {}", e))?;
 
-        let empty_vec = vec![];
-        let tools_array = tools_resp
-            .get("result")
-            .and_then(|r| r.get("tools"))
-            .and_then(|t| t.as_array())
-            .unwrap_or(&empty_vec);
-
-        let tools = tools_array.iter().map(|t| {
-            let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("unknown").to_string();
-            let description = t.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string();
-            let input_schema = t.get("inputSchema").cloned();
-            
+        let tools = raw_tools.into_iter().map(|t| {
             McpToolInfo {
-                name,
-                description,
-                input_schema,
+                name: t.name,
+                description: t.description.unwrap_or_default(),
+                input_schema: t.input_schema,
                 server: server.clone(),
             }
         }).collect();
@@ -219,8 +179,25 @@ impl McpDiscovery for RuntimeMcpDiscovery {
         // Register in marketplace
         self.marketplace.register_capability_manifest(manifest.clone()).await
             .map_err(|e| format!("Failed to register capability: {}", e))?;
+        
+        // Index in catalog if available
+        if let Some(ref catalog) = self.catalog {
+            use crate::catalog::CatalogSource;
+            catalog.register_capability(&manifest, CatalogSource::Discovered);
+            log::debug!("[mcp] Indexed capability '{}' in catalog", manifest.id);
+        }
 
         Ok(manifest.id)
+    }
+
+    async fn list_known_servers(&self) -> Vec<McpServerInfo> {
+        self.config_discovery.get_all_server_configs().into_iter()
+            .map(|config| McpServerInfo {
+                name: config.name.clone(),
+                url: config.endpoint,
+                namespace: config.name,
+            })
+            .collect()
     }
 }
 
@@ -629,35 +606,73 @@ impl ResolutionStrategy for McpResolution {
         })
     }
     
-    async fn list_available_tools(&self) -> Vec<ToolSummary> {
+    async fn list_available_tools(&self, domain_hints: Option<&[DomainHint]>) -> Vec<ToolSummary> {
         // Try to get tools from all known MCP servers
         let mut all_tools = Vec::new();
         
-        // Check known domains
-        let domains = [
-            DomainHint::GitHub,
-            DomainHint::Slack,
-            DomainHint::FileSystem,
-            DomainHint::Database,
-            DomainHint::Web,
-        ];
+        let servers_to_query = if let Some(hints) = domain_hints {
+            if hints.is_empty() {
+                // Empty hints -> unknown domain -> search ALL servers
+                self.discovery.list_known_servers().await
+            } else {
+                // Specific hints -> search matching servers
+                let mut servers = Vec::new();
+                for hint in hints {
+                    if let Some(s) = self.discovery.get_server_for_domain(hint).await {
+                        servers.push(s);
+                    } else if let DomainHint::Generic = hint {
+                        // If Generic is requested, maybe search everything too?
+                        // Or just rely on builtin. 
+                        // For now, let's assume Generic doesn't map to a specific MCP server unless configured.
+                    }
+                }
+                
+                // If specific hints yielded nothing (e.g. unknown domain but not empty hints?), fallback to all
+                if servers.is_empty() {
+                    self.discovery.list_known_servers().await
+                } else {
+                    servers
+                }
+            }
+        } else {
+            // No hints provided (None) -> search ALL servers
+            self.discovery.list_known_servers().await
+        };
         
-        for domain in &domains {
-            if let Some(server) = self.discovery.get_server_for_domain(domain).await {
-                match self.get_tools(&server).await {
-                    Ok(tools) => {
-                        for tool in tools {
-                            // Use the proper conversion that includes all fields
-                            let cached = CachedToolInfo::from(&tool);
-                            all_tools.push(cached.to_tool_summary());
+        for server in servers_to_query {
+            // Deduplicate by URL to avoid querying same server multiple times
+            if all_tools.iter().any(|t: &ToolSummary| {
+                // Check if we already have tools from this domain/server? 
+                // Hard to check from ToolSummary alone without metadata.
+                // But `get_tools` handles caching, so it's cheap to call.
+                false 
+            }) {
+                continue;
+            }
+
+            match self.get_tools(&server).await {
+                Ok(tools) => {
+                    for tool in &tools {
+                        // Register each tool in marketplace and catalog
+                        // This ensures CatalogResolution can find them by ID
+                        if let Err(e) = self.discovery.register_tool(tool).await {
+                            log::warn!("Failed to register tool '{}': {}", tool.name, e);
                         }
+                        
+                        // Convert to ToolSummary for grounded decomposition
+                        let cached = CachedToolInfo::from(tool);
+                        all_tools.push(cached.to_tool_summary());
                     }
-                    Err(e) => {
-                        log::debug!("Failed to get tools for {:?}: {}", domain, e);
-                    }
+                }
+                Err(e) => {
+                    log::debug!("Failed to get tools for {}: {}", server.name, e);
                 }
             }
         }
+        
+        // Deduplicate tools by name/id
+        all_tools.sort_by(|a, b| a.name.cmp(&b.name));
+        all_tools.dedup_by(|a, b| a.name == b.name);
         
         all_tools
     }
@@ -697,10 +712,14 @@ mod tests {
             ])
         }
         
-        async fn register_tool(&self, tool: &McpToolInfo) -> Result<String, String> {
-            Ok(format!("mcp.{}.{}", tool.server.namespace, tool.name))
-        }
+    async fn register_tool(&self, tool: &McpToolInfo) -> Result<String, String> {
+        Ok(format!("mcp.{}.{}", tool.server.namespace, tool.name))
     }
+
+    async fn list_known_servers(&self) -> Vec<McpServerInfo> {
+        vec![]
+    }
+}
     
     #[tokio::test]
     async fn test_mcp_resolution() {

@@ -1,3 +1,4 @@
+pub mod config_mcp_discovery;
 pub mod discovery;
 pub mod executors;
 pub mod marketplace;
