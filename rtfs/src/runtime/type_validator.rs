@@ -377,6 +377,14 @@ impl TypeValidator {
             (Value::Keyword(_), TypeExpr::Primitive(PrimitiveType::Keyword)) => Ok(()),
             (Value::Symbol(_), TypeExpr::Primitive(PrimitiveType::Symbol)) => Ok(()),
 
+            // Function types - bare :fn accepts any function
+            (Value::Function(_), TypeExpr::Primitive(PrimitiveType::Custom(kw))) if kw.0 == "fn" => {
+                Ok(())
+            }
+
+            // Full function type signature [:fn [...] ...] - accepts any function
+            (Value::Function(_), TypeExpr::Function { .. }) => Ok(()),
+
             // Any type accepts everything
             (_, TypeExpr::Any) => Ok(()),
 
@@ -453,6 +461,15 @@ impl TypeValidator {
             (Value::Nil, TypeExpr::Primitive(PrimitiveType::Nil)) => Ok(()),
             (Value::Keyword(_), TypeExpr::Primitive(PrimitiveType::Keyword)) => Ok(()),
             (Value::Symbol(_), TypeExpr::Primitive(PrimitiveType::Symbol)) => Ok(()),
+
+            // Function types - bare :fn accepts any function
+            (Value::Function(_), TypeExpr::Primitive(PrimitiveType::Custom(kw))) if kw.0 == "fn" => {
+                Ok(())
+            }
+
+            // Full function type signature [:fn [...] ...] - accepts any function
+            // (Structural validation of param/return types could be added here)
+            (Value::Function(_), TypeExpr::Function { .. }) => Ok(()),
 
             // Any type accepts everything
             (_, TypeExpr::Any) => Ok(()),
