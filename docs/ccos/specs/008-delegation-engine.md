@@ -1,22 +1,22 @@
 # CCOS Specification 008: Delegation Engine (RTFS 2.0 Edition)
 
-**Status:** Draft for Review  
-**Version:** 1.0  
-**Date:** 2025-09-20  
-**Related:** [000: Architecture](./000-ccos-architecture-new.md), [007: Global Function Mesh](./007-global-function-mesh-new.md), [005: Security](./005-security-and-context-new.md)  
+**Status:** Active  
+**Version:** 1.1  
+**Date:** 2025-11-29  
+**Related:** [000: Architecture](./000-ccos-architecture.md), [030: Capability System](./030-capability-system-architecture.md), [005: Security](./005-security-and-context.md)  
 
 ## Introduction: Policy-Driven Provider Selection
 
-The Delegation Engine (DE) is CCOS's decision layer: After GFM provides capability candidates, DE selects the optimal provider based on runtime policies (e.g., cost, privacy, latency). Pluggable and configurable, it ensures yields align with context (e.g., intent constraints). In RTFS 2.0, DE operates on yield requests, keeping plans abstract and pure—selection is host-side, transparent via chain logs.
+The Delegation Engine (DE) is CCOS's decision layer: After the CapabilityMarketplace provides capability candidates, DE selects the optimal provider based on runtime policies (e.g., cost, privacy, latency). Pluggable and configurable, it ensures yields align with context (e.g., intent constraints). In RTFS 2.0, DE operates on yield requests, keeping plans abstract and pure—selection is host-side, transparent via chain logs.
 
-Why critical? GFM finds 'what's available'; DE decides 'which one'—balancing tradeoffs. Reentrancy: Deterministic selection on resume (policy-seeded randomness or fixed).
+Why critical? CapabilityMarketplace finds 'what's available'; DE decides 'which one'—balancing tradeoffs. Reentrancy: Deterministic selection on resume (policy-seeded randomness or fixed).
 
 ## Core Concepts
 
 ### 1. DE Structure and Scoring
-DE uses pluggable scorers (e.g., CostScorer, PrivacyScorer) to rank GFM candidates.
+DE uses pluggable scorers (e.g., CostScorer, PrivacyScorer) to rank marketplace candidates.
 
-**Input**: Yield request + candidates from GFM.
+**Input**: Yield request + candidates from CapabilityMarketplace.
 **Policies**: From Runtime Context (e.g., {:prefer-local true, :max-latency 100ms, :budget-per-call 0.05}).
 **Output**: Selected provider (e.g., {:impl :local-nlp, :score 0.95}).
 
@@ -29,7 +29,7 @@ DE uses pluggable scorers (e.g., CostScorer, PrivacyScorer) to rank GFM candidat
 ```
 
 ### 2. Workflow
-1. GFM returns candidates.
+1. CapabilityMarketplace returns candidates.
 2. DE applies scorers: e.g., Cost = 1 - (price / budget); Privacy = match-level (0-1).
 3. Weighted sum → Rank; select top if > threshold, else fallback.
 4. Log decision to chain.
@@ -38,7 +38,7 @@ DE uses pluggable scorers (e.g., CostScorer, PrivacyScorer) to rank GFM candidat
 ```mermaid
 graph LR
     Yield[Yield Request<br/>:nlp.sentiment + Context]
-    GFM[GFM: Candidates<br/>(OpenAI, Local, HuggingFace)]
+    MP[CapabilityMarketplace<br/>Candidates (OpenAI, Local, HuggingFace)]
     DE[Delegation Engine<br/>Apply Policies]
     S1[Cost Scorer: OpenAI=0.2, Local=0.9]
     S2[Latency: OpenAI=0.8, Local=0.95]
@@ -47,8 +47,8 @@ graph LR
     Select[Select Local]
     Exec[Execute + Resume RTFS]
 
-    Yield --> GFM
-    GFM --> DE
+    Yield --> MP
+    MP --> DE
     DE --> S1 & S2 & S3
     S1 & S2 & S3 --> Rank
     Rank --> Select
