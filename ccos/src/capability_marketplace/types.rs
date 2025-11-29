@@ -314,6 +314,217 @@ impl CapabilityManifest {
         categories.iter().any(|c| self.has_category(c))
     }
 
+    /// Infer domains from source (server/registry name) and capability name
+    /// 
+    /// For example:
+    /// - source="github", name="list_issues" → ["github", "github.issues"]
+    /// - source="modelcontextprotocol/github", name="get_pull_request" → ["github", "github.pull_requests"]
+    /// - source="slack", name="send_message" → ["slack", "slack.messages"]
+    /// 
+    /// Returns the inferred domains that can be added to the capability
+    pub fn infer_domains(source: &str, capability_name: &str) -> Vec<String> {
+        let mut domains = Vec::new();
+
+        // Step 1: Extract primary domain from source
+        let primary_domain = Self::extract_primary_domain(source);
+        if !primary_domain.is_empty() {
+            domains.push(primary_domain.clone());
+        }
+
+        // Step 2: Extract sub-domain from capability name
+        if let Some(sub_domain) = Self::extract_sub_domain(capability_name) {
+            if !primary_domain.is_empty() {
+                domains.push(format!("{}.{}", primary_domain, sub_domain));
+            } else {
+                domains.push(sub_domain);
+            }
+        }
+
+        domains
+    }
+
+    /// Extract the primary domain from a source/server name
+    /// Handles formats like:
+    /// - "github" → "github"
+    /// - "modelcontextprotocol/github" → "github"  
+    /// - "github-mcp-server" → "github"
+    /// - "my-slack-bot" → "slack"
+    fn extract_primary_domain(source: &str) -> String {
+        let source_lower = source.to_lowercase();
+
+        // Handle namespace/name format (e.g., "modelcontextprotocol/github")
+        let name_part = if let Some(pos) = source_lower.rfind('/') {
+            &source_lower[pos + 1..]
+        } else {
+            &source_lower
+        };
+
+        // Remove common suffixes
+        let clean_name = name_part
+            .replace("-mcp-server", "")
+            .replace("_mcp_server", "")
+            .replace("-server", "")
+            .replace("_server", "")
+            .replace("-mcp", "")
+            .replace("_mcp", "")
+            .replace("-bot", "")
+            .replace("_bot", "")
+            .replace("-api", "")
+            .replace("_api", "");
+
+        // Map to known domains or use the cleaned name
+        match clean_name.as_str() {
+            s if s.contains("github") || s.contains("gh") => "github".to_string(),
+            s if s.contains("slack") => "slack".to_string(),
+            s if s.contains("discord") => "discord".to_string(),
+            s if s.contains("jira") => "jira".to_string(),
+            s if s.contains("confluence") => "confluence".to_string(),
+            s if s.contains("notion") => "notion".to_string(),
+            s if s.contains("linear") => "linear".to_string(),
+            s if s.contains("aws") || s.contains("amazon") => "cloud.aws".to_string(),
+            s if s.contains("gcp") || s.contains("google") => "cloud.gcp".to_string(),
+            s if s.contains("azure") => "cloud.azure".to_string(),
+            s if s.contains("postgres") || s.contains("mysql") || s.contains("sqlite") || s.contains("database") || s.contains("db") => "database".to_string(),
+            s if s.contains("file") || s.contains("filesystem") || s.contains("fs") => "filesystem".to_string(),
+            s if s.contains("http") || s.contains("fetch") || s.contains("web") => "web".to_string(),
+            s if s.contains("email") || s.contains("mail") || s.contains("smtp") => "email".to_string(),
+            s if s.contains("calendar") || s.contains("gcal") => "calendar".to_string(),
+            _ => clean_name.replace(['-', '_'], "."),
+        }
+    }
+
+    /// Extract sub-domain from capability/tool name
+    /// Maps common patterns to resource types:
+    /// - "list_issues", "get_issue", "create_issue" → "issues"
+    /// - "list_pull_requests", "get_pr" → "pull_requests"
+    /// - "send_message", "post_message" → "messages"
+    fn extract_sub_domain(capability_name: &str) -> Option<String> {
+        let name_lower = capability_name.to_lowercase();
+
+        // Remove action prefixes to get the resource part
+        let resource_part = name_lower
+            .strip_prefix("list_")
+            .or_else(|| name_lower.strip_prefix("get_"))
+            .or_else(|| name_lower.strip_prefix("get_all_"))
+            .or_else(|| name_lower.strip_prefix("create_"))
+            .or_else(|| name_lower.strip_prefix("add_"))
+            .or_else(|| name_lower.strip_prefix("update_"))
+            .or_else(|| name_lower.strip_prefix("edit_"))
+            .or_else(|| name_lower.strip_prefix("delete_"))
+            .or_else(|| name_lower.strip_prefix("remove_"))
+            .or_else(|| name_lower.strip_prefix("search_"))
+            .or_else(|| name_lower.strip_prefix("find_"))
+            .or_else(|| name_lower.strip_prefix("read_"))
+            .or_else(|| name_lower.strip_prefix("write_"))
+            .or_else(|| name_lower.strip_prefix("send_"))
+            .or_else(|| name_lower.strip_prefix("post_"))
+            .or_else(|| name_lower.strip_prefix("fetch_"))
+            .or_else(|| name_lower.strip_prefix("download_"))
+            .or_else(|| name_lower.strip_prefix("upload_"));
+
+        resource_part.map(|r| {
+            // Normalize common abbreviations and singulars to plurals
+            match r {
+                "issue" => "issues".to_string(),
+                "pr" | "pull_request" => "pull_requests".to_string(),
+                "repo" | "repository" => "repos".to_string(),
+                "branch" => "branches".to_string(),
+                "commit" => "commits".to_string(),
+                "file" | "files" => "files".to_string(),
+                "dir" | "directory" | "folder" => "directories".to_string(),
+                "message" | "msg" => "messages".to_string(),
+                "channel" => "channels".to_string(),
+                "user" => "users".to_string(),
+                "team" => "teams".to_string(),
+                "workflow" => "workflows".to_string(),
+                "action" => "actions".to_string(),
+                "release" => "releases".to_string(),
+                "tag" => "tags".to_string(),
+                "comment" => "comments".to_string(),
+                "review" => "reviews".to_string(),
+                "label" => "labels".to_string(),
+                "milestone" => "milestones".to_string(),
+                other => {
+                    // Keep as-is, replacing underscores with dots for hierarchy
+                    other.replace('_', ".")
+                }
+            }
+        })
+    }
+
+    /// Infer category from capability name based on action pattern
+    /// Returns categories like "crud.read", "crud.write", "search", "notify"
+    pub fn infer_category(capability_name: &str) -> Vec<String> {
+        let name_lower = capability_name.to_lowercase();
+        let mut categories = Vec::new();
+
+        // Determine CRUD category
+        if name_lower.starts_with("list_") 
+            || name_lower.starts_with("get_")
+            || name_lower.starts_with("read_")
+            || name_lower.starts_with("fetch_")
+            || name_lower.starts_with("download_")
+        {
+            categories.push("crud.read".to_string());
+        } else if name_lower.starts_with("create_") 
+            || name_lower.starts_with("add_")
+            || name_lower.starts_with("new_")
+            || name_lower.starts_with("post_")
+        {
+            categories.push("crud.create".to_string());
+        } else if name_lower.starts_with("update_") 
+            || name_lower.starts_with("edit_")
+            || name_lower.starts_with("modify_")
+            || name_lower.starts_with("patch_")
+        {
+            categories.push("crud.update".to_string());
+        } else if name_lower.starts_with("delete_") 
+            || name_lower.starts_with("remove_")
+            || name_lower.starts_with("drop_")
+        {
+            categories.push("crud.delete".to_string());
+        }
+
+        // Determine additional categories
+        if name_lower.starts_with("search_") || name_lower.starts_with("find_") || name_lower.contains("_search") {
+            categories.push("search".to_string());
+        }
+
+        if name_lower.starts_with("send_") || name_lower.starts_with("notify_") || name_lower.contains("_message") {
+            categories.push("notify".to_string());
+        }
+
+        if name_lower.starts_with("transform_") || name_lower.starts_with("convert_") || name_lower.starts_with("format_") {
+            categories.push("transform".to_string());
+        }
+
+        if name_lower.starts_with("validate_") || name_lower.starts_with("check_") || name_lower.starts_with("verify_") {
+            categories.push("validate".to_string());
+        }
+
+        if name_lower.starts_with("upload_") || name_lower.contains("_upload") {
+            categories.push("upload".to_string());
+        }
+
+        if categories.is_empty() {
+            categories.push("other".to_string());
+        }
+
+        categories
+    }
+
+    /// Automatically populate domains and categories based on source and name
+    /// Use this when creating a manifest from MCP or other external sources
+    pub fn with_inferred_domains_and_categories(mut self, source: &str) -> Self {
+        if self.domains.is_empty() {
+            self.domains = Self::infer_domains(source, &self.name);
+        }
+        if self.categories.is_empty() {
+            self.categories = Self::infer_category(&self.name);
+        }
+        self
+    }
+
     /// Get the last updated timestamp from metadata
     pub fn last_updated(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.metadata
@@ -1125,3 +1336,116 @@ pub trait CapabilityExecutor: Send + Sync {
 }
 
 // Implementation moved to marketplace.rs to avoid conflicts
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_infer_domains_from_github_server() {
+        // Simple server name
+        let domains = CapabilityManifest::infer_domains("github", "list_issues");
+        assert!(domains.contains(&"github".to_string()));
+        assert!(domains.contains(&"github.issues".to_string()));
+
+        // Namespaced server name (MCP registry format)
+        let domains = CapabilityManifest::infer_domains("modelcontextprotocol/github", "get_pull_request");
+        assert!(domains.contains(&"github".to_string()));
+        assert!(domains.contains(&"github.pull_requests".to_string()));
+
+        // Server name with suffix
+        let domains = CapabilityManifest::infer_domains("github-mcp-server", "create_issue");
+        assert!(domains.contains(&"github".to_string()));
+        assert!(domains.contains(&"github.issues".to_string()));
+    }
+
+    #[test]
+    fn test_infer_domains_from_slack_server() {
+        let domains = CapabilityManifest::infer_domains("slack", "send_message");
+        assert!(domains.contains(&"slack".to_string()));
+        assert!(domains.contains(&"slack.messages".to_string()));
+
+        let domains = CapabilityManifest::infer_domains("my-slack-bot", "list_channels");
+        assert!(domains.contains(&"slack".to_string()));
+        assert!(domains.contains(&"slack.channels".to_string()));
+    }
+
+    #[test]
+    fn test_infer_domains_from_cloud_providers() {
+        let domains = CapabilityManifest::infer_domains("aws-s3", "upload_file");
+        assert!(domains.contains(&"cloud.aws".to_string()));
+        assert!(domains.contains(&"cloud.aws.files".to_string()));
+
+        let domains = CapabilityManifest::infer_domains("google-cloud", "list_buckets");
+        assert!(domains.contains(&"cloud.gcp".to_string()));
+    }
+
+    #[test]
+    fn test_infer_category_from_capability_name() {
+        // Read operations
+        let cats = CapabilityManifest::infer_category("list_issues");
+        assert!(cats.contains(&"crud.read".to_string()));
+
+        let cats = CapabilityManifest::infer_category("get_user");
+        assert!(cats.contains(&"crud.read".to_string()));
+
+        // Create operations
+        let cats = CapabilityManifest::infer_category("create_issue");
+        assert!(cats.contains(&"crud.create".to_string()));
+
+        // Update operations
+        let cats = CapabilityManifest::infer_category("update_issue");
+        assert!(cats.contains(&"crud.update".to_string()));
+
+        // Delete operations
+        let cats = CapabilityManifest::infer_category("delete_issue");
+        assert!(cats.contains(&"crud.delete".to_string()));
+
+        // Search operations
+        let cats = CapabilityManifest::infer_category("search_issues");
+        assert!(cats.contains(&"search".to_string()));
+
+        // Notify operations
+        let cats = CapabilityManifest::infer_category("send_message");
+        assert!(cats.contains(&"notify".to_string()));
+    }
+
+    #[test]
+    fn test_extract_primary_domain() {
+        assert_eq!(CapabilityManifest::extract_primary_domain("github"), "github");
+        assert_eq!(CapabilityManifest::extract_primary_domain("modelcontextprotocol/github"), "github");
+        assert_eq!(CapabilityManifest::extract_primary_domain("GitHub-MCP-Server"), "github");
+        assert_eq!(CapabilityManifest::extract_primary_domain("my-postgres-db"), "database");
+        assert_eq!(CapabilityManifest::extract_primary_domain("aws-lambda"), "cloud.aws");
+    }
+
+    #[test]
+    fn test_extract_sub_domain() {
+        assert_eq!(CapabilityManifest::extract_sub_domain("list_issues"), Some("issues".to_string()));
+        assert_eq!(CapabilityManifest::extract_sub_domain("get_pull_request"), Some("pull_requests".to_string()));
+        assert_eq!(CapabilityManifest::extract_sub_domain("get_pr"), Some("pull_requests".to_string()));
+        assert_eq!(CapabilityManifest::extract_sub_domain("send_message"), Some("messages".to_string()));
+        assert_eq!(CapabilityManifest::extract_sub_domain("create_branch"), Some("branches".to_string()));
+        assert_eq!(CapabilityManifest::extract_sub_domain("some_random_thing"), None);
+    }
+
+    #[test]
+    fn test_with_inferred_domains_and_categories() {
+        let manifest = CapabilityManifest::new(
+            "mcp.github.list_issues".to_string(),
+            "list_issues".to_string(),
+            "List GitHub issues".to_string(),
+            ProviderType::MCP(MCPCapability {
+                server_url: "http://localhost:8080".to_string(),
+                tool_name: "list_issues".to_string(),
+                timeout_ms: 30000,
+                auth_token: None,
+            }),
+            "1.0.0".to_string(),
+        ).with_inferred_domains_and_categories("modelcontextprotocol/github");
+
+        assert!(manifest.domains.contains(&"github".to_string()));
+        assert!(manifest.domains.contains(&"github.issues".to_string()));
+        assert!(manifest.categories.contains(&"crud.read".to_string()));
+    }
+}
