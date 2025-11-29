@@ -105,7 +105,9 @@ impl CapabilityExecutor for MCPExecutor {
                 }
             });
 
-            let mut init_builder = client.post(&mcp.server_url);
+            let mut init_builder = client.post(&mcp.server_url)
+                .header("Accept", "application/json")
+                .header("Accept", "text/event-stream");
             if let Some(token) = &auth_token {
                 init_builder = init_builder.header("Authorization", format!("Bearer {}", token));
             }
@@ -116,10 +118,56 @@ impl CapabilityExecutor for MCPExecutor {
                 .send()
                 .await
                 .map_err(|e| RuntimeError::Generic(format!("MCP initialization failed: {}", e)))?;
-
-            let init_json: serde_json::Value = init_response.json().await.map_err(|e| {
-                RuntimeError::Generic(format!("Failed to parse MCP init response: {}", e))
-            })?;
+            
+            // Check status and handle SSE format
+            let status = init_response.status();
+            if !status.is_success() {
+                let error_text = init_response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(RuntimeError::Generic(format!(
+                    "MCP initialization failed ({}): {}",
+                    status, error_text
+                )));
+            }
+            
+            // Extract session ID from response header first (MCP Streamable HTTP Transport spec)
+            let session_id_from_header = init_response.headers()
+                .get("mcp-session-id")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from);
+            
+            log::debug!("MCP session ID from header: {:?}", session_id_from_header);
+            
+            let content_type = init_response.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/json");
+            
+            let init_json: serde_json::Value = if content_type.contains("text/event-stream") {
+                let body = init_response.text().await.map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to read SSE init response: {}", e))
+                })?;
+                let mut last_data = None;
+                for line in body.lines() {
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        if !data.trim().is_empty() {
+                            last_data = Some(data.to_string());
+                        }
+                    }
+                }
+                if let Some(data) = last_data {
+                    serde_json::from_str(&data).map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to parse SSE init data: {}", e))
+                    })?
+                } else {
+                    return Err(RuntimeError::Generic(
+                        "No data found in SSE init response".to_string()
+                    ));
+                }
+            } else {
+                init_response.json().await.map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to parse MCP init response: {}", e))
+                })?
+            };
 
             // Check for initialization error
             if let Some(error) = init_json.get("error") {
@@ -129,16 +177,24 @@ impl CapabilityExecutor for MCPExecutor {
                 )));
             }
 
-            // Extract session ID if provided (some servers use it)
-            let session_id = init_json
-                .get("result")
-                .and_then(|r| r.get("sessionId"))
-                .and_then(|s| s.as_str())
-                .map(String::from);
+            // Extract session ID from response header (MCP Streamable HTTP Transport spec)
+            // The Mcp-Session-Id header is set in the response, not the body
+            let session_id = session_id_from_header.or_else(|| {
+                // Fallback: check if it's in the JSON response body (some servers)
+                init_json
+                    .get("result")
+                    .and_then(|r| r.get("sessionId"))
+                    .and_then(|s| s.as_str())
+                    .map(String::from)
+            });
+            
+            log::debug!("MCP session ID (final): {:?}", session_id);
 
             let tool_name = if mcp.tool_name.is_empty() || mcp.tool_name == "*" {
                 let tools_request = json!({"jsonrpc":"2.0","id":"tools_discovery","method":"tools/list","params":{}});
-                let mut request_builder = client.post(&mcp.server_url);
+                let mut request_builder = client.post(&mcp.server_url)
+                    .header("Accept", "application/json")
+                    .header("Accept", "text/event-stream");
                 if let Some(token) = &auth_token {
                     request_builder =
                         request_builder.header("Authorization", format!("Bearer {}", token));
@@ -155,9 +211,48 @@ impl CapabilityExecutor for MCPExecutor {
                     .map_err(|e| {
                         RuntimeError::Generic(format!("Failed to connect to MCP server: {}", e))
                     })?;
-                let tools_response: serde_json::Value = response.json().await.map_err(|e| {
-                    RuntimeError::Generic(format!("Failed to parse MCP response: {}", e))
-                })?;
+                
+                // Check status and handle SSE format for tools/list
+                let status = response.status();
+                if !status.is_success() {
+                    let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                    return Err(RuntimeError::Generic(format!(
+                        "MCP tools/list failed ({}): {}",
+                        status, error_text
+                    )));
+                }
+                
+                let content_type = response.headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("application/json");
+                
+                let tools_response: serde_json::Value = if content_type.contains("text/event-stream") {
+                    let body = response.text().await.map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to read SSE tools response: {}", e))
+                    })?;
+                    let mut last_data = None;
+                    for line in body.lines() {
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            if !data.trim().is_empty() {
+                                last_data = Some(data.to_string());
+                            }
+                        }
+                    }
+                    if let Some(data) = last_data {
+                        serde_json::from_str(&data).map_err(|e| {
+                            RuntimeError::Generic(format!("Failed to parse SSE tools data: {}", e))
+                        })?
+                    } else {
+                        return Err(RuntimeError::Generic(
+                            "No data found in SSE tools response".to_string()
+                        ));
+                    }
+                } else {
+                    response.json().await.map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to parse MCP response: {}", e))
+                    })?
+                };
                 if let Some(result) = tools_response.get("result") {
                     if let Some(tools) = result.get("tools").and_then(|t| t.as_array()) {
                         if let Some(first_tool) = tools
@@ -185,7 +280,9 @@ impl CapabilityExecutor for MCPExecutor {
                 mcp.tool_name.clone()
             };
             let tool_request = json!({"jsonrpc":"2.0","id":"tool_call","method":"tools/call","params":{"name":tool_name,"arguments":input_json}});
-            let mut request_builder = client.post(&mcp.server_url);
+            let mut request_builder = client.post(&mcp.server_url)
+                .header("Accept", "application/json")
+                .header("Accept", "text/event-stream");
             if let Some(token) = &auth_token {
                 request_builder =
                     request_builder.header("Authorization", format!("Bearer {}", token));
@@ -200,9 +297,67 @@ impl CapabilityExecutor for MCPExecutor {
                 .send()
                 .await
                 .map_err(|e| RuntimeError::Generic(format!("Failed to execute MCP tool: {}", e)))?;
-            let tool_response: serde_json::Value = response.json().await.map_err(|e| {
-                RuntimeError::Generic(format!("Failed to parse tool response: {}", e))
+            
+            // Check status code first
+            let status = response.status();
+            
+            // Check content type to handle SSE vs JSON
+            let content_type = response.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+            
+            log::debug!("MCP tool response: status={}, content-type={}", status, content_type);
+            
+            // Read the body as text first for debugging
+            let body_text = response.text().await.map_err(|e| {
+                RuntimeError::Generic(format!("Failed to read response body: {}", e))
             })?;
+            
+            if body_text.is_empty() {
+                return Err(RuntimeError::Generic(format!(
+                    "MCP tool execution returned empty response (status={}, content-type={})",
+                    status, content_type
+                )));
+            }
+            
+            log::debug!("MCP tool response body (first 500 chars): {}", &body_text[..body_text.len().min(500)]);
+            
+            if !status.is_success() {
+                return Err(RuntimeError::Generic(format!(
+                    "MCP tool execution failed ({}): {}",
+                    status, body_text
+                )));
+            }
+            
+            let tool_response: serde_json::Value = if content_type.contains("text/event-stream") {
+                // Parse SSE response - extract the last data line
+                // SSE format: "data: {...}\n\n"
+                let mut last_data = None;
+                for line in body_text.lines() {
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        if !data.trim().is_empty() {
+                            last_data = Some(data.to_string());
+                        }
+                    }
+                }
+                
+                if let Some(data) = last_data {
+                    serde_json::from_str(&data).map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to parse SSE data: {}", e))
+                    })?
+                } else {
+                    return Err(RuntimeError::Generic(
+                        "No data found in SSE response".to_string()
+                    ));
+                }
+            } else {
+                // Parse as regular JSON
+                serde_json::from_str(&body_text).map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to parse tool response: {} (body: {})", e, &body_text[..body_text.len().min(200)]))
+                })?
+            };
             if let Some(error) = tool_response.get("error") {
                 return Err(RuntimeError::Generic(format!(
                     "MCP tool execution failed: {:?}",

@@ -398,7 +398,7 @@ impl MCPDiscoveryProvider {
                 server_url: self.config.endpoint.clone(),
                 tool_name: tool.name.clone(),
                 timeout_ms: self.config.timeout_seconds * 1000,
-                auth_token: None,
+                auth_token: self.config.auth_token.clone(),
             }),
             version: "1.0.0".to_string(),
             input_schema,
