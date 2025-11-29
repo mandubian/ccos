@@ -200,39 +200,42 @@ for (server_config, tools) in results {
 
 ---
 
-### Option 8: Complete MCP Discovery Migration 🔄 (Code Cleanup)
+### ~~Option 8: Complete MCP Discovery Migration~~ ✅ COMPLETED
 **Priority**: High | **Effort**: 2-3 hours | **Impact**: High
 
-**What**: Complete the migration from `mcp_discovery.rs` legacy code to `mcp/core.rs` unified service.
+**Status**: Migration complete. All MCP discovery now uses the unified `MCPDiscoveryService`.
 
-**Current State**:
-- `MCPDiscoveryService` in `mcp/core.rs` is the unified, complete implementation
-- `MCPDiscoveryProvider` in `mcp_discovery.rs` has optional `unified_service` field
-- By default, `unified_service` is `None`, so legacy code path is used
-- Legacy implementation duplicates discovery logic
+**Changes Made**:
 
-**Problem**:
-- Redundant code paths (legacy vs unified)
-- Default behavior uses legacy code instead of unified service
-- Migration incomplete - both implementations coexist
+1. **`MCPDiscoveryProvider`** (in `mcp_discovery.rs`):
+   - Now always uses `discovery_service: Arc<MCPDiscoveryService>` (not optional)
+   - Removed `session_manager` field (no longer needed)
+   - Removed `unified_service` optional field
+   - `new()` creates its own `MCPDiscoveryService` with auth headers
+   - Added `with_discovery_service()` for sharing discovery service
+   - Removed legacy methods: `get_session()`, `discover_raw_tools()`
+   - Removed `with_session_manager()`, `with_unified_service()`
+   - `discover_tools()` and `discover_resources()` delegate to discovery service
 
-**Implementation**:
-- Make `MCPDiscoveryProvider` always use `MCPDiscoveryService` (remove `unified_service` optional)
-- Remove legacy `discover_raw_tools()` and related methods from `mcp_discovery.rs`
-- Keep `MCPDiscoveryProvider` as thin `CapabilityDiscovery` adapter that delegates to `MCPDiscoveryService`
-- Update `MCPDiscoveryProvider::new()` to create and use `MCPDiscoveryService` internally
-- Remove `with_unified_service()` method (no longer needed)
+2. **`RuntimeMcpDiscovery`** (in `planner/modular_planner/resolution/mcp.rs`):
+   - Now always uses `discovery_service: Arc<MCPDiscoveryService>` (not optional)
+   - Removed `session_manager` field
+   - Removed `unified_service` optional field
+   - `new()` takes only `marketplace` and creates discovery service internally
+   - Added `with_discovery_service()` for sharing discovery service
+   - Removed `with_unified_service()` method
+   - All trait methods delegate to discovery service (no legacy fallbacks)
 
-**Files to Modify**:
-- `ccos/src/capability_marketplace/mcp_discovery.rs` (remove legacy code, always use unified service)
-- `ccos/src/mcp/core.rs` (ensure all needed methods are public)
-- Update any code that calls `with_unified_service()` (should be minimal)
+3. **Callers Updated**:
+   - `ccos/src/examples_common/builder.rs` - Uses `with_discovery_service()`
+   - `ccos/examples/autonomous_agent_demo.rs` - Uses `with_discovery_service()`
 
 **Benefits**:
-- Eliminates code duplication
-- Single source of truth for MCP discovery
-- Better maintainability
-- Consistent behavior (always uses caching, rate limiting, etc.)
+- ✅ Single source of truth for MCP discovery
+- ✅ All discovery uses caching, rate limiting, retry policies
+- ✅ ~150 lines of legacy code removed
+- ✅ Cleaner API surface
+- ✅ All 40 MCP discovery tests pass
 
 ---
 

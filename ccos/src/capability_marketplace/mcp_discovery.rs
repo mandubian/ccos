@@ -2,7 +2,6 @@ use crate::capability_marketplace::types::CapabilityDiscovery;
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
 use crate::synthesis::mcp_introspector::MCPIntrospector;
 use crate::mcp::types::DiscoveredMCPTool;
-use crate::mcp::discovery_session::{MCPServerInfo, MCPSession, MCPSessionManager};
 use async_trait::async_trait;
 use chrono::Utc;
 use rtfs::ast::{
@@ -97,11 +96,13 @@ pub struct RTFSModuleDefinition {
 }
 
 /// MCP Discovery Provider for discovering MCP servers and their tools
+/// 
+/// This is a thin adapter implementing the `CapabilityDiscovery` trait
+/// that delegates to the unified `MCPDiscoveryService` for all discovery operations.
 pub struct MCPDiscoveryProvider {
     config: MCPServerConfig,
-    session_manager: std::sync::Arc<MCPSessionManager>,
-    /// Optional unified discovery service (if provided, uses it; otherwise uses legacy implementation)
-    unified_service: Option<std::sync::Arc<crate::mcp::core::MCPDiscoveryService>>,
+    /// Unified discovery service - always used for discovery
+    discovery_service: std::sync::Arc<crate::mcp::core::MCPDiscoveryService>,
 }
 
 impl MCPDiscoveryProvider {
@@ -247,6 +248,8 @@ impl MCPDiscoveryProvider {
     }
 
     /// Create a new MCP discovery provider
+    /// 
+    /// Internally creates an `MCPDiscoveryService` for all discovery operations.
     pub fn new(config: MCPServerConfig) -> RuntimeResult<Self> {
         // Build auth headers if token provided
         let auth_headers = config.auth_token.as_ref().map(|token| {
@@ -255,151 +258,69 @@ impl MCPDiscoveryProvider {
             headers
         });
 
-        let session_manager = std::sync::Arc::new(MCPSessionManager::new(auth_headers));
+        // Create the unified discovery service
+        let discovery_service = std::sync::Arc::new(
+            crate::mcp::core::MCPDiscoveryService::with_auth_headers(auth_headers)
+        );
 
         Ok(Self {
             config,
-            session_manager,
-            unified_service: None,
+            discovery_service,
         })
     }
 
-    /// Create a new MCP discovery provider with an existing session manager
-    pub fn with_session_manager(
+    /// Create a new MCP discovery provider with an existing discovery service
+    /// 
+    /// Useful when you want to share a discovery service across multiple providers.
+    pub fn with_discovery_service(
         config: MCPServerConfig,
-        session_manager: std::sync::Arc<MCPSessionManager>,
+        discovery_service: std::sync::Arc<crate::mcp::core::MCPDiscoveryService>,
     ) -> Self {
         Self {
             config,
-            session_manager,
-            unified_service: None,
+            discovery_service,
         }
-    }
-
-    /// Create a new MCP discovery provider using the unified discovery service
-    pub fn with_unified_service(
-        config: MCPServerConfig,
-        unified_service: std::sync::Arc<crate::mcp::core::MCPDiscoveryService>,
-    ) -> Self {
-        Self {
-            config,
-            session_manager: std::sync::Arc::new(MCPSessionManager::new(None)), // Not used when unified service is provided
-            unified_service: Some(unified_service),
-        }
-    }
-
-    /// Establish a session with the MCP server
-    async fn get_session(&self) -> RuntimeResult<MCPSession> {
-        // ... existing get_session logic ...
-        let client_info = MCPServerInfo {
-            name: "ccos-mcp-discovery".to_string(),
-            version: "1.0.0".to_string(),
-        };
-
-        self.session_manager
-            .initialize_session(&self.config.endpoint, &client_info)
-            .await
-    }
-
-    /// Discover raw tools from the MCP server without conversion to CapabilityManifest
-    pub async fn discover_raw_tools(&self) -> RuntimeResult<Vec<MCPTool>> {
-        let session = self.get_session().await?;
-
-        // Use session manager to make request
-        let response = self
-            .session_manager
-            .make_request(&session, "tools/list", serde_json::json!({}))
-            .await?;
-
-        let tools_array = response
-            .get("result")
-            .and_then(|r| r.get("tools"))
-            .and_then(|t| t.as_array());
-
-        // Parse MCP tools
-        let mut tools = Vec::new();
-        if let Some(tools_val) = tools_array {
-            for tool_val in tools_val {
-                if let Ok(tool) = serde_json::from_value::<MCPTool>(tool_val.clone()) {
-                    tools.push(tool);
-                }
-            }
-        }
-
-        // Clean up session if needed
-        let _ = self.session_manager.terminate_session(&session).await;
-
-        Ok(tools)
     }
 
     /// Discover tools from the MCP server
+    /// 
+    /// This method delegates to the unified `MCPDiscoveryService` for all discovery.
     pub async fn discover_tools(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
-        // Use unified service if available
-        if let Some(ref unified) = self.unified_service {
-            let options = crate::mcp::types::DiscoveryOptions {
-                introspect_output_schemas: false, // Can be made configurable
-                use_cache: true,
-                register_in_marketplace: false,
-                export_to_rtfs: false,
-                export_directory: None,
-                auth_headers: self.build_auth_headers(),
-                ..Default::default()
-            };
+        let options = crate::mcp::types::DiscoveryOptions {
+            introspect_output_schemas: false, // Can be made configurable
+            use_cache: true,
+            register_in_marketplace: false,
+            export_to_rtfs: false,
+            export_directory: None,
+            auth_headers: self.build_auth_headers(),
+            ..Default::default()
+        };
 
-            let discovered_tools = unified.discover_tools(&self.config, &options).await?;
+        let discovered_tools = self.discovery_service.discover_tools(&self.config, &options).await?;
 
-            // Convert to manifests
-            let mut capabilities = Vec::new();
-            for tool in discovered_tools {
-                let manifest = unified.tool_to_manifest(&tool, &self.config);
-                capabilities.push(manifest);
-            }
-
-            return Ok(capabilities);
-        }
-
-        // Legacy implementation
-        let tools = self.discover_raw_tools().await?;
-
-        // Convert MCP tools to capability manifests
+        // Convert to manifests
         let mut capabilities = Vec::new();
-        for tool in tools {
-            let capability = self
-                .convert_tool_to_capability_with_introspection(tool)
-                .await?;
-            capabilities.push(capability);
+        for tool in discovered_tools {
+            let manifest = self.discovery_service.tool_to_manifest(&tool, &self.config);
+            capabilities.push(manifest);
         }
 
         Ok(capabilities)
     }
 
     /// Discover resources from the MCP server
+    /// 
+    /// This method delegates to the unified `MCPDiscoveryService` for resource discovery.
     pub async fn discover_resources(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
-        let session = self.get_session().await?;
-
-        // Use session manager to make request
-        let response = self
-            .session_manager
-            .make_request(&session, "resources/list", serde_json::json!({}))
-            .await?;
-
-        let resources_array = response
-            .get("result")
-            .and_then(|r| r.get("resources"))
-            .and_then(|t| t.as_array());
+        let resources = self.discovery_service.discover_resources(&self.config).await?;
 
         // Convert MCP resources to capability manifests
         let mut capabilities = Vec::new();
-        if let Some(resources) = resources_array {
-            for resource in resources {
-                if let Ok(capability) = self.convert_resource_to_capability(resource.clone()) {
-                    capabilities.push(capability);
-                }
+        for resource in resources {
+            if let Ok(capability) = self.convert_resource_to_capability(resource) {
+                capabilities.push(capability);
             }
         }
-
-        // Clean up session if needed
-        let _ = self.session_manager.terminate_session(&session).await;
 
         Ok(capabilities)
     }

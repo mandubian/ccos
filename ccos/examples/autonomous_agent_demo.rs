@@ -2761,12 +2761,17 @@ async fn run_modular_planner(
             auth_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
         }
     }
-    let discovery_session_manager = Arc::new(MCPSessionManager::new(Some(auth_headers)));
+    
+    // Create discovery service with auth headers
+    let discovery_service = Arc::new(
+        ccos::mcp::core::MCPDiscoveryService::with_auth_headers(Some(auth_headers))
+            .with_marketplace(ccos.get_capability_marketplace())
+    );
 
-    // Create runtime MCP discovery
-    let mcp_discovery = Arc::new(RuntimeMcpDiscovery::new(
-        discovery_session_manager,
+    // Create runtime MCP discovery using the unified discovery service
+    let mcp_discovery = Arc::new(RuntimeMcpDiscovery::with_discovery_service(
         ccos.get_capability_marketplace(),
+        discovery_service,
     ));
 
     let mcp_resolution = McpResolution::new(mcp_discovery);
