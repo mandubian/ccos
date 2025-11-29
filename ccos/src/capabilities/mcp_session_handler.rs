@@ -46,7 +46,7 @@ impl MCPSessionHandler {
         if let Some(token) = metadata.get("mcp_auth_token") {
             return Some(token.clone());
         }
-        
+
         // Fallback to env var lookup
         let env_var = metadata.get("mcp_auth_env_var")?;
         std::env::var(env_var).ok()
@@ -185,10 +185,10 @@ impl MCPSessionHandler {
                             MapKey::String(s) => s.clone(),
                             MapKey::Integer(i) => i.to_string(),
                         };
-                        
+
                         // Convert value to JSON
                         let json_val = rtfs_value_to_json(value);
-                        
+
                         // Filter out null values for MCP arguments
                         // This handles cases where optional parameters are passed as nil (null)
                         // but the MCP server expects them to be omitted if not present.
@@ -206,7 +206,10 @@ impl MCPSessionHandler {
             ));
         };
 
-        eprintln!("📝 MCP Arguments: {}", serde_json::to_string_pretty(&mcp_args).unwrap_or_default());
+        eprintln!(
+            "📝 MCP Arguments: {}",
+            serde_json::to_string_pretty(&mcp_args).unwrap_or_default()
+        );
 
         // Build MCP JSON-RPC request
         let mcp_request = serde_json::json!({
@@ -280,35 +283,42 @@ impl MCPSessionHandler {
         // Extract result from JSON-RPC response
         if let Some(result) = json.get("result") {
             // Debug: Log the keys of the result for troubleshooting
-             if let Some(content) = result.get("content") {
-                 if let Some(arr) = content.as_array() {
-                     for (i, item) in arr.iter().enumerate() {
-                         if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                             let preview = if text.len() > 100 { &text[..100] } else { text };
-                             eprintln!("📦 MCP result content[{}]: type={}, text (preview)='{}...'", 
-                                 i, 
-                                 item.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
-                                 preview
-                             );
-                             // Try to parse JSON to see structure
-                             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
-                                 if let Some(obj) = parsed.as_object() {
-                                     eprintln!("   ↳ Parsed JSON keys: {:?}", obj.keys().collect::<Vec<_>>());
-                                 } else if parsed.is_array() {
-                                      eprintln!("   ↳ Parsed JSON is an Array of len {}", parsed.as_array().unwrap().len());
-                                 }
-                             }
-                         }
-                     }
-                 }
-             }
+            if let Some(content) = result.get("content") {
+                if let Some(arr) = content.as_array() {
+                    for (i, item) in arr.iter().enumerate() {
+                        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                            let preview = if text.len() > 100 { &text[..100] } else { text };
+                            eprintln!(
+                                "📦 MCP result content[{}]: type={}, text (preview)='{}...'",
+                                i,
+                                item.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
+                                preview
+                            );
+                            // Try to parse JSON to see structure
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
+                                if let Some(obj) = parsed.as_object() {
+                                    eprintln!(
+                                        "   ↳ Parsed JSON keys: {:?}",
+                                        obj.keys().collect::<Vec<_>>()
+                                    );
+                                } else if parsed.is_array() {
+                                    eprintln!(
+                                        "   ↳ Parsed JSON is an Array of len {}",
+                                        parsed.as_array().unwrap().len()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // MCP protocol returns results in a "content" array with text blocks.
             // We should return the raw result structure so downstream adapters can handle it
             // instead of trying to be too smart and unwrapping it automatically.
             // The adapter `adapters.mcp.parse-json-from-text-content` expects the raw structure
             // with a "content" array containing text blocks.
-            
+
             // Fallback: Check for structuredContent field (if MCP server provides it)
             // Note: The MCP spec allows structuredContent, but most tools return content array.
             // We preserve the original structure unless structuredContent is explicitly present.
@@ -342,9 +352,10 @@ impl SessionHandler for MCPSessionHandler {
         metadata: &HashMap<String, String>,
     ) -> RuntimeResult<SessionId> {
         // eprintln!("[MCPSessionHandler] initialize_session for {}: metadata keys={:?}", capability_id, metadata.keys());
-        
+
         // Extract server URL from metadata
-        let server_url = metadata.get("server_url")
+        let server_url = metadata
+            .get("server_url")
             .or_else(|| metadata.get("url"))
             .or_else(|| metadata.get("mcp_server_url")); // Added fallback to mcp_server_url
 
@@ -352,10 +363,12 @@ impl SessionHandler for MCPSessionHandler {
             Some(url) => {
                 // eprintln!("[MCPSessionHandler] Found server_url: {}", url);
                 url.clone()
-            },
+            }
             None => {
                 // eprintln!("[MCPSessionHandler] Missing server_url in metadata: {:?}", metadata);
-                return Err(RuntimeError::Generic("Missing server_url in metadata".to_string()));
+                return Err(RuntimeError::Generic(
+                    "Missing server_url in metadata".to_string(),
+                ));
             }
         };
 
@@ -516,12 +529,13 @@ fn json_to_rtfs_value(json: &serde_json::Value) -> Value {
             for (k, v) in obj.iter() {
                 // Use keyword for object keys
                 // FIX: Do not prepend ':' if standard RTFS parser produces Keyword("name") for :name
-                let key_str = if k.starts_with(':') { k[1..].to_string() } else { k.clone() };
-                
-                map.insert(
-                    MapKey::Keyword(Keyword(key_str)),
-                    json_to_rtfs_value(v),
-                );
+                let key_str = if k.starts_with(':') {
+                    k[1..].to_string()
+                } else {
+                    k.clone()
+                };
+
+                map.insert(MapKey::Keyword(Keyword(key_str)), json_to_rtfs_value(v));
             }
             Value::Map(map)
         }

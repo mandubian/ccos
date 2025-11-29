@@ -51,8 +51,9 @@ pub async fn register_default_capabilities(
                         } else {
                             // Fallback: check for "message", "content", "text", "value"
                             for key in &["message", "content", "text", "value"] {
-                                if let Some(val) = map.get(&MapKey::String(key.to_string()))
-                                    .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string())))) 
+                                if let Some(val) = map
+                                    .get(&MapKey::String(key.to_string()))
+                                    .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string()))))
                                 {
                                     return Ok(val.clone());
                                 }
@@ -63,7 +64,7 @@ pub async fn register_default_capabilities(
                                     return Ok(val.clone());
                                 }
                             }
-                            
+
                             Err(RuntimeError::Generic(
                                 "Missing :args (or 'message'/'value') for ccos.echo".to_string(),
                             ))
@@ -135,14 +136,14 @@ pub async fn register_default_capabilities(
                             // This supports { "a": 1, "b": 2 } usage
                             let mut sum = 0i64;
                             let mut found_int = false;
-                            
+
                             for val in map.values() {
                                 if let Value::Integer(i) = val {
                                     sum += *i;
                                     found_int = true;
                                 }
                             }
-                            
+
                             if found_int {
                                 Ok(Value::Integer(sum))
                             } else {
@@ -209,17 +210,18 @@ pub async fn register_default_capabilities(
                                     }
                                 }
                             }
-                            
+
                             // Fallback: check for common keys like "prompt", "question", "message"
                             // or if map has exactly one string value
                             for key in &["prompt", "question", "message", "text"] {
-                                if let Some(val) = map.get(&MapKey::String(key.to_string()))
-                                    .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string())))) 
+                                if let Some(val) = map
+                                    .get(&MapKey::String(key.to_string()))
+                                    .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string()))))
                                 {
                                     return Ok(val.to_string());
                                 }
                             }
-                            
+
                             // Last resort: if map has exactly one entry and value is string, use it
                             if map.len() == 1 {
                                 if let Some(val) = map.values().next() {
@@ -228,7 +230,8 @@ pub async fn register_default_capabilities(
                             }
 
                             Err(RuntimeError::Generic(
-                                "Missing :args (or 'prompt'/'question') for ccos.user.ask".to_string(),
+                                "Missing :args (or 'prompt'/'question') for ccos.user.ask"
+                                    .to_string(),
                             ))
                         }
                         Value::List(args) | Value::Vector(args) => {
@@ -299,10 +302,15 @@ pub async fn register_default_capabilities(
                         } else {
                             // Fallback: check common keys
                             let mut msg = None;
-                            
+
                             // Check _previous_result first (data pipeline flow)
-                            if let Some(val) = map.get(&MapKey::String("_previous_result".to_string()))
-                                .or_else(|| map.get(&MapKey::Keyword(Keyword("_previous_result".to_string()))))
+                            if let Some(val) = map
+                                .get(&MapKey::String("_previous_result".to_string()))
+                                .or_else(|| {
+                                    map.get(&MapKey::Keyword(Keyword(
+                                        "_previous_result".to_string(),
+                                    )))
+                                })
                             {
                                 msg = Some(match val {
                                     Value::String(s) => s.clone(),
@@ -312,8 +320,10 @@ pub async fn register_default_capabilities(
 
                             if msg.is_none() {
                                 for key in &["message", "content", "text", "value"] {
-                                    if let Some(val) = map.get(&MapKey::String(key.to_string()))
-                                        .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string())))) 
+                                    if let Some(val) =
+                                        map.get(&MapKey::String(key.to_string())).or_else(|| {
+                                            map.get(&MapKey::Keyword(Keyword(key.to_string())))
+                                        })
                                     {
                                         msg = Some(match val {
                                             Value::String(s) => s.clone(),
@@ -323,7 +333,7 @@ pub async fn register_default_capabilities(
                                     }
                                 }
                             }
-                            
+
                             msg.unwrap_or_else(|| {
                                 // If single value map, use it
                                 if map.len() == 1 {
@@ -386,8 +396,9 @@ pub async fn register_default_capabilities(
                             // Fallback: check common keys
                             let mut msg = None;
                             for key in &["message", "content", "text", "value"] {
-                                if let Some(val) = map.get(&MapKey::String(key.to_string()))
-                                    .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string())))) 
+                                if let Some(val) = map
+                                    .get(&MapKey::String(key.to_string()))
+                                    .or_else(|| map.get(&MapKey::Keyword(Keyword(key.to_string()))))
                                 {
                                     msg = Some(match val {
                                         Value::String(s) => s.clone(),
@@ -396,7 +407,7 @@ pub async fn register_default_capabilities(
                                     break;
                                 }
                             }
-                            
+
                             msg.unwrap_or_else(|| {
                                 // If single value map, use it
                                 if map.len() == 1 {

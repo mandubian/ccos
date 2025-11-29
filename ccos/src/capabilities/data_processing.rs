@@ -106,7 +106,6 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.data.sort: {:?}", e)))?;
 
-
     // ccos.data.select (limit/take)
     marketplace
         .register_local_capability(
@@ -114,10 +113,12 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
             "Select Data".to_string(),
             "Selects items from a list. Params: data (list), count (int)".to_string(),
             Arc::new(|input| {
-                let (data, params_val) = extract_data_and_params(input, "ccos.data.select", "params")?;
-                
+                let (data, params_val) =
+                    extract_data_and_params(input, "ccos.data.select", "params")?;
+
                 let count = if let Some(Value::Map(params)) = params_val {
-                    params.get(&MapKey::String("count".to_string()))
+                    params
+                        .get(&MapKey::String("count".to_string()))
                         .or_else(|| params.get(&MapKey::Keyword(Keyword("count".to_string()))))
                         .and_then(|v| match v {
                             Value::Integer(i) => Some(*i as usize),
@@ -131,9 +132,9 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
 
                 // Extract list from data - handle both direct lists and wrapped results
                 let items = extract_list_from_value(data)?;
-                
+
                 let selected: Vec<Value> = items.iter().take(count).cloned().collect();
-                
+
                 // If count is 1, return the single item directly for convenience
                 // This makes the output cleaner for "get the one with most stars" type queries
                 if count == 1 && selected.len() == 1 {
@@ -144,7 +145,9 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
             }),
         )
         .await
-        .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.data.select: {:?}", e)))?;
+        .map_err(|e| {
+            RuntimeError::Generic(format!("Failed to register ccos.data.select: {:?}", e))
+        })?;
 
     Ok(())
 }
@@ -158,7 +161,7 @@ fn extract_list_from_value(data: &Value) -> RuntimeResult<Vec<Value>> {
     if let Value::List(items) | Value::Vector(items) = data {
         return Ok(items.clone());
     }
-    
+
     // If it's a map, try to find a list inside
     if let Value::Map(map) = data {
         // First, try to find any key that contains a list
@@ -176,15 +179,18 @@ fn extract_list_from_value(data: &Value) -> RuntimeResult<Vec<Value>> {
                 _ => continue,
             }
         }
-        
+
         // No list found in any key
         return Err(RuntimeError::TypeError {
             expected: "list or map containing a list".to_string(),
-            actual: format!("map with keys: {:?}", map.keys().take(5).collect::<Vec<_>>()),
+            actual: format!(
+                "map with keys: {:?}",
+                map.keys().take(5).collect::<Vec<_>>()
+            ),
             operation: "extract_list_from_value".to_string(),
         });
     }
-    
+
     Err(RuntimeError::TypeError {
         expected: "list or map containing a list".to_string(),
         actual: data.type_name().to_string(),
@@ -204,17 +210,23 @@ fn value_to_clean_string(v: &Value) -> String {
     }
 }
 
-fn extract_data_and_params<'a>(input: &'a Value, op_name: &str, secondary_param: &str) -> RuntimeResult<(&'a Value, Option<&'a Value>)> {
+fn extract_data_and_params<'a>(
+    input: &'a Value,
+    op_name: &str,
+    secondary_param: &str,
+) -> RuntimeResult<(&'a Value, Option<&'a Value>)> {
     match input {
         Value::Map(map) => {
             // Get _previous_result first (this is the actual data from pipeline)
-            let previous_result = map.get(&MapKey::String("_previous_result".to_string()))
+            let previous_result = map
+                .get(&MapKey::String("_previous_result".to_string()))
                 .or_else(|| map.get(&MapKey::Keyword(Keyword("_previous_result".to_string()))));
-            
+
             // Get "data" param (may be actual data or a string reference like "step_0_result")
-            let data_param = map.get(&MapKey::String("data".to_string()))
+            let data_param = map
+                .get(&MapKey::String("data".to_string()))
                 .or_else(|| map.get(&MapKey::Keyword(Keyword("data".to_string()))));
-            
+
             // Determine actual data to use:
             // 1. If "data" is a list/map (actual data), use it
             // 2. If "data" is a string (reference like "step_0_result"), use _previous_result instead
@@ -223,18 +235,26 @@ fn extract_data_and_params<'a>(input: &'a Value, op_name: &str, secondary_param:
                 Some(Value::List(_)) | Some(Value::Vector(_)) | Some(Value::Map(_)) => data_param,
                 Some(Value::String(s)) => {
                     // This is a reference string like "step_0_result", use _previous_result
-                    log::debug!("[data_processing] 'data' is string reference '{}', using _previous_result", s);
+                    log::debug!(
+                        "[data_processing] 'data' is string reference '{}', using _previous_result",
+                        s
+                    );
                     previous_result
                 }
                 _ => previous_result,
             };
-                
-            let params = map.get(&MapKey::String(secondary_param.to_string()))
+
+            let params = map
+                .get(&MapKey::String(secondary_param.to_string()))
                 .or_else(|| map.get(&MapKey::Keyword(Keyword(secondary_param.to_string()))));
-            
+
             if let Some(d) = data {
                 // If params is not found, use the input map itself for param extraction
-                let p = if params.is_some() { params } else { Some(input) };
+                let p = if params.is_some() {
+                    params
+                } else {
+                    Some(input)
+                };
                 Ok((d, p))
             } else {
                 Err(RuntimeError::Generic(format!(
@@ -266,12 +286,15 @@ fn compare_values(a: &Value, b: &Value) -> Ordering {
         (Value::Integer(i1), Value::Integer(i2)) => i1.cmp(i2),
         (Value::Float(f1), Value::Float(f2)) => f1.partial_cmp(f2).unwrap_or(Ordering::Equal),
         // Handle numeric mix
-        (Value::Integer(i), Value::Float(f)) => (*i as f64).partial_cmp(f).unwrap_or(Ordering::Equal),
-        (Value::Float(f), Value::Integer(i)) => f.partial_cmp(&(*i as f64)).unwrap_or(Ordering::Equal),
-        
+        (Value::Integer(i), Value::Float(f)) => {
+            (*i as f64).partial_cmp(f).unwrap_or(Ordering::Equal)
+        }
+        (Value::Float(f), Value::Integer(i)) => {
+            f.partial_cmp(&(*i as f64)).unwrap_or(Ordering::Equal)
+        }
+
         (Value::String(s1), Value::String(s2)) => s1.cmp(s2),
         (Value::Boolean(b1), Value::Boolean(b2)) => b1.cmp(b2),
         _ => Ordering::Equal, // Incomparable
     }
 }
-
