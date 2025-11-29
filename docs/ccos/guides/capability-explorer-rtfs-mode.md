@@ -60,7 +60,7 @@ Lists all configured MCP servers.
 
 ### `ccos.discovery.discover`
 
-Discovers capabilities from a specific MCP server.
+Discovers capabilities from a specific MCP server and exports them to RTFS files.
 
 ```rtfs
 (call :ccos.discovery.discover {:server "github"})
@@ -71,6 +71,13 @@ Discovers capabilities from a specific MCP server.
 - `:hint` (optional) - Filter hint for discovery
 
 **Output:** Vector of discovered capability IDs.
+
+**RTFS Export:** Discovered capabilities are automatically exported to:
+```
+capabilities/discovered/mcp/<server-name>/capabilities.rtfs
+```
+
+This location can be overridden with the `CCOS_CAPABILITY_STORAGE` environment variable.
 
 ### `ccos.discovery.search`
 
