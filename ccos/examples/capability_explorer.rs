@@ -576,8 +576,8 @@ impl CapabilityExplorer {
             introspect_output_schemas: false,
             use_cache: false,
             register_in_marketplace: true,
-            export_to_rtfs: false,
-            export_directory: None,
+            export_to_rtfs: true,  // Enable RTFS export for discovered capabilities
+            export_directory: None, // Uses default: ../capabilities/discovered
             auth_headers: None,
             retry_policy: Default::default(),
             rate_limit: Default::default(),
@@ -585,20 +585,19 @@ impl CapabilityExplorer {
             lazy_output_schemas: true,
         };
         
-        match self.discovery_service.discover_tools(&config, &options).await {
-            Ok(discovered) => {
-                let count = discovered.len();
+        // Use discover_and_export_tools to ensure RTFS files are created
+        match self.discovery_service.discover_and_export_tools(&config, &options).await {
+            Ok(manifests) => {
+                let count = manifests.len();
                 
-                for tool in &discovered {
-                    // Convert DiscoveredMCPTool to CapabilityManifest
-                    let manifest = self.discovery_service.tool_to_manifest(tool, &config);
+                for manifest in &manifests {
                     self.discovered_tools.push(DiscoveredTool {
                         manifest: manifest.clone(),
                         server_name: config.name.clone(),
                         discovery_hint: None,
                     });
                     // Also register in marketplace
-                    let _ = self.marketplace.register_capability_manifest(manifest).await;
+                    let _ = self.marketplace.register_capability_manifest(manifest.clone()).await;
                 }
                 
                 if !quiet {
@@ -606,8 +605,8 @@ impl CapabilityExplorer {
                 }
                 
                 // Return list of capability IDs
-                let ids: Vec<Value> = discovered.iter()
-                    .map(|t| Value::String(format!("mcp.{}.{}", config.name, t.tool_name)))
+                let ids: Vec<Value> = manifests.iter()
+                    .map(|m| Value::String(m.id.clone()))
                     .collect();
                 Ok(Value::Vector(ids))
             }
@@ -839,8 +838,8 @@ impl CapabilityExplorer {
             introspect_output_schemas: false,
             use_cache: true,
             register_in_marketplace: true,
-            export_to_rtfs: false,
-            export_directory: None,
+            export_to_rtfs: true,  // Enable RTFS export for discovered capabilities
+            export_directory: None, // Uses default: ../capabilities/discovered
             auth_headers: config.auth_token.as_ref().map(|token| {
                 let mut headers = HashMap::new();
                 headers.insert("Authorization".to_string(), format!("Bearer {}", token));
