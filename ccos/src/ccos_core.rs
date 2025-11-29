@@ -521,6 +521,10 @@ impl CCOS {
                 .missing_capabilities
                 .verbose_logging
                 .unwrap_or(false),
+            base_backoff_seconds: 60,
+            max_backoff_seconds: 3600,
+            high_risk_auto_resolution: false,
+            human_approval_timeout_hours: 24,
         };
 
         // Initialize missing capability resolver

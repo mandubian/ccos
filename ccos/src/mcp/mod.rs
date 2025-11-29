@@ -33,4 +33,4 @@ pub use types::*;
 pub use rate_limiter::{RateLimitConfig, RetryPolicy, RetryPolicyConfig, RateLimiter, RetryContext};
 
 // Re-export core service
-pub use core::MCPDiscoveryService;
+pub use core::{MCPDiscoveryService, CacheWarmingStats};

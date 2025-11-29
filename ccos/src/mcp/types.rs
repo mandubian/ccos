@@ -43,6 +43,7 @@ pub struct MCPDiscoveryResult {
 #[derive(Debug, Clone)]
 pub struct DiscoveryOptions {
     /// Whether to introspect output schemas (requires calling tools)
+    /// Note: This is expensive and should be enabled only when needed
     pub introspect_output_schemas: bool,
     /// Whether to use cache if available
     pub use_cache: bool,
@@ -58,6 +59,13 @@ pub struct DiscoveryOptions {
     pub retry_policy: RetryPolicy,
     /// Rate limit configuration
     pub rate_limit: RateLimitConfig,
+    /// Maximum number of parallel server discoveries (default: 5)
+    /// This prevents overwhelming servers and getting rate-limited/banned
+    pub max_parallel_discoveries: usize,
+    /// Whether to skip output schema introspection by default (lazy loading)
+    /// When true, output schemas are only introspected if explicitly requested
+    /// Input schemas are always loaded as they're provided by MCP servers
+    pub lazy_output_schemas: bool,
 }
 
 impl Default for DiscoveryOptions {
@@ -71,6 +79,8 @@ impl Default for DiscoveryOptions {
             auth_headers: None,
             retry_policy: RetryPolicy::default(),
             rate_limit: RateLimitConfig::default(),
+            max_parallel_discoveries: 5, // Conservative default to avoid rate limits
+            lazy_output_schemas: true, // Skip expensive introspection by default
         }
     }
 }

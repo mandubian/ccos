@@ -212,29 +212,39 @@ impl ContinuousResolutionLoop {
     }
 
     /// Assess risk level for a capability
+    /// Delegates core assessment to MissingCapabilityResolver and adds deadline for human approval
     async fn assess_risk(
         &self,
         capability_id: &str,
         _context: Option<&str>,
     ) -> RuntimeResult<RiskAssessment> {
-        let mut risk_factors = Vec::new();
-        let mut security_concerns = Vec::new();
-        let mut compliance_requirements = Vec::new();
+        // Delegate core risk assessment to the resolver
+        let core_assessment = self.resolver.assess_risk(capability_id);
 
-        // Analyze capability ID for risk indicators
-        if capability_id.contains("admin") || capability_id.contains("root") {
-            risk_factors.push("Administrative capability detected".to_string());
-            security_concerns.push("High privilege access required".to_string());
-        }
+        // Convert resolver priority to local priority type
+        let priority = match core_assessment.priority {
+            crate::synthesis::core::missing_capability_resolver::ResolutionPriority::Low => {
+                ResolutionPriority::Low
+            }
+            crate::synthesis::core::missing_capability_resolver::ResolutionPriority::Medium => {
+                ResolutionPriority::Medium
+            }
+            crate::synthesis::core::missing_capability_resolver::ResolutionPriority::High => {
+                ResolutionPriority::High
+            }
+            crate::synthesis::core::missing_capability_resolver::ResolutionPriority::Critical => {
+                ResolutionPriority::Critical
+            }
+        };
 
+        // Augment with additional context-specific risk factors
+        let mut risk_factors = core_assessment.risk_factors;
+        let mut compliance_requirements = core_assessment.compliance_requirements;
+
+        // Add domain-specific risk indicators not covered by resolver
         if capability_id.contains("payment") || capability_id.contains("financial") {
             risk_factors.push("Financial capability detected".to_string());
             compliance_requirements.push("PCI-DSS compliance required".to_string());
-        }
-
-        if capability_id.contains("auth") || capability_id.contains("security") {
-            risk_factors.push("Security-related capability".to_string());
-            security_concerns.push("Authentication/authorization access".to_string());
         }
 
         if capability_id.contains("database") || capability_id.contains("storage") {
@@ -242,24 +252,14 @@ impl ContinuousResolutionLoop {
             compliance_requirements.push("Data protection compliance required".to_string());
         }
 
-        // Determine priority based on risk factors
-        let priority = if security_concerns.len() > 1 || compliance_requirements.len() > 1 {
-            ResolutionPriority::Critical
-        } else if security_concerns.len() > 0 || compliance_requirements.len() > 0 {
-            ResolutionPriority::High
-        } else if risk_factors.len() > 0 {
-            ResolutionPriority::Medium
-        } else {
-            ResolutionPriority::Low
-        };
-
-        let requires_human_approval = priority == ResolutionPriority::Critical
+        // Determine if human approval is required (using resolver's assessment + config)
+        let requires_human_approval = core_assessment.requires_human_approval
             || (priority == ResolutionPriority::High && !self.config.high_risk_auto_resolution);
 
         Ok(RiskAssessment {
             priority,
             risk_factors,
-            security_concerns,
+            security_concerns: core_assessment.security_concerns,
             compliance_requirements,
             requires_human_approval,
             approval_deadline: if requires_human_approval {
@@ -368,14 +368,30 @@ impl ContinuousResolutionLoop {
                         capability_id, method
                     );
 
-                    // Record successful attempt
+                    // Record successful attempt in local history (with timestamps)
                     let mut history = self.resolution_history.write().await;
                     let attempts = history
                         .entry(capability_id.to_string())
                         .or_insert_with(Vec::new);
-                    let mut successful_attempt = attempt;
+                    let mut successful_attempt = attempt.clone();
                     successful_attempt.success = true;
                     attempts.push(successful_attempt);
+
+                    // Also record in resolver for persistence across restarts
+                    self.resolver.record_resolution_attempt(
+                        crate::synthesis::core::missing_capability_resolver::ResolutionAttempt {
+                            capability_id: capability_id.to_string(),
+                            attempted_at: std::time::SystemTime::now(),
+                            attempt_count: current_attempt,
+                            strategy_name: format!("{:?}", method),
+                            success: true,
+                            error_message: None,
+                            next_retry_at: None,
+                        },
+                    );
+
+                    // Clear resolver history on success (capability is now resolved)
+                    self.resolver.clear_resolution_history(capability_id);
 
                     return Ok(());
                 }
@@ -385,7 +401,7 @@ impl ContinuousResolutionLoop {
                         capability_id, method, e
                     );
 
-                    // Record failed attempt
+                    // Record failed attempt in local history
                     let mut history = self.resolution_history.write().await;
                     let attempts = history
                         .entry(capability_id.to_string())
@@ -393,6 +409,23 @@ impl ContinuousResolutionLoop {
                     let mut failed_attempt = attempt;
                     failed_attempt.error_message = Some(e.to_string());
                     attempts.push(failed_attempt);
+
+                    // Also record in resolver for persistence
+                    let backoff_secs = self.calculate_backoff_delay(current_attempt);
+                    self.resolver.record_resolution_attempt(
+                        crate::synthesis::core::missing_capability_resolver::ResolutionAttempt {
+                            capability_id: capability_id.to_string(),
+                            attempted_at: std::time::SystemTime::now(),
+                            attempt_count: current_attempt,
+                            strategy_name: format!("{:?}", method),
+                            success: false,
+                            error_message: Some(e.to_string()),
+                            next_retry_at: Some(
+                                std::time::SystemTime::now()
+                                    + std::time::Duration::from_secs(backoff_secs),
+                            ),
+                        },
+                    );
                 }
             }
 
@@ -639,9 +672,9 @@ impl ContinuousResolutionLoop {
     }
 
     /// Calculate backoff delay based on attempt count
+    /// Delegates to MissingCapabilityResolver for unified backoff logic
     fn calculate_backoff_delay(&self, attempt_count: u32) -> u64 {
-        let delay = self.config.base_backoff_seconds * 2_u64.pow(attempt_count);
-        delay.min(self.config.max_backoff_seconds)
+        self.resolver.calculate_backoff_delay(attempt_count)
     }
 
     /// Process the resolution queue
@@ -929,7 +962,9 @@ mod tests {
             config.clone(),
         );
 
-        assert_eq!(loop_instance.calculate_backoff_delay(0), 30);
+        // Now delegates to resolver, which uses base_backoff_seconds: 60
+        // Formula: base * 2^(attempt_count - 1), min 1 at attempt 0 → base * 1 = 60
+        assert_eq!(loop_instance.calculate_backoff_delay(0), 60);
         assert_eq!(loop_instance.calculate_backoff_delay(1), 60);
         assert_eq!(loop_instance.calculate_backoff_delay(2), 120);
         assert_eq!(loop_instance.calculate_backoff_delay(10), 3600); // Max backoff

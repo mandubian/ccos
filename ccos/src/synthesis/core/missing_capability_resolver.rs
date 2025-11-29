@@ -452,6 +452,25 @@ pub struct QueueStats {
     pub failed_count: usize,
 }
 
+/// Resolution attempt record for tracking retry history
+#[derive(Debug, Clone)]
+pub struct ResolutionAttempt {
+    /// Capability ID being resolved
+    pub capability_id: String,
+    /// Timestamp of the attempt
+    pub attempted_at: std::time::SystemTime,
+    /// Number of attempts so far
+    pub attempt_count: u32,
+    /// Strategy name used
+    pub strategy_name: String,
+    /// Success status
+    pub success: bool,
+    /// Error message if failed
+    pub error_message: Option<String>,
+    /// Next retry time (if failed)
+    pub next_retry_at: Option<std::time::SystemTime>,
+}
+
 /// Main resolver that coordinates missing capability resolution
 pub struct MissingCapabilityResolver {
     /// The resolution queue
@@ -472,6 +491,8 @@ pub struct MissingCapabilityResolver {
     alias_store: Arc<RwLock<ToolAliasStore>>,
     /// Optional observer for structured resolution events
     event_observer: Arc<RwLock<Option<Arc<dyn ResolutionObserver>>>>,
+    /// Resolution history for backoff tracking
+    resolution_history: Arc<std::sync::RwLock<HashMap<String, Vec<ResolutionAttempt>>>>,
 }
 
 /// Configuration for the missing capability resolver
@@ -483,14 +504,113 @@ pub struct ResolverConfig {
     pub auto_resolve: bool,
     /// Whether to log detailed resolution information
     pub verbose_logging: bool,
+    /// Base backoff delay in seconds for retry
+    pub base_backoff_seconds: u64,
+    /// Maximum backoff delay in seconds
+    pub max_backoff_seconds: u64,
+    /// Whether to enable high-risk auto-resolution (bypasses human approval)
+    pub high_risk_auto_resolution: bool,
+    /// Human approval timeout in hours
+    pub human_approval_timeout_hours: u64,
 }
 
 impl Default for ResolverConfig {
     fn default() -> Self {
         Self {
-            max_attempts: 3,
+            max_attempts: 5,
             auto_resolve: true,
             verbose_logging: false,
+            base_backoff_seconds: 60,
+            max_backoff_seconds: 3600,
+            high_risk_auto_resolution: false,
+            human_approval_timeout_hours: 24,
+        }
+    }
+}
+
+/// Risk priority level for capability resolution
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolutionPriority {
+    /// Low risk - can be auto-resolved
+    Low,
+    /// Medium risk - auto-resolve with monitoring
+    Medium,
+    /// High risk - requires human approval
+    High,
+    /// Critical risk - manual intervention required
+    Critical,
+}
+
+/// Risk assessment for a capability resolution
+#[derive(Debug, Clone)]
+pub struct RiskAssessment {
+    /// Overall risk level
+    pub priority: ResolutionPriority,
+    /// Risk factors identified
+    pub risk_factors: Vec<String>,
+    /// Security concerns
+    pub security_concerns: Vec<String>,
+    /// Compliance requirements
+    pub compliance_requirements: Vec<String>,
+    /// Human approval required
+    pub requires_human_approval: bool,
+}
+
+impl RiskAssessment {
+    /// Assess risk for a capability based on its ID and context
+    pub fn assess(capability_id: &str, config: &ResolverConfig) -> Self {
+        let mut risk_factors = Vec::new();
+        let mut security_concerns = Vec::new();
+        let mut compliance_requirements = Vec::new();
+
+        // Analyze capability ID for risk indicators
+        let id_lower = capability_id.to_lowercase();
+        
+        if id_lower.contains("admin") || id_lower.contains("root") || id_lower.contains("sudo") {
+            risk_factors.push("Administrative capability detected".to_string());
+            security_concerns.push("High privilege access required".to_string());
+        }
+
+        if id_lower.contains("payment") || id_lower.contains("financial") || id_lower.contains("billing") {
+            risk_factors.push("Financial capability detected".to_string());
+            compliance_requirements.push("PCI-DSS compliance required".to_string());
+        }
+
+        if id_lower.contains("auth") || id_lower.contains("security") || id_lower.contains("credential") {
+            risk_factors.push("Security-related capability".to_string());
+            security_concerns.push("Authentication/authorization access".to_string());
+        }
+
+        if id_lower.contains("database") || id_lower.contains("storage") || id_lower.contains("delete") {
+            risk_factors.push("Data access capability".to_string());
+            compliance_requirements.push("Data protection compliance required".to_string());
+        }
+
+        if id_lower.contains("pii") || id_lower.contains("personal") || id_lower.contains("gdpr") {
+            risk_factors.push("Personal data handling".to_string());
+            compliance_requirements.push("GDPR compliance required".to_string());
+        }
+
+        // Determine priority based on risk factors
+        let priority = if security_concerns.len() > 1 || compliance_requirements.len() > 1 {
+            ResolutionPriority::Critical
+        } else if !security_concerns.is_empty() || !compliance_requirements.is_empty() {
+            ResolutionPriority::High
+        } else if !risk_factors.is_empty() {
+            ResolutionPriority::Medium
+        } else {
+            ResolutionPriority::Low
+        };
+
+        let requires_human_approval = priority == ResolutionPriority::Critical
+            || (priority == ResolutionPriority::High && !config.high_risk_auto_resolution);
+
+        Self {
+            priority,
+            risk_factors,
+            security_concerns,
+            compliance_requirements,
+            requires_human_approval,
         }
     }
 }
@@ -979,6 +1099,7 @@ impl MissingCapabilityResolver {
             delegating_arbiter: Arc::new(RwLock::new(None)),
             alias_store: Arc::new(RwLock::new(ToolAliasStore::load_default())),
             event_observer: Arc::new(RwLock::new(None)),
+            resolution_history: Arc::new(std::sync::RwLock::new(HashMap::new())),
         }
     }
 
@@ -1000,6 +1121,7 @@ impl MissingCapabilityResolver {
             delegating_arbiter: Arc::new(RwLock::new(None)),
             alias_store: Arc::new(RwLock::new(ToolAliasStore::load_default())),
             event_observer: Arc::new(RwLock::new(None)),
+            resolution_history: Arc::new(std::sync::RwLock::new(HashMap::new())),
         }
     }
 
@@ -4031,6 +4153,131 @@ impl MissingCapabilityResolver {
         let queue = self.queue.lock().unwrap();
         queue.stats()
     }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Resolution History & Backoff Methods (unified from continuous_resolution.rs)
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Calculate exponential backoff delay based on attempt count
+    pub fn calculate_backoff_delay(&self, attempt_count: u32) -> u64 {
+        let base = self.config.base_backoff_seconds;
+        let max = self.config.max_backoff_seconds;
+        // Exponential backoff: base * 2^(attempt_count - 1), capped at max
+        let delay = base.saturating_mul(1u64 << attempt_count.saturating_sub(1).min(10));
+        delay.min(max)
+    }
+
+    /// Record a resolution attempt for a capability
+    pub fn record_resolution_attempt(&self, attempt: ResolutionAttempt) {
+        let mut history = self.resolution_history.write().unwrap();
+        history
+            .entry(attempt.capability_id.clone())
+            .or_insert_with(Vec::new)
+            .push(attempt);
+    }
+
+    /// Get the resolution history for a specific capability
+    pub fn get_resolution_history(&self, capability_id: &str) -> Vec<ResolutionAttempt> {
+        let history = self.resolution_history.read().unwrap();
+        history.get(capability_id).cloned().unwrap_or_default()
+    }
+
+    /// Get the number of resolution attempts for a capability
+    pub fn get_attempt_count(&self, capability_id: &str) -> u32 {
+        let history = self.resolution_history.read().unwrap();
+        history
+            .get(capability_id)
+            .map(|attempts| attempts.len() as u32)
+            .unwrap_or(0)
+    }
+
+    /// Check if a capability has exceeded max retry attempts
+    pub fn has_exceeded_max_attempts(&self, capability_id: &str) -> bool {
+        self.get_attempt_count(capability_id) >= self.config.max_attempts
+    }
+
+    /// Assess risk level for resolving a capability
+    pub fn assess_risk(&self, capability_id: &str) -> RiskAssessment {
+        let attempt_count = self.get_attempt_count(capability_id);
+        let history = self.get_resolution_history(capability_id);
+
+        // Collect risk factors first to determine priority
+        let mut risk_factors = Vec::new();
+        if attempt_count > 2 {
+            risk_factors.push(format!("Multiple prior failures ({})", attempt_count));
+        }
+        if history.iter().any(|a| {
+            a.error_message
+                .as_ref()
+                .map(|e| e.contains("timeout"))
+                .unwrap_or(false)
+        }) {
+            risk_factors.push("Previous timeout errors".to_string());
+        }
+
+        // Security concerns for sensitive capabilities
+        let security_concerns = if capability_id.contains("exec")
+            || capability_id.contains("shell")
+            || capability_id.contains("system")
+        {
+            vec!["Capability may execute arbitrary code".to_string()]
+        } else if capability_id.contains("admin") || capability_id.contains("root") {
+            vec!["High privilege access required".to_string()]
+        } else {
+            Vec::new()
+        };
+
+        // Compliance requirements based on capability type
+        let compliance_requirements = if capability_id.contains("data")
+            || capability_id.contains("pii")
+            || capability_id.contains("personal")
+        {
+            vec!["Data handling compliance required".to_string()]
+        } else {
+            Vec::new()
+        };
+
+        // Determine priority based on capability name patterns and collected concerns
+        let priority = if capability_id.contains("security")
+            || capability_id.contains("auth")
+            || capability_id.contains("crypto")
+        {
+            ResolutionPriority::Critical
+        } else if capability_id.contains("core") || capability_id.contains("system") {
+            ResolutionPriority::High
+        } else if security_concerns.len() > 1 || compliance_requirements.len() > 1 {
+            ResolutionPriority::Critical
+        } else if !security_concerns.is_empty() || !compliance_requirements.is_empty() {
+            ResolutionPriority::High
+        } else if attempt_count > 3 {
+            ResolutionPriority::Low // Deprioritize after many failures
+        } else if !risk_factors.is_empty() {
+            ResolutionPriority::Medium
+        } else {
+            ResolutionPriority::Low // Default: no risk factors = low risk
+        };
+
+        // Require human approval for high-risk or repeated failures
+        let requires_human_approval = priority == ResolutionPriority::Critical
+            || attempt_count > 5
+            || !security_concerns.is_empty();
+
+        RiskAssessment {
+            priority,
+            risk_factors,
+            security_concerns,
+            compliance_requirements,
+            requires_human_approval,
+        }
+    }
+
+    /// Clear resolution history for a capability (e.g., after successful resolution)
+    pub fn clear_resolution_history(&self, capability_id: &str) {
+        let mut history = self.resolution_history.write().unwrap();
+        history.remove(capability_id);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
 
     pub fn list_pending_capabilities(&self) -> Vec<String> {
         let queue = self.queue.lock().unwrap();
