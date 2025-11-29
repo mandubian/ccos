@@ -18,9 +18,9 @@ pub trait CapabilityExecutor: Send + Sync {
     async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value>;
 }
 
+use crate::capabilities::SessionPoolManager;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::capabilities::SessionPoolManager;
 
 pub struct MCPExecutor {
     pub session_pool: Arc<RwLock<Option<Arc<SessionPoolManager>>>>,
@@ -38,15 +38,21 @@ impl CapabilityExecutor for MCPExecutor {
 
             // Resolve auth token: inputs > provider > env
             let auth_token_from_inputs = if let Value::Map(map) = inputs {
-                map.get(&MapKey::Keyword(rtfs::ast::Keyword("auth-token".to_string())))
-                   .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword("auth_token".to_string()))))
-                   .and_then(|v| {
-                       if let Value::String(s) = v {
-                           Some(s.clone())
-                       } else {
-                           None
-                       }
-                   })
+                map.get(&MapKey::Keyword(rtfs::ast::Keyword(
+                    "auth-token".to_string(),
+                )))
+                .or_else(|| {
+                    map.get(&MapKey::Keyword(rtfs::ast::Keyword(
+                        "auth_token".to_string(),
+                    )))
+                })
+                .and_then(|v| {
+                    if let Value::String(s) = v {
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                })
             } else {
                 None
             };
@@ -63,7 +69,7 @@ impl CapabilityExecutor for MCPExecutor {
                 metadata.insert("mcp_server_url".to_string(), mcp.server_url.clone());
                 metadata.insert("mcp_tool_name".to_string(), mcp.tool_name.clone());
                 metadata.insert("mcp_timeout_ms".to_string(), mcp.timeout_ms.to_string());
-                
+
                 if let Some(token) = &auth_token {
                     metadata.insert("mcp_auth_token".to_string(), token.clone());
                 }
@@ -71,7 +77,7 @@ impl CapabilityExecutor for MCPExecutor {
                 let pool_clone = pool.clone();
                 let tool_name = mcp.tool_name.clone();
                 let inputs_clone = inputs.clone();
-                
+
                 // Execute via session pool
                 return pool_clone.execute_with_session(&tool_name, &metadata, &[inputs_clone]);
             }
@@ -82,7 +88,7 @@ impl CapabilityExecutor for MCPExecutor {
                 .map_err(|e| RuntimeError::Generic(format!("Failed to serialize inputs: {}", e)))?;
 
             let client = reqwest::Client::new();
-            
+
             // Step 1: Initialize MCP session
             let init_request = json!({
                 "jsonrpc": "2.0",
@@ -97,23 +103,23 @@ impl CapabilityExecutor for MCPExecutor {
                     }
                 }
             });
-            
+
             let mut init_builder = client.post(&mcp.server_url);
             if let Some(token) = &auth_token {
                 init_builder = init_builder.header("Authorization", format!("Bearer {}", token));
             }
-            
+
             let init_response = init_builder
                 .json(&init_request)
                 .timeout(Duration::from_millis(mcp.timeout_ms))
                 .send()
                 .await
                 .map_err(|e| RuntimeError::Generic(format!("MCP initialization failed: {}", e)))?;
-            
+
             let init_json: serde_json::Value = init_response.json().await.map_err(|e| {
                 RuntimeError::Generic(format!("Failed to parse MCP init response: {}", e))
             })?;
-            
+
             // Check for initialization error
             if let Some(error) = init_json.get("error") {
                 return Err(RuntimeError::Generic(format!(
@@ -121,7 +127,7 @@ impl CapabilityExecutor for MCPExecutor {
                     error
                 )));
             }
-            
+
             // Extract session ID if provided (some servers use it)
             let session_id = init_json
                 .get("result")
@@ -133,12 +139,13 @@ impl CapabilityExecutor for MCPExecutor {
                 let tools_request = json!({"jsonrpc":"2.0","id":"tools_discovery","method":"tools/list","params":{}});
                 let mut request_builder = client.post(&mcp.server_url);
                 if let Some(token) = &auth_token {
-                    request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
+                    request_builder =
+                        request_builder.header("Authorization", format!("Bearer {}", token));
                 }
                 if let Some(ref sid) = session_id {
                     request_builder = request_builder.header("Mcp-Session-Id", sid);
                 }
-                
+
                 let response = request_builder
                     .json(&tools_request)
                     .timeout(std::time::Duration::from_millis(mcp.timeout_ms))
@@ -179,7 +186,8 @@ impl CapabilityExecutor for MCPExecutor {
             let tool_request = json!({"jsonrpc":"2.0","id":"tool_call","method":"tools/call","params":{"name":tool_name,"arguments":input_json}});
             let mut request_builder = client.post(&mcp.server_url);
             if let Some(token) = &auth_token {
-                request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
+                request_builder =
+                    request_builder.header("Authorization", format!("Bearer {}", token));
             }
             if let Some(ref sid) = session_id {
                 request_builder = request_builder.header("Mcp-Session-Id", sid);

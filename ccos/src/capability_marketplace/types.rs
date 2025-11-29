@@ -788,8 +788,7 @@ pub struct PluginCapability {
 pub struct CapabilityMarketplace {
     pub(crate) capabilities: Arc<RwLock<HashMap<String, CapabilityManifest>>>,
     pub(crate) discovery_agents: Vec<Box<dyn CapabilityDiscovery>>,
-    pub(crate) capability_registry:
-        Arc<RwLock<crate::capabilities::registry::CapabilityRegistry>>,
+    pub(crate) capability_registry: Arc<RwLock<crate::capabilities::registry::CapabilityRegistry>>,
     pub(crate) network_registry: Option<NetworkRegistryConfig>,
     pub(crate) type_validator: Arc<rtfs::runtime::type_validator::TypeValidator>,
     pub(crate) executor_registry:

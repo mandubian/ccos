@@ -1,5 +1,5 @@
-use crate::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo};
 use super::types::*;
+use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 use async_trait::async_trait;
 use chrono::Utc;
 use rtfs::runtime::error::RuntimeError;
@@ -175,7 +175,7 @@ impl NetworkDiscoveryAgent {
             headers.insert("Authorization".to_string(), format!("Bearer {}", token));
             headers
         });
-        
+
         Self {
             registry_endpoint,
             auth_token,
@@ -264,18 +264,20 @@ impl CapabilityDiscovery for NetworkDiscoveryAgent {
             version: "1.0.0".to_string(),
         };
 
-        let session = self.session_manager
+        let session = self
+            .session_manager
             .initialize_session(&self.registry_endpoint, &client_info)
             .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to init session: {}", e)))?;
 
-        let response_result = self.session_manager
+        let response_result = self
+            .session_manager
             .make_request(
                 &session,
                 "discover_capabilities",
                 serde_json::json!({
-                    "limit": 100, 
-                    "include_attestations": true, 
+                    "limit": 100,
+                    "include_attestations": true,
                     "include_provenance": true
                 }),
             )

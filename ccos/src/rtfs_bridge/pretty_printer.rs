@@ -444,7 +444,7 @@ impl RtfsPrettyPrinter {
             }
         } else {
             let mut result = String::from("(if");
-            
+
             // Condition
             result.push('\n');
             result.push_str(&self.indent(depth + 1));
@@ -461,7 +461,7 @@ impl RtfsPrettyPrinter {
                 result.push_str(&self.indent(depth + 1));
                 result.push_str(&else_b);
             }
-            
+
             result.push('\n');
             result.push_str(&self.indent(depth));
             result.push(')');

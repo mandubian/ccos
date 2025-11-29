@@ -60,10 +60,7 @@ struct ContextToken {
 
 impl DiscoveryAgent {
     /// Create a new discovery agent
-    pub fn new(
-        marketplace: Arc<CapabilityMarketplace>,
-        config: DiscoveryConfig,
-    ) -> Self {
+    pub fn new(marketplace: Arc<CapabilityMarketplace>, config: DiscoveryConfig) -> Self {
         let embedding_service = EmbeddingService::from_settings(Some(&config))
             .map(|service| Arc::new(Mutex::new(service)));
         Self {
@@ -82,12 +79,17 @@ impl DiscoveryAgent {
 
         for manifest in &capabilities {
             // Extract namespace (first part of capability ID)
-            let namespace = manifest.id.split('.').next().unwrap_or("general").to_string();
-            
+            let namespace = manifest
+                .id
+                .split('.')
+                .next()
+                .unwrap_or("general")
+                .to_string();
+
             // Extract tokens from ID, name, and description
             let text = format!("{} {} {}", manifest.id, manifest.name, manifest.description)
                 .to_ascii_lowercase();
-            
+
             // Tokenize: split on dots, dashes, underscores, and whitespace
             let tokens: Vec<String> = text
                 .split(|c: char| c == '.' || c == '_' || c == '-' || c.is_whitespace())
@@ -113,11 +115,11 @@ impl DiscoveryAgent {
                     sources: HashSet::new(), // Could track sources if needed
                 })
                 .collect();
-            
+
             // Sort by frequency (descending) and take top tokens
             context_tokens.sort_by(|a, b| b.frequency.cmp(&a.frequency));
             context_tokens.truncate(20); // Keep top 20 per namespace
-            
+
             context_vocab.insert(namespace, context_tokens);
         }
 
@@ -134,14 +136,10 @@ impl DiscoveryAgent {
     ) -> RuntimeResult<DiscoverySuggestion> {
         // 1. Extract context tokens from learned vocabulary + goal text
         let context_tokens = self.extract_context_tokens(goal, intent, need).await?;
-        
+
         // 2. Generate unified hints (both for logging and for registry queries)
-        let (hints, registry_queries) = self.generate_unified_hints(
-            goal,
-            intent,
-            &context_tokens,
-            &need.capability_class,
-        )?;
+        let (hints, registry_queries) =
+            self.generate_unified_hints(goal, intent, &context_tokens, &need.capability_class)?;
 
         // 3. Search local marketplace with embedding-backed ranking
         let ranked_capabilities = self
@@ -211,10 +209,10 @@ impl DiscoveryAgent {
 
         // Filter out common stopwords
         let stopwords: HashSet<&str> = [
-            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-            "of", "with", "by", "from", "as", "is", "are", "was", "were", "be",
-            "been", "being", "have", "has", "had", "do", "does", "did", "will",
-            "would", "should", "could", "may", "might", "must", "can",
+            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
+            "by", "from", "as", "is", "are", "was", "were", "be", "been", "being", "have", "has",
+            "had", "do", "does", "did", "will", "would", "should", "could", "may", "might", "must",
+            "can",
         ]
         .iter()
         .cloned()
@@ -241,23 +239,57 @@ impl DiscoveryAgent {
         let mut seen = HashSet::new();
 
         // Generic operation verbs (these are common patterns)
-        let operations = ["list", "search", "get", "fetch", "create", "update", "delete", "filter"];
-        
+        let operations = [
+            "list", "search", "get", "fetch", "create", "update", "delete", "filter",
+        ];
+
         // High-value context tokens (platforms/services) should be prioritized
         let high_value_contexts: HashSet<&str> = [
-            "github", "gitlab", "bitbucket", "jira",
-            "slack", "discord", "telegram",
-            "google", "gmail", "calendar", "drive",
-            "aws", "azure", "gcp", "cloud",
-            "postgres", "mysql", "sql", "redis", "mongo",
-            "linear", "notion", "trello", "asana",
-            "stripe", "paypal",
-            "weather", "stock", "finance",
-            "email", "sms",
-            "filesystem", "file", "git",
-            "spotify", "youtube",
-            "huggingface", "openai", "anthropic", "llm", "ai"
-        ].iter().cloned().collect();
+            "github",
+            "gitlab",
+            "bitbucket",
+            "jira",
+            "slack",
+            "discord",
+            "telegram",
+            "google",
+            "gmail",
+            "calendar",
+            "drive",
+            "aws",
+            "azure",
+            "gcp",
+            "cloud",
+            "postgres",
+            "mysql",
+            "sql",
+            "redis",
+            "mongo",
+            "linear",
+            "notion",
+            "trello",
+            "asana",
+            "stripe",
+            "paypal",
+            "weather",
+            "stock",
+            "finance",
+            "email",
+            "sms",
+            "filesystem",
+            "file",
+            "git",
+            "spotify",
+            "youtube",
+            "huggingface",
+            "openai",
+            "anthropic",
+            "llm",
+            "ai",
+        ]
+        .iter()
+        .cloned()
+        .collect();
 
         // Score and sort context tokens by priority
         let mut scored_tokens: Vec<(String, usize)> = context_tokens
@@ -273,11 +305,9 @@ impl DiscoveryAgent {
                 (token.clone(), priority)
             })
             .collect();
-        
+
         // Sort by priority (descending), then by length (descending)
-        scored_tokens.sort_by(|a, b| {
-            b.1.cmp(&a.1).then_with(|| b.0.len().cmp(&a.0.len()))
-        });
+        scored_tokens.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.len().cmp(&a.0.len())));
 
         // Take top 3 context tokens for combinations (reduces noise)
         let top_contexts: Vec<&String> = scored_tokens.iter().take(3).map(|(t, _)| t).collect();
@@ -312,7 +342,9 @@ impl DiscoveryAgent {
         if class_parts.len() >= 2 {
             let query = class_parts.join(" ");
             // Check if capability class contains a high-value context
-            let has_high_value = class_parts.iter().any(|part| high_value_contexts.contains(part));
+            let has_high_value = class_parts
+                .iter()
+                .any(|part| high_value_contexts.contains(part));
             if has_high_value {
                 // Insert at beginning for high-value contexts
                 hints.insert(0, capability_class.to_string());
@@ -325,7 +357,10 @@ impl DiscoveryAgent {
 
         // 3. Add single high-value context tokens only (skip generic ones)
         for (context, priority) in scored_tokens.iter().take(2) {
-            if *priority >= 2 && !operations.contains(&context.as_str()) && seen.insert(context.clone()) {
+            if *priority >= 2
+                && !operations.contains(&context.as_str())
+                && seen.insert(context.clone())
+            {
                 hints.push(context.clone());
                 registry_queries.push(context.clone());
             }
@@ -345,36 +380,44 @@ impl DiscoveryAgent {
         let text_lower = text.to_ascii_lowercase();
         let words: Vec<&str> = text_lower.split_whitespace().collect();
         let mut terms = Vec::new();
-        
+
         // Common operation verbs to skip
         let operations: HashSet<&str> = [
-            "list", "search", "get", "fetch", "create", "update", "delete", "filter",
-            "find", "show", "display", "print", "return", "send", "receive"
-        ].iter().cloned().collect();
-        
+            "list", "search", "get", "fetch", "create", "update", "delete", "filter", "find",
+            "show", "display", "print", "return", "send", "receive",
+        ]
+        .iter()
+        .cloned()
+        .collect();
+
         // Common stopwords
         let stopwords: HashSet<&str> = [
-            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-            "of", "with", "by", "from", "as", "is", "are", "was", "were", "be",
-            "been", "being", "have", "has", "had", "do", "does", "did", "will",
-            "would", "should", "could", "may", "might", "must", "can", "if", "them",
-            "they", "their", "this", "that", "these", "those", "about", "speak"
-        ].iter().cloned().collect();
-        
+            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
+            "by", "from", "as", "is", "are", "was", "were", "be", "been", "being", "have", "has",
+            "had", "do", "does", "did", "will", "would", "should", "could", "may", "might", "must",
+            "can", "if", "them", "they", "their", "this", "that", "these", "those", "about",
+            "speak",
+        ]
+        .iter()
+        .cloned()
+        .collect();
+
         for word in words {
             let cleaned = word.trim_matches(|c: char| !c.is_alphanumeric());
             // Skip if too short, is an operation, or is a stopword
-            if cleaned.len() >= 4 
+            if cleaned.len() >= 4
                 && !operations.contains(cleaned)
                 && !stopwords.contains(cleaned)
-                && cleaned.chars().all(|c| c.is_alphabetic()) {
+                && cleaned.chars().all(|c| c.is_alphabetic())
+            {
                 terms.push(cleaned.to_string());
             }
         }
-        
+
         // Remove duplicates while preserving order
         let mut seen = HashSet::new();
-        terms.into_iter()
+        terms
+            .into_iter()
             .filter(|t| seen.insert(t.clone()))
             .collect()
     }
@@ -391,11 +434,14 @@ impl DiscoveryAgent {
 
         // Build query text for embedding
         let query_text = format!("{} {}", goal, need.rationale);
-        
+
         // Extract semantic terms from goal (e.g., "issues", "branches", "commits")
         let semantic_terms = Self::extract_semantic_terms(&query_text);
         if !semantic_terms.is_empty() {
-            eprintln!("  → Extracted semantic terms from goal: {:?}", semantic_terms);
+            eprintln!(
+                "  → Extracted semantic terms from goal: {:?}",
+                semantic_terms
+            );
         }
 
         // Get query embedding if available
@@ -413,10 +459,8 @@ impl DiscoveryAgent {
             }
 
             // Build capability text for matching
-            let capability_text = format!(
-                "{} {} {}",
-                manifest.id, manifest.name, manifest.description
-            );
+            let capability_text =
+                format!("{} {} {}", manifest.id, manifest.name, manifest.description);
             let capability_lower = capability_text.to_ascii_lowercase();
 
             let mut score = 0.0;
@@ -428,14 +472,20 @@ impl DiscoveryAgent {
                     .iter()
                     .filter(|term| capability_lower.contains(term.as_str()))
                     .count();
-                
+
                 if semantic_matches > 0 {
                     // Strong boost for semantic term matches (0.3-0.6 depending on match count)
                     let semantic_boost = (semantic_matches as f64 * 0.2).min(0.6);
                     score = semantic_boost;
-                    match_reason = format!("semantic term match: {}/{} terms ({:?})", 
-                        semantic_matches, semantic_terms.len(), 
-                        semantic_terms.iter().filter(|t| capability_lower.contains(t.as_str())).collect::<Vec<_>>());
+                    match_reason = format!(
+                        "semantic term match: {}/{} terms ({:?})",
+                        semantic_matches,
+                        semantic_terms.len(),
+                        semantic_terms
+                            .iter()
+                            .filter(|t| capability_lower.contains(t.as_str()))
+                            .collect::<Vec<_>>()
+                    );
                 }
             }
 
@@ -477,7 +527,8 @@ impl DiscoveryAgent {
                     let token_score = matching_tokens as f64 / tokens.len() as f64;
                     if token_score > score {
                         score = token_score;
-                        match_reason = format!("token match: {}/{} tokens", matching_tokens, tokens.len());
+                        match_reason =
+                            format!("token match: {}/{} tokens", matching_tokens, tokens.len());
                     } else {
                         // Add as small boost
                         score += token_score * 0.1;
@@ -519,7 +570,11 @@ impl DiscoveryAgent {
         }
 
         // Sort by score (descending)
-        ranked.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Take top candidates
         ranked.truncate(20);
@@ -532,4 +587,3 @@ impl DiscoveryAgent {
 mod tests {
     // Tests would go here when we have mock marketplace support
 }
-
