@@ -4,6 +4,8 @@
 //!
 //! Usage:
 //!   cargo run --example capability_explorer -- --config config/agent_config.toml
+//!   cargo run --example capability_explorer -- --rtfs "(call :ccos.discovery.discover {:server \"github\"})"
+//!   cargo run --example capability_explorer -- --rtfs-file script.rtfs
 //!
 //! Features:
 //! - Browse available registries (MCP servers, local, etc.)
@@ -11,11 +13,20 @@
 //! - Inspect schemas and metadata
 //! - Test capabilities with live execution
 //! - Beautiful colored output with progress indicators
+//! - RTFS command-line mode for scripting and automation
+//!
+//! RTFS Capabilities:
+//! - (call :ccos.discovery.servers {})                    - List available servers
+//! - (call :ccos.discovery.discover {:server "github"})   - Discover from server
+//! - (call :ccos.discovery.search {:hint "issues"})       - Search capabilities
+//! - (call :ccos.discovery.list {})                       - List discovered capabilities
+//! - (call :ccos.discovery.inspect {:id "mcp.github.list_issues"}) - Inspect capability
+//! - (call :mcp.github.list_issues {:owner "x" :repo "y"}) - Call any capability
 
 use clap::Parser;
 use colored::*;
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::io::{self, Write, Read};
 use std::sync::Arc;
 
 use ccos::capability_marketplace::mcp_discovery::MCPServerConfig;
@@ -26,6 +37,8 @@ use ccos::catalog::CatalogService;
 use ccos::mcp::core::MCPDiscoveryService;
 use ccos::mcp::types::DiscoveryOptions;
 use rtfs::config::types::AgentConfig;
+use rtfs::runtime::values::Value;
+use rtfs::ast::{MapKey, Keyword};
 use tokio::sync::RwLock;
 
 #[derive(Parser, Debug)]
@@ -43,6 +56,26 @@ struct Args {
     /// Start with a search hint
     #[arg(long)]
     hint: Option<String>,
+    
+    /// Execute a single RTFS expression and exit
+    #[arg(long)]
+    rtfs: Option<String>,
+    
+    /// Execute RTFS expressions from a file (one per line, or multi-line with (do ...))
+    #[arg(long)]
+    rtfs_file: Option<String>,
+    
+    /// Read RTFS expressions from stdin
+    #[arg(long)]
+    rtfs_stdin: bool,
+    
+    /// Output format for RTFS mode: "pretty", "json", or "rtfs"
+    #[arg(long, default_value = "pretty")]
+    output: String,
+    
+    /// Quiet mode - only output results, no banners
+    #[arg(long, short)]
+    quiet: bool,
 }
 
 /// Main explorer state
@@ -81,6 +114,592 @@ impl CapabilityExplorer {
             catalog,
             discovered_tools: Vec::new(),
             selected_capability: None,
+        }
+    }
+    
+    /// Execute an RTFS expression and return the result as a Value
+    async fn execute_rtfs(&mut self, expr: &str, output_format: &str, quiet: bool) -> Result<Value, String> {
+        // Parse the RTFS expression to extract call information
+        let trimmed = expr.trim();
+        
+        // Handle (call :capability-id {...}) pattern
+        if let Some(call_content) = Self::extract_call(trimmed) {
+            return self.handle_rtfs_call(&call_content, output_format, quiet).await;
+        }
+        
+        // Handle (do ...) for multiple expressions
+        if trimmed.starts_with("(do") {
+            return self.handle_rtfs_do(trimmed, output_format, quiet).await;
+        }
+        
+        Err(format!("Unsupported RTFS expression. Expected (call :capability-id {{...}}) or (do ...)"))
+    }
+    
+    /// Extract the content of a (call ...) expression
+    fn extract_call(expr: &str) -> Option<String> {
+        let trimmed = expr.trim();
+        if trimmed.starts_with("(call ") && trimmed.ends_with(')') {
+            Some(trimmed[6..trimmed.len()-1].trim().to_string())
+        } else {
+            None
+        }
+    }
+    
+    /// Handle a single (call :capability-id {...}) expression
+    async fn handle_rtfs_call(&mut self, call_content: &str, output_format: &str, quiet: bool) -> Result<Value, String> {
+        // Parse capability ID and arguments
+        // Format: :capability-id {...} or "capability-id" {...}
+        let (cap_id, args_str) = Self::parse_call_content(call_content)?;
+        
+        // Check if it's a discovery capability
+        match cap_id.as_str() {
+            "ccos.discovery.servers" => {
+                let servers = self.get_servers_as_value().await;
+                if !quiet { self.output_value(&servers, output_format); }
+                Ok(servers)
+            }
+            "ccos.discovery.discover" => {
+                let args = Self::parse_rtfs_map(&args_str)?;
+                let server = Self::get_string_arg(&args, "server")
+                    .ok_or("Missing :server argument")?;
+                let hint = Self::get_string_arg(&args, "hint");
+                let result = self.discover_rtfs(&server, hint.as_deref(), quiet).await?;
+                if !quiet { self.output_value(&result, output_format); }
+                Ok(result)
+            }
+            "ccos.discovery.search" => {
+                let args = Self::parse_rtfs_map(&args_str)?;
+                let hint = Self::get_string_arg(&args, "hint")
+                    .ok_or("Missing :hint argument")?;
+                let result = self.search_rtfs(&hint).await;
+                if !quiet { self.output_value(&result, output_format); }
+                Ok(result)
+            }
+            "ccos.discovery.list" => {
+                let result = self.list_rtfs();
+                if !quiet { self.output_value(&result, output_format); }
+                Ok(result)
+            }
+            "ccos.discovery.inspect" => {
+                let args = Self::parse_rtfs_map(&args_str)?;
+                let id = Self::get_string_arg(&args, "id")
+                    .ok_or("Missing :id argument")?;
+                let result = self.inspect_rtfs(&id).await?;
+                if !quiet { self.output_value(&result, output_format); }
+                Ok(result)
+            }
+            _ => {
+                // It's a regular capability call - execute through marketplace
+                let args = Self::parse_rtfs_map(&args_str)?;
+                let result = self.call_capability_rtfs(&cap_id, args, quiet).await?;
+                if !quiet { self.output_value(&result, output_format); }
+                Ok(result)
+            }
+        }
+    }
+    
+    /// Handle (do expr1 expr2 ...) - execute multiple expressions
+    fn handle_rtfs_do<'a>(&'a mut self, expr: &'a str, output_format: &'a str, quiet: bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + 'a>> {
+        Box::pin(async move {
+            // Simple parsing: extract expressions between (do and final )
+            let content = &expr[3..expr.len()-1].trim();
+            
+            let mut results = Vec::new();
+            let mut depth = 0;
+            let mut current_expr = String::new();
+            
+            for c in content.chars() {
+                match c {
+                    '(' => {
+                        depth += 1;
+                        current_expr.push(c);
+                    }
+                    ')' => {
+                        current_expr.push(c);
+                        depth -= 1;
+                        if depth == 0 && !current_expr.trim().is_empty() {
+                            let result = self.execute_rtfs(&current_expr, output_format, quiet).await?;
+                            results.push(result);
+                            current_expr.clear();
+                        }
+                    }
+                    _ => {
+                        if depth > 0 {
+                            current_expr.push(c);
+                        }
+                    }
+                }
+            }
+            
+            // Return last result or nil
+            Ok(results.pop().unwrap_or(Value::Nil))
+        })
+    }
+    
+    /// Parse call content to extract capability ID and arguments
+    fn parse_call_content(content: &str) -> Result<(String, String), String> {
+        let trimmed = content.trim();
+        
+        // Handle :keyword-id {...}
+        if trimmed.starts_with(':') {
+            if let Some(space_idx) = trimmed.find(|c: char| c.is_whitespace()) {
+                let cap_id = trimmed[1..space_idx].to_string();
+                let args_str = trimmed[space_idx..].trim().to_string();
+                return Ok((cap_id, args_str));
+            } else {
+                // No arguments
+                return Ok((trimmed[1..].to_string(), "{}".to_string()));
+            }
+        }
+        
+        // Handle "string-id" {...}
+        if trimmed.starts_with('"') {
+            if let Some(end_quote) = trimmed[1..].find('"') {
+                let cap_id = trimmed[1..end_quote+1].to_string();
+                let args_str = trimmed[end_quote+2..].trim().to_string();
+                return Ok((cap_id, if args_str.is_empty() { "{}".to_string() } else { args_str }));
+            }
+        }
+        
+        Err(format!("Invalid call format. Expected :capability-id or \"capability-id\""))
+    }
+    
+    /// Parse RTFS map syntax {:key value :key2 value2} into a HashMap
+    fn parse_rtfs_map(map_str: &str) -> Result<HashMap<String, Value>, String> {
+        let trimmed = map_str.trim();
+        if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+            // Empty map or just a value
+            if trimmed.is_empty() || trimmed == "{}" {
+                return Ok(HashMap::new());
+            }
+            return Err(format!("Expected map {{...}}, got: {}", trimmed));
+        }
+        
+        let content = &trimmed[1..trimmed.len()-1];
+        let mut map = HashMap::new();
+        let mut chars = content.chars().peekable();
+        
+        while let Some(&c) = chars.peek() {
+            // Skip whitespace
+            if c.is_whitespace() {
+                chars.next();
+                continue;
+            }
+            
+            // Expect :key
+            if c != ':' {
+                break;
+            }
+            chars.next(); // consume ':'
+            
+            // Read key
+            let mut key = String::new();
+            while let Some(&c) = chars.peek() {
+                if c.is_whitespace() || c == '{' || c == '"' || c == ':' {
+                    break;
+                }
+                key.push(c);
+                chars.next();
+            }
+            
+            // Skip whitespace
+            while let Some(&c) = chars.peek() {
+                if !c.is_whitespace() { break; }
+                chars.next();
+            }
+            
+            // Read value
+            let value = Self::parse_rtfs_value(&mut chars)?;
+            map.insert(key, value);
+        }
+        
+        Ok(map)
+    }
+    
+    /// Parse a single RTFS value
+    fn parse_rtfs_value(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<Value, String> {
+        // Skip whitespace
+        while let Some(&c) = chars.peek() {
+            if !c.is_whitespace() { break; }
+            chars.next();
+        }
+        
+        match chars.peek() {
+            Some('"') => {
+                // String value
+                chars.next(); // consume opening quote
+                let mut s = String::new();
+                while let Some(c) = chars.next() {
+                    if c == '"' { break; }
+                    if c == '\\' {
+                        if let Some(escaped) = chars.next() {
+                            match escaped {
+                                'n' => s.push('\n'),
+                                't' => s.push('\t'),
+                                '\\' => s.push('\\'),
+                                '"' => s.push('"'),
+                                _ => s.push(escaped),
+                            }
+                        }
+                    } else {
+                        s.push(c);
+                    }
+                }
+                Ok(Value::String(s))
+            }
+            Some(c) if c.is_ascii_digit() || *c == '-' => {
+                // Number
+                let mut num_str = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_ascii_digit() || c == '.' || c == '-' {
+                        num_str.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if num_str.contains('.') {
+                    num_str.parse::<f64>()
+                        .map(Value::Float)
+                        .map_err(|e| format!("Invalid float: {}", e))
+                } else {
+                    num_str.parse::<i64>()
+                        .map(Value::Integer)
+                        .map_err(|e| format!("Invalid integer: {}", e))
+                }
+            }
+            Some(':') => {
+                // Keyword as value
+                chars.next(); // consume ':'
+                let mut kw = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_whitespace() || c == '}' || c == ')' { break; }
+                    kw.push(c);
+                    chars.next();
+                }
+                Ok(Value::Keyword(Keyword(kw)))
+            }
+            Some('[') => {
+                // Vector
+                chars.next(); // consume '['
+                let mut items = Vec::new();
+                loop {
+                    // Skip whitespace
+                    while let Some(&c) = chars.peek() {
+                        if !c.is_whitespace() { break; }
+                        chars.next();
+                    }
+                    if chars.peek() == Some(&']') {
+                        chars.next();
+                        break;
+                    }
+                    items.push(Self::parse_rtfs_value(chars)?);
+                }
+                Ok(Value::Vector(items))
+            }
+            Some('t') | Some('f') => {
+                // Boolean
+                let mut word = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_whitespace() || c == '}' || c == ')' || c == ']' { break; }
+                    word.push(c);
+                    chars.next();
+                }
+                match word.as_str() {
+                    "true" => Ok(Value::Boolean(true)),
+                    "false" => Ok(Value::Boolean(false)),
+                    _ => Ok(Value::String(word)),
+                }
+            }
+            Some('n') => {
+                // nil
+                let mut word = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c.is_whitespace() || c == '}' || c == ')' || c == ']' { break; }
+                    word.push(c);
+                    chars.next();
+                }
+                if word == "nil" {
+                    Ok(Value::Nil)
+                } else {
+                    Ok(Value::String(word))
+                }
+            }
+            _ => Ok(Value::Nil),
+        }
+    }
+    
+    /// Get a string argument from parsed map
+    fn get_string_arg(args: &HashMap<String, Value>, key: &str) -> Option<String> {
+        args.get(key).and_then(|v| match v {
+            Value::String(s) => Some(s.clone()),
+            Value::Keyword(k) => Some(k.0.clone()),
+            _ => None,
+        })
+    }
+    
+    /// Output a value in the specified format
+    fn output_value(&self, value: &Value, format: &str) {
+        match format {
+            "json" => {
+                if let Ok(json) = self.value_to_json(value) {
+                    println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
+                }
+            }
+            "rtfs" => {
+                println!("{:?}", value);
+            }
+            _ => {
+                // Pretty format
+                self.pretty_print_value(value, 0);
+            }
+        }
+    }
+    
+    fn pretty_print_value(&self, value: &Value, indent: usize) {
+        let pad = "  ".repeat(indent);
+        match value {
+            Value::Map(m) => {
+                println!("{}{{", pad);
+                for (k, v) in m {
+                    let key_str = match k {
+                        MapKey::Keyword(kw) => format!(":{}", kw.0),
+                        MapKey::String(s) => format!("\"{}\"", s),
+                        MapKey::Integer(i) => i.to_string(),
+                    };
+                    print!("{}  {} ", pad, key_str.cyan());
+                    self.pretty_print_inline(v);
+                    println!();
+                }
+                println!("{}}}", pad);
+            }
+            Value::Vector(v) => {
+                println!("{}[", pad);
+                for item in v {
+                    print!("{}  ", pad);
+                    self.pretty_print_inline(item);
+                    println!();
+                }
+                println!("{}]", pad);
+            }
+            _ => self.pretty_print_inline(value),
+        }
+    }
+    
+    fn pretty_print_inline(&self, value: &Value) {
+        match value {
+            Value::String(s) => print!("{}", format!("\"{}\"", s).green()),
+            Value::Integer(i) => print!("{}", i.to_string().yellow()),
+            Value::Float(f) => print!("{}", f.to_string().yellow()),
+            Value::Boolean(b) => print!("{}", b.to_string().magenta()),
+            Value::Keyword(k) => print!("{}", format!(":{}", k.0).cyan()),
+            Value::Nil => print!("{}", "nil".dimmed()),
+            Value::Map(m) => {
+                print!("{{");
+                for (i, (k, v)) in m.iter().enumerate() {
+                    if i > 0 { print!(" "); }
+                    let key_str = match k {
+                        MapKey::Keyword(kw) => format!(":{}", kw.0),
+                        MapKey::String(s) => format!("\"{}\"", s),
+                        MapKey::Integer(i) => i.to_string(),
+                    };
+                    print!("{} ", key_str);
+                    self.pretty_print_inline(v);
+                }
+                print!("}}");
+            }
+            Value::Vector(v) => {
+                print!("[");
+                for (i, item) in v.iter().enumerate() {
+                    if i > 0 { print!(" "); }
+                    self.pretty_print_inline(item);
+                }
+                print!("]");
+            }
+            _ => print!("{:?}", value),
+        }
+    }
+    
+    fn value_to_json(&self, value: &Value) -> Result<serde_json::Value, String> {
+        match value {
+            Value::Nil => Ok(serde_json::Value::Null),
+            Value::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
+            Value::Integer(i) => Ok(serde_json::json!(i)),
+            Value::Float(f) => Ok(serde_json::json!(f)),
+            Value::String(s) => Ok(serde_json::Value::String(s.clone())),
+            Value::Keyword(k) => Ok(serde_json::Value::String(format!(":{}", k.0))),
+            Value::Vector(v) => {
+                let items: Result<Vec<_>, _> = v.iter().map(|i| self.value_to_json(i)).collect();
+                Ok(serde_json::Value::Array(items?))
+            }
+            Value::Map(m) => {
+                let mut obj = serde_json::Map::new();
+                for (k, v) in m {
+                    let key = match k {
+                        MapKey::Keyword(kw) => kw.0.clone(),
+                        MapKey::String(s) => s.clone(),
+                        MapKey::Integer(i) => i.to_string(),
+                    };
+                    obj.insert(key, self.value_to_json(v)?);
+                }
+                Ok(serde_json::Value::Object(obj))
+            }
+            _ => Ok(serde_json::Value::String(format!("{:?}", value))),
+        }
+    }
+    
+    // RTFS-mode implementations
+    
+    async fn get_servers_as_value(&self) -> Value {
+        let servers = self.discovery_service.list_known_servers();
+        let server_values: Vec<Value> = servers.iter().map(|s| {
+            let mut map = HashMap::new();
+            map.insert(MapKey::Keyword(Keyword("name".to_string())), Value::String(s.name.clone()));
+            map.insert(MapKey::Keyword(Keyword("endpoint".to_string())), Value::String(s.endpoint.clone()));
+            Value::Map(map)
+        }).collect();
+        Value::Vector(server_values)
+    }
+    
+    async fn discover_rtfs(&mut self, server_name: &str, _hint: Option<&str>, quiet: bool) -> Result<Value, String> {
+        let servers = self.discovery_service.list_known_servers();
+        let config = servers.iter()
+            .find(|s| s.name == server_name || s.endpoint.contains(server_name))
+            .cloned()
+            .ok_or_else(|| format!("Unknown server: {}", server_name))?;
+        
+        if !quiet {
+            eprintln!("  {} Discovering from {}...", "⏳".yellow(), config.endpoint);
+        }
+        
+        let options = DiscoveryOptions {
+            introspect_output_schemas: false,
+            use_cache: false,
+            register_in_marketplace: true,
+            export_to_rtfs: false,
+            export_directory: None,
+            auth_headers: None,
+            retry_policy: Default::default(),
+            rate_limit: Default::default(),
+            max_parallel_discoveries: 5,
+            lazy_output_schemas: true,
+        };
+        
+        match self.discovery_service.discover_tools(&config, &options).await {
+            Ok(discovered) => {
+                let count = discovered.len();
+                
+                for tool in &discovered {
+                    // Convert DiscoveredMCPTool to CapabilityManifest
+                    let manifest = self.discovery_service.tool_to_manifest(tool, &config);
+                    self.discovered_tools.push(DiscoveredTool {
+                        manifest: manifest.clone(),
+                        server_name: config.name.clone(),
+                        discovery_hint: None,
+                    });
+                    // Also register in marketplace
+                    let _ = self.marketplace.register_capability_manifest(manifest).await;
+                }
+                
+                if !quiet {
+                    eprintln!("  {} Discovered {} capabilities", "✓".green(), count);
+                }
+                
+                // Return list of capability IDs
+                let ids: Vec<Value> = discovered.iter()
+                    .map(|t| Value::String(format!("mcp.{}.{}", config.name, t.tool_name)))
+                    .collect();
+                Ok(Value::Vector(ids))
+            }
+            Err(e) => Err(format!("Discovery failed: {}", e)),
+        }
+    }
+    
+    async fn search_rtfs(&self, hint: &str) -> Value {
+        let results = self.catalog.search_keyword(hint, None, 100);
+        let values: Vec<Value> = results.iter().map(|r| {
+            let mut map = HashMap::new();
+            map.insert(MapKey::Keyword(Keyword("id".to_string())), Value::String(r.entry.id.clone()));
+            map.insert(MapKey::Keyword(Keyword("name".to_string())), 
+                Value::String(r.entry.name.clone().unwrap_or_default()));
+            map.insert(MapKey::Keyword(Keyword("score".to_string())), Value::Float(r.score as f64));
+            Value::Map(map)
+        }).collect();
+        Value::Vector(values)
+    }
+    
+    fn list_rtfs(&self) -> Value {
+        let values: Vec<Value> = self.discovered_tools.iter().map(|t| {
+            let mut map = HashMap::new();
+            map.insert(MapKey::Keyword(Keyword("id".to_string())), Value::String(t.manifest.id.clone()));
+            map.insert(MapKey::Keyword(Keyword("name".to_string())), Value::String(t.manifest.name.clone()));
+            map.insert(MapKey::Keyword(Keyword("server".to_string())), Value::String(t.server_name.clone()));
+            Value::Map(map)
+        }).collect();
+        Value::Vector(values)
+    }
+    
+    async fn inspect_rtfs(&self, id: &str) -> Result<Value, String> {
+        // Search in discovered tools
+        if let Some(tool) = self.discovered_tools.iter().find(|t| t.manifest.id == id || t.manifest.name == id) {
+            return Ok(self.manifest_to_value(&tool.manifest));
+        }
+        
+        // Try marketplace
+        if let Some(manifest) = self.marketplace.get_capability(id).await {
+            return Ok(self.manifest_to_value(&manifest));
+        }
+        
+        Err(format!("Capability not found: {}", id))
+    }
+    
+    fn manifest_to_value(&self, manifest: &CapabilityManifest) -> Value {
+        let mut map = HashMap::new();
+        map.insert(MapKey::Keyword(Keyword("id".to_string())), Value::String(manifest.id.clone()));
+        map.insert(MapKey::Keyword(Keyword("name".to_string())), Value::String(manifest.name.clone()));
+        map.insert(MapKey::Keyword(Keyword("description".to_string())), Value::String(manifest.description.clone()));
+        map.insert(MapKey::Keyword(Keyword("version".to_string())), Value::String(manifest.version.clone()));
+        
+        // Add provider info
+        let provider_str = match &manifest.provider {
+            ProviderType::MCP(mcp) => format!("MCP: {} ({})", mcp.tool_name, mcp.server_url),
+            ProviderType::Local(_) => "Local".to_string(),
+            ProviderType::A2A(a) => format!("A2A: {}", a.agent_id),
+            ProviderType::Http(h) => format!("HTTP: {}", h.base_url),
+            ProviderType::OpenApi(o) => format!("OpenAPI: {}", o.base_url),
+            _ => "Other".to_string(),
+        };
+        map.insert(MapKey::Keyword(Keyword("provider".to_string())), Value::String(provider_str));
+        
+        // Add schema info
+        if let Some(schema) = &manifest.input_schema {
+            map.insert(MapKey::Keyword(Keyword("input_schema".to_string())), 
+                Value::String(format!("{:?}", schema)));
+        }
+        
+        Value::Map(map)
+    }
+    
+    async fn call_capability_rtfs(&mut self, cap_id: &str, args: HashMap<String, Value>, quiet: bool) -> Result<Value, String> {
+        // Convert args HashMap to RTFS Map
+        let mut rtfs_map = HashMap::new();
+        for (k, v) in args {
+            rtfs_map.insert(MapKey::Keyword(Keyword(k)), v);
+        }
+        let input = Value::Map(rtfs_map);
+        
+        if !quiet {
+            eprintln!("  {} Calling {}...", "⏳".yellow(), cap_id);
+        }
+        
+        match self.marketplace.execute_capability(cap_id, &input).await {
+            Ok(result) => {
+                if !quiet {
+                    eprintln!("  {} Success", "✓".green());
+                }
+                Ok(result)
+            }
+            Err(e) => Err(format!("Execution failed: {}", e)),
         }
     }
     
@@ -783,7 +1402,15 @@ impl CapabilityExplorer {
     }
     
     async fn run(&mut self, args: &Args) {
-        self.print_banner();
+        // RTFS mode - execute expressions without interactive TUI
+        if args.rtfs.is_some() || args.rtfs_file.is_some() || args.rtfs_stdin {
+            self.run_rtfs_mode(args).await;
+            return;
+        }
+        
+        if !args.quiet {
+            self.print_banner();
+        }
         
         // Auto-discover if server specified
         if let Some(ref server) = args.server {
@@ -824,11 +1451,119 @@ impl CapabilityExplorer {
                     break;
                 }
                 "" => continue,
+                // Try to parse as RTFS expression in interactive mode
+                expr if expr.starts_with('(') => {
+                    match self.execute_rtfs(expr, &args.output, false).await {
+                        Ok(_) => {}
+                        Err(e) => println!("  {} {}", "✗".red(), e),
+                    }
+                }
                 _ => {
                     println!("  {} Unknown command. Type '{}' for help.", "✗".red(), "h".yellow());
+                    println!("  {} You can also enter RTFS expressions directly, e.g.:", "💡".cyan());
+                    println!("    (call :ccos.discovery.servers {{}})");
                 }
             }
         }
+    }
+    
+    /// Run in RTFS script mode (non-interactive)
+    async fn run_rtfs_mode(&mut self, args: &Args) {
+        // Collect expressions to execute
+        let expressions: Vec<String> = if let Some(ref expr) = args.rtfs {
+            vec![expr.clone()]
+        } else if let Some(ref file_path) = args.rtfs_file {
+            match std::fs::read_to_string(file_path) {
+                Ok(content) => {
+                    // If the file starts with (do, treat as single expression
+                    let trimmed = content.trim();
+                    if trimmed.starts_with("(do") {
+                        vec![trimmed.to_string()]
+                    } else {
+                        // Otherwise, treat each non-comment line starting with ( as an expression
+                        self.parse_rtfs_lines(&content)
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error reading file {}: {}", file_path, e);
+                    return;
+                }
+            }
+        } else if args.rtfs_stdin {
+            let mut content = String::new();
+            if let Err(e) = std::io::stdin().lock().read_to_string(&mut content) {
+                eprintln!("Error reading from stdin: {}", e);
+                return;
+            }
+            let trimmed = content.trim();
+            if trimmed.starts_with("(do") {
+                vec![trimmed.to_string()]
+            } else {
+                self.parse_rtfs_lines(&content)
+            }
+        } else {
+            return;
+        };
+        
+        // Execute each expression
+        for expr in expressions {
+            if !args.quiet {
+                eprintln!("{} {}", "▶".cyan(), expr.dimmed());
+            }
+            
+            match self.execute_rtfs(&expr, &args.output, args.quiet).await {
+                Ok(_value) => {
+                    // Value already printed by execute_rtfs
+                }
+                Err(e) => {
+                    eprintln!("{} {}", "✗".red(), e);
+                    // Continue with remaining expressions
+                }
+            }
+        }
+    }
+    
+    /// Parse RTFS lines from multi-line content
+    fn parse_rtfs_lines(&self, content: &str) -> Vec<String> {
+        let mut expressions = Vec::new();
+        let mut current_expr = String::new();
+        let mut depth = 0;
+        
+        for line in content.lines() {
+            let trimmed = line.trim();
+            
+            // Skip empty lines and comments
+            if trimmed.is_empty() || trimmed.starts_with(';') || trimmed.starts_with(";;") {
+                continue;
+            }
+            
+            // Track parenthesis depth
+            for c in trimmed.chars() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+            }
+            
+            if !current_expr.is_empty() {
+                current_expr.push(' ');
+            }
+            current_expr.push_str(trimmed);
+            
+            // Complete expression when depth returns to 0
+            if depth == 0 && !current_expr.is_empty() {
+                expressions.push(current_expr.clone());
+                current_expr.clear();
+            }
+        }
+        
+        // Push any remaining incomplete expression
+        if !current_expr.is_empty() {
+            expressions.push(current_expr);
+        }
+        
+        expressions
     }
 }
 

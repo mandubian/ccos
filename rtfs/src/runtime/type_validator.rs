@@ -456,6 +456,8 @@ impl TypeValidator {
             // Primitive types
             (Value::Integer(_), TypeExpr::Primitive(PrimitiveType::Int)) => Ok(()),
             (Value::Float(_), TypeExpr::Primitive(PrimitiveType::Float)) => Ok(()),
+            // Allow integer to be used where float is expected (numeric coercion)
+            (Value::Integer(_), TypeExpr::Primitive(PrimitiveType::Float)) => Ok(()),
             (Value::String(_), TypeExpr::Primitive(PrimitiveType::String)) => Ok(()),
             (Value::Boolean(_), TypeExpr::Primitive(PrimitiveType::Bool)) => Ok(()),
             (Value::Nil, TypeExpr::Primitive(PrimitiveType::Nil)) => Ok(()),
