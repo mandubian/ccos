@@ -343,6 +343,9 @@ mod tests {
 
     #[test]
     fn test_canonical_capability_schema_validation() {
+        use rtfs::ast::MapKey;
+        use rtfs::runtime::values::Value;
+        
         let mut cap_map = HashMap::new();
         cap_map.insert(
             MapKey::String(":id".to_string()),
@@ -360,7 +363,16 @@ mod tests {
             MapKey::String(":description".to_string()),
             Value::String("A test capability".to_string()),
         );
+        // Use string provider type "mcp" to indicate remote capability (doesn't need :language)
+        cap_map.insert(
+            MapKey::String(":provider".to_string()),
+            Value::String("mcp".to_string()),
+        );
 
-        assert!(CanonicalCapabilitySchema::validate(&cap_map).is_ok());
+        let result = CanonicalCapabilitySchema::validate(&cap_map);
+        if let Err(e) = &result {
+            eprintln!("Validation error: {}", e);
+        }
+        assert!(result.is_ok());
     }
 }

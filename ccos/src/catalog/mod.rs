@@ -46,6 +46,10 @@ pub enum CatalogLocation {
 pub struct CatalogFilter {
     pub kind: Option<CatalogEntryKind>,
     pub source: Option<CatalogSource>,
+    /// Filter by domains (any match)
+    pub domains: Vec<String>,
+    /// Filter by categories (any match)
+    pub categories: Vec<String>,
 }
 
 impl CatalogFilter {
@@ -54,6 +58,34 @@ impl CatalogFilter {
             kind: Some(kind),
             ..Default::default()
         }
+    }
+
+    /// Create a filter for a specific domain
+    pub fn for_domain(domain: impl Into<String>) -> Self {
+        Self {
+            domains: vec![domain.into()],
+            ..Default::default()
+        }
+    }
+
+    /// Create a filter for specific domains
+    pub fn for_domains(domains: Vec<String>) -> Self {
+        Self {
+            domains,
+            ..Default::default()
+        }
+    }
+
+    /// Add domain filter
+    pub fn with_domain(mut self, domain: impl Into<String>) -> Self {
+        self.domains.push(domain.into());
+        self
+    }
+
+    /// Add category filter
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.categories.push(category.into());
+        self
     }
 
     fn matches(&self, entry: &CatalogEntry) -> bool {
@@ -66,6 +98,14 @@ impl CatalogFilter {
             if entry.source != source {
                 return false;
             }
+        }
+        // Domain filter: match if any domain matches (prefix matching supported)
+        if !self.domains.is_empty() && !entry.matches_any_domain(&self.domains) {
+            return false;
+        }
+        // Category filter: match if any category matches
+        if !self.categories.is_empty() && !entry.has_any_category(&self.categories) {
+            return false;
         }
         true
     }
@@ -88,16 +128,46 @@ pub struct CatalogEntry {
     pub goal: Option<String>,
     pub search_blob: String,
     pub embedding: Option<Vec<f32>>,
+    /// Domains this entry belongs to (hierarchical, e.g., "github.issues", "cloud.aws")
+    pub domains: Vec<String>,
+    /// Categories describing operation type (e.g., "crud", "search", "transform")
+    pub categories: Vec<String>,
 }
 
 impl CatalogEntry {
+    /// Check if entry matches a domain (supports prefix matching)
+    pub fn matches_domain(&self, domain: &str) -> bool {
+        self.domains.iter().any(|d| {
+            d == domain || d.starts_with(&format!("{}.", domain)) || domain.starts_with(&format!("{}.", d))
+        })
+    }
+
+    /// Check if entry matches any of the given domains
+    pub fn matches_any_domain(&self, domains: &[String]) -> bool {
+        domains.iter().any(|d| self.matches_domain(d))
+    }
+
+    /// Check if entry has a specific category
+    pub fn has_category(&self, category: &str) -> bool {
+        self.categories.iter().any(|c| c == category)
+    }
+
+    /// Check if entry has any of the given categories
+    pub fn has_any_category(&self, categories: &[String]) -> bool {
+        categories.iter().any(|c| self.has_category(c))
+    }
+
     fn new_capability(manifest: &CapabilityManifest, source: CatalogSource) -> Self {
         let tags = manifest.metadata.keys().cloned().collect::<Vec<_>>();
         let inputs = extract_schema_fields(manifest.input_schema.as_ref());
         let outputs = extract_schema_fields(manifest.output_schema.as_ref());
         let provider = Some(provider_to_string(&manifest.provider));
+        
+        // Include domains and categories in search blob for better discoverability
+        let domain_text = manifest.domains.join(" ");
+        let category_text = manifest.categories.join(" ");
         let search_blob = build_search_blob(
-            &[&manifest.id, &manifest.name, &manifest.description],
+            &[&manifest.id, &manifest.name, &manifest.description, &domain_text, &category_text],
             &tags,
             &inputs,
             &outputs,
@@ -119,6 +189,8 @@ impl CatalogEntry {
             goal: None,
             search_blob,
             embedding,
+            domains: manifest.domains.clone(),
+            categories: manifest.categories.clone(),
         }
     }
 
@@ -175,6 +247,8 @@ impl CatalogEntry {
             goal,
             search_blob,
             embedding,
+            domains: Vec::new(),  // Plans don't have domains yet
+            categories: Vec::new(),  // Plans don't have categories yet
         }
     }
 }

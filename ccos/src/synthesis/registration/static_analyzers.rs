@@ -471,6 +471,8 @@ mod tests {
             effects: vec![],
             metadata: std::collections::HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         }
     }
 

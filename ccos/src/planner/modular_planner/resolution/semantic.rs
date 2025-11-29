@@ -18,6 +18,10 @@ pub struct CapabilityInfo {
     pub name: String,
     pub description: String,
     pub input_schema: Option<String>,
+    /// Domains this capability belongs to
+    pub domains: Vec<String>,
+    /// Categories for this capability
+    pub categories: Vec<String>,
 }
 
 /// Catalog trait for querying available capabilities
@@ -31,6 +35,38 @@ pub trait CapabilityCatalog: Send + Sync {
 
     /// Search capabilities by query string
     async fn search(&self, query: &str, limit: usize) -> Vec<CapabilityInfo>;
+
+    /// Search capabilities by domain and optional category
+    async fn search_by_domain(
+        &self,
+        domains: &[String],
+        categories: Option<&[String]>,
+        limit: usize,
+    ) -> Vec<CapabilityInfo> {
+        // Default implementation falls back to listing and filtering
+        let all = self.list_capabilities(domains.first().map(|s| s.as_str())).await;
+        all.into_iter()
+            .filter(|c| {
+                // Check domain match
+                let domain_match = domains.is_empty()
+                    || c.domains.iter().any(|d| {
+                        domains.iter().any(|fd| {
+                            d == fd
+                                || d.starts_with(&format!("{}.", fd))
+                                || fd.starts_with(&format!("{}.", d))
+                        })
+                    });
+
+                // Check category match if specified
+                let category_match = categories
+                    .map(|cats| cats.is_empty() || c.categories.iter().any(|c| cats.contains(c)))
+                    .unwrap_or(true);
+
+                domain_match && category_match
+            })
+            .take(limit)
+            .collect()
+    }
 }
 
 /// Semantic resolution using embeddings and catalog search.
@@ -273,12 +309,16 @@ mod tests {
                     name: "list_issues".to_string(),
                     description: "List issues in a GitHub repository".to_string(),
                     input_schema: None,
+                    domains: vec!["github".to_string()],
+                    categories: vec!["list".to_string(), "crud".to_string()],
                 },
                 CapabilityInfo {
                     id: "mcp.github.create_issue".to_string(),
                     name: "create_issue".to_string(),
                     description: "Create a new issue".to_string(),
                     input_schema: None,
+                    domains: vec!["github".to_string()],
+                    categories: vec!["create".to_string(), "crud".to_string()],
                 },
             ],
         });

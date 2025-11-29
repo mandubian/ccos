@@ -553,6 +553,8 @@ mod tests {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         // Test registration
@@ -588,6 +590,8 @@ mod tests {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         let validation_result = ValidationResult {

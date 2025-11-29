@@ -3496,6 +3496,8 @@ impl MissingCapabilityResolver {
                 meta
             },
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         if self.config.verbose_logging {
@@ -4441,6 +4443,8 @@ mod tests {
             effects: vec![],
             metadata: std::collections::HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         marketplace
             .register_capability_manifest(manifest)

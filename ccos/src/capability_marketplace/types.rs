@@ -95,6 +95,14 @@ pub struct CapabilityManifest {
     pub metadata: HashMap<String, String>,
     /// Agent-specific metadata flags for unified capability/agent model
     pub agent_metadata: Option<AgentMetadata>,
+    /// Domains this capability belongs to (e.g., "github", "code", "devops", "communication")
+    /// Domains are hierarchical strings using dot notation: "cloud.aws.s3", "code.rust"
+    /// New domains can be added dynamically without code changes
+    pub domains: Vec<String>,
+    /// Categories for grouping capabilities (e.g., "crud", "search", "transform", "notify")
+    /// Categories describe what kind of operation the capability performs
+    /// New categories can be added dynamically without code changes  
+    pub categories: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -173,6 +181,8 @@ impl CapabilityManifest {
             effects: Vec::new(),
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         }
     }
 
@@ -207,6 +217,8 @@ impl CapabilityManifest {
                 interactive,
                 config: HashMap::new(),
             }),
+            domains: Vec::new(),
+            categories: Vec::new(),
         }
     }
 
@@ -251,6 +263,55 @@ impl CapabilityManifest {
     pub fn with_agent_metadata(mut self, metadata: AgentMetadata) -> Self {
         self.agent_metadata = Some(metadata);
         self
+    }
+
+    /// Add domains to this capability
+    /// Domains are hierarchical strings using dot notation: "cloud.aws.s3", "code.rust"
+    pub fn with_domains(mut self, domains: Vec<String>) -> Self {
+        self.domains = domains;
+        self
+    }
+
+    /// Add a single domain to this capability
+    pub fn with_domain(mut self, domain: impl Into<String>) -> Self {
+        self.domains.push(domain.into());
+        self
+    }
+
+    /// Add categories to this capability
+    /// Categories describe what kind of operation: "crud", "search", "transform", "notify"
+    pub fn with_categories(mut self, categories: Vec<String>) -> Self {
+        self.categories = categories;
+        self
+    }
+
+    /// Add a single category to this capability
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.categories.push(category.into());
+        self
+    }
+
+    /// Check if capability matches a domain (supports prefix matching)
+    /// e.g., "github" matches "github.issues" and "github.repos"
+    pub fn matches_domain(&self, domain: &str) -> bool {
+        self.domains.iter().any(|d| {
+            d == domain || d.starts_with(&format!("{}.", domain)) || domain.starts_with(&format!("{}.", d))
+        })
+    }
+
+    /// Check if capability matches any of the given domains
+    pub fn matches_any_domain(&self, domains: &[String]) -> bool {
+        domains.iter().any(|d| self.matches_domain(d))
+    }
+
+    /// Check if capability has a specific category
+    pub fn has_category(&self, category: &str) -> bool {
+        self.categories.iter().any(|c| c == category)
+    }
+
+    /// Check if capability has any of the given categories
+    pub fn has_any_category(&self, categories: &[String]) -> bool {
+        categories.iter().any(|c| self.has_category(c))
     }
 
     /// Get the last updated timestamp from metadata

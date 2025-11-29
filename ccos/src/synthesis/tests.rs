@@ -85,6 +85,9 @@ mod tests {
             permissions: vec![],
             effects: vec![],
             metadata,
+            agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         let planner_rtfs = crate::synthesis::artifact_generator::generate_planner_generic_v0_1(

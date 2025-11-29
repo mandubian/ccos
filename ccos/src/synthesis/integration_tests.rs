@@ -49,6 +49,8 @@ mod tests {
             effects: vec![],
             metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         let result = synthesize_capabilities_with_marketplace(&convo, &[manifest.clone()]);

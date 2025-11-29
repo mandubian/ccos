@@ -729,6 +729,8 @@ impl OpenAPIImporter {
             effects: vec!["network_call".to_string()],
             metadata: manifest_metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         })
     }
 
@@ -1175,6 +1177,8 @@ impl OpenAPIImporter {
             effects,
             metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         })
     }
 
