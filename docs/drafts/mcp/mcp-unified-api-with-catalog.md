@@ -103,20 +103,36 @@ The unified `MCPDiscoveryService` will:
 - **Removes**: Duplicate discovery logic
 
 ### Introspector (`mcp_introspector.rs`)
-- **Uses Core**: For discovery
-- **Adds**: Output schema introspection, RTFS generation
-- **Removes**: Duplicate discovery logic
+- **Used By Core**: `MCPDiscoveryService` contains an `MCPIntrospector` instance
+- **Adds**: Output schema introspection, RTFS code generation
+- **Note**: Remains as a specialized module for RTFS generation
 
 ## Migration Checklist
 
-- [ ] Create `mcp/core.rs` with unified discovery
-- [ ] Add catalog integration to core
-- [ ] Add marketplace integration to core
-- [ ] Add caching layer
-- [ ] Update `mcp.rs` to use core
-- [ ] Update `mcp_discovery.rs` to use core
-- [ ] Update `mcp_introspector.rs` to use core
-- [ ] Remove duplicate code
-- [ ] Update tests
-- [ ] Update documentation
+- [x] Create `mcp/core.rs` with unified discovery
+- [x] Add catalog integration to core
+- [x] Add marketplace integration to core
+- [x] Add caching layer
+- [x] Update `mcp.rs` to use core
+- [x] Update `mcp_discovery.rs` to use core
+- [x] Add rate limiting layer
+- [x] Add domain/category inference for discovered capabilities
+- [ ] Update `mcp_introspector.rs` to optionally use core for discovery (currently standalone)
+- [ ] Remove duplicate code in introspector
+- [x] Update tests
+- [x] Update documentation
+
+## Remaining Optional Work
+
+### MCPIntrospector Integration (Low Priority)
+The `MCPIntrospector` in `synthesis/introspection/` could optionally delegate discovery to 
+`MCPDiscoveryService`, but currently works fine standalone. The introspector adds specialized 
+RTFS generation that doesn't need to be in the unified service.
+
+### Domain/Category Enhancement
+Recently added automatic domain/category inference:
+- Domains inferred from server name (e.g., "github" from "modelcontextprotocol/github")
+- Sub-domains inferred from tool name (e.g., "issues" from "list_issues")
+- Categories inferred from action patterns (e.g., "crud.read" from "list_*")
+
 
