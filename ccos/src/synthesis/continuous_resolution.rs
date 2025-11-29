@@ -7,10 +7,10 @@
 //! - Repeatable resolution with safe fallbacks
 
 use crate::capability_marketplace::CapabilityMarketplace;
+use crate::synthesis::mcp_introspector::MCPIntrospector;
+use crate::mcp::registry::MCPRegistryClient;
 use crate::synthesis::missing_capability_resolver::MissingCapabilityResolver;
 use crate::synthesis::registration_flow::RegistrationFlow;
-use crate::synthesis::mcp_introspector::MCPIntrospector;
-use crate::synthesis::mcp_registry_client::McpRegistryClient;
 use chrono::{DateTime, Utc};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::collections::HashMap;
@@ -215,7 +215,7 @@ impl ContinuousResolutionLoop {
     async fn assess_risk(
         &self,
         capability_id: &str,
-        context: Option<&str>,
+        _context: Option<&str>,
     ) -> RuntimeResult<RiskAssessment> {
         let mut risk_factors = Vec::new();
         let mut security_concerns = Vec::new();
@@ -425,11 +425,11 @@ impl ContinuousResolutionLoop {
             ResolutionMethod::McpRegistry => {
                 // 1. Check overrides first
                 let overrides = self.resolver.load_curated_overrides_for(capability_id)?;
-                
+
                 let server_url = if let Some(server) = overrides.first() {
                     println!("✅ Found override for capability: {}", capability_id);
                     if let Some(remotes) = &server.remotes {
-                        McpRegistryClient::select_best_remote_url(remotes)
+                        MCPRegistryClient::select_best_remote_url(remotes)
                     } else {
                         None
                     }
@@ -442,24 +442,28 @@ impl ContinuousResolutionLoop {
                 if let Some(url) = server_url {
                     println!("🔍 Introspecting MCP server at {}", url);
                     let introspector = MCPIntrospector::new();
-                    
+
                     let mut headers = HashMap::new();
                     if let Ok(token) = std::env::var("MCP_AUTH_TOKEN") {
                         headers.insert("Authorization".to_string(), format!("Bearer {}", token));
                     }
-                    let headers_opt = if headers.is_empty() { None } else { Some(headers) };
-                    
-                    let server_name = "mcp-server"; 
+                    let headers_opt = if headers.is_empty() {
+                        None
+                    } else {
+                        Some(headers)
+                    };
+
+                    let server_name = "mcp-server";
 
                     let introspection = introspector
                         .introspect_mcp_server_with_auth(&url, server_name, headers_opt.clone())
                         .await?;
 
                     let manifests = introspector.create_capabilities_from_mcp(&introspection)?;
-                    
+
                     // Find the specific tool we are looking for
                     let tool_name = capability_id.split('.').last().unwrap_or(capability_id);
-                    
+
                     let mut manifest = manifests
                         .into_iter()
                         .find(|m| {
@@ -469,7 +473,10 @@ impl ContinuousResolutionLoop {
                                 .unwrap_or(false)
                         })
                         .ok_or_else(|| {
-                            RuntimeError::Generic(format!("Tool '{}' not found in MCP server", tool_name))
+                            RuntimeError::Generic(format!(
+                                "Tool '{}' not found in MCP server",
+                                tool_name
+                            ))
                         })?;
 
                     // Force the capability ID to match the requested ID
@@ -479,55 +486,63 @@ impl ContinuousResolutionLoop {
                     // Load safe inputs for introspection from config/mcp_introspection.toml
                     let config_path = std::path::Path::new("config/mcp_introspection.toml");
                     let input_overrides = if config_path.exists() {
-                         let content = std::fs::read_to_string(config_path).unwrap_or_default();
-                         let config: toml::Value = toml::from_str(&content).unwrap_or(toml::Value::Table(toml::map::Map::new()));
-                         
-                         config.get("tools")
-                            .and_then(|t| t.get(tool_name))
-                            .map(|v| {
-                                let json_str = serde_json::to_string(v).unwrap_or("{}".to_string());
-                                serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null)
-                            })
+                        let content = std::fs::read_to_string(config_path).unwrap_or_default();
+                        let config: toml::Value = toml::from_str(&content)
+                            .unwrap_or(toml::Value::Table(toml::map::Map::new()));
+
+                        config.get("tools").and_then(|t| t.get(tool_name)).map(|v| {
+                            let json_str = serde_json::to_string(v).unwrap_or("{}".to_string());
+                            serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null)
+                        })
                     } else {
                         None
                     };
 
                     // Introspect output schema
-                    if let Some(tool) = introspection.tools.iter().find(|t| t.tool_name == tool_name) {
-                         if let Ok((schema_opt, _)) = introspector
-                            .introspect_output_schema(tool, &url, server_name, headers_opt, input_overrides)
-                            .await 
-                         {
-                             if let Some(schema) = schema_opt {
-                                 manifest.output_schema = Some(schema);
-                                 println!("✅ Updated output schema for {}", tool_name);
-                             }
-                         }
+                    if let Some(tool) = introspection
+                        .tools
+                        .iter()
+                        .find(|t| t.tool_name == tool_name)
+                    {
+                        if let Ok((schema_opt, _)) = introspector
+                            .introspect_output_schema(
+                                tool,
+                                &url,
+                                server_name,
+                                headers_opt,
+                                input_overrides,
+                            )
+                            .await
+                        {
+                            if let Some(schema) = schema_opt {
+                                manifest.output_schema = Some(schema);
+                                println!("✅ Updated output schema for {}", tool_name);
+                            }
+                        }
                     }
 
                     // Generate implementation
-                    let implementation = introspector.generate_mcp_wrapper_code(
-                        &url,
-                        tool_name,
-                        &manifest.name
-                    );
+                    let implementation =
+                        introspector.generate_mcp_wrapper_code(&url, tool_name, &manifest.name);
 
                     // Save to disk
                     let output_dir = std::path::Path::new("capabilities/discovered");
                     std::fs::create_dir_all(output_dir.join("mcp")).ok();
-                    
+
                     let path = introspector.save_capability_to_rtfs(
                         &manifest,
                         &implementation,
                         output_dir,
-                        None
+                        None,
                     )?;
-                    
+
                     println!("💾 Saved capability to {:?}", path);
 
                     // Register in marketplace
-                    self.registration_flow.register_capability(manifest, Some(&implementation)).await?;
-                    
+                    self.registration_flow
+                        .register_capability(manifest, Some(&implementation))
+                        .await?;
+
                     Ok(())
                 } else {
                     Err(RuntimeError::Generic(
@@ -571,9 +586,27 @@ impl ContinuousResolutionLoop {
                 ))
             }
 
-            ResolutionMethod::Manual => Err(RuntimeError::Generic(
-                "Manual resolution required".to_string(),
-            )),
+            ResolutionMethod::Manual => {
+                // Reconstruct a minimal request context to reuse the existing strategy logic
+                // In a real implementation, we might want to store/retrieve the original context
+                let request = crate::synthesis::missing_capability_resolver::MissingCapabilityRequest {
+                    capability_id: capability_id.to_string(),
+                    arguments: vec![], // No arguments available in this context
+                    context: Default::default(),
+                    requested_at: std::time::SystemTime::now(),
+                    attempt_count: 1, // Logic handles attempts separately
+                };
+                
+                if let Some(manifest) = self.resolver.attempt_user_interaction(&request, capability_id).await? {
+                    // Register if successful
+                    self.marketplace.register_capability_manifest(manifest).await?;
+                    Ok(())
+                } else {
+                     Err(RuntimeError::Generic(
+                        "User interaction did not resolve capability".to_string(),
+                    ))
+                }
+            }
         }
     }
 
@@ -588,6 +621,7 @@ impl ContinuousResolutionLoop {
                     ResolutionMethod::HttpWrapper,
                     ResolutionMethod::LlmSynthesis,
                     ResolutionMethod::WebSearch,
+                    ResolutionMethod::Manual, // Added Manual to Low priority for demo/fallback
                 ]
             }
             ResolutionPriority::Medium => {
@@ -839,9 +873,7 @@ mod tests {
     #[tokio::test]
     async fn test_continuous_resolution_loop() {
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let checkpoint_archive = Arc::new(CheckpointArchive::new());
         let resolver = Arc::new(MissingCapabilityResolver::new(
@@ -892,9 +924,7 @@ mod tests {
                 )),
             )))),
             Arc::new(CapabilityMarketplace::new(Arc::new(
-                tokio::sync::RwLock::new(
-                    crate::capabilities::registry::CapabilityRegistry::new(),
-                ),
+                tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
             ))),
             config.clone(),
         );
