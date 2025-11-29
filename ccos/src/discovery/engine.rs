@@ -11,6 +11,7 @@ use crate::discovery::recursive_synthesizer::RecursiveSynthesizer;
 use crate::intent_graph::IntentGraph;
 use crate::synthesis::primitives::PrimitiveContext;
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
+use crate::utils::value_conversion;
 use regex;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde_json::Value as JsonValue;
@@ -1988,7 +1989,7 @@ impl DiscoveryEngine {
         match expr {
             rtfs::ast::TypeExpr::Map { entries, .. } => {
                 for entry in entries {
-                    let param_name = &entry.key.0;
+                    let param_name = value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()));
                     // Check if this parameter has constraints or enum values
                     let ty = &*entry.value_type;
                     // For enum types, extract the values
@@ -1999,7 +2000,9 @@ impl DiscoveryEngine {
                                 if let rtfs::ast::TypeExpr::Literal(lit) = v {
                                     match lit {
                                         rtfs::ast::Literal::String(s) => Some(s.clone()),
-                                        rtfs::ast::Literal::Keyword(k) => Some(k.0.clone()),
+                                        rtfs::ast::Literal::Keyword(k) => {
+                                            Some(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(k.clone())))
+                                        }
                                         _ => None,
                                     }
                                 } else {
@@ -2267,7 +2270,7 @@ impl DiscoveryEngine {
     fn schema_bindings(schema: Option<&rtfs::ast::TypeExpr>) -> Vec<String> {
         match schema {
             Some(rtfs::ast::TypeExpr::Map { entries, .. }) => {
-                entries.iter().map(|entry| entry.key.0.clone()).collect()
+                entries.iter().map(|entry| value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()))).collect()
             }
             _ => Vec::new(),
         }
@@ -2281,7 +2284,7 @@ impl DiscoveryEngine {
             rtfs::ast::TypeExpr::Map { entries, .. } => {
                 for entry in entries {
                     // Extract keyword name (remove the ':' prefix if present)
-                    let param_name = entry.key.0.clone();
+                    let param_name = value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()));
                     params.push(param_name);
                 }
             }
@@ -2935,7 +2938,7 @@ fn eh_collect_schema_keys(schema: &rtfs::ast::TypeExpr, out: &mut Vec<String>) {
     match schema {
         rtfs::ast::TypeExpr::Map { entries, .. } => {
             for entry in entries {
-                out.push(entry.key.0.clone());
+                out.push(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone())));
             }
         }
         rtfs::ast::TypeExpr::Vector(inner) | rtfs::ast::TypeExpr::Optional(inner) => {

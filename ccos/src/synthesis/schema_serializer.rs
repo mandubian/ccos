@@ -3,6 +3,7 @@
 //! This module provides common functions for converting RTFS TypeExpr AST nodes
 //! into human-readable RTFS schema strings for capability definitions.
 
+use crate::utils::value_conversion;
 use rtfs::ast::TypeExpr;
 
 /// Convert TypeExpr to compact RTFS schema string (uses built-in Display)
@@ -48,7 +49,7 @@ pub fn type_expr_to_rtfs_pretty(expr: &TypeExpr) -> String {
             let mut map_parts = vec!["{".to_string()];
 
             for entry in entries {
-                let key_str = &entry.key.0;
+                let key_str = value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()));
                 let value_str = type_expr_to_rtfs_pretty(&entry.value_type);
                 if entry.optional {
                     map_parts.push(format!("    :{} {} ;; optional", key_str, value_str));

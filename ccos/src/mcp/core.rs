@@ -559,6 +559,154 @@ impl MCPDiscoveryService {
     pub fn list_known_servers(&self) -> Vec<MCPServerConfig> {
         self.config_discovery.get_all_server_configs()
     }
+
+    // ================================
+    // Registry Integration Methods
+    // ================================
+
+    /// Search the MCP registry for servers that might provide a capability
+    ///
+    /// This method searches the official MCP registry for servers matching
+    /// the given capability name or query. Results are cached to avoid
+    /// repeated lookups.
+    pub async fn search_registry_for_capability(
+        &self,
+        capability_query: &str,
+        use_cache: bool,
+    ) -> RuntimeResult<Vec<crate::mcp::registry::McpServer>> {
+        // Check cache first
+        if use_cache {
+            if let Some(cached) = self.cache.get_registry_search(capability_query) {
+                log::debug!("Registry search cache hit for '{}'", capability_query);
+                return Ok(cached);
+            }
+        }
+
+        // Search the registry
+        log::info!("🔍 Searching MCP registry for '{}'...", capability_query);
+        let servers = self.registry_client.search_servers(capability_query).await?;
+
+        // Cache results
+        if use_cache {
+            self.cache.store_registry_search(capability_query, servers.clone());
+        }
+
+        log::info!("📦 Found {} servers matching '{}'", servers.len(), capability_query);
+        Ok(servers)
+    }
+
+    /// Find servers that can provide a specific capability
+    ///
+    /// This method:
+    /// 1. First checks local/configured servers
+    /// 2. Falls back to registry search if no local servers found
+    /// 3. Converts registry results to MCPServerConfig for discovery
+    pub async fn find_servers_for_capability(
+        &self,
+        capability_name: &str,
+        options: &DiscoveryOptions,
+    ) -> RuntimeResult<Vec<MCPServerConfig>> {
+        let mut found_servers = Vec::new();
+
+        // First, check if any known local servers might have this capability
+        let local_servers = self.config_discovery.get_all_server_configs();
+        for server in local_servers {
+            // Check if server name hints at having this capability
+            let server_name_lower = server.name.to_lowercase();
+            let capability_lower = capability_name.to_lowercase();
+            
+            // Simple heuristic: server name contains capability keywords
+            if server_name_lower.contains(&capability_lower) 
+                || capability_lower.contains(&server_name_lower) 
+            {
+                found_servers.push(server);
+            }
+        }
+
+        // If we found local servers, return them first
+        if !found_servers.is_empty() {
+            log::debug!("Found {} local servers for '{}'", found_servers.len(), capability_name);
+            return Ok(found_servers);
+        }
+
+        // Fall back to registry search
+        let registry_servers = self.search_registry_for_capability(
+            capability_name,
+            options.use_cache,
+        ).await?;
+
+        // Convert registry servers to MCPServerConfig
+        for registry_server in registry_servers {
+            if let Some(config) = self.registry_server_to_config(&registry_server) {
+                found_servers.push(config);
+            }
+        }
+
+        Ok(found_servers)
+    }
+
+    /// Convert a registry McpServer to MCPServerConfig
+    fn registry_server_to_config(
+        &self,
+        server: &crate::mcp::registry::McpServer,
+    ) -> Option<MCPServerConfig> {
+        // Try to get a usable endpoint from remotes
+        let endpoint = server.remotes.as_ref()
+            .and_then(|remotes| crate::mcp::registry::MCPRegistryClient::select_best_remote_url(remotes))?;
+
+        Some(MCPServerConfig {
+            name: server.name.clone(),
+            endpoint,
+            auth_token: None, // Will need to be configured separately
+            timeout_seconds: 30,
+            protocol_version: "2024-11-05".to_string(),
+        })
+    }
+
+    /// Discover tools from registry-found servers
+    ///
+    /// This is a high-level method that:
+    /// 1. Searches the registry for servers matching the query
+    /// 2. Attempts to discover tools from each found server
+    /// 3. Returns all discovered tools across all servers
+    pub async fn discover_from_registry(
+        &self,
+        capability_query: &str,
+        options: &DiscoveryOptions,
+    ) -> RuntimeResult<Vec<(MCPServerConfig, Vec<DiscoveredMCPTool>)>> {
+        let servers = self.find_servers_for_capability(capability_query, options).await?;
+        
+        let mut results = Vec::new();
+        for server_config in servers {
+            match self.discover_tools(&server_config, options).await {
+                Ok(tools) => {
+                    if !tools.is_empty() {
+                        log::info!(
+                            "✅ Discovered {} tools from '{}'",
+                            tools.len(),
+                            server_config.name
+                        );
+                        results.push((server_config, tools));
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "⚠️ Failed to discover from '{}': {}",
+                        server_config.name,
+                        e
+                    );
+                    // Continue with other servers
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Get the registry client (for direct access when needed)
+    pub fn registry_client(&self) -> &MCPRegistryClient {
+        &self.registry_client
+    }
 }
 
 impl Default for MCPDiscoveryService {

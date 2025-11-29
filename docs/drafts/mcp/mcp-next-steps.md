@@ -80,30 +80,47 @@ capabilities/discovered/
 
 ---
 
-### Option 4: MCP Registry Integration 🔍 (Discovery Enhancement)
+### ~~Option 4: MCP Registry Integration~~ ✅ COMPLETED
 **Priority**: Medium | **Effort**: 4-5 hours | **Impact**: Medium
 
-**What**: Better integration of `MCPRegistryClient` into the unified service for server discovery.
+**Status**: Implemented registry integration in `MCPDiscoveryService` and `MCPCache`.
 
-**Current State**:
-- `MCPRegistryClient` exists but not fully integrated
-- `MCPDiscoveryService` has registry client but doesn't use it much
+**Features Added**:
 
-**Implementation**:
-- Add `discover_servers_for_capability()` method
-- Search registry when domain hint doesn't match known servers
-- Auto-configure servers from registry results
-- Cache registry search results
+1. **Registry Search Methods** (in `ccos/src/mcp/core.rs`):
+   - `search_registry_for_capability(query, use_cache)` - Search MCP registry with caching
+   - `find_servers_for_capability(capability_name, options)` - Local-first search with registry fallback
+   - `discover_from_registry(query, options)` - High-level discovery from registry-found servers
+   - `registry_server_to_config(server)` - Convert registry server to MCPServerConfig
+   - `registry_client()` - Access the underlying registry client
 
-**Files to Modify**:
-- `ccos/src/mcp/core.rs` (add registry search methods)
-- `ccos/src/mcp/registry.rs` (enhance search)
-- `ccos/src/planner/modular_planner/resolution/mcp.rs` (use registry search)
+2. **Registry Search Caching** (in `ccos/src/mcp/cache.rs`):
+   - `get_registry_search(query)` - Retrieve cached registry search results
+   - `store_registry_search(query, servers)` - Cache registry search results
+   - 1-hour TTL for registry cache (vs 24-hour for tool cache)
+   - File persistence support for registry cache
 
-**Benefits**:
-- Automatic server discovery
-- Better capability resolution
-- Less manual configuration
+**Tests Added** (8 new tests in `mcp_discovery_tests.rs`):
+- `test_registry_cache_store_and_retrieve`
+- `test_registry_cache_miss_for_unknown_query`
+- `test_registry_cache_with_file_persistence`
+- `test_registry_cache_clear_includes_registry`
+- `test_discovery_service_registry_client_accessible`
+- `test_find_servers_for_capability_local_first`
+- `test_registry_server_to_config_with_remotes`
+- `test_registry_server_without_remotes`
+
+**Usage Example**:
+```rust
+let service = MCPDiscoveryService::new();
+let options = DiscoveryOptions { use_cache: true, ..Default::default() };
+
+// Search registry and discover tools from matching servers
+let results = service.discover_from_registry("github", &options).await?;
+for (server_config, tools) in results {
+    println!("Found {} tools from {}", tools.len(), server_config.name);
+}
+```
 
 ---
 

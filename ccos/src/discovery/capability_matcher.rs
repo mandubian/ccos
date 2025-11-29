@@ -155,7 +155,7 @@ pub fn calculate_description_match_score_with_embedding(
     need_rationale: &str,
     manifest_description: &str,
     manifest_name: &str,
-    embedding_service: Option<&mut crate::discovery::embedding_service::EmbeddingService>,
+    _embedding_service: Option<&mut crate::discovery::embedding_service::EmbeddingService>,
 ) -> f64 {
     // For free text, use a tokenizer suited for sentences.
     let need_keywords = extract_keywords_from_text(need_rationale);
