@@ -18,10 +18,12 @@ use crate::discovery::capability_matcher::{
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::rtfs_bridge::expression_to_pretty_rtfs_string;
 use crate::rtfs_bridge::expression_to_rtfs_string;
-use crate::synthesis::capability_synthesizer::{
-    MultiCapabilityEndpoint,
-};
+use crate::synthesis::capability_synthesizer::MultiCapabilityEndpoint;
 use crate::synthesis::feature_flags::{FeatureFlagChecker, MissingCapabilityConfig};
+use crate::synthesis::missing_capability_strategies::{
+    MissingCapabilityStrategy, MissingCapabilityStrategyConfig, PureRtfsGenerationStrategy,
+    UserInteractionStrategy, ExternalLlmHintStrategy, ServiceDiscoveryHintStrategy,
+};
 use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
 use crate::synthesis::server_trust::{
@@ -85,7 +87,7 @@ struct CuratedOverrides {
 #[derive(Debug, Clone, Deserialize)]
 struct CuratedEntry {
     pub matches: Vec<String>,
-    pub server: crate::synthesis::mcp_registry_client::McpServer,
+    pub server: crate::mcp::registry::McpServer,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -134,7 +136,20 @@ impl ToolAliasStore {
     fn build_mcp_auth_headers(server_name: &str) -> Option<HashMap<String, String>> {
         Self::get_mcp_auth_token(server_name).map(|token| {
             let mut headers = HashMap::new();
-            headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+            // If the provided token already includes a scheme (e.g. "Bearer ..."),
+            // use it verbatim. Otherwise, prefix with "Bearer ". This makes the
+            // environment variable flexible and avoids double-prefixing when users
+            // supply a full Authorization header value.
+            let auth_value = if token.to_lowercase().starts_with("bearer ")
+                || token.to_lowercase().starts_with("token ")
+                || token.to_lowercase().starts_with("basic ")
+            {
+                token
+            } else {
+                format!("Bearer {}", token)
+            };
+
+            headers.insert("Authorization".to_string(), auth_value);
             headers
         })
     }
@@ -323,7 +338,7 @@ pub enum ResolutionResult {
 /// An MCP server with its relevance score
 #[derive(Debug, Clone)]
 pub struct RankedMcpServer {
-    pub server: crate::synthesis::mcp_registry_client::McpServer,
+    pub server: crate::mcp::registry::McpServer,
     pub score: f64,
 }
 
@@ -1306,6 +1321,64 @@ impl MissingCapabilityResolver {
                 })
             }
             None => {
+                // Try pure RTFS generation as a cheap, local fallback before invoking LLM synthesis.
+                if let Some(manifest) = self
+                    .attempt_pure_rtfs_generation(request, &capability_id_normalized)
+                    .await?
+                {
+                    self.marketplace
+                        .register_capability_manifest(manifest.clone())
+                        .await?;
+
+                    self.trigger_auto_resume_for_capability(&capability_id_normalized)
+                        .await?;
+
+                    return Ok(ResolutionResult::Resolved {
+                        capability_id: manifest.id.clone(),
+                        resolution_method: "pure_rtfs_generation".to_string(),
+                        provider_info: Some("pure_rtfs_generated".to_string()),
+                    });
+                }
+
+                // 2. User Interaction Strategy
+                if let Some(manifest) = self
+                    .attempt_user_interaction(request, &capability_id_normalized)
+                    .await?
+                {
+                    self.marketplace
+                        .register_capability_manifest(manifest.clone())
+                        .await?;
+
+                    self.trigger_auto_resume_for_capability(&capability_id_normalized)
+                        .await?;
+
+                    return Ok(ResolutionResult::Resolved {
+                        capability_id: manifest.id.clone(),
+                        resolution_method: "user_interaction".to_string(),
+                        provider_info: Some("user_provided".to_string()),
+                    });
+                }
+
+                // 3. Service Discovery Hint Strategy
+                if let Some(manifest) = self
+                    .attempt_service_discovery_hint(request, &capability_id_normalized)
+                    .await?
+                {
+                    self.marketplace
+                        .register_capability_manifest(manifest.clone())
+                        .await?;
+
+                    self.trigger_auto_resume_for_capability(&capability_id_normalized)
+                        .await?;
+
+                    return Ok(ResolutionResult::Resolved {
+                        capability_id: manifest.id.clone(),
+                        resolution_method: "service_discovery_hint".to_string(),
+                        provider_info: Some("user_hint".to_string()),
+                    });
+                }
+
+                // 4. External LLM Hint Strategy
                 if self.feature_checker.is_llm_synthesis_enabled() {
                     if let Some(manifest) = self
                         .attempt_llm_capability_synthesis(request, &capability_id_normalized)
@@ -1553,7 +1626,7 @@ impl MissingCapabilityResolver {
             .collect()
     }
 
-    fn manifest_to_rtfs(manifest: &CapabilityManifest, implementation_code: &str) -> String {
+    pub fn manifest_to_rtfs(manifest: &CapabilityManifest, implementation_code: &str) -> String {
         let timestamp = chrono::Utc::now().to_rfc3339();
         let escaped_name = Self::escape_string(&manifest.name);
         let escaped_description = Self::escape_string(&manifest.description);
@@ -1575,7 +1648,11 @@ impl MissingCapabilityResolver {
                 mcp.server_url,
                 mcp.tool_name,
                 mcp.timeout_ms / 1000,
-                manifest.metadata.get("mcp_protocol_version").map(|s| s.as_str()).unwrap_or("2024-11-05")
+                manifest
+                    .metadata
+                    .get("mcp_protocol_version")
+                    .map(|s| s.as_str())
+                    .unwrap_or("2024-11-05")
             )),
             _ => None,
         };
@@ -1774,7 +1851,7 @@ impl MissingCapabilityResolver {
         let normalized = crate::rtfs_bridge::normalizer::normalize_capability_to_map(
             &expr,
             crate::rtfs_bridge::normalizer::NormalizationConfig {
-                warn_on_function_call: true,
+                warn_on_function_call: false,
                 validate_after_normalization: true,
             },
         )
@@ -1958,24 +2035,44 @@ impl MissingCapabilityResolver {
             "🔍 DISCOVERY: Trying MCP server discovery for '{}'",
             capability_id
         );
-        if let Some(manifest) = self.discover_mcp_servers(capability_id, request).await? {
-            eprintln!(
-                "✅ DISCOVERY: Found via MCP server discovery: '{}'",
-                capability_id
-            );
-            return Ok(Some(manifest));
+        match self.discover_mcp_servers(capability_id, request).await {
+            Ok(Some(manifest)) => {
+                eprintln!(
+                    "✅ DISCOVERY: Found via MCP server discovery: '{}'",
+                    capability_id
+                );
+                return Ok(Some(manifest));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                if self.config.verbose_logging {
+                    eprintln!("⚠️ MCP discovery failed (will try other methods): {}", e);
+                }
+            }
         }
 
         // 5. Web search discovery (if enabled)
         if self.feature_checker.is_web_search_enabled() {
-            if let Some(manifest) = self.discover_via_web_search(capability_id).await? {
-                return Ok(Some(manifest));
+            match self.discover_via_web_search(capability_id).await {
+                Ok(Some(manifest)) => return Ok(Some(manifest)),
+                Ok(None) => {}
+                Err(e) => {
+                    if self.config.verbose_logging {
+                        eprintln!("⚠️ Web search discovery failed: {}", e);
+                    }
+                }
             }
         }
 
         // 6. Network catalog queries (if configured)
-        if let Some(manifest) = self.discover_network_catalogs(capability_id).await? {
-            return Ok(Some(manifest));
+        match self.discover_network_catalogs(capability_id).await {
+            Ok(Some(manifest)) => return Ok(Some(manifest)),
+            Ok(None) => {}
+            Err(e) => {
+                if self.config.verbose_logging {
+                    eprintln!("⚠️ Network catalog discovery failed: {}", e);
+                }
+            }
         }
 
         if self.config.verbose_logging {
@@ -2158,7 +2255,7 @@ impl MissingCapabilityResolver {
             None,
         );
 
-        let registry_client = crate::synthesis::mcp_registry_client::McpRegistryClient::new();
+        let registry_client = crate::mcp::registry::MCPRegistryClient::new();
 
         // Try semantic search first if the query looks like a description
         let mut servers = if self.is_semantic_query(capability_id) {
@@ -2316,7 +2413,7 @@ impl MissingCapabilityResolver {
             .await?;
 
         // Find the selected server from ranked servers; if not found, reload curated overrides (user may have added one)
-        let mut selected_server_opt: Option<crate::synthesis::mcp_registry_client::McpServer> =
+        let mut selected_server_opt: Option<crate::mcp::registry::McpServer> =
             ranked_servers
                 .iter()
                 .find(|ranked| {
@@ -2364,7 +2461,7 @@ impl MissingCapabilityResolver {
         };
 
         let server_url = if let Some(url) =
-            crate::synthesis::mcp_registry_client::McpRegistryClient::select_best_remote_url(
+            crate::mcp::registry::MCPRegistryClient::select_best_remote_url(
                 remotes,
             ) {
             url
@@ -2480,7 +2577,7 @@ impl MissingCapabilityResolver {
         );
 
         let need = self.build_need_from_request(capability_id, request);
-        let tool_map: HashMap<String, crate::synthesis::mcp_introspector::DiscoveredMCPTool> =
+        let tool_map: HashMap<String, crate::mcp::types::DiscoveredMCPTool> =
             introspection
                 .tools
                 .iter()
@@ -2755,7 +2852,7 @@ impl MissingCapabilityResolver {
     fn rank_mcp_servers(
         &self,
         capability_id: &str,
-        servers: Vec<crate::synthesis::mcp_registry_client::McpServer>,
+        servers: Vec<crate::mcp::registry::McpServer>,
     ) -> Vec<RankedMcpServer> {
         let mut ranked: Vec<RankedMcpServer> = servers
             .into_iter()
@@ -2783,7 +2880,7 @@ impl MissingCapabilityResolver {
     fn calculate_server_score(
         &self,
         capability_id: &str,
-        server: &crate::synthesis::mcp_registry_client::McpServer,
+        server: &crate::mcp::registry::McpServer,
     ) -> f64 {
         let mut score = 0.0;
         let requested_lower = capability_id.to_lowercase();
@@ -2948,8 +3045,8 @@ impl MissingCapabilityResolver {
     async fn semantic_search_servers(
         &self,
         keywords: &[String],
-    ) -> RuntimeResult<Vec<crate::synthesis::mcp_registry_client::McpServer>> {
-        let registry_client = crate::synthesis::mcp_registry_client::McpRegistryClient::new();
+    ) -> RuntimeResult<Vec<crate::mcp::registry::McpServer>> {
+        let registry_client = crate::mcp::registry::MCPRegistryClient::new();
         let mut all_servers = Vec::new();
 
         // Search for each keyword
@@ -2999,7 +3096,7 @@ impl MissingCapabilityResolver {
     pub(crate) fn load_curated_overrides_for(
         &self,
         capability_id: &str,
-    ) -> RuntimeResult<Vec<crate::synthesis::mcp_registry_client::McpServer>> {
+    ) -> RuntimeResult<Vec<crate::mcp::registry::McpServer>> {
         use std::fs;
         use std::path::Path;
 
@@ -3295,6 +3392,142 @@ impl MissingCapabilityResolver {
         self.save_generic_capability(&manifest, url).await?;
 
         Ok(Some(manifest))
+    }
+
+    async fn attempt_pure_rtfs_generation(
+        &self,
+        request: &MissingCapabilityRequest,
+        capability_id_normalized: &str,
+    ) -> RuntimeResult<Option<CapabilityManifest>> {
+        // Build a local pure-RTFS generator and ask it for an implementation
+        let config = MissingCapabilityStrategyConfig::default();
+        let strategy = PureRtfsGenerationStrategy::new(config);
+
+        match strategy.generate_pure_rtfs_implementation(request).await {
+            Ok(rtfs_source) => {
+                self.process_generated_rtfs(rtfs_source, capability_id_normalized, "pure_rtfs_generated").await
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Attempt user interaction strategy
+    pub async fn attempt_user_interaction(
+        &self,
+        request: &MissingCapabilityRequest,
+        _capability_id_normalized: &str,
+    ) -> RuntimeResult<Option<CapabilityManifest>> {
+        let config = MissingCapabilityStrategyConfig::default();
+        let strategy = UserInteractionStrategy::new(config)
+            .with_marketplace(self.marketplace.clone());
+        
+        let context = crate::planner::modular_planner::ResolutionContext {
+            domain_hints: vec![],
+            resolved_capabilities: Default::default(),
+            preferences: Default::default(),
+            allow_synthesis: true,
+            ambiguity_threshold: 0.5,
+        };
+
+        // User interaction currently just prints to stdout/stderr and simulates choices
+        // It doesn't return a manifest directly in the current implementation
+        if let Ok(ResolutionResult::Resolved { .. }) = strategy.resolve(request, &context).await {
+             // If user provided a solution that resolved it, we might need to fetch it.
+             // But the current implementation returns NotFound(Not Implemented).
+             // If we implement it fully, we would return the manifest here.
+             Ok(None)
+        } else {
+             Ok(None)
+        }
+    }
+
+    async fn attempt_external_llm_hint(
+        &self,
+        request: &MissingCapabilityRequest,
+        capability_id_normalized: &str,
+    ) -> RuntimeResult<Option<CapabilityManifest>> {
+        let config = MissingCapabilityStrategyConfig::default();
+        let mut strategy = ExternalLlmHintStrategy::new(config);
+        
+        // Inject arbiter if available
+        {
+            let guard = self.delegating_arbiter.read().unwrap();
+            if let Some(arbiter) = guard.as_ref() {
+                strategy = strategy.with_arbiter(arbiter.clone());
+            } else {
+                return Ok(None);
+            }
+        }
+
+        match strategy.generate_implementation(request).await {
+            Ok(rtfs_source) => {
+                self.process_generated_rtfs(rtfs_source, capability_id_normalized, "llm_generated").await
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
+    async fn attempt_service_discovery_hint(
+        &self,
+        request: &MissingCapabilityRequest,
+        _capability_id_normalized: &str,
+    ) -> RuntimeResult<Option<CapabilityManifest>> {
+        let config = MissingCapabilityStrategyConfig::default();
+        let strategy = ServiceDiscoveryHintStrategy::new(config);
+        
+        let context = crate::planner::modular_planner::ResolutionContext {
+            domain_hints: vec![],
+            resolved_capabilities: Default::default(),
+            preferences: Default::default(),
+            allow_synthesis: true,
+            ambiguity_threshold: 0.5,
+        };
+
+        // Currently just a placeholder/log
+        let _ = strategy.resolve(request, &context).await;
+        Ok(None)
+    }
+
+    async fn process_generated_rtfs(
+        &self,
+        rtfs_source: String,
+        capability_id_normalized: &str,
+        source_label: &str,
+    ) -> RuntimeResult<Option<CapabilityManifest>> {
+        // Try to parse a capability manifest from the generated RTFS
+        match self
+            .manifest_from_rtfs(&rtfs_source, capability_id_normalized)
+            .await
+        {
+            Ok(mut manifest) => {
+                // Mark the generated RTFS implementation for persistence & auditing
+                manifest
+                    .metadata
+                    .insert("rtfs_implementation".to_string(), rtfs_source.clone());
+                manifest.metadata.insert(
+                    "resolution_source".to_string(),
+                    source_label.to_string(),
+                );
+
+                // Persist generated RTFS to disk so it's available for inspection
+                if let Ok(path) = self.persist_llm_generated_capability(&manifest).await {
+                    manifest
+                        .metadata
+                        .insert("storage_path".to_string(), path.display().to_string());
+                }
+
+                Ok(Some(manifest))
+            }
+            Err(err) => {
+                if self.config.verbose_logging {
+                    eprintln!(
+                        "❌ RTFS generation produced invalid capability RTFS: {}",
+                        err
+                    );
+                }
+                Ok(None)
+            }
+        }
     }
 
     /// Save a generic HTTP API capability to storage
@@ -3787,13 +4020,28 @@ impl MissingCapabilityResolver {
             pending_count: q_stats.pending_count,
             in_progress_count: q_stats.in_progress_count,
             resolved_count: 0, // Not tracked in queue stats currently
-            failed_count: 0,
+            failed_count: q_stats.failed_count,
         }
+    }
+
+    /// Get the checkpoint archive reference
+    pub fn get_checkpoint_archive(&self) -> Arc<CheckpointArchive> {
+        Arc::clone(&self.checkpoint_archive)
+    }
+
+    /// Get queue statistics (for compatibility with calculate_success_rate)
+    pub fn get_queue_stats(&self) -> QueueStats {
+        let queue = self.queue.lock().unwrap();
+        queue.stats()
     }
 
     pub fn list_pending_capabilities(&self) -> Vec<String> {
         let queue = self.queue.lock().unwrap();
-        queue.queue.iter().map(|r| r.capability_id.clone()).collect()
+        queue
+            .queue
+            .iter()
+            .map(|r| r.capability_id.clone())
+            .collect()
     }
 
     pub async fn process_queue(&self) -> RuntimeResult<()> {
@@ -3805,7 +4053,10 @@ impl MissingCapabilityResolver {
         Ok(())
     }
 
-    async fn discover_network_catalogs(&self, _capability_id: &str) -> RuntimeResult<Option<CapabilityManifest>> {
+    async fn discover_network_catalogs(
+        &self,
+        _capability_id: &str,
+    ) -> RuntimeResult<Option<CapabilityManifest>> {
         // Stub implementation
         Ok(None)
     }

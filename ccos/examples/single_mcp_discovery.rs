@@ -18,12 +18,13 @@ use crate::single_mcp_discovery_impl::{run_discovery, Args};
 
 mod single_mcp_discovery_impl {
     use super::*;
-    use ccos::synthesis::mcp_introspector::{DiscoveredMCPTool, MCPIntrospector};
-    use ccos::synthesis::mcp_session::MCPSessionManager;
-    use ccos::synthesis::mcp_registry_client::McpRegistryClient;
+    use ccos::synthesis::mcp_introspector::MCPIntrospector;
+    use ccos::mcp::types::DiscoveredMCPTool;
+    use ccos::mcp::registry::MCPRegistryClient;
+    use ccos::mcp::discovery_session::{MCPSessionManager, MCPServerInfo};
+    use rtfs::runtime::values::Value as RtfsValue;
     use serde_json;
     use std::path::Path;
-    use rtfs::runtime::values::Value as RtfsValue;
 
     /// Convert RTFS Value to serde_json::Value by extracting the actual value
     fn rtfs_value_to_json(rtfs_value: &RtfsValue) -> serde_json::Value {
@@ -31,19 +32,19 @@ mod single_mcp_discovery_impl {
             RtfsValue::Nil => serde_json::Value::Null,
             RtfsValue::Boolean(b) => serde_json::Value::Bool(*b),
             RtfsValue::Integer(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
-            RtfsValue::Float(f) => {
-                serde_json::Number::from_f64(*f)
-                    .map(serde_json::Value::Number)
-                    .unwrap_or(serde_json::Value::Null)
-            }
+            RtfsValue::Float(f) => serde_json::Number::from_f64(*f)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
             RtfsValue::String(s) => serde_json::Value::String(s.clone()),
             RtfsValue::Vector(vec) => {
-                let json_array: Vec<serde_json::Value> = vec.iter().map(rtfs_value_to_json).collect();
+                let json_array: Vec<serde_json::Value> =
+                    vec.iter().map(rtfs_value_to_json).collect();
                 serde_json::Value::Array(json_array)
             }
             RtfsValue::List(list) => {
                 // Treat List same as Vector for JSON serialization
-                let json_array: Vec<serde_json::Value> = list.iter().map(rtfs_value_to_json).collect();
+                let json_array: Vec<serde_json::Value> =
+                    list.iter().map(rtfs_value_to_json).collect();
                 serde_json::Value::Array(json_array)
             }
             RtfsValue::Map(map) => {
@@ -119,7 +120,11 @@ mod single_mcp_discovery_impl {
             .await?,
         );
 
-        eprintln!("🔍 Introspecting MCP server: {:?} ({})", args.server_name.as_deref().unwrap_or(""), args.server_url.as_deref().unwrap_or(""));
+        eprintln!(
+            "🔍 Introspecting MCP server: {:?} ({})",
+            args.server_name.as_deref().unwrap_or(""),
+            args.server_url.as_deref().unwrap_or("")
+        );
 
         let mut auth_headers = args.token.map(|t| {
             let mut m = std::collections::HashMap::new();
@@ -163,15 +168,23 @@ mod single_mcp_discovery_impl {
                         url
                     } else {
                         // Try registry search
-                        eprintln!("🔍 Searching MCP Registry for '{}'...", server_name_candidate);
-                        let client = McpRegistryClient::new();
+                        eprintln!(
+                            "🔍 Searching MCP Registry for '{}'...",
+                            server_name_candidate
+                        );
+                        let client = MCPRegistryClient::new();
                         let mut found_url = None;
                         match client.search_servers(server_name_candidate).await {
                             Ok(servers) => {
                                 for server in servers {
                                     if let Some(remotes) = &server.remotes {
-                                        if let Some(url) = McpRegistryClient::select_best_remote_url(remotes) {
-                                            eprintln!("  → Found server in registry: {} ({})", server.name, url);
+                                        if let Some(url) =
+                                            MCPRegistryClient::select_best_remote_url(remotes)
+                                        {
+                                            eprintln!(
+                                                "  → Found server in registry: {} ({})",
+                                                server.name, url
+                                            );
                                             found_url = Some(url);
                                             break;
                                         }
@@ -182,7 +195,7 @@ mod single_mcp_discovery_impl {
                                 eprintln!("⚠️ Registry search failed: {}", e);
                             }
                         }
-                        
+
                         if let Some(url) = found_url {
                             url
                         } else {
@@ -202,15 +215,23 @@ mod single_mcp_discovery_impl {
                     url
                 } else {
                     // Try using hint as query
-                    eprintln!("🔍 No server specified. Searching MCP Registry for hint '{}'...", args.hint);
-                    let client = McpRegistryClient::new();
+                    eprintln!(
+                        "🔍 No server specified. Searching MCP Registry for hint '{}'...",
+                        args.hint
+                    );
+                    let client = MCPRegistryClient::new();
                     let mut found_url = None;
                     match client.search_servers(&args.hint).await {
                         Ok(servers) => {
                             for server in servers {
                                 if let Some(remotes) = &server.remotes {
-                                    if let Some(url) = McpRegistryClient::select_best_remote_url(remotes) {
-                                        eprintln!("  → Found server in registry: {} ({})", server.name, url);
+                                    if let Some(url) =
+                                        MCPRegistryClient::select_best_remote_url(remotes)
+                                    {
+                                        eprintln!(
+                                            "  → Found server in registry: {} ({})",
+                                            server.name, url
+                                        );
                                         found_url = Some(url);
                                         break;
                                     }
@@ -233,10 +254,15 @@ mod single_mcp_discovery_impl {
         };
 
         // If the provided URL looks like a repository, try to derive a better server name and check overrides again.
-        if server_url.starts_with("https://github.com") || server_url.starts_with("http://github.com") {
+        if server_url.starts_with("https://github.com")
+            || server_url.starts_with("http://github.com")
+        {
             if let Some(derive) = derive_server_name_from_repo_url(&server_url) {
                 if let Some(url2) = resolve_server_url_from_overrides(&derive) {
-                    eprintln!("  → Found curated mapping for derived server_name '{}': {}", derive, url2);
+                    eprintln!(
+                        "  → Found curated mapping for derived server_name '{}': {}",
+                        derive, url2
+                    );
                     server_url = url2;
                 }
             }
@@ -244,12 +270,15 @@ mod single_mcp_discovery_impl {
 
         // Create a session manager and initialize a session once — reuse it for tools/list and tools/call
         let session_manager = MCPSessionManager::new(auth_headers.clone());
-        let client_info = ccos::synthesis::mcp_session::MCPServerInfo {
+        let client_info = MCPServerInfo {
             name: "ccos-single-discovery".to_string(),
             version: "1.0.0".to_string(),
         };
 
-        let session = match session_manager.initialize_session(&server_url, &client_info).await {
+        let session = match session_manager
+            .initialize_session(&server_url, &client_info)
+            .await
+        {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("✗ MCP initialization failed: {}", e);
@@ -286,7 +315,7 @@ mod single_mcp_discovery_impl {
                 .map(|s| s.to_string());
 
             let input_schema_json = tool_json.get("inputSchema").cloned();
-            
+
             // Convert JSON schema to RTFS TypeExpr if available
             let input_schema = if let Some(schema) = &input_schema_json {
                 MCPIntrospector::type_expr_from_json_schema(schema).ok()
@@ -332,59 +361,93 @@ mod single_mcp_discovery_impl {
         }
 
         // Use the Arbiter to select the best tool and proactively extract arguments.
-        let (tool, extracted_args) = if let Some((tool_name, args)) = select_tool_and_extract_args_with_arbiter(&ccos, &introspection.tools, &args.hint).await {
+        let (tool, extracted_args) = if let Some((tool_name, args)) =
+            select_tool_and_extract_args_with_arbiter(&ccos, &introspection.tools, &args.hint).await
+        {
             // Try exact match first
-            if let Some(found_tool) = introspection.tools.iter().find(|t| t.tool_name == tool_name) {
+            if let Some(found_tool) = introspection
+                .tools
+                .iter()
+                .find(|t| t.tool_name == tool_name)
+            {
                 (found_tool.clone(), args)
             } else {
                 // Try fuzzy matching - find tool name that contains the selected name or vice versa
-                let found_tool = introspection.tools.iter().find(|t| {
-                    t.tool_name.contains(&tool_name) || tool_name.contains(&t.tool_name)
-                });
+                let found_tool = introspection
+                    .tools
+                    .iter()
+                    .find(|t| t.tool_name.contains(&tool_name) || tool_name.contains(&t.tool_name));
                 if let Some(found_tool) = found_tool {
-                    eprintln!("⚠️ Arbiter selected '{}', using fuzzy match: '{}'", tool_name, found_tool.tool_name);
+                    eprintln!(
+                        "⚠️ Arbiter selected '{}', using fuzzy match: '{}'",
+                        tool_name, found_tool.tool_name
+                    );
                     (found_tool.clone(), args)
                 } else {
                     eprintln!("⚠️ Arbiter selected tool '{}' but it was not found in the introspection results.", tool_name);
-                    eprintln!("   Available tools: {}", introspection.tools.iter().map(|t| t.tool_name.as_str()).collect::<Vec<_>>().join(", "));
+                    eprintln!(
+                        "   Available tools: {}",
+                        introspection
+                            .tools
+                            .iter()
+                            .map(|t| t.tool_name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
                     return Ok(());
                 }
             }
         } else {
-            eprintln!("⚠️ Arbiter could not select a tool for the hint '{}'.", args.hint);
+            eprintln!(
+                "⚠️ Arbiter could not select a tool for the hint '{}'.",
+                args.hint
+            );
             // As a fallback, we could use the keyword-based search here, but for this example, we'll just exit.
             return Ok(());
         };
 
         // Try to infer output schema by calling tool once with safe inputs
         // (we reuse the `session_manager` and `session` created earlier to avoid session-mismatch errors)
-        let mut test_inputs = build_safe_test_inputs_from_schema(tool.input_schema_json.as_ref(), false);
+        let mut test_inputs =
+            build_safe_test_inputs_from_schema(tool.input_schema_json.as_ref(), false);
 
         // Map extracted parameter names to match the tool's schema parameter names
-        let mut mapped_args = map_parameters_to_schema(&extracted_args, tool.input_schema_json.as_ref());
+        let mut mapped_args =
+            map_parameters_to_schema(&extracted_args, tool.input_schema_json.as_ref());
         eprintln!("📋 Parameter mapping:");
-        eprintln!("  Extracted: {:?}", extracted_args.keys().collect::<Vec<_>>());
+        eprintln!(
+            "  Extracted: {:?}",
+            extracted_args.keys().collect::<Vec<_>>()
+        );
         eprintln!("  Mapped: {:?}", mapped_args.keys().collect::<Vec<_>>());
 
         // Merge the mapped arguments into the test inputs.
         eprintln!("📥 Merging extracted parameters into test inputs...");
-        eprintln!("  Before merge: {}", serde_json::to_string_pretty(&test_inputs).unwrap_or_default());
+        eprintln!(
+            "  Before merge: {}",
+            serde_json::to_string_pretty(&test_inputs).unwrap_or_default()
+        );
         if let Some(obj) = test_inputs.as_object_mut() {
             obj.append(&mut mapped_args);
         } else {
             eprintln!("⚠️ test_inputs is not an object, cannot merge parameters");
         }
-        eprintln!("  After merge: {}", serde_json::to_string_pretty(&test_inputs).unwrap_or_default());
+        eprintln!(
+            "  After merge: {}",
+            serde_json::to_string_pretty(&test_inputs).unwrap_or_default()
+        );
 
         // To keep sample output small, ask for just one result if a common pagination
         // parameter is supported by the tool's input schema.
         if let Some(obj) = test_inputs.as_object_mut() {
             if let Some(schema) = tool.input_schema_json.as_ref() {
                 if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-                    const PAGINATION_CANDIDATES: &[&str] = &["perPage", "limit", "count", "pageSize", "maxItems"];
+                    const PAGINATION_CANDIDATES: &[&str] =
+                        &["perPage", "limit", "count", "pageSize", "maxItems"];
                     for (key, prop_schema) in properties {
                         if PAGINATION_CANDIDATES.contains(&key.as_str()) {
-                            if let Some(type_str) = prop_schema.get("type").and_then(|t| t.as_str()) {
+                            if let Some(type_str) = prop_schema.get("type").and_then(|t| t.as_str())
+                            {
                                 if type_str == "integer" || type_str == "number" {
                                     if !obj.contains_key(key) {
                                         obj.insert(key.clone(), serde_json::json!(1));
@@ -402,11 +465,17 @@ mod single_mcp_discovery_impl {
         // Ensure required parameters aren't missing before we actually call the tool
         if let Some(obj) = test_inputs.as_object() {
             // Check against schema required fields if available
-            let required_keys: Vec<String> = tool.input_schema_json
+            let required_keys: Vec<String> = tool
+                .input_schema_json
                 .as_ref()
                 .and_then(|schema| schema.get("required"))
                 .and_then(|r| r.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .collect()
+                })
                 .unwrap_or_default();
 
             let missing: Vec<&str> = required_keys
@@ -415,7 +484,8 @@ mod single_mcp_discovery_impl {
                     obj.get(*key)
                         .map(|value| {
                             // Check if value is null or empty string
-                            value.is_null() || value.as_str().map(|s| s.trim().is_empty()).unwrap_or(false)
+                            value.is_null()
+                                || value.as_str().map(|s| s.trim().is_empty()).unwrap_or(false)
                         })
                         .unwrap_or(true)
                 })
@@ -432,12 +502,18 @@ mod single_mcp_discovery_impl {
             }
         }
 
-
         // Call the tool via the open session
         eprintln!("🔧 Calling tool '{}' with arguments:", tool.tool_name);
-        eprintln!("{}", serde_json::to_string_pretty(&test_inputs).unwrap_or_default());
+        eprintln!(
+            "{}",
+            serde_json::to_string_pretty(&test_inputs).unwrap_or_default()
+        );
         let call_res = session_manager
-            .make_request(&session, "tools/call", serde_json::json!({"name": tool.tool_name, "arguments": test_inputs}))
+            .make_request(
+                &session,
+                "tools/call",
+                serde_json::json!({"name": tool.tool_name, "arguments": test_inputs}),
+            )
             .await;
 
         let (schema_opt, sample_opt) = match call_res {
@@ -447,14 +523,17 @@ mod single_mcp_discovery_impl {
 
                 // Try to unwrap stringified JSON in "content"[0]["text"] if present
                 // This is common for MCP tools that return complex data serialized as text
-                let actual_val = if let Some(content) = result_val.get("content").and_then(|c| c.as_array()) {
+                let actual_val = if let Some(content) =
+                    result_val.get("content").and_then(|c| c.as_array())
+                {
                     if let Some(first) = content.first() {
                         if let Some(text) = first.get("text").and_then(|t| t.as_str()) {
-                            if let Ok(inner_json) = serde_json::from_str::<serde_json::Value>(text) {
-                                 eprintln!("  → Detected stringified JSON in output, inferring schema from inner content.");
-                                 inner_json
+                            if let Ok(inner_json) = serde_json::from_str::<serde_json::Value>(text)
+                            {
+                                eprintln!("  → Detected stringified JSON in output, inferring schema from inner content.");
+                                inner_json
                             } else {
-                                 result_val.clone()
+                                result_val.clone()
                             }
                         } else {
                             result_val.clone()
@@ -467,7 +546,7 @@ mod single_mcp_discovery_impl {
                 };
 
                 let is_mcp_error = r.get("isError").and_then(|v| v.as_bool()).unwrap_or(false);
-                
+
                 let is_content_error = sample_snippet
                     .as_ref()
                     .map(|s| {
@@ -478,7 +557,7 @@ mod single_mcp_discovery_impl {
                             || s_l.contains("forbidden")
                     })
                     .unwrap_or(false);
-                    
+
                 let is_error = is_mcp_error || is_content_error;
 
                 if is_error {
@@ -494,7 +573,10 @@ mod single_mcp_discovery_impl {
                 }
             }
             Err(e) => {
-                eprintln!("⚠️ Failed to call tool for output schema introspection: {}", e);
+                eprintln!(
+                    "⚠️ Failed to call tool for output schema introspection: {}",
+                    e
+                );
                 (None, None)
             }
         };
@@ -502,19 +584,27 @@ mod single_mcp_discovery_impl {
         if schema_opt.is_some() {
             eprintln!("✅ Inferred output schema for {}", tool.tool_name);
             if let Some(sample) = sample_opt.as_ref() {
-                eprintln!("Sample output (first lines):\n{}", sample.lines().take(8).collect::<Vec<_>>().join("\n"));
+                eprintln!(
+                    "Sample output (first lines):\n{}",
+                    sample.lines().take(8).collect::<Vec<_>>().join("\n")
+                );
             }
             // Proceed to save the capability with the inferred schema
         } else {
             // If introspection returned no schema but provided a sample with an error-like message,
             // attempt to synthesize plausible inputs heuristically and retry the call.
             if let Some(sample) = sample_opt.as_ref() {
-                eprintln!("⚠️ Introspection with initial inputs failed or produced an error-like sample:");
+                eprintln!(
+                    "⚠️ Introspection with initial inputs failed or produced an error-like sample:"
+                );
                 // Show the full error, but limit to first 50 lines to avoid overwhelming output
                 let error_lines: Vec<&str> = sample.lines().take(50).collect();
                 eprintln!("{}", error_lines.join("\n"));
                 if sample.lines().count() > 50 {
-                    eprintln!("... (truncated, {} more lines)", sample.lines().count() - 50);
+                    eprintln!(
+                        "... (truncated, {} more lines)",
+                        sample.lines().count() - 50
+                    );
                 }
             } else {
                 eprintln!("⚠️ No sample or schema could be obtained from introspection and no error snippet provided.");
@@ -528,7 +618,8 @@ mod single_mcp_discovery_impl {
                 manifest.output_schema = Some(output_schema);
             }
 
-            let implementation_code = inspector.generate_mcp_rtfs_implementation(&tool, &server_url);
+            let implementation_code =
+                inspector.generate_mcp_rtfs_implementation(&tool, &server_url);
             match inspector.save_capability_to_rtfs(
                 &manifest,
                 &implementation_code,
@@ -545,14 +636,13 @@ mod single_mcp_discovery_impl {
         Ok(())
     }
 
-
-
-
     fn resolve_server_url_from_overrides(server_name: &str) -> Option<String> {
         // Try to load curated overrides from 'capabilities/mcp/overrides.json'
         let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let overrides_path = if root.ends_with("rtfs_compiler") {
-            root.parent().unwrap_or(&root).join("capabilities/mcp/overrides.json")
+            root.parent()
+                .unwrap_or(&root)
+                .join("capabilities/mcp/overrides.json")
         } else {
             root.join("capabilities/mcp/overrides.json")
         };
@@ -591,11 +681,19 @@ mod single_mcp_discovery_impl {
                             // Simple pattern matching: check if server_name matches the pattern
                             // For patterns like "github.*", we check if server_name starts with "github"
                             let pattern_clean = p.trim_end_matches(".*");
-                            if server_name.starts_with(pattern_clean) || server_name == pattern_clean {
-                                if let Some(remotes) = server.get("remotes").and_then(|r| r.as_array()) {
+                            if server_name.starts_with(pattern_clean)
+                                || server_name == pattern_clean
+                            {
+                                if let Some(remotes) =
+                                    server.get("remotes").and_then(|r| r.as_array())
+                                {
                                     for remote in remotes {
-                                        if let Some(url) = remote.get("url").and_then(|u| u.as_str()) {
-                                            if url.starts_with("http://") || url.starts_with("https://") {
+                                        if let Some(url) =
+                                            remote.get("url").and_then(|u| u.as_str())
+                                        {
+                                            if url.starts_with("http://")
+                                                || url.starts_with("https://")
+                                            {
                                                 return Some(url.to_string());
                                             }
                                         }
@@ -615,7 +713,10 @@ mod single_mcp_discovery_impl {
     fn derive_server_name_from_repo_url(url: &str) -> Option<String> {
         use url::Url;
         if let Ok(parsed) = Url::parse(url) {
-            let mut segs: Vec<&str> = parsed.path_segments().map(|s| s.collect()).unwrap_or_default();
+            let mut segs: Vec<&str> = parsed
+                .path_segments()
+                .map(|s| s.collect())
+                .unwrap_or_default();
             segs.retain(|s| !s.is_empty());
             if segs.len() >= 2 {
                 let owner = segs[0];
@@ -632,7 +733,7 @@ mod single_mcp_discovery_impl {
         hint: &str,
     ) -> Option<(String, serde_json::Map<String, serde_json::Value>)> {
         let tool_names: Vec<String> = tools.iter().map(|t| t.tool_name.clone()).collect();
-        
+
         // Build a map of tool names to their input schemas for the prompt
         let mut tool_schemas = std::collections::HashMap::new();
         for tool in tools {
@@ -648,11 +749,13 @@ mod single_mcp_discovery_impl {
             // Call using fully qualified path to ensure method is found
             // Pass tool schemas so the LLM can use exact parameter names
             match ccos::arbiter::DelegatingArbiter::select_mcp_tool(
-                arbiter_arc.as_ref(), 
-                hint, 
+                arbiter_arc.as_ref(),
+                hint,
                 &tool_names,
-                Some(&tool_schemas)
-            ).await {
+                Some(&tool_schemas),
+            )
+            .await
+            {
                 Ok((tool_name, constraints)) => {
                     // Convert RTFS Value constraints to serde_json::Value
                     let mut args = serde_json::Map::new();
@@ -660,7 +763,7 @@ mod single_mcp_discovery_impl {
                         let json_val = rtfs_value_to_json(v);
                         args.insert(k.to_string(), json_val);
                     }
-                    
+
                     // Debug: Show extracted parameters
                     if !args.is_empty() {
                         eprintln!("📋 Extracted parameters from hint:");
@@ -670,7 +773,7 @@ mod single_mcp_discovery_impl {
                     } else {
                         eprintln!("⚠️ No parameters extracted from hint");
                     }
-                    
+
                     // Validate that the selected tool exists in our list
                     if tool_names.contains(&tool_name) {
                         eprintln!("🔧 Selected tool: '{}'", tool_name);
@@ -679,12 +782,14 @@ mod single_mcp_discovery_impl {
                         eprintln!("⚠️ Arbiter selected tool '{}' but it was not in the provided list. Available: {}", tool_name, tool_names.join(", "));
                         // Try fuzzy matching as fallback
                         let hint_lower = hint.to_lowercase();
-                        tool_names.iter()
+                        tool_names
+                            .iter()
                             .find(|&tn| {
                                 let tn_lower = tn.to_lowercase();
-                                (hint_lower.contains("list") && tn_lower.contains("list")) ||
-                                (hint_lower.contains("issue") && tn_lower.contains("issue")) ||
-                                (hint_lower.contains("repository") && tn_lower.contains("repo"))
+                                (hint_lower.contains("list") && tn_lower.contains("list"))
+                                    || (hint_lower.contains("issue") && tn_lower.contains("issue"))
+                                    || (hint_lower.contains("repository")
+                                        && tn_lower.contains("repo"))
                             })
                             .map(|tn| {
                                 eprintln!("🔧 Using fuzzy match: '{}'", tn);
@@ -711,66 +816,90 @@ mod single_mcp_discovery_impl {
         schema: Option<&serde_json::Value>,
     ) -> serde_json::Map<String, serde_json::Value> {
         let mut mapped = serde_json::Map::new();
-        
+
         // Get schema property names and types
-        let schema_props_map: std::collections::HashMap<String, String> = if let Some(schema) = schema {
-            schema
-                .get("properties")
-                .and_then(|p| p.as_object())
-                .map(|props| {
-                    props.iter().map(|(k, v)| {
-                        let type_str = v.get("type").and_then(|t| t.as_str()).unwrap_or("unknown").to_string();
-                        (k.clone(), type_str)
-                    }).collect()
-                })
-                .unwrap_or_default()
-        } else {
-            std::collections::HashMap::new()
-        };
+        let schema_props_map: std::collections::HashMap<String, String> =
+            if let Some(schema) = schema {
+                schema
+                    .get("properties")
+                    .and_then(|p| p.as_object())
+                    .map(|props| {
+                        props
+                            .iter()
+                            .map(|(k, v)| {
+                                let type_str = v
+                                    .get("type")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                (k.clone(), type_str)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                std::collections::HashMap::new()
+            };
         let schema_properties: Vec<String> = schema_props_map.keys().cloned().collect();
 
         for (extracted_key, value) in extracted_args {
             let mut matched = false;
             let mut matched_key = String::new();
-            
+
             // First, check for exact match (case-insensitive)
             let extracted_lower = extracted_key.to_lowercase();
             for schema_key in &schema_properties {
                 if extracted_lower == schema_key.to_lowercase() {
                     matched_key = schema_key.clone();
                     if extracted_key != schema_key {
-                        eprintln!("  → Mapped '{}' → '{}' (case-insensitive match)", extracted_key, schema_key);
+                        eprintln!(
+                            "  → Mapped '{}' → '{}' (case-insensitive match)",
+                            extracted_key, schema_key
+                        );
                     }
                     matched = true;
                     break;
                 }
             }
-            
+
             // If no exact match, try fuzzy matching as fallback
             if !matched {
                 for schema_key in &schema_properties {
                     let schema_lower = schema_key.to_lowercase();
                     // Check if one contains the other (case-insensitive)
-                    if extracted_lower.contains(&schema_lower) || schema_lower.contains(&extracted_lower) {
+                    if extracted_lower.contains(&schema_lower)
+                        || schema_lower.contains(&extracted_lower)
+                    {
                         // Check if they're similar enough (one is substring of the other)
                         let min_len = extracted_lower.len().min(schema_lower.len());
                         let max_len = extracted_lower.len().max(schema_lower.len());
                         // If the shorter is at least 70% of the longer, consider it a match
                         if min_len as f64 / max_len as f64 >= 0.7 {
                             matched_key = schema_key.clone();
-                            eprintln!("  → Mapped '{}' → '{}' (fuzzy match)", extracted_key, schema_key);
+                            eprintln!(
+                                "  → Mapped '{}' → '{}' (fuzzy match)",
+                                extracted_key, schema_key
+                            );
                             matched = true;
                             break;
                         }
                     }
                 }
             }
-            
-            let final_key = if matched { matched_key } else { extracted_key.clone() };
-            
+
+            let final_key = if matched {
+                matched_key
+            } else {
+                extracted_key.clone()
+            };
+
             // Check for enum casing mismatch if schema has enums for this property
             let value_with_enum_fix = if let Some(schema) = schema {
-                if let Some(prop) = schema.get("properties").and_then(|p| p.as_object()).and_then(|p| p.get(&final_key)) {
+                if let Some(prop) = schema
+                    .get("properties")
+                    .and_then(|p| p.as_object())
+                    .and_then(|p| p.get(&final_key))
+                {
                     if let Some(enums) = prop.get("enum").and_then(|e| e.as_array()) {
                         if let serde_json::Value::String(s) = value {
                             let s_upper = s.to_uppercase();
@@ -783,7 +912,12 @@ mod single_mcp_discovery_impl {
                                 }
                             }) {
                                 if matched_enum.as_str() != Some(s.as_str()) {
-                                    eprintln!("  → Correcting case for parameter '{}': '{}' -> '{}'", final_key, s, matched_enum.as_str().unwrap_or(""));
+                                    eprintln!(
+                                        "  → Correcting case for parameter '{}': '{}' -> '{}'",
+                                        final_key,
+                                        s,
+                                        matched_enum.as_str().unwrap_or("")
+                                    );
                                     matched_enum.clone()
                                 } else {
                                     value.clone()
@@ -808,47 +942,57 @@ mod single_mcp_discovery_impl {
             let final_value = if let Some(expected_type) = schema_props_map.get(&final_key) {
                 match (expected_type.as_str(), &value_with_enum_fix) {
                     ("array", serde_json::Value::String(s)) => {
-                        eprintln!("  → Coercing string '{}' to array for parameter '{}'", s, final_key);
+                        eprintln!(
+                            "  → Coercing string '{}' to array for parameter '{}'",
+                            s, final_key
+                        );
                         // Try to split by comma if it looks like a list, otherwise single item
                         if s.contains(',') {
-                            let items: Vec<serde_json::Value> = s.split(',')
+                            let items: Vec<serde_json::Value> = s
+                                .split(',')
                                 .map(|item| serde_json::Value::String(item.trim().to_string()))
                                 .collect();
                             serde_json::Value::Array(items)
                         } else {
                             serde_json::Value::Array(vec![serde_json::Value::String(s.clone())])
                         }
-                    },
+                    }
                     ("integer", serde_json::Value::String(s)) => {
                         if let Ok(i) = s.parse::<i64>() {
-                            eprintln!("  → Coercing string '{}' to integer for parameter '{}'", s, final_key);
+                            eprintln!(
+                                "  → Coercing string '{}' to integer for parameter '{}'",
+                                s, final_key
+                            );
                             serde_json::Value::Number(serde_json::Number::from(i))
                         } else {
                             value_with_enum_fix.clone()
                         }
-                    },
-                     ("number", serde_json::Value::String(s)) => {
+                    }
+                    ("number", serde_json::Value::String(s)) => {
                         if let Ok(f) = s.parse::<f64>() {
-                             if let Some(n) = serde_json::Number::from_f64(f) {
-                                eprintln!("  → Coercing string '{}' to number for parameter '{}'", s, final_key);
+                            if let Some(n) = serde_json::Number::from_f64(f) {
+                                eprintln!(
+                                    "  → Coercing string '{}' to number for parameter '{}'",
+                                    s, final_key
+                                );
                                 serde_json::Value::Number(n)
-                             } else {
-                                 value_with_enum_fix.clone()
-                             }
+                            } else {
+                                value_with_enum_fix.clone()
+                            }
                         } else {
                             value_with_enum_fix.clone()
                         }
-                    },
+                    }
                     ("boolean", serde_json::Value::String(s)) => {
-                         let s_lower = s.to_lowercase();
-                         if s_lower == "true" {
-                             serde_json::Value::Bool(true)
-                         } else if s_lower == "false" {
-                             serde_json::Value::Bool(false)
-                         } else {
-                             value_with_enum_fix.clone()
-                         }
-                    },
+                        let s_lower = s.to_lowercase();
+                        if s_lower == "true" {
+                            serde_json::Value::Bool(true)
+                        } else if s_lower == "false" {
+                            serde_json::Value::Bool(false)
+                        } else {
+                            value_with_enum_fix.clone()
+                        }
+                    }
                     _ => value_with_enum_fix.clone(),
                 }
             } else {
@@ -857,16 +1001,19 @@ mod single_mcp_discovery_impl {
 
             mapped.insert(final_key, final_value);
             if !matched {
-                 eprintln!("  → Kept '{}' as-is (no schema match found)", extracted_key);
+                eprintln!("  → Kept '{}' as-is (no schema match found)", extracted_key);
             }
         }
-        
+
         mapped
     }
 
-    fn build_safe_test_inputs_from_schema(schema: Option<&serde_json::Value>, plausible: bool) -> serde_json::Value {
+    fn build_safe_test_inputs_from_schema(
+        schema: Option<&serde_json::Value>,
+        plausible: bool,
+    ) -> serde_json::Value {
         let mut inputs = serde_json::Map::new();
-        
+
         if let Some(schema) = schema {
             if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
                 let required: Vec<String> = schema
@@ -883,16 +1030,17 @@ mod single_mcp_discovery_impl {
                 for (key, prop_schema) in properties {
                     // Only include required fields
                     if required.contains(key) {
-                        let default_value = generate_safe_default_value(prop_schema, key, plausible);
+                        let default_value =
+                            generate_safe_default_value(prop_schema, key, plausible);
                         inputs.insert(key.clone(), default_value);
                     }
                 }
             }
         }
-        
+
         serde_json::Value::Object(inputs)
     }
-    
+
     fn generate_safe_default_value(
         schema: &serde_json::Value,
         name: &str,
@@ -966,7 +1114,10 @@ fn load_agent_config(config_path: &str) -> Result<AgentConfig, Box<dyn Error>> {
     toml::from_str(&content).map_err(|e| format!("failed to parse agent config: {}", e).into())
 }
 
-fn apply_llm_profile(agent_config: &AgentConfig, profile: Option<&str>) -> Result<(), Box<dyn Error>> {
+fn apply_llm_profile(
+    agent_config: &AgentConfig,
+    profile: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
     if let Some(profile_name) = profile {
         let (expanded_profiles, _, _) =
             rtfs::config::profile_selection::expand_profiles(agent_config);
