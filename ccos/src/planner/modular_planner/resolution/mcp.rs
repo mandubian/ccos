@@ -168,6 +168,7 @@ impl McpDiscovery for RuntimeMcpDiscovery {
                 export_to_rtfs: false,
                 export_directory: None,
                 auth_headers: None,
+                ..Default::default()
             };
 
             match unified.discover_tools(&config, &options).await {

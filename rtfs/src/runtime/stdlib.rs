@@ -2374,19 +2374,6 @@ impl StandardLibrary {
     }
 }
 
-/// Register default capabilities in the marketplace
-///
-/// NOTE: implementation was moved to `// CCOS removed: capabilities::defaults::register_default_capabilities`
-/// to keep the runtime stdlib focused on language-level functions. This shim preserves the
-/// original public API while delegating to the new location.
-/// Register default capabilities
-/// Note: Full implementation available when RTFS is used with CCOS
-pub async fn register_default_capabilities(
-    _marketplace: &crate::runtime::capability_marketplace::CapabilityMarketplace,
-) -> RuntimeResult<()> {
-    // CCOS implementation required for full functionality
-    Ok(())
-}
 
 /// Load the standard library into a module registry
 /// This creates a "stdlib" module containing all built-in functions

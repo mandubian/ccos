@@ -4,7 +4,8 @@
 //! Manages MCP session lifecycle: initialize, execute tools/call, terminate.
 
 use super::session_pool::{SessionHandler, SessionId};
-use rtfs::ast::{Keyword, MapKey};
+use crate::utils::value_conversion;
+use rtfs::ast::MapKey;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
@@ -187,7 +188,8 @@ impl MCPSessionHandler {
                         };
 
                         // Convert value to JSON
-                        let json_val = rtfs_value_to_json(value);
+                        let json_val = value_conversion::rtfs_value_to_json(value)
+                            .unwrap_or_else(|_| serde_json::Value::Null);
 
                         // Filter out null values for MCP arguments
                         // This handles cases where optional parameters are passed as nil (null)
@@ -198,7 +200,8 @@ impl MCPSessionHandler {
                     }
                     serde_json::Value::Object(json_map)
                 }
-                _ => rtfs_value_to_json(&args[0]),
+                _ => value_conversion::rtfs_value_to_json(&args[0])
+                    .unwrap_or_else(|_| serde_json::Value::Null),
             }
         } else {
             return Err(RuntimeError::Generic(
@@ -324,7 +327,7 @@ impl MCPSessionHandler {
             // We preserve the original structure unless structuredContent is explicitly present.
 
             // Default: Convert JSON to RTFS Value as-is, preserving 'content' or 'structuredContent' keys
-            Ok(json_to_rtfs_value(result))
+            value_conversion::json_to_rtfs_value(result)
         } else if let Some(error) = json.get("error") {
             Err(RuntimeError::Generic(format!("MCP error: {}", error)))
         } else {
@@ -461,84 +464,6 @@ impl SessionHandler for MCPSessionHandler {
 
         // Create new session
         self.initialize_session(capability_id, metadata)
-    }
-}
-
-/// Helper: Convert RTFS Value to serde_json::Value
-fn rtfs_value_to_json(value: &Value) -> serde_json::Value {
-    match value {
-        Value::Nil => serde_json::Value::Null,
-        Value::Boolean(b) => serde_json::Value::Bool(*b),
-        Value::Integer(i) => serde_json::json!(i),
-        Value::Float(f) => serde_json::json!(f),
-        Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Keyword(k) => {
-            // Strip leading colon for JSON
-            let s = &k.0;
-            serde_json::Value::String(if s.starts_with(':') {
-                s[1..].to_string()
-            } else {
-                s.clone()
-            })
-        }
-        Value::Symbol(s) => serde_json::Value::String(s.0.clone()),
-        Value::Vector(v) => serde_json::Value::Array(v.iter().map(rtfs_value_to_json).collect()),
-        Value::Map(m) => {
-            let mut obj = serde_json::Map::new();
-            for (key, val) in m.iter() {
-                let key_str = match key {
-                    MapKey::Keyword(k) => {
-                        let s = &k.0;
-                        if s.starts_with(':') {
-                            s[1..].to_string()
-                        } else {
-                            s.clone()
-                        }
-                    }
-                    MapKey::String(s) => s.clone(),
-                    MapKey::Integer(i) => i.to_string(),
-                };
-                obj.insert(key_str, rtfs_value_to_json(val));
-            }
-            serde_json::Value::Object(obj)
-        }
-        _ => serde_json::Value::String(format!("{:?}", value)),
-    }
-}
-
-/// Helper: Convert serde_json::Value to RTFS Value
-fn json_to_rtfs_value(json: &serde_json::Value) -> Value {
-    match json {
-        serde_json::Value::Null => Value::Nil,
-        serde_json::Value::Bool(b) => Value::Boolean(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Integer(i)
-            } else if let Some(f) = n.as_f64() {
-                Value::Float(f)
-            } else {
-                Value::String(n.to_string())
-            }
-        }
-        serde_json::Value::String(s) => Value::String(s.clone()),
-        serde_json::Value::Array(arr) => {
-            Value::Vector(arr.iter().map(json_to_rtfs_value).collect())
-        }
-        serde_json::Value::Object(obj) => {
-            let mut map = HashMap::new();
-            for (k, v) in obj.iter() {
-                // Use keyword for object keys
-                // FIX: Do not prepend ':' if standard RTFS parser produces Keyword("name") for :name
-                let key_str = if k.starts_with(':') {
-                    k[1..].to_string()
-                } else {
-                    k.clone()
-                };
-
-                map.insert(MapKey::Keyword(Keyword(key_str)), json_to_rtfs_value(v));
-            }
-            Value::Map(map)
-        }
     }
 }
 
