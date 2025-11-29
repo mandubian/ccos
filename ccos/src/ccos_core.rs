@@ -290,17 +290,18 @@ impl CCOS {
         let capability_registry = Arc::new(tokio::sync::RwLock::new(
             crate::capabilities::registry::CapabilityRegistry::new(),
         ));
-        
+
         // Pass the full CCOS capability registry to the marketplace
-        let mut capability_marketplace = CapabilityMarketplace::with_causal_chain_and_debug_callback(
-            Arc::clone(&capability_registry),
-            Some(Arc::clone(&causal_chain)),
-            debug_callback.clone(),
-        );
+        let mut capability_marketplace =
+            CapabilityMarketplace::with_causal_chain_and_debug_callback(
+                Arc::clone(&capability_registry),
+                Some(Arc::clone(&causal_chain)),
+                debug_callback.clone(),
+            );
 
         // Add Local Config MCP Discovery (centralized discovery)
         capability_marketplace.add_discovery_agent(Box::new(
-            crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery::new()
+            crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery::new(),
         ));
 
         // Bootstrap the marketplace with discovered capabilities
@@ -1427,11 +1428,16 @@ impl CCOS {
                             _ => None,
                         })
                         .unwrap_or_else(|| "Unknown execution error".to_string());
-                    
+
                     let runtime_error = RuntimeError::Generic(error_message);
 
                     match self
-                        .try_repair_plan_with_llm(&current_plan, &runtime_error, attempt_index, &options)
+                        .try_repair_plan_with_llm(
+                            &current_plan,
+                            &runtime_error,
+                            attempt_index,
+                            &options,
+                        )
                         .await?
                     {
                         Some(repaired_plan) => {
@@ -1571,7 +1577,7 @@ impl CCOS {
             None => {
                 println!("DEBUG: Failed to extract RTFS plan from repair response");
                 return Ok(None);
-            },
+            }
         };
 
         if let Err(e) = rtfs::parser::parse(&new_plan_source) {

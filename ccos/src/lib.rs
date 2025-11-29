@@ -24,6 +24,7 @@ pub mod storage;
 pub mod storage_backends;
 pub mod synthesis;
 pub mod types;
+pub mod mcp;
 pub mod wm_integration;
 
 // Delegation and execution stack
