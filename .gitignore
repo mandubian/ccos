@@ -56,3 +56,6 @@ rtfs/.rtfs_repl_history
 rtfs/.rtfs_ccos_repl_history
 capabilities/generated
 
+
+# Runtime capabilities (not source code)
+ccos/capabilities/
