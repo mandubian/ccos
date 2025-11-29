@@ -12,19 +12,26 @@
 //! - Configurable retry policies
 //! - Handles 429 (Too Many Requests) responses
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Rate limit configuration for MCP discovery
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RateLimitConfig {
     /// Maximum requests per second per server
     pub requests_per_second: f64,
     /// Maximum burst size (tokens in bucket)
     pub burst_size: u32,
     /// Whether rate limiting is enabled
+    #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for RateLimitConfig {
@@ -62,6 +69,47 @@ impl RateLimitConfig {
             requests_per_second: f64::MAX,
             burst_size: u32::MAX,
             enabled: false,
+        }
+    }
+}
+
+/// Retry policy configuration (serializable version for config files)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RetryPolicyConfig {
+    /// Maximum number of retry attempts
+    pub max_retries: u32,
+    /// Initial delay before first retry (in milliseconds)
+    pub initial_delay_ms: u64,
+    /// Maximum delay between retries (in milliseconds)
+    pub max_delay_ms: u64,
+    /// Multiplier for exponential backoff (e.g., 2.0 doubles each time)
+    pub exponential_base: f64,
+    /// Whether to add jitter to retry delays
+    pub jitter: bool,
+}
+
+impl Default for RetryPolicyConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            initial_delay_ms: 1000,
+            max_delay_ms: 30000,
+            exponential_base: 2.0,
+            jitter: true,
+        }
+    }
+}
+
+impl From<RetryPolicyConfig> for RetryPolicy {
+    fn from(config: RetryPolicyConfig) -> Self {
+        Self {
+            max_retries: config.max_retries,
+            initial_delay: Duration::from_millis(config.initial_delay_ms),
+            max_delay: Duration::from_millis(config.max_delay_ms),
+            backoff_multiplier: config.exponential_base,
+            use_jitter: config.jitter,
+            retryable_status_codes: vec![429, 500, 502, 503, 504],
         }
     }
 }
