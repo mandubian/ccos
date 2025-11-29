@@ -445,6 +445,9 @@ impl MCPDiscoveryService {
             "mcp_unified_service".to_string(),
         );
 
+        // Automatically infer domains and categories from server name and tool name
+        manifest = manifest.with_inferred_domains_and_categories(&server_config.name);
+
         manifest
     }
 
