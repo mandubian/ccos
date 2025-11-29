@@ -5,19 +5,14 @@ use super::executors::{
 };
 use super::resource_monitor::ResourceMonitor;
 use super::types::*;
-// Temporarily disabled to fix resource monitoring tests
-// use super::network_discovery::{NetworkDiscoveryProvider, NetworkDiscoveryBuilder};
-// use super::mcp_discovery::{MCPDiscoveryProvider, MCPDiscoveryBuilder, MCPServerConfig};
-// use super::a2a_discovery::{A2ADiscoveryProvider, A2ADiscoveryBuilder, A2AAgentConfig};
 use crate::catalog::{CatalogService, CatalogSource};
+use crate::utils::value_conversion;
 use rtfs::ast::{MapKey, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-// RuntimeContext no longer needed in missing-capability path
 use super::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use crate::streaming::{
     McpStreamingProvider, StreamConfig, StreamHandle, StreamType, StreamingProvider,
 };
-// use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
 use chrono::Utc;
 use rtfs::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
@@ -1899,35 +1894,12 @@ impl CapabilityMarketplace {
         Ok(Value::Map(map))
     }
 
+    /// Convert JSON to RTFS Value (public API wrapper for backward compatibility)
+    /// 
+    /// This delegates to the shared utility in `ccos::utils::value_conversion`.
+    /// Prefer using `ccos::utils::value_conversion::json_to_rtfs_value` directly in new code.
     pub fn json_to_rtfs_value(json: &serde_json::Value) -> RuntimeResult<Value> {
-        match json {
-            serde_json::Value::String(s) => Ok(Value::String(s.clone())),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Ok(Value::Integer(i))
-                } else if let Some(f) = n.as_f64() {
-                    Ok(Value::Float(f))
-                } else {
-                    Err(RuntimeError::Generic("Invalid number format".to_string()))
-                }
-            }
-            serde_json::Value::Bool(b) => Ok(Value::Boolean(*b)),
-            serde_json::Value::Array(arr) => {
-                let values: Result<Vec<Value>, RuntimeError> =
-                    arr.iter().map(Self::json_to_rtfs_value).collect();
-                Ok(Value::Vector(values?))
-            }
-            serde_json::Value::Object(obj) => {
-                let mut map = HashMap::new();
-                for (key, value) in obj {
-                    let rtfs_key = MapKey::String(key.clone());
-                    let rtfs_value = Self::json_to_rtfs_value(value)?;
-                    map.insert(rtfs_key, rtfs_value);
-                }
-                Ok(Value::Map(map))
-            }
-            serde_json::Value::Null => Ok(Value::Nil),
-        }
+        value_conversion::json_to_rtfs_value(json)
     }
 
     /// Return a sanitized snapshot of registered capabilities for observability purposes.

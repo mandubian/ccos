@@ -53,6 +53,39 @@ enabled = false
 [marketplace]
 registry_paths = []
 
+# MCP Discovery Configuration
+[mcp_discovery]
+# Enable output schema introspection (calls tools with safe inputs)
+introspect_output_schemas = false
+# Use cache for discovered tools
+use_cache = true
+# Automatically register discovered tools in marketplace
+register_in_marketplace = true
+# Export discovered tools to RTFS files
+export_to_rtfs = true
+# Directory for exported RTFS files (relative to workspace root)
+export_directory = "capabilities/discovered"
+
+# Rate limiting configuration (token bucket algorithm)
+[mcp_discovery.rate_limit]
+# Requests per second (default: 10.0)
+requests_per_second = 10.0
+# Maximum burst size (default: 20)
+burst_size = 20
+
+# Retry policy configuration (exponential backoff)
+[mcp_discovery.retry_policy]
+# Maximum number of retries (default: 3)
+max_retries = 3
+# Initial delay in milliseconds (default: 1000)
+initial_delay_ms = 1000
+# Maximum delay in milliseconds (default: 30000)
+max_delay_ms = 30000
+# Exponential base for backoff (default: 2.0)
+exponential_base = 2.0
+# Add jitter to prevent thundering herd (default: true)
+jitter = true
+
 [delegation]
 enabled = true
 print_extracted_intent = true

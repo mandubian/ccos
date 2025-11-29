@@ -30,7 +30,7 @@ pub use registry::{MCPRegistryClient, McpServer};
 pub use types::*;
 
 // Re-export rate limiter types
-pub use rate_limiter::{RateLimitConfig, RetryPolicy, RateLimiter, RetryContext};
+pub use rate_limiter::{RateLimitConfig, RetryPolicy, RetryPolicyConfig, RateLimiter, RetryContext};
 
 // Re-export core service
 pub use core::MCPDiscoveryService;

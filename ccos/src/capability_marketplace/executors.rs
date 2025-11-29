@@ -1,4 +1,5 @@
 use super::types::*;
+use crate::utils::value_conversion;
 use async_trait::async_trait;
 use regex::Regex;
 use reqwest;
@@ -298,74 +299,13 @@ impl A2AExecutor {
             ))
         }
     }
+    // Use shared value conversion utilities
     fn value_to_json(value: &Value) -> Result<serde_json::Value, RuntimeError> {
-        use serde_json::Value as JsonValue;
-        match value {
-            Value::Integer(i) => Ok(JsonValue::Number(serde_json::Number::from(*i))),
-            Value::Float(f) => Ok(JsonValue::Number(
-                serde_json::Number::from_f64(*f)
-                    .ok_or_else(|| RuntimeError::Generic("Invalid float value".to_string()))?,
-            )),
-            Value::String(s) => Ok(JsonValue::String(s.clone())),
-            Value::Boolean(b) => Ok(JsonValue::Bool(*b)),
-            Value::Vector(vec) => Ok(JsonValue::Array(
-                vec.iter()
-                    .map(|v| Self::value_to_json(v))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            Value::Map(map) => {
-                let mut json_map = serde_json::Map::new();
-                for (key, val) in map {
-                    let key_str = match key {
-                        MapKey::String(s) => s.clone(),
-                        MapKey::Keyword(k) => k.0.clone(),
-                        _ => {
-                            return Err(RuntimeError::Generic(
-                                "Map keys must be strings or keywords".to_string(),
-                            ))
-                        }
-                    };
-                    json_map.insert(key_str, Self::value_to_json(val)?);
-                }
-                Ok(JsonValue::Object(json_map))
-            }
-            Value::Nil => Ok(JsonValue::Null),
-            _ => Err(RuntimeError::Generic(format!(
-                "Cannot convert {} to JSON",
-                value.type_name()
-            ))),
-        }
+        value_conversion::rtfs_value_to_json(value)
     }
+    
     fn json_to_rtfs_value(json: &serde_json::Value) -> RuntimeResult<Value> {
-        match json {
-            serde_json::Value::String(s) => Ok(Value::String(s.clone())),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Ok(Value::Integer(i))
-                } else if let Some(f) = n.as_f64() {
-                    Ok(Value::Float(f))
-                } else {
-                    Err(RuntimeError::Generic("Invalid number format".to_string()))
-                }
-            }
-            serde_json::Value::Bool(b) => Ok(Value::Boolean(*b)),
-            serde_json::Value::Array(arr) => Ok(Value::Vector(
-                arr.iter()
-                    .map(|json| CapabilityMarketplace::json_to_rtfs_value(json))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            serde_json::Value::Object(obj) => {
-                let mut map = HashMap::new();
-                for (k, v) in obj {
-                    map.insert(
-                        rtfs::ast::MapKey::String(k.clone()),
-                        CapabilityMarketplace::json_to_rtfs_value(v)?,
-                    );
-                }
-                Ok(Value::Map(map))
-            }
-            serde_json::Value::Null => Ok(Value::Nil),
-        }
+        value_conversion::json_to_rtfs_value(json)
     }
 }
 
@@ -615,12 +555,9 @@ impl OpenApiExecutor {
         }
     }
 
+    // Use shared utility for map key conversion
     fn map_key_to_string(key: &MapKey) -> RuntimeResult<String> {
-        match key {
-            MapKey::String(s) => Ok(s.clone()),
-            MapKey::Keyword(k) => Ok(k.0.clone()),
-            MapKey::Integer(i) => Ok(i.to_string()),
-        }
+        Ok(value_conversion::map_key_to_string(key))
     }
 
     fn value_to_value_map(value: &Value) -> RuntimeResult<HashMap<String, Value>> {

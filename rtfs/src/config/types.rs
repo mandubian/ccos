@@ -55,6 +55,9 @@ pub struct AgentConfig {
     /// Missing capability resolution configuration
     #[serde(default)]
     pub missing_capabilities: MissingCapabilityRuntimeConfig,
+    /// MCP discovery configuration (rate limiting, retry policies, etc.)
+    #[serde(default)]
+    pub mcp_discovery: MCPDiscoveryConfig,
 }
 
 /// A named LLM model profile that can be selected at runtime
@@ -243,6 +246,142 @@ pub struct MissingCapabilityRuntimeConfig {
     /// Tool selector configuration (LLM-assisted matching)
     #[serde(default)]
     pub tool_selector: MissingCapabilityToolSelectorRuntimeConfig,
+}
+
+/// MCP Discovery configuration for rate limiting, retries, and other settings
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MCPDiscoveryConfig {
+    /// Enable output schema introspection (calls tools with safe inputs)
+    #[serde(default)]
+    pub introspect_output_schemas: bool,
+    /// Use cache for discovered tools
+    #[serde(default = "default_mcp_discovery_use_cache")]
+    pub use_cache: bool,
+    /// Automatically register discovered tools in marketplace
+    #[serde(default = "default_mcp_discovery_register")]
+    pub register_in_marketplace: bool,
+    /// Export discovered tools to RTFS files
+    #[serde(default = "default_mcp_discovery_export")]
+    pub export_to_rtfs: bool,
+    /// Directory for exported RTFS files (relative to workspace root)
+    #[serde(default = "default_mcp_discovery_export_directory")]
+    pub export_directory: String,
+    /// Rate limiting configuration
+    #[serde(default)]
+    pub rate_limit: MCPRateLimitConfig,
+    /// Retry policy configuration
+    #[serde(default)]
+    pub retry_policy: MCPRetryPolicyConfig,
+}
+
+impl Default for MCPDiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            introspect_output_schemas: false,
+            use_cache: default_mcp_discovery_use_cache(),
+            register_in_marketplace: default_mcp_discovery_register(),
+            export_to_rtfs: default_mcp_discovery_export(),
+            export_directory: default_mcp_discovery_export_directory(),
+            rate_limit: MCPRateLimitConfig::default(),
+            retry_policy: MCPRetryPolicyConfig::default(),
+        }
+    }
+}
+
+fn default_mcp_discovery_use_cache() -> bool {
+    true
+}
+
+fn default_mcp_discovery_register() -> bool {
+    true
+}
+
+fn default_mcp_discovery_export() -> bool {
+    true
+}
+
+fn default_mcp_discovery_export_directory() -> String {
+    "capabilities/discovered".to_string()
+}
+
+/// Rate limit configuration for MCP discovery
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MCPRateLimitConfig {
+    /// Maximum requests per second per server
+    #[serde(default = "default_rate_limit_rps")]
+    pub requests_per_second: f64,
+    /// Maximum burst size (tokens in bucket)
+    #[serde(default = "default_rate_limit_burst")]
+    pub burst_size: u32,
+}
+
+impl Default for MCPRateLimitConfig {
+    fn default() -> Self {
+        Self {
+            requests_per_second: default_rate_limit_rps(),
+            burst_size: default_rate_limit_burst(),
+        }
+    }
+}
+
+fn default_rate_limit_rps() -> f64 {
+    10.0
+}
+
+fn default_rate_limit_burst() -> u32 {
+    20
+}
+
+/// Retry policy configuration for MCP discovery
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MCPRetryPolicyConfig {
+    /// Maximum number of retry attempts
+    #[serde(default = "default_retry_max")]
+    pub max_retries: u32,
+    /// Initial delay before first retry (in milliseconds)
+    #[serde(default = "default_retry_initial_delay")]
+    pub initial_delay_ms: u64,
+    /// Maximum delay between retries (in milliseconds)
+    #[serde(default = "default_retry_max_delay")]
+    pub max_delay_ms: u64,
+    /// Multiplier for exponential backoff
+    #[serde(default = "default_retry_exponential_base")]
+    pub exponential_base: f64,
+    /// Whether to add jitter to retry delays
+    #[serde(default = "default_retry_jitter")]
+    pub jitter: bool,
+}
+
+impl Default for MCPRetryPolicyConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: default_retry_max(),
+            initial_delay_ms: default_retry_initial_delay(),
+            max_delay_ms: default_retry_max_delay(),
+            exponential_base: default_retry_exponential_base(),
+            jitter: default_retry_jitter(),
+        }
+    }
+}
+
+fn default_retry_max() -> u32 {
+    3
+}
+
+fn default_retry_initial_delay() -> u64 {
+    1000
+}
+
+fn default_retry_max_delay() -> u64 {
+    30000
+}
+
+fn default_retry_exponential_base() -> f64 {
+    2.0
+}
+
+fn default_retry_jitter() -> bool {
+    true
 }
 
 fn default_catalog_plan_min_score() -> f32 {
@@ -633,6 +772,7 @@ impl Default for AgentConfig {
             discovery: DiscoveryConfig::default(),
             catalog: CatalogConfig::default(),
             missing_capabilities: MissingCapabilityRuntimeConfig::default(),
+            mcp_discovery: MCPDiscoveryConfig::default(),
         }
     }
 }
