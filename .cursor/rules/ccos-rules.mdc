@@ -13,3 +13,10 @@ description: CCOS concepts and specification compliance rules
 - Always enforce security gates: intent sanitization (`012`), governance (`010`), context limits (`009`), working memory rules (`013`).
 - Delegation must use Arbiter / Delegation Engine patterns (`006`, `008`) and respect human-in-loop pauses when flagged.
 - Never bypass intent graph, causal chain, capability attestation, or CCOS step special form; doing so violates core compliance.
+
+## Code Factorization and Shared Utilities
+
+- **ALWAYS check `ccos::utils` modules before implementing utility functions**: Look for existing shared utilities, especially in `ccos::utils::value_conversion` for RTFS↔JSON conversions.
+- **Use shared value conversion utilities**: For any RTFS Value ↔ serde_json::Value conversion, use `ccos::utils::value_conversion::{rtfs_value_to_json, json_to_rtfs_value}` instead of implementing custom conversion logic.
+- **Factorize common patterns**: If you find yourself writing similar code in multiple places, extract it to a shared utility module in `ccos::utils`.
+- **Avoid code duplication**: Before implementing helper functions for map keys, string manipulation, or value conversions, check if they exist in `ccos::utils::value_conversion` (e.g., `map_key_to_string`, `strip_leading_colon`).
