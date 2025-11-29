@@ -28,30 +28,37 @@
 
 ---
 
-### Option 2: Load RTFS Capabilities on Startup 🔄 (Infrastructure)
+### ~~Option 2: Load RTFS Capabilities on Startup~~ ✅ COMPLETED
 **Priority**: Medium | **Effort**: 3-4 hours | **Impact**: Medium
 
-**What**: Add automatic loading of RTFS capabilities from `capabilities/discovered/` when marketplace initializes.
+**Status**: Implemented in `ccos/src/capability_marketplace/marketplace.rs`.
 
-**Current State**:
-- Capabilities are exported to RTFS files
-- But not automatically reloaded on startup
+**Features**:
+- `load_discovered_capabilities()` - Loads from `capabilities/discovered/` on startup
+- `import_capabilities_from_rtfs_dir_recursive()` - Recursively scans directories for `.rtfs` files
+- `import_single_rtfs_file()` - Loads individual files with duplicate detection
+- Integrated into `bootstrap()` - Auto-loads discovered capabilities during marketplace initialization
+- Handles duplicate capabilities (skips same version, updates if different version)
 
-**Implementation**:
-- Add `load_capabilities_from_rtfs_dir()` to `CapabilityMarketplace`
-- Scan `capabilities/discovered/mcp/*/capabilities.rtfs`
-- Parse RTFS files and register capabilities
-- Handle duplicates (skip or update?)
+**Directory Structure Supported**:
+```text
+capabilities/discovered/
+├── mcp/
+│   ├── github/
+│   │   └── capabilities.rtfs
+│   └── slack/
+│       └── capabilities.rtfs
+└── other/
+    └── capabilities.rtfs
+```
 
-**Files to Modify**:
-- `ccos/src/capability_marketplace/marketplace.rs`
-- `ccos/src/capability_marketplace/config_mcp_discovery.rs` (or new loader)
-- Add to marketplace initialization
-
-**Benefits**:
-- Offline capability loading
-- Faster startup (no server queries needed)
-- Version control for capabilities
+**Tests Added** (6 new tests in `mcp_discovery_tests.rs`):
+- `test_load_discovered_capabilities_empty_dir`
+- `test_load_discovered_capabilities_nonexistent_dir`
+- `test_load_discovered_capabilities_flat_dir`
+- `test_load_discovered_capabilities_recursive`
+- `test_load_discovered_capabilities_ignores_non_rtfs`
+- `test_import_single_rtfs_file_duplicate_handling`
 
 ---
 
@@ -176,6 +183,42 @@
 
 ---
 
+### Option 8: Complete MCP Discovery Migration 🔄 (Code Cleanup)
+**Priority**: High | **Effort**: 2-3 hours | **Impact**: High
+
+**What**: Complete the migration from `mcp_discovery.rs` legacy code to `mcp/core.rs` unified service.
+
+**Current State**:
+- `MCPDiscoveryService` in `mcp/core.rs` is the unified, complete implementation
+- `MCPDiscoveryProvider` in `mcp_discovery.rs` has optional `unified_service` field
+- By default, `unified_service` is `None`, so legacy code path is used
+- Legacy implementation duplicates discovery logic
+
+**Problem**:
+- Redundant code paths (legacy vs unified)
+- Default behavior uses legacy code instead of unified service
+- Migration incomplete - both implementations coexist
+
+**Implementation**:
+- Make `MCPDiscoveryProvider` always use `MCPDiscoveryService` (remove `unified_service` optional)
+- Remove legacy `discover_raw_tools()` and related methods from `mcp_discovery.rs`
+- Keep `MCPDiscoveryProvider` as thin `CapabilityDiscovery` adapter that delegates to `MCPDiscoveryService`
+- Update `MCPDiscoveryProvider::new()` to create and use `MCPDiscoveryService` internally
+- Remove `with_unified_service()` method (no longer needed)
+
+**Files to Modify**:
+- `ccos/src/capability_marketplace/mcp_discovery.rs` (remove legacy code, always use unified service)
+- `ccos/src/mcp/core.rs` (ensure all needed methods are public)
+- Update any code that calls `with_unified_service()` (should be minimal)
+
+**Benefits**:
+- Eliminates code duplication
+- Single source of truth for MCP discovery
+- Better maintainability
+- Consistent behavior (always uses caching, rate limiting, etc.)
+
+---
+
 ## 📊 Recommendation Matrix
 
 | Option | Priority | Effort | Impact | Dependencies |
@@ -187,23 +230,26 @@
 | **5. Versioning** | Low | High | Medium | Option 2 |
 | **6. Testing** | High | Medium | High | None |
 | **7. Performance** | Medium | Medium | Medium | Option 6 (test first) |
+| **8. Complete MCP Discovery Migration** | High | Low | High | None |
 
 ---
 
 ## 🎯 Suggested Order
 
-1. **Option 6: Testing** (High priority, validates everything)
-2. **Option 1: Output Schema Introspection** (Quick win, high impact)
-3. **Option 3: Rate Limiting** (High priority, reliability)
-4. **Option 2: Load RTFS on Startup** (Infrastructure improvement)
-5. **Option 4: Registry Integration** (Discovery enhancement)
-6. **Option 7: Performance** (Optimization)
-7. **Option 5: Versioning** (Future maintenance)
+1. **Option 8: Complete MCP Discovery Migration** (High priority, code cleanup, eliminates redundancy)
+2. **Option 6: Testing** (High priority, validates everything)
+3. **Option 1: Output Schema Introspection** (Quick win, high impact)
+4. **Option 3: Rate Limiting** (High priority, reliability)
+5. **Option 2: Load RTFS on Startup** (Infrastructure improvement)
+6. **Option 4: Registry Integration** (Discovery enhancement)
+7. **Option 7: Performance** (Optimization)
+8. **Option 5: Versioning** (Future maintenance)
 
 ---
 
 ## 💡 Quick Wins (Can Do Now)
 
+- **Option 8**: Complete MCP discovery migration (remove legacy code, always use unified service)
 - **Option 1**: Output schema introspection (code already exists, just needs wiring)
 - **Option 6**: Add a few more test cases to existing example
 

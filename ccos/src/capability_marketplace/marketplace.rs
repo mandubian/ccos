@@ -440,6 +440,26 @@ impl CapabilityMarketplace {
         // Register default capabilities first
         crate::capabilities::register_default_capabilities(self).await?;
 
+        // Load previously discovered capabilities from RTFS files
+        // This enables offline operation without re-querying MCP servers
+        match self.load_discovered_capabilities::<std::path::PathBuf>(None).await {
+            Ok(count) => {
+                if count > 0 {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!("Loaded {} previously discovered capabilities from RTFS files", count));
+                    } else {
+                        println!("📦 Loaded {} previously discovered capabilities", count);
+                    }
+                }
+            }
+            Err(e) => {
+                // Non-fatal: log and continue
+                if let Some(cb) = &self.debug_callback {
+                    cb(format!("Note: Could not load discovered capabilities: {}", e));
+                }
+            }
+        }
+
         // Load built-in capabilities from the capability registry
         // Note: RTFS stub registry doesn't have list_capabilities, so we skip this
         // CCOS capabilities are registered through register_default_capabilities instead
@@ -2280,6 +2300,194 @@ impl CapabilityMarketplace {
             caps.insert(cap.id.clone(), cap);
             loaded += 1;
         }
+        Ok(loaded)
+    }
+
+    /// Load all discovered capabilities from the standard discovered capabilities directory.
+    /// This scans `capabilities/discovered/` recursively for `.rtfs` files and loads them.
+    /// 
+    /// The directory structure is expected to be:
+    /// ```text
+    /// capabilities/discovered/
+    /// ├── mcp/
+    /// │   ├── github/
+    /// │   │   └── capabilities.rtfs
+    /// │   └── slack/
+    /// │       └── capabilities.rtfs
+    /// └── other/
+    ///     └── capabilities.rtfs
+    /// ```
+    /// 
+    /// # Arguments
+    /// * `base_dir` - Optional base directory. Defaults to "capabilities/discovered" or
+    ///   the value of CCOS_CAPABILITY_STORAGE environment variable.
+    /// 
+    /// # Returns
+    /// The number of capabilities loaded.
+    pub async fn load_discovered_capabilities<P: AsRef<Path>>(
+        &self,
+        base_dir: Option<P>,
+    ) -> RuntimeResult<usize> {
+        let dir = base_dir
+            .map(|p| p.as_ref().to_path_buf())
+            .unwrap_or_else(|| {
+                std::env::var("CCOS_CAPABILITY_STORAGE")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::path::PathBuf::from("capabilities/discovered"))
+            });
+
+        if !dir.exists() {
+            if let Some(cb) = &self.debug_callback {
+                cb(format!("Discovered capabilities directory does not exist: {}", dir.display()));
+            }
+            return Ok(0);
+        }
+
+        self.import_capabilities_from_rtfs_dir_recursive(&dir).await
+    }
+
+    /// Recursively import capabilities from RTFS files in a directory and its subdirectories.
+    /// 
+    /// This method walks the directory tree and loads all `.rtfs` files it finds.
+    pub async fn import_capabilities_from_rtfs_dir_recursive<P: AsRef<Path>>(
+        &self,
+        dir: P,
+    ) -> RuntimeResult<usize> {
+        let dir_path = dir.as_ref();
+
+        if !dir_path.exists() {
+            return Err(RuntimeError::Generic(format!(
+                "Directory does not exist: {}",
+                dir_path.display()
+            )));
+        }
+
+        let mut total_loaded = 0usize;
+        let mut dirs_to_process = vec![dir_path.to_path_buf()];
+
+        while let Some(current_dir) = dirs_to_process.pop() {
+            let entries = match std::fs::read_dir(&current_dir) {
+                Ok(e) => e,
+                Err(e) => {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Failed to read directory {}: {}",
+                            current_dir.display(),
+                            e
+                        ));
+                    }
+                    continue;
+                }
+            };
+
+            for entry in entries {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) => {
+                        if let Some(cb) = &self.debug_callback {
+                            cb(format!(
+                                "Failed to read entry in {}: {}",
+                                current_dir.display(),
+                                e
+                            ));
+                        }
+                        continue;
+                    }
+                };
+
+                let path = entry.path();
+                
+                // If it's a directory, add it to the queue for processing
+                if path.is_dir() {
+                    dirs_to_process.push(path);
+                    continue;
+                }
+
+                // Skip non-rtfs files
+                if path.extension().and_then(|s| s.to_str()).map_or(true, |ext| ext != "rtfs") {
+                    continue;
+                }
+
+                // Load the RTFS file
+                match self.import_single_rtfs_file(&path).await {
+                    Ok(count) => {
+                        total_loaded += count;
+                        if let Some(cb) = &self.debug_callback {
+                            cb(format!("Loaded {} capabilities from {}", count, path.display()));
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(cb) = &self.debug_callback {
+                            cb(format!("Failed to load {}: {}", path.display(), e));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(total_loaded)
+    }
+
+    /// Import capabilities from a single RTFS file.
+    async fn import_single_rtfs_file<P: AsRef<Path>>(&self, path: P) -> RuntimeResult<usize> {
+        let path = path.as_ref();
+        
+        let path_str = path.to_str().ok_or_else(|| {
+            RuntimeError::Generic(format!(
+                "Non-UTF8 path: {}",
+                path.display()
+            ))
+        })?;
+
+        let parser = MCPDiscoveryProvider::new(MCPServerConfig::default()).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to initialize RTFS parser: {}",
+                e
+            ))
+        })?;
+
+        let module = parser.load_rtfs_capabilities(path_str)?;
+        let mut loaded = 0usize;
+
+        for cap_def in module.capabilities {
+            match parser.rtfs_to_capability_manifest(&cap_def) {
+                Ok(manifest) => {
+                    let mut caps = self.capabilities.write().await;
+                    // Check for duplicates - skip if already exists with same version
+                    if let Some(existing) = caps.get(&manifest.id) {
+                        if existing.version == manifest.version {
+                            if let Some(cb) = &self.debug_callback {
+                                cb(format!(
+                                    "Skipping duplicate capability: {} (same version)",
+                                    manifest.id
+                                ));
+                            }
+                            continue;
+                        }
+                        if let Some(cb) = &self.debug_callback {
+                            cb(format!(
+                                "Updating capability: {} (version {} -> {})",
+                                manifest.id,
+                                existing.version,
+                                manifest.version
+                            ));
+                        }
+                    }
+                    caps.insert(manifest.id.clone(), manifest);
+                    loaded += 1;
+                }
+                Err(err) => {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Failed to convert RTFS capability in {}: {}",
+                            path.display(),
+                            err
+                        ));
+                    }
+                }
+            }
+        }
+
         Ok(loaded)
     }
 

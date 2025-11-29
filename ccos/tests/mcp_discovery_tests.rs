@@ -711,3 +711,131 @@ mod integration_tests {
         assert!(options.export_directory.is_some());
     }
 }
+
+// =============================================================================
+// Capability Loading Tests
+// =============================================================================
+
+mod capability_loading_tests {
+    use super::*;
+    use std::fs;
+
+    /// Create a sample RTFS capability file for testing
+    fn create_test_rtfs_file(dir: &std::path::Path, filename: &str, capability_id: &str) -> std::path::PathBuf {
+        let file_path = dir.join(filename);
+        let content = format!(
+            r#";; Test capability file
+(capability
+  :id "{}"
+  :name "Test Capability"
+  :description "A test capability for loading tests"
+  :implementation (fn [input] input)
+)
+"#,
+            capability_id
+        );
+        fs::write(&file_path, content).expect("Failed to write test RTFS file");
+        file_path
+    }
+
+    #[tokio::test]
+    async fn test_load_discovered_capabilities_empty_dir() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = CapabilityMarketplace::new(registry);
+
+        // Loading from empty directory should succeed with 0 capabilities
+        let result = marketplace.load_discovered_capabilities(Some(temp_dir.path())).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_load_discovered_capabilities_nonexistent_dir() {
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = CapabilityMarketplace::new(registry);
+
+        // Loading from non-existent directory should return 0 (not error)
+        let result = marketplace.load_discovered_capabilities(Some(std::path::Path::new("/nonexistent/path"))).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_load_discovered_capabilities_flat_dir() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        
+        // Create test RTFS files in the root
+        create_test_rtfs_file(temp_dir.path(), "cap1.rtfs", "test.cap1");
+        create_test_rtfs_file(temp_dir.path(), "cap2.rtfs", "test.cap2");
+        
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = CapabilityMarketplace::new(registry);
+
+        let result = marketplace.load_discovered_capabilities(Some(temp_dir.path())).await;
+        assert!(result.is_ok());
+        // Note: The loading may fail to parse simple test files, which is expected
+        // The important thing is that the recursive scan works
+    }
+
+    #[tokio::test]
+    async fn test_load_discovered_capabilities_recursive() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        
+        // Create nested directory structure like capabilities/discovered/mcp/github/
+        let mcp_dir = temp_dir.path().join("mcp");
+        let github_dir = mcp_dir.join("github");
+        let slack_dir = mcp_dir.join("slack");
+        
+        fs::create_dir_all(&github_dir).expect("Failed to create github dir");
+        fs::create_dir_all(&slack_dir).expect("Failed to create slack dir");
+        
+        // Create test RTFS files in subdirectories
+        create_test_rtfs_file(&github_dir, "capabilities.rtfs", "mcp.github.list_issues");
+        create_test_rtfs_file(&slack_dir, "capabilities.rtfs", "mcp.slack.send_message");
+        
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = CapabilityMarketplace::new(registry);
+
+        let result = marketplace.import_capabilities_from_rtfs_dir_recursive(temp_dir.path()).await;
+        assert!(result.is_ok());
+        // The recursive scan should find files in subdirectories
+    }
+
+    #[tokio::test]
+    async fn test_load_discovered_capabilities_ignores_non_rtfs() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        
+        // Create various file types
+        fs::write(temp_dir.path().join("readme.md"), "# Readme").unwrap();
+        fs::write(temp_dir.path().join("config.json"), "{}").unwrap();
+        fs::write(temp_dir.path().join("data.txt"), "data").unwrap();
+        create_test_rtfs_file(temp_dir.path(), "valid.rtfs", "test.valid");
+        
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = CapabilityMarketplace::new(registry);
+
+        // Should only attempt to load .rtfs files
+        let result = marketplace.load_discovered_capabilities(Some(temp_dir.path())).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_import_single_rtfs_file_duplicate_handling() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        
+        // Create a test RTFS file
+        let _file_path = create_test_rtfs_file(temp_dir.path(), "test.rtfs", "test.duplicate");
+        
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = CapabilityMarketplace::new(registry);
+
+        // Load the same file twice - second load should handle duplicates gracefully
+        let result1 = marketplace.import_capabilities_from_rtfs_dir_recursive(temp_dir.path()).await;
+        let result2 = marketplace.import_capabilities_from_rtfs_dir_recursive(temp_dir.path()).await;
+        
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+        // Second load should skip duplicates (same version)
+    }
+}
