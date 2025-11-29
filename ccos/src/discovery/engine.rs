@@ -632,9 +632,15 @@ impl DiscoveryEngine {
         &self,
         need: &CapabilityNeed,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
-        eprintln!("  → search_mcp_registry called for: {}", need.capability_class);
-        eprintln!("  → Discovery agent available: {}", self.discovery_agent.is_some());
-        
+        eprintln!(
+            "  → search_mcp_registry called for: {}",
+            need.capability_class
+        );
+        eprintln!(
+            "  → Discovery agent available: {}",
+            self.discovery_agent.is_some()
+        );
+
         // Use discovery agent if available to get intelligent suggestions
         let (keywords, registry_queries) = if let Some(ref agent) = self.discovery_agent {
             eprintln!("  → Using discovery agent for intelligent query generation...");
@@ -644,31 +650,38 @@ impl DiscoveryEngine {
             } else {
                 eprintln!("  → Discovery agent vocabulary loaded");
             }
-            
+
             // Get suggestions from agent (we'll use goal from rationale for now)
             // TODO: Pass actual goal and intent when available
             match agent.suggest(&need.rationale, None, need).await {
                 Ok(suggestion) => {
-                    eprintln!("  → Discovery agent suggested {} hint(s) and {} query(ies)", 
-                        suggestion.hints.len(), suggestion.registry_queries.len());
+                    eprintln!(
+                        "  → Discovery agent suggested {} hint(s) and {} query(ies)",
+                        suggestion.hints.len(),
+                        suggestion.registry_queries.len()
+                    );
                     if !suggestion.hints.is_empty() {
                         eprintln!("  → Hints: {:?}", suggestion.hints);
                     }
                     if !suggestion.registry_queries.is_empty() {
                         eprintln!("  → Registry queries: {:?}", suggestion.registry_queries);
                     }
-                    
+
                     // Use first registry query as primary, extract keywords from it
-                    let primary_query = suggestion.registry_queries.first()
+                    let primary_query = suggestion
+                        .registry_queries
+                        .first()
                         .cloned()
                         .unwrap_or_else(|| need.capability_class.clone());
-                    let keywords: Vec<String> = primary_query.split_whitespace().map(String::from).collect();
+                    let keywords: Vec<String> =
+                        primary_query.split_whitespace().map(String::from).collect();
                     (keywords, suggestion.registry_queries)
                 }
                 Err(e) => {
                     eprintln!("  ⚠️  Discovery agent suggestion failed: {}, falling back to legacy method", e);
                     // Fallback to old method if agent fails
-                    let mut keywords: Vec<String> = need.capability_class.split('.').map(String::from).collect();
+                    let mut keywords: Vec<String> =
+                        need.capability_class.split('.').map(String::from).collect();
                     let context_tokens = extract_context_tokens(&need.rationale);
                     for token in context_tokens {
                         if !keywords.iter().any(|k| k == &token) {
@@ -682,7 +695,8 @@ impl DiscoveryEngine {
         } else {
             eprintln!("  → Discovery agent not available, using legacy extraction method");
             // Fallback: use old extraction method
-            let mut keywords: Vec<String> = need.capability_class.split('.').map(String::from).collect();
+            let mut keywords: Vec<String> =
+                need.capability_class.split('.').map(String::from).collect();
             let context_tokens = extract_context_tokens(&need.rationale);
             for token in context_tokens {
                 if !keywords.iter().any(|k| k == &token) {
@@ -694,7 +708,7 @@ impl DiscoveryEngine {
         };
 
         // Use MCP registry client to search for servers
-        let registry_client = crate::synthesis::mcp_registry_client::McpRegistryClient::new();
+        let registry_client = crate::mcp::registry::MCPRegistryClient::new();
 
         let search_query = keywords.join(" "); // Use space-separated keywords for search
 
@@ -745,10 +759,17 @@ impl DiscoveryEngine {
         if servers.is_empty() && !registry_queries.is_empty() {
             // Try remaining registry queries from agent
             for query in registry_queries.iter().skip(1).take(3) {
-                eprintln!("  → No servers found, trying agent-suggested query: '{}'", query);
+                eprintln!(
+                    "  → No servers found, trying agent-suggested query: '{}'",
+                    query
+                );
                 if let Ok(fallback_servers) = registry_client.search_servers(query).await {
                     if !fallback_servers.is_empty() {
-                        eprintln!("  → Found {} MCP server(s) for '{}'", fallback_servers.len(), query);
+                        eprintln!(
+                            "  → Found {} MCP server(s) for '{}'",
+                            fallback_servers.len(),
+                            query
+                        );
                         servers.extend(fallback_servers);
                         break; // Stop after first successful query
                     }
@@ -801,7 +822,7 @@ impl DiscoveryEngine {
                 };
                 servers.extend(fallback_servers);
             }
-            
+
             // If still no servers, try the first keyword (often the context/platform)
             if servers.is_empty() {
                 let first_keyword = &keywords[0];
@@ -890,7 +911,7 @@ impl DiscoveryEngine {
         for server in servers.iter() {
             // Try to get server URL from remotes first, then check for environment variable overrides
             let mut server_url = server.remotes.as_ref().and_then(|remotes| {
-                crate::synthesis::mcp_registry_client::McpRegistryClient::select_best_remote_url(
+                crate::mcp::registry::MCPRegistryClient::select_best_remote_url(
                     remotes,
                 )
             });
@@ -1165,12 +1186,16 @@ impl DiscoveryEngine {
                                 };
 
                                 // Extract semantic terms from goal/rationale for better matching
-                                let goal_text = format!("{} {}", need.rationale, need.capability_class);
+                                let goal_text =
+                                    format!("{} {}", need.rationale, need.capability_class);
                                 // Use agent's semantic term extraction (public static method)
                                 let semantic_terms = crate::discovery::discovery_agent::DiscoveryAgent::extract_semantic_terms(&goal_text);
-                                
+
                                 if !semantic_terms.is_empty() {
-                                    eprintln!("  → Using semantic terms for tool matching: {:?}", semantic_terms);
+                                    eprintln!(
+                                        "  → Using semantic terms for tool matching: {:?}",
+                                        semantic_terms
+                                    );
                                 }
 
                                 for manifest in &capabilities {
@@ -1195,19 +1220,23 @@ impl DiscoveryEngine {
                                             &self.config,
                                         )
                                     };
-                                    
+
                                     // Boost score if semantic terms match capability name/description
                                     if !semantic_terms.is_empty() {
-                                        let capability_text = format!("{} {} {}", 
-                                            manifest.id, manifest.name, manifest.description).to_lowercase();
+                                        let capability_text = format!(
+                                            "{} {} {}",
+                                            manifest.id, manifest.name, manifest.description
+                                        )
+                                        .to_lowercase();
                                         let semantic_matches: usize = semantic_terms
                                             .iter()
                                             .filter(|term| capability_text.contains(term.as_str()))
                                             .count();
-                                        
+
                                         if semantic_matches > 0 {
                                             // Strong boost: 0.2-0.5 depending on match count
-                                            let semantic_boost = (semantic_matches as f64 * 0.15).min(0.5);
+                                            let semantic_boost =
+                                                (semantic_matches as f64 * 0.15).min(0.5);
                                             desc_score += semantic_boost;
                                             eprintln!("  → Boosted '{}' by {:.2} for semantic term matches ({}/{})", 
                                                 manifest.name, semantic_boost, semantic_matches, semantic_terms.len());
@@ -1661,7 +1690,7 @@ impl DiscoveryEngine {
     fn load_curated_overrides_for(
         &self,
         capability_id: &str,
-    ) -> RuntimeResult<Vec<crate::synthesis::mcp_registry_client::McpServer>> {
+    ) -> RuntimeResult<Vec<crate::mcp::registry::McpServer>> {
         use std::fs;
 
         // Define the override file structure
@@ -1673,7 +1702,7 @@ impl DiscoveryEngine {
         #[derive(serde::Deserialize)]
         struct CuratedEntry {
             pub matches: Vec<String>,
-            pub server: crate::synthesis::mcp_registry_client::McpServer,
+            pub server: crate::mcp::registry::McpServer,
         }
 
         let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -2975,18 +3004,47 @@ fn extract_context_tokens(rationale: &str) -> Vec<String> {
     // These are words that, if present in the goal, MUST be in the search query
     // to find the right tool.
     let high_value_contexts = [
-        "github", "gitlab", "bitbucket", "jira", 
-        "slack", "discord", "telegram", 
-        "google", "gmail", "calendar", "drive",
-        "aws", "azure", "gcp", "cloud",
-        "postgres", "mysql", "sql", "redis", "mongo",
-        "linear", "notion", "trello", "asana",
-        "stripe", "paypal",
-        "weather", "stock", "finance",
-        "email", "sms",
-        "filesystem", "file", "git",
-        "spotify", "youtube",
-        "huggingface", "openai", "anthropic", "llm", "ai"
+        "github",
+        "gitlab",
+        "bitbucket",
+        "jira",
+        "slack",
+        "discord",
+        "telegram",
+        "google",
+        "gmail",
+        "calendar",
+        "drive",
+        "aws",
+        "azure",
+        "gcp",
+        "cloud",
+        "postgres",
+        "mysql",
+        "sql",
+        "redis",
+        "mongo",
+        "linear",
+        "notion",
+        "trello",
+        "asana",
+        "stripe",
+        "paypal",
+        "weather",
+        "stock",
+        "finance",
+        "email",
+        "sms",
+        "filesystem",
+        "file",
+        "git",
+        "spotify",
+        "youtube",
+        "huggingface",
+        "openai",
+        "anthropic",
+        "llm",
+        "ai",
     ];
 
     let text_lower = rationale.to_ascii_lowercase();
@@ -2999,7 +3057,7 @@ fn extract_context_tokens(rationale: &str) -> Vec<String> {
             matches.push(context.to_string());
         }
     }
-    
+
     // Filter out substrings (e.g. remove "git" if "github" is present)
     let mut context_tokens = Vec::new();
     for m in &matches {
@@ -3009,6 +3067,6 @@ fn extract_context_tokens(rationale: &str) -> Vec<String> {
             context_tokens.push(m.clone());
         }
     }
-    
+
     context_tokens
 }

@@ -689,8 +689,8 @@ impl ServerSelectionHandler {
         description: &str,
         url_input: &str,
         repo_source: Option<String>,
-    ) -> crate::synthesis::mcp_registry_client::McpServer {
-        use crate::synthesis::mcp_registry_client as mcp;
+    ) -> crate::mcp::registry::McpServer {
+        use crate::mcp::registry as mcp;
 
         // Remote type based on scheme
         let remote_type = if url_input.starts_with("ws://") || url_input.starts_with("wss://") {
@@ -788,7 +788,7 @@ impl ServerSelectionHandler {
     // Save or append an override entry for the capability
     fn save_override_for(
         capability_id: &str,
-        server: &crate::synthesis::mcp_registry_client::McpServer,
+        server: &crate::mcp::registry::McpServer,
     ) -> RuntimeResult<()> {
         // Compute overrides path similar to the resolver
         let current = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -815,7 +815,7 @@ impl ServerSelectionHandler {
         #[derive(serde::Serialize, serde::Deserialize)]
         struct OverrideEntry {
             matches: Vec<String>,
-            server: crate::synthesis::mcp_registry_client::McpServer,
+            server: crate::mcp::registry::McpServer,
         }
 
         #[derive(serde::Serialize, serde::Deserialize, Default)]

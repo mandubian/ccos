@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use rtfs::runtime::error::RuntimeResult;
 use std::any::Any;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Discovery provider that finds MCP servers from local configuration (overrides.json) and environment variables
 pub struct LocalConfigMcpDiscovery {
@@ -23,7 +24,9 @@ impl LocalConfigMcpDiscovery {
         let candidates = vec![
             root.join("capabilities/mcp/overrides.json"),
             root.join("ccos/capabilities/mcp/overrides.json"),
-            root.parent().unwrap_or(&root).join("capabilities/mcp/overrides.json"),
+            root.parent()
+                .unwrap_or(&root)
+                .join("capabilities/mcp/overrides.json"),
         ];
 
         for path in candidates {
@@ -56,9 +59,10 @@ impl LocalConfigMcpDiscovery {
 
     fn parse_server_entry(&self, entry: &serde_json::Value) -> Option<MCPServerConfig> {
         let server = entry.get("server")?;
-        
+
         // Extract name from matches (first pattern) or generate default
-        let name = entry.get("matches")
+        let name = entry
+            .get("matches")
             .and_then(|m| m.as_array())
             .and_then(|m| m.first())
             .and_then(|p| p.as_str())
@@ -67,7 +71,7 @@ impl LocalConfigMcpDiscovery {
             .to_string();
 
         let remotes = server.get("remotes").and_then(|r| r.as_array())?;
-        
+
         // Find first HTTP/HTTPS endpoint
         for remote in remotes {
             if let Some(url) = remote.get("url").and_then(|u| u.as_str()) {
@@ -91,7 +95,8 @@ impl LocalConfigMcpDiscovery {
 
         // GitHub MCP Endpoint
         if let Ok(endpoint) = std::env::var("GITHUB_MCP_ENDPOINT") {
-            let token = std::env::var("MCP_AUTH_TOKEN").ok()
+            let token = std::env::var("MCP_AUTH_TOKEN")
+                .ok()
                 .or_else(|| std::env::var("GITHUB_TOKEN").ok());
 
             servers.push(MCPServerConfig {
@@ -133,26 +138,45 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
         let configs = self.get_all_server_configs();
         let mut all_manifests = Vec::new();
 
-        println!("🔍 LocalConfigMcpDiscovery found {} servers configuration", configs.len());
+        println!(
+            "🔍 LocalConfigMcpDiscovery found {} servers configuration",
+            configs.len()
+        );
+
+        // Create unified service once for all servers (more efficient)
+        let unified_service = Arc::new(
+            crate::mcp::core::MCPDiscoveryService::new()
+        );
 
         for config in configs {
-            println!("   👉 Discovering from server: {} ({})", config.name, config.endpoint);
-            
-            // Create a temporary MCPDiscoveryProvider for this server
-            match MCPDiscoveryProvider::new(config.clone()) {
-                Ok(provider) => {
-                    match provider.discover().await {
-                        Ok(manifests) => {
-                            println!("      ✅ Found {} capabilities", manifests.len());
-                            all_manifests.extend(manifests);
-                        },
-                        Err(e) => {
-                            println!("      ⚠️  Discovery failed for {}: {}", config.name, e);
-                        }
-                    }
-                },
+            println!(
+                "   👉 Discovering from server: {} ({})",
+                config.name, config.endpoint
+            );
+
+            // Use unified service for discovery
+            // Note: unified service will also check env vars as fallback if auth_token is None
+            let options = crate::mcp::types::DiscoveryOptions {
+                introspect_output_schemas: false,
+                use_cache: true,
+                register_in_marketplace: true, // Register in marketplace
+                export_to_rtfs: true, // Export to RTFS files
+                export_directory: Some("capabilities/discovered".to_string()),
+                auth_headers: config.auth_token.as_ref().map(|token| {
+                    let mut headers = std::collections::HashMap::new();
+                    headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+                    headers
+                }),
+            };
+
+            // Use discover_and_export_tools which handles registration and export automatically
+            match unified_service.discover_and_export_tools(&config, &options).await {
+                Ok(manifests) => {
+                    println!("      ✅ Found {} capabilities", manifests.len());
+                    all_manifests.extend(manifests);
+                }
                 Err(e) => {
-                    println!("      ⚠️  Failed to create provider for {}: {}", config.name, e);
+                    println!("      ⚠️  Discovery failed for {}: {}", config.name, e);
                 }
             }
         }
@@ -168,4 +192,3 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
         self
     }
 }
-
