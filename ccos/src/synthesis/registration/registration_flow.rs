@@ -11,9 +11,9 @@ use crate::capability_marketplace::types::{
     CapabilityAttestation, CapabilityManifest, CapabilityProvenance,
 };
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::synthesis::governance_policies::GovernancePolicy;
-use crate::synthesis::static_analyzers::StaticAnalyzer;
-use crate::synthesis::validation_harness::{ValidationHarness, ValidationResult, ValidationStatus};
+use super::governance_policies::GovernancePolicy;
+use super::static_analyzers::StaticAnalyzer;
+use super::validation_harness::{ValidationHarness, ValidationResult, ValidationStatus};
 use chrono::Utc;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::values::Value;

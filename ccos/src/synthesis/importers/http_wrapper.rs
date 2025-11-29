@@ -1,5 +1,5 @@
 use crate::capability_marketplace::types::CapabilityManifest;
-use crate::synthesis::auth_injector::{AuthInjector, AuthType};
+use crate::synthesis::introspection::auth_injector::{AuthInjector, AuthType};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

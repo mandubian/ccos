@@ -7,8 +7,8 @@ use super::schema_builder::{ParamSchema, ParamTypeInfo};
 use super::skill_extractor::{
     extract_constraints, extract_skills_advanced, ExtractedSkill, SkillCategory,
 };
-use super::status::{STATUS_PROCESSING, STATUS_READY_FOR_EXECUTION};
-use super::InteractionTurn;
+use crate::synthesis::status::{STATUS_PROCESSING, STATUS_READY_FOR_EXECUTION};
+use crate::synthesis::InteractionTurn;
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::rtfs_bridge::extractors::capability_def_to_rtfs_string;
 use rtfs::ast::{

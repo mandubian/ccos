@@ -18,15 +18,15 @@ use crate::discovery::capability_matcher::{
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::rtfs_bridge::expression_to_pretty_rtfs_string;
 use crate::rtfs_bridge::expression_to_rtfs_string;
-use crate::synthesis::capability_synthesizer::MultiCapabilityEndpoint;
-use crate::synthesis::feature_flags::{FeatureFlagChecker, MissingCapabilityConfig};
-use crate::synthesis::missing_capability_strategies::{
+use super::feature_flags::{FeatureFlagChecker, MissingCapabilityConfig};
+use super::missing_capability_strategies::{
     MissingCapabilityStrategy, MissingCapabilityStrategyConfig, PureRtfsGenerationStrategy,
     UserInteractionStrategy, ExternalLlmHintStrategy, ServiceDiscoveryHintStrategy,
 };
+use super::schema_serializer::type_expr_to_rtfs_compact;
+use crate::synthesis::dialogue::capability_synthesizer::MultiCapabilityEndpoint;
 use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;
-use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
-use crate::synthesis::server_trust::{
+use crate::synthesis::runtime::server_trust::{
     create_default_trust_registry, ServerCandidate, ServerSelectionHandler, ServerTrustRegistry,
 };
 use crate::utils::value_conversion;
@@ -4098,7 +4098,7 @@ impl MissingCapabilityResolver {
 mod tests {
     use super::*;
     use crate::capabilities::registry::CapabilityRegistry;
-    use crate::synthesis::feature_flags::MissingCapabilityFeatureFlags;
+    use crate::synthesis::core::feature_flags::MissingCapabilityFeatureFlags;
     use tokio::sync::RwLock;
 
     #[tokio::test]

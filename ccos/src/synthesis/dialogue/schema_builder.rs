@@ -3,7 +3,7 @@
 //! Extracts parameter schemas from CausalChain by analyzing user.ask actions.
 //! Implements the algorithm from spec section 23.1.
 
-use super::InteractionTurn;
+use crate::synthesis::InteractionTurn;
 use std::collections::HashMap;
 
 /// Complete parameter schema extracted from conversation.

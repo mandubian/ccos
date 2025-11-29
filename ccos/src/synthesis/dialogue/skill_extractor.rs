@@ -3,7 +3,7 @@
 //! Implements Phase 2: Skill extraction and automatic parameter mapping.
 //! Provides sophisticated analysis of interaction patterns to derive agent skills.
 
-use super::InteractionTurn;
+use crate::synthesis::InteractionTurn;
 use std::collections::{HashMap, HashSet};
 
 /// Extracted skill with confidence score and supporting evidence
