@@ -8,8 +8,8 @@ use std::collections::HashMap;
 // AST Node Imports - Ensure all used AST nodes are listed here
 use crate::ast::{
     CatchClause, CatchPattern, DefExpr, DefnExpr, DefstructExpr, DefstructField, DelegationHint,
-    DoExpr, FnExpr, IfExpr, LetBinding, LetExpr, MatchClause, MatchExpr,
-    ParamDef, Pattern, TryCatchExpr, TypeExpr,
+    DoExpr, FnExpr, IfExpr, LetBinding, LetExpr, MatchClause, MatchExpr, ParamDef, Pattern,
+    TryCatchExpr, TypeExpr,
 };
 
 // Builder function imports from sibling modules

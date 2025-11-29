@@ -75,28 +75,40 @@ The architecture supports iterative decomposition:
 ## Architecture
 
 ```mermaid
-graph TD
-    Goal[User Goal] --> Decomp[Decomposition Strategy]
-    
-    subgraph "Decomposition Phase"
-    Decomp -->|Produces| SubIntents[Sub-Intents]
-    SubIntents -->|Stored In| IG[IntentGraph]
+flowchart TD
+    subgraph User
+        A[Natural Language Goal] --> B[ModularPlanner]
     end
-    
-    subgraph "Resolution Phase"
-    IG -->|Reads| ResStrat[Resolution Strategy]
-    ResStrat -->|Maps to| Caps[Resolved Capabilities]
-    ResStrat -->|Queries| MCP[MCP Servers]
-    ResStrat -->|Queries| Catalog[Local Catalog]
+
+    subgraph Planning
+        B --> C[Decomposition Strategy]
+        C -->|SubIntents| D[IntentGraph]
+        D -->|Intent IDs| E[Resolution Strategy]
+        E -->|ResolvedCapabilities| F[RTFS Generator]
+        F -->|RTFS Plan| G[PlanResult]
     end
-    
-    subgraph "Orchestration Phase"
-    Caps -->|Generates| Plan[RTFS Plan]
-    Plan -->|Infers| Deps[Dependencies]
-    Plan -->|Injects| Coercion[Type Coercion]
+
+    subgraph Execution
+        G --> H[CCOS Runtime]
+        H -->|RuntimeContext| I[Capability Execution]
+        I -->|ExecutionResult| J[User Output]
     end
-    
-    Plan --> Execution[Governance & Execution]
+
+    subgraph Components
+        C -->|PatternDecomposition| C1[Regex Patterns]
+        C -->|IntentFirstDecomposition| C2[LLM-based]
+        C -->|GroundedLlmDecomposition| C3[Embedding-filtered]
+        C -->|HybridDecomposition| C4[Pattern + LLM]
+
+        E -->|SemanticResolution| E1[Embedding-based]
+        E -->|McpResolution| E2[MCP Discovery]
+        E -->|CatalogResolution| E3[Local Catalog]
+        E -->|CompositeResolution| E4[Multiple Strategies]
+    end
+
+    style A fill:#f9f,stroke:#333
+    style J fill:#bbf,stroke:#333
+    style D fill:#f96,stroke:#333
 ```
 
 ## 1. Decomposition Phase (The "What")
@@ -213,6 +225,99 @@ Filler words (`first`, `please`, `the`) are stripped from topics before matching
 
 As of **November 2025**, the Modular Planner is fully operational in `modular_planner_demo`.
 
+## Autonomy Enhancement Roadmap
+
+The modular planner architecture provides a solid foundation for autonomous agents. The following enhancements are recommended to achieve full autonomy:
+
+### 1. Self-Correction & Error Recovery (Phase D)
+
+**Goal**: Enable the agent to recover from runtime failures by feeding errors back to the planner.
+
+**Implementation**:
+- **Repair Loop Integration**: Wrap plan execution in a retry loop (max 3 attempts)
+- **Error Context**: Capture execution errors and feed back to planner with original intent + error message
+- **Plan Repair**: Update RTFS plan with fixes and retry execution
+- **MCP Error Handling**: Parse MCP error responses and convert to `RuntimeError` for repair loop integration
+
+```mermaid
+flowchart TD
+    Execution -->|Success| Result[Execution Result]
+    Execution -->|Failure| ErrorCapture[Capture Error]
+    ErrorCapture -->|Original Plan + Error| Planner[ModularPlanner]
+    Planner -->|Fixed Plan| ExecutionRetry[Retry Execution]
+    ExecutionRetry -->|Max Retries| FinalResult[Final Result]
+```
+
+### 2. Advanced Planning Features (Phase I)
+
+**Goal**: Improve plan quality and handle complex multi-capability workflows.
+
+**Implementation**:
+- **Plan Validation**: Pre-execution validation for capability existence and argument compatibility
+- **Parallel Execution**: Identify independent steps and execute using `tokio::join!`
+- **Conditional Execution**: Support `if/else` patterns based on step results
+- **Loop/Iteration**: Handle "for each X, do Y" patterns with RTFS `map`/`filter`/`reduce`
+
+### 3. MCP Robustness Enhancements
+
+**Goal**: Improve reliability and performance of MCP integration.
+
+**Implementation**:
+- **Stdio MCP Server Support**: Implement `StdioSessionHandler` for local MCP servers
+- **Capability Caching**: Cache discovered MCP capabilities across sessions
+- **Enhanced Error Handling**: Handle rate limiting, auth errors, and network failures gracefully
+
+### 4. Self-Improvement Mechanisms
+
+**Goal**: Enable the agent to learn from experience and improve over time.
+
+**Implementation**:
+- **Planning Metrics**: Collect success/failure metrics by strategy and intent type
+- **Strategy Learning**: Implement adaptive strategy selection based on historical performance
+- **Feedback Loop**: Store successful intent-to-capability mappings for future reuse
+- **Intent Reuse**: Leverage IntentGraph for intent pattern reuse across sessions
+
+### 5. Enhanced Data Flow
+
+**Goal**: Improve handling of complex data dependencies and transformations.
+
+**Implementation**:
+- **Complex Data Handling**: Extend data processing to handle nested structures
+- **Data Transformation**: Add more sophisticated transformation capabilities
+- **Context Accumulation**: Enhance context accumulation for multi-step workflows
+
+### Implementation Priority
+
+```mermaid
+gantt
+    title Autonomous Agent Enhancement Roadmap
+    dateFormat  YYYY-MM-DD
+    section Core
+    Repair Loop Integration       :a1, 2025-11-28, 3d
+    MCP Error Handling            :a2, after a1, 2d
+    Plan Validation               :a3, after a2, 3d
+    section Advanced
+    Parallel Execution            :b1, after a3, 4d
+    Conditional Execution         :b2, after b1, 3d
+    Loop Support                  :b3, after b2, 3d
+    section MCP
+    Stdio Server Support          :c1, 2025-12-02, 5d
+    Capability Caching            :c2, after c1, 3d
+    section Autonomy
+    Planning Metrics              :d1, after a3, 3d
+    Strategy Learning             :d2, after d1, 4d
+    Data Flow Enhancements        :d3, after b3, 3d
+```
+
+### Recommended First Steps
+
+1. **Integrate repair loop** - Provides immediate autonomy benefits through self-correction
+2. **Add MCP error handling** - Makes the agent more robust with real-world services
+3. **Implement plan validation** - Prevents execution of invalid plans before they fail
+4. **Add parallel execution** - Improves performance for independent steps
+
+These enhancements will transform the modular planner from a capable planning system into a truly autonomous agent that can self-correct, learn from experience, and handle complex workflows in the CCOS environment.
+
 ### Validated Capabilities
 *   **Hybrid Decomposition**: Successfully switches between Patterns and LLM based on goal complexity.
 *   **Grounded Decomposition**: Can utilize catalog tools to guide LLM decomposition. Supports `_suggested_tool` hints for direct capability lookup.
@@ -248,4 +353,126 @@ let planner = ModularPlanner::new(
 let plan_result = planner.plan("list issues in mandubian/ccos but ask me for the page size").await?;
 // plan_result.rtfs_plan contains the executable code
 ```
+
+## Missing Capability Resolution Enhancement
+
+When no capability is found for an intent, the system should employ a multi-strategy approach to resolve the missing capability:
+
+### Enhanced Resolution Flow
+
+```mermaid
+flowchart TD
+    A[Missing Capability Detected] --> B[Queue for Resolution]
+    B --> C[Attempt Discovery]
+    C -->|Found| D[Register & Retry]
+    C -->|Not Found| E[Determine Resolution Strategy]
+
+    E --> F1[Pure RTFS Generation]
+    E --> F2[User Interaction]
+    E --> F3[External LLM Hint]
+    E --> F4[Service Discovery Hint]
+
+    F1 --> G[Generate RTFS Implementation]
+    F2 --> G
+    F3 --> G
+    F4 --> C
+
+    G --> H[Register Capability]
+    H --> D
+```
+
+### 1. Pure RTFS Generation Strategy
+
+**Implementation**: Add a new synthesis strategy that generates pure RTFS implementations without external dependencies.
+
+**Key Features**:
+- **Pure RTFS Mode**: Generate capabilities that only use RTFS standard library functions
+- **No External Dependencies**: Avoid MCP calls, HTTP requests, etc.
+- **User-Provided Logic**: Allow user to specify the implementation logic
+- **Example Prompt**:
+  ```text
+  Generate a pure RTFS implementation for capability "data.filter_items" that:
+  - Takes a list of items and a filter function
+  - Returns items that match the filter
+  - Uses only RTFS standard library functions
+  - Include input/output schema validation
+  ```
+
+### 2. User Interaction Strategy
+
+**Implementation**: Add interactive resolution that prompts the user for guidance.
+
+**Key Features**:
+- **Clarification Prompts**: Ask user to clarify intent when resolution fails
+- **Alternative Suggestions**: Present alternatives when exact match not found
+- **Implementation Hints**: Ask user for implementation guidance
+- **Example Prompts**:
+  ```text
+  I couldn't find capability "github.list_issues". Did you mean:
+  1. mcp.github.list_issues (GitHub MCP)
+  2. ccos.data.filter (local data filtering)
+  3. None of the above
+
+  How would you like me to implement "data.filter_items"?
+  1. Pure RTFS implementation
+  2. Use existing MCP service
+  3. Search for alternative APIs
+  4. Provide custom implementation
+  ```
+
+### 3. External LLM Hint Strategy
+
+**Implementation**: Integrate with external LLMs to get implementation suggestions.
+
+**Key Features**:
+- **Implementation Suggestions**: Ask LLM how to implement the capability
+- **Service Discovery**: Ask LLM which services might provide the capability
+- **RTFS Generation**: Ask LLM to generate RTFS code for the capability
+- **Example Prompt**:
+  ```text
+  How would you implement a capability called "github.list_issues" in RTFS?
+  Provide:
+  1. Recommended MCP server/tool name
+  2. RTFS implementation code
+  3. Input/output schemas
+  4. Required permissions
+  ```
+
+### 4. Service Discovery Hint Strategy
+
+**Implementation**: Add mechanism to get user hints about service discovery.
+
+**Key Features**:
+- **MCP Server Hints**: Ask user which MCP servers might provide the capability
+- **API Discovery**: Ask user about known APIs that could be used
+- **Override Patterns**: Allow user to specify override patterns for discovery
+- **Example Prompt**:
+  ```text
+  I couldn't discover capability "weather.get_forecast".
+  Which MCP servers should I check for this capability?
+  (Enter server names, domains, or patterns)
+  ```
+
+### Implementation Priority
+
+```mermaid
+gantt
+    title Missing Capability Resolution Enhancements
+    dateFormat  YYYY-MM-DD
+    section Core
+    User Interaction Strategy       :a1, 2025-11-28, 3d
+    Pure RTFS Generation            :a2, after a1, 2d
+    section Advanced
+    External LLM Hint Strategy      :b1, after a2, 3d
+    Service Discovery Hints         :b2, after b1, 2d
+```
+
+### Recommended First Steps
+
+1. **Add User Interaction Strategy** - Enable interactive clarification when resolution fails
+2. **Implement Pure RTFS Generation** - Add capability to generate pure RTFS implementations
+3. **Enhance LLM Synthesis Prompts** - Improve prompts to get better implementation suggestions
+4. **Add Service Discovery Hints** - Allow users to provide hints about where to find capabilities
+
+These enhancements will enable the autonomous agent to handle missing capabilities more effectively by leveraging user knowledge, external expertise, and pure RTFS generation capabilities.
 

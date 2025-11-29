@@ -2,8 +2,7 @@
 
 use crate::ast::{
     CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr, ForExpr, IfExpr,
-    Keyword, LetExpr, Literal, MapKey, MatchExpr, Symbol, TopLevel,
-    TryCatchExpr,
+    Keyword, LetExpr, Literal, MapKey, MatchExpr, Symbol, TopLevel, TryCatchExpr,
 };
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
@@ -2521,7 +2520,7 @@ impl Evaluator {
         // This allows the function to reference itself in its own body
         let placeholder = Arc::new(std::sync::RwLock::new(Value::Nil));
         let placeholder_value = Value::FunctionPlaceholder(placeholder.clone());
-        
+
         // Define the placeholder in the environment BEFORE creating the closure
         // This ensures the captured environment contains the symbol pointing to the placeholder
         env.define(&defn_expr.name, placeholder_value.clone());
@@ -2553,7 +2552,9 @@ impl Evaluator {
 
         // Update the placeholder to point to the actual function
         {
-            let mut guard = placeholder.write().map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
+            let mut guard = placeholder
+                .write()
+                .map_err(|e| RuntimeError::InternalError(format!("RwLock poisoned: {}", e)))?;
             *guard = function.clone();
         }
 
@@ -2741,7 +2742,7 @@ impl Evaluator {
         let bindings_exprs = match &args[0] {
             Expression::Vector(v) => v,
             _ => {
-                 return Err(RuntimeError::TypeError {
+                return Err(RuntimeError::TypeError {
                     expected: "vector literal for bindings".into(),
                     actual: format!("{:?}", args[0]),
                     operation: "for".into(),
@@ -2775,7 +2776,9 @@ impl Evaluator {
             let coll_outcome = self.eval_expr(&bindings_exprs[i + 1], env)?;
             let coll_val = match coll_outcome {
                 ExecutionOutcome::Complete(v) => v,
-                ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                ExecutionOutcome::RequiresHost(hc) => {
+                    return Ok(ExecutionOutcome::RequiresHost(hc))
+                }
                 #[cfg(feature = "effect-boundary")]
                 ExecutionOutcome::RequiresHost(host_call) => {
                     return Ok(ExecutionOutcome::RequiresHost(host_call))
@@ -2834,7 +2837,9 @@ impl Evaluator {
             let coll_outcome = self.eval_expr(&for_expr.bindings[i + 1], env)?;
             let coll_val = match coll_outcome {
                 ExecutionOutcome::Complete(v) => v,
-                ExecutionOutcome::RequiresHost(hc) => return Ok(ExecutionOutcome::RequiresHost(hc)),
+                ExecutionOutcome::RequiresHost(hc) => {
+                    return Ok(ExecutionOutcome::RequiresHost(hc))
+                }
                 #[cfg(feature = "effect-boundary")]
                 ExecutionOutcome::RequiresHost(host_call) => {
                     return Ok(ExecutionOutcome::RequiresHost(host_call))

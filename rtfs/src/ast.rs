@@ -421,7 +421,7 @@ impl TypeExpr {
                 for entry in entries {
                     let key_name = entry.key.0.clone();
                     properties.insert(key_name.clone(), entry.value_type.to_json()?);
-                    
+
                     if !entry.optional {
                         required.push(serde_json::Value::String(key_name));
                     }
@@ -432,11 +432,11 @@ impl TypeExpr {
                     "properties": properties,
                     "additionalProperties": false
                 });
-                
+
                 if !required.is_empty() {
                     schema["required"] = serde_json::Value::Array(required);
                 }
-                
+
                 Ok(schema)
             }
             TypeExpr::Any => Ok(json!({})), // Accept anything
@@ -992,4 +992,3 @@ impl std::fmt::Display for Expression {
         write!(f, "{:?}", self)
     }
 }
-
