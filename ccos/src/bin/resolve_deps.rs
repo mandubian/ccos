@@ -1039,6 +1039,8 @@ async fn bootstrap_test_capabilities(
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         marketplace.register_capability_manifest(manifest).await?;

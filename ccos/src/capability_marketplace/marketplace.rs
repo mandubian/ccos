@@ -255,6 +255,8 @@ impl From<SerializableManifest> for CapabilityManifest {
             effects: s.effects,
             metadata: s.metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         }
     }
 }
@@ -508,6 +510,8 @@ impl CapabilityMarketplace {
                 effects: vec![],
                 metadata: HashMap::new(),
                 agent_metadata: None,
+                domains: Vec::new(),
+                categories: Vec::new(),
             };
 
             let mut caps = self.capabilities.write().await;
@@ -721,6 +725,8 @@ impl CapabilityMarketplace {
             effects: normalized_effects,
             metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -757,6 +763,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         let catalog_manifest = manifest.clone();
@@ -1049,6 +1057,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1091,6 +1101,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata, // Provider-specific metadata (generic)
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1131,6 +1143,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1173,6 +1187,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1217,6 +1233,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1263,6 +1281,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1308,6 +1328,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1355,6 +1377,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1396,6 +1420,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1439,6 +1465,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1482,6 +1510,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);

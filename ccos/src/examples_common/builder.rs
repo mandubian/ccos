@@ -520,6 +520,8 @@ fn catalog_hit_to_info(hit: crate::catalog::CatalogHit) -> CapabilityInfo {
         name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
         description: hit.entry.description.unwrap_or_default(),
         input_schema: None, // We don't need full schema for resolution matching
+        domains: Vec::new(),
+        categories: Vec::new(),
     }
 }
 

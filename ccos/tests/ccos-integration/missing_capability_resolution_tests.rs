@@ -295,6 +295,8 @@ async fn test_validation_harness() {
         effects: vec![],
         metadata: std::collections::HashMap::new(),
         agent_metadata: None,
+        domains: Vec::new(),
+        categories: Vec::new(),
     };
 
     // Test validation
@@ -333,6 +335,8 @@ async fn test_governance_policies() {
             "6".to_string(),
         )]),
         agent_metadata: None,
+        domains: Vec::new(),
+        categories: Vec::new(),
     };
 
     // Test policy compliance
@@ -437,6 +441,8 @@ fn create_test_capability() -> CapabilityManifest {
         effects: vec![],
         metadata: std::collections::HashMap::new(),
         agent_metadata: None,
+        domains: Vec::new(),
+        categories: Vec::new(),
     }
 }
 

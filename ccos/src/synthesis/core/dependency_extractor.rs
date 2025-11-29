@@ -284,6 +284,8 @@ mod tests {
                 effects: vec![],
                 metadata: HashMap::new(),
                 agent_metadata: None,
+                domains: Vec::new(),
+                categories: Vec::new(),
             },
             CapabilityManifest {
                 id: "travel.hotels".to_string(),
@@ -307,6 +309,8 @@ mod tests {
                 effects: vec![],
                 metadata: HashMap::new(),
                 agent_metadata: None,
+                domains: Vec::new(),
+                categories: Vec::new(),
             },
         ];
 

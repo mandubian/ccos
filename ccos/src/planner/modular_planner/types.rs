@@ -177,6 +177,36 @@ pub enum DomainHint {
 }
 
 impl DomainHint {
+    /// Convert to domain string for catalog filtering
+    pub fn to_domain_string(&self) -> String {
+        match self {
+            DomainHint::GitHub => "github".to_string(),
+            DomainHint::Slack => "slack".to_string(),
+            DomainHint::FileSystem => "filesystem".to_string(),
+            DomainHint::Database => "database".to_string(),
+            DomainHint::Web => "web".to_string(),
+            DomainHint::Email => "email".to_string(),
+            DomainHint::Calendar => "calendar".to_string(),
+            DomainHint::Generic => "generic".to_string(),
+            DomainHint::Custom(s) => s.clone(),
+        }
+    }
+
+    /// Create from a domain string (for flexibility)
+    pub fn from_string(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "github" | "gh" => DomainHint::GitHub,
+            "slack" => DomainHint::Slack,
+            "filesystem" | "fs" | "file" => DomainHint::FileSystem,
+            "database" | "db" | "sql" => DomainHint::Database,
+            "web" | "http" | "api" => DomainHint::Web,
+            "email" | "mail" => DomainHint::Email,
+            "calendar" | "gcal" => DomainHint::Calendar,
+            "generic" | "" => DomainHint::Generic,
+            other => DomainHint::Custom(other.to_string()),
+        }
+    }
+
     /// Infer all possible domains from goal text using keyword matching
     pub fn infer_all_from_text(text: &str) -> Vec<Self> {
         let lower = text.to_lowercase();

@@ -435,6 +435,8 @@ impl MCPDiscoveryProvider {
                 metadata
             },
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         }
     }
 
@@ -1694,6 +1696,8 @@ impl MCPDiscoveryProvider {
             effects,
             metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         })
     }
 
@@ -2028,6 +2032,8 @@ impl MCPDiscoveryProvider {
                 metadata
             },
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         })
     }
 

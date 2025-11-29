@@ -717,6 +717,8 @@ impl CapabilitySynthesizer {
             effects,
             metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         let mut warnings = Vec::new();
@@ -897,6 +899,8 @@ impl CapabilitySynthesizer {
                 meta
             },
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         let warnings = vec![
@@ -1234,6 +1238,8 @@ mod tests {
                 ("guardrailed".to_string(), "true".to_string()),
             ]),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         assert!(synthesizer.validate_governance(&capability).unwrap());
