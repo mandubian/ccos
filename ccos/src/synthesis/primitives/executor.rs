@@ -16,9 +16,13 @@ struct RestrictedHost;
 impl HostInterface for RestrictedHost {
     fn execute_capability(&self, name: &str, args: &[Value]) -> RuntimeResult<Value> {
         if name == "ccos.io.println" || name == "io.println" {
-             let message = args.iter().map(|v| format!("{}", v)).collect::<Vec<_>>().join(" ");
-             println!("{}", message);
-             return Ok(Value::Nil);
+            let message = args
+                .iter()
+                .map(|v| format!("{}", v))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!("{}", message);
+            return Ok(Value::Nil);
         }
         Err(RuntimeError::SecurityViolation {
             operation: "execute_capability".to_string(),
