@@ -734,7 +734,8 @@ async fn build_capability_menu_from_catalog(
             let mut filtered_count = 0;
             for manifest in all_capabilities {
                 // Filter out meta-capabilities, but allow specific util capabilities like ccos.echo
-                let is_meta = manifest.id.starts_with("planner.") || manifest.id.starts_with("ccos.");
+                let is_meta =
+                    manifest.id.starts_with("planner.") || manifest.id.starts_with("ccos.");
                 let is_allowed_util = manifest.id == "ccos.echo" || manifest.id == "ccos.user.ask"; // Allow echo and ask
                 if is_meta && !is_allowed_util {
                     filtered_count += 1;
@@ -831,34 +832,44 @@ async fn refresh_capability_menu(
     // This detects if we have a semantic gap (e.g. goal asks for "github issues" but we only have "ccos.user.ask")
     let query = build_catalog_query(goal, intent);
     let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
-    
+
     let mut gap_detected = false;
     // Check if the main query itself has poor coverage
     let main_hits = catalog.search_semantic(&query, Some(&filter), 3);
-    let best_main_score = main_hits.iter()
+    let best_main_score = main_hits
+        .iter()
         .filter(|h| h.entry.id != "ccos.user.ask" && h.entry.id != "ccos.echo") // Ignore generic fallbacks
         .map(|h| h.score)
         .next() // Hits are sorted by score desc
         .unwrap_or(0.0);
-        
+
     if best_main_score < 0.65 {
-        eprintln!("🔍 Goal coverage is low (score {:.2}) - checking hints for specific gaps...", best_main_score);
-        
+        eprintln!(
+            "🔍 Goal coverage is low (score {:.2}) - checking hints for specific gaps...",
+            best_main_score
+        );
+
         // If main query is weak, check specific hints to confirm if we really need external tools
         // or if the query is just vague.
         for hint in &capability_hints {
             // Skip very generic hints to avoid false positives
-            if hint.contains("general.") { continue; }
-            
+            if hint.contains("general.") {
+                continue;
+            }
+
             let hits = catalog.search_semantic(hint, Some(&filter), 1);
-            let best_score = hits.iter()
+            let best_score = hits
+                .iter()
                 .filter(|h| h.entry.id != "ccos.user.ask" && h.entry.id != "ccos.echo")
                 .map(|h| h.score)
                 .next()
                 .unwrap_or(0.0);
-            
-            if best_score < 0.65 { 
-                eprintln!("🔍 Hint '{}' has low coverage (score {:.2}) - signaling discovery need", hint, best_score);
+
+            if best_score < 0.65 {
+                eprintln!(
+                    "🔍 Hint '{}' has low coverage (score {:.2}) - signaling discovery need",
+                    hint, best_score
+                );
                 gap_detected = true;
                 break;
             }
@@ -876,7 +887,9 @@ async fn refresh_capability_menu(
                 eprintln!("🔍 Marketplace only contains meta-capabilities ({} total, {} executable) - triggering MCP discovery", 
                     marketplace_count_before, executable_count_before);
             } else {
-                eprintln!("🔍 Marketplace is empty - triggering MCP discovery based on goal/intent");
+                eprintln!(
+                    "🔍 Marketplace is empty - triggering MCP discovery based on goal/intent"
+                );
             }
         } else {
             eprintln!("🔍 Goal suggests external capabilities (based on low semantic coverage) - triggering MCP discovery");
@@ -980,7 +993,8 @@ async fn refresh_capability_menu(
             }
 
             // Filter out meta-capabilities
-            let is_meta = capability_id.starts_with("planner.") || capability_id.starts_with("ccos.");
+            let is_meta =
+                capability_id.starts_with("planner.") || capability_id.starts_with("ccos.");
             let is_allowed_util = capability_id == "ccos.echo" || capability_id == "ccos.user.ask";
             if is_meta && !is_allowed_util {
                 continue;
@@ -1026,14 +1040,15 @@ async fn refresh_capability_menu(
     }
 
     let mut menu =
-        build_capability_menu_from_catalog(catalog, marketplace.clone(), goal, intent, limit).await?;
+        build_capability_menu_from_catalog(catalog, marketplace.clone(), goal, intent, limit)
+            .await?;
 
     // Always inject ccos.echo into the menu as a utility
     if !menu.iter().any(|e| e.id == "ccos.echo") {
         if let Some(manifest) = marketplace.get_capability("ccos.echo").await {
-             let mut entry = menu_entry_from_manifest(&manifest, Some(0.1));
-             apply_input_overrides(&mut entry);
-             menu.push(entry);
+            let mut entry = menu_entry_from_manifest(&manifest, Some(0.1));
+            apply_input_overrides(&mut entry);
+            menu.push(entry);
         }
     }
 
@@ -1167,7 +1182,7 @@ fn build_semantic_hints_from_tokens(tokens: &[String]) -> Vec<String> {
         if GENERIC_OPERATION_HINTS.contains(&token.as_str()) {
             continue;
         }
-        
+
         if seen.insert(token.clone()) {
             hints.push(token.clone());
         }
@@ -2448,31 +2463,41 @@ fn rewrite_rtfs_references(code: &str, step_index: &HashMap<String, usize>) -> S
         if id == &target {
             continue; // No change needed
         }
-        
+
         // Only replace if surrounded by boundaries to avoid partial matches
         // e.g. don't replace "step_1" in "step_10"
         let mut result = String::with_capacity(rewritten.len());
         let mut last_end = 0;
-        
+
         // Find all occurrences
         let matches: Vec<(usize, &str)> = rewritten.match_indices(id).collect();
         for (start, _part) in matches {
-             if start < last_end { continue; } // Already processed (overlapping?)
+            if start < last_end {
+                continue;
+            } // Already processed (overlapping?)
 
-             let before = if start > 0 { rewritten.chars().nth(start - 1) } else { None };
-             let after = rewritten.chars().nth(start + id.len());
-             
-             let boundary_start = before.map(|c| !c.is_alphanumeric() && c != '_').unwrap_or(true);
-             let boundary_end = after.map(|c| !c.is_alphanumeric() && c != '_').unwrap_or(true);
-             
-             result.push_str(&rewritten[last_end..start]);
-             
-             if boundary_start && boundary_end {
-                 result.push_str(&target);
-             } else {
-                 result.push_str(id);
-             }
-             last_end = start + id.len();
+            let before = if start > 0 {
+                rewritten.chars().nth(start - 1)
+            } else {
+                None
+            };
+            let after = rewritten.chars().nth(start + id.len());
+
+            let boundary_start = before
+                .map(|c| !c.is_alphanumeric() && c != '_')
+                .unwrap_or(true);
+            let boundary_end = after
+                .map(|c| !c.is_alphanumeric() && c != '_')
+                .unwrap_or(true);
+
+            result.push_str(&rewritten[last_end..start]);
+
+            if boundary_start && boundary_end {
+                result.push_str(&target);
+            } else {
+                result.push_str(id);
+            }
+            last_end = start + id.len();
         }
         result.push_str(&rewritten[last_end..]);
         rewritten = result;
@@ -2502,27 +2527,27 @@ fn render_plan_body(
             // We expect a direct RTFS string.
             // But render_step_arguments rendered inputs as a Map string.
             // We need to be careful.
-            
+
             // Try to find the "expression" or "code" input
-            let expr = step.inputs.iter().find_map(|(k, v)| {
-                if k == "expression" || k == "code" {
-                    match v {
-                         StepInputBinding::Literal(s) => Some(s.clone()),
-                         StepInputBinding::RtfsCode(s) => Some(s.clone()),
-                         _ => None
+            let expr = step
+                .inputs
+                .iter()
+                .find_map(|(k, v)| {
+                    if k == "expression" || k == "code" {
+                        match v {
+                            StepInputBinding::Literal(s) => Some(s.clone()),
+                            StepInputBinding::RtfsCode(s) => Some(s.clone()),
+                            _ => None,
+                        }
+                    } else {
+                        None
                     }
-                } else {
-                    None
-                }
-            }).unwrap_or_else(|| "nil".to_string());
-            
+                })
+                .unwrap_or_else(|| "nil".to_string());
+
             let rewritten_expr = rewrite_rtfs_references(&expr, step_index);
 
-            body.push_str(&format!(
-                "      step_{} {}\n",
-                idx,
-                rewritten_expr
-            ));
+            body.push_str(&format!("      step_{} {}\n", idx, rewritten_expr));
         } else {
             body.push_str(&format!(
                 "      step_{} (call :{} {})\n",
@@ -2562,9 +2587,9 @@ fn render_plan_body(
             let step_def = &steps[*step_idx];
             let is_rtfs = step_def.capability_id == "rtfs";
             let val_expr = if is_rtfs {
-                 format!("step_{}", step_idx)
+                format!("step_{}", step_idx)
             } else {
-                 format!("(get step_{} :{})", step_idx, sanitize_keyword_name(source))
+                format!("(get step_{} :{})", step_idx, sanitize_keyword_name(source))
             };
 
             body.push_str(&format!(
@@ -2619,10 +2644,10 @@ fn render_step_arguments(
                 // Simple replacement: var::name -> name (keeping it simple, full parsing would require RTFS parser)
                 // Note: This is a basic fix; in production you might want proper parsing
                 rtfs_code = rtfs_code.replace("var::", "");
-                
+
                 // Also rewrite step references (e.g. step_ID -> step_INDEX)
                 rtfs_code = rewrite_rtfs_references(&rtfs_code, step_index);
-                
+
                 rtfs_code
             }
         };
@@ -4206,27 +4231,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                     // Export and summarize causal chain for audit/replay
                     // EXTRACT DATA UNDER LOCK THEN RELEASE TO AVOID DEADLOCK with planner_audit.log_json
-                    let (plan_actions_len, integrity_result, trace) = if let Ok(chain_guard) = causal_chain_arc.lock() {
-                        let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
-                        let len = plan_actions.len();
-                        let integrity = chain_guard.verify_and_summarize();
-                        // Clone actions so we can release the lock
-                        let trace: Vec<Action> = chain_guard
-                            .get_plan_execution_trace(&plan.plan_id)
-                            .into_iter()
-                            .cloned()
-                            .collect();
-                        (len, integrity, trace)
-                    } else {
-                        eprintln!("⚠️ Failed to lock causal chain for export");
-                        (
-                            0,
-                            Err(RuntimeError::Generic(
-                                "Failed to lock causal chain".to_string(),
-                            )),
-                            Vec::new(),
-                        )
-                    };
+                    let (plan_actions_len, integrity_result, trace) =
+                        if let Ok(chain_guard) = causal_chain_arc.lock() {
+                            let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+                            let len = plan_actions.len();
+                            let integrity = chain_guard.verify_and_summarize();
+                            // Clone actions so we can release the lock
+                            let trace: Vec<Action> = chain_guard
+                                .get_plan_execution_trace(&plan.plan_id)
+                                .into_iter()
+                                .cloned()
+                                .collect();
+                            (len, integrity, trace)
+                        } else {
+                            eprintln!("⚠️ Failed to lock causal chain for export");
+                            (
+                                0,
+                                Err(RuntimeError::Generic(
+                                    "Failed to lock causal chain".to_string(),
+                                )),
+                                Vec::new(),
+                            )
+                        };
 
                     if plan_actions_len > 0 {
                         println!(
@@ -4304,27 +4330,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                     // Export and summarize causal chain for audit/replay
                     // EXTRACT DATA UNDER LOCK THEN RELEASE TO AVOID DEADLOCK with planner_audit.log_json
-                    let (plan_actions_len, integrity_result, trace) = if let Ok(chain_guard) = causal_chain_arc.lock() {
-                        let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
-                        let len = plan_actions.len();
-                        let integrity = chain_guard.verify_and_summarize();
-                        // Clone actions so we can release the lock
-                        let trace: Vec<Action> = chain_guard
-                            .get_plan_execution_trace(&plan.plan_id)
-                            .into_iter()
-                            .cloned()
-                            .collect();
-                        (len, integrity, trace)
-                    } else {
-                        eprintln!("⚠️ Failed to lock causal chain for export");
-                        (
-                            0,
-                            Err(RuntimeError::Generic(
-                                "Failed to lock causal chain".to_string(),
-                            )),
-                            Vec::new(),
-                        )
-                    };
+                    let (plan_actions_len, integrity_result, trace) =
+                        if let Ok(chain_guard) = causal_chain_arc.lock() {
+                            let plan_actions = chain_guard.export_plan_actions(&plan.plan_id);
+                            let len = plan_actions.len();
+                            let integrity = chain_guard.verify_and_summarize();
+                            // Clone actions so we can release the lock
+                            let trace: Vec<Action> = chain_guard
+                                .get_plan_execution_trace(&plan.plan_id)
+                                .into_iter()
+                                .cloned()
+                                .collect();
+                            (len, integrity, trace)
+                        } else {
+                            eprintln!("⚠️ Failed to lock causal chain for export");
+                            (
+                                0,
+                                Err(RuntimeError::Generic(
+                                    "Failed to lock causal chain".to_string(),
+                                )),
+                                Vec::new(),
+                            )
+                        };
 
                     if plan_actions_len > 0 {
                         println!(
