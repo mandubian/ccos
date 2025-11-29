@@ -509,7 +509,9 @@ impl StandardLibrary {
     /// `(read-lines path)` delegates to host capability ccos.io.read-lines (if available)
     fn read_lines_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
         // Try delegating to ccos.io.read-lines
-         evaluator.host.execute_capability("ccos.io.read-lines", &args)
+        evaluator
+            .host
+            .execute_capability("ccos.io.read-lines", &args)
     }
 
     /// `(step ...)` delegates to host capability ccos.io.println (formatted)
@@ -938,7 +940,7 @@ impl StandardLibrary {
 
     /// `(read-file path)` -> placeholder function for testing
     fn read_file(args: Vec<Value>) -> RuntimeResult<Value> {
-         Err(RuntimeError::Generic(
+        Err(RuntimeError::Generic(
             "read-file is not supported in RTFS core. Use ccos.io.read-file or host delegation."
                 .to_string(),
         ))

@@ -1,9 +1,8 @@
 use super::common::{build_literal, build_map_key, build_symbol};
 use super::errors::{pair_to_source_span, PestParseError};
 use super::special_forms::{
-    build_def_expr, build_defn_expr, build_defstruct_expr,
-    build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
-    build_match_expr, build_try_catch_expr,
+    build_def_expr, build_defn_expr, build_defstruct_expr, build_do_expr, build_fn_expr,
+    build_if_expr, build_let_expr, build_match_expr, build_try_catch_expr,
 };
 use super::utils::unescape;
 use super::Rule;

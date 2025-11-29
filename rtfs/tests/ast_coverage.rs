@@ -712,7 +712,8 @@ mod pattern_coverage {
 #[test]
 fn test_complex_nested_expression() {
     // Removed log-step from test as it's no longer a RTFS special form
-    let complex_input = "(let [data {:name \"Alice\" :age 25}] (if (> (:age data) 0) (:name data) \"error\"))";
+    let complex_input =
+        "(let [data {:name \"Alice\" :age 25}] (if (> (:age data) 0) (:name data) \"error\"))";
 
     // This test ensures the parser can handle complex nested structures
     // We don't check the exact AST structure here, just that it parses successfully
