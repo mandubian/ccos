@@ -544,7 +544,7 @@ impl MCPDiscoveryService {
             .unwrap_or_else(|| {
                 std::env::var("CCOS_CAPABILITY_STORAGE")
                     .map(PathBuf::from)
-                    .unwrap_or_else(|_| PathBuf::from("capabilities/discovered"))
+                    .unwrap_or_else(|_| PathBuf::from("../capabilities/discovered"))
             });
 
         // Create directory structure: capabilities/discovered/mcp/<server_name>/

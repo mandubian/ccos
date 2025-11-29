@@ -54,8 +54,7 @@ rtfs/capabilities/
 
 rtfs/.rtfs_repl_history
 rtfs/.rtfs_ccos_repl_history
-capabilities/generated
 
-
-# Runtime capabilities (not source code)
-ccos/capabilities/
+# Runtime capabilities (not source code - stored at project root)
+capabilities/generated/
+capabilities/discovered/

@@ -130,7 +130,7 @@ struct ToolPromptCandidate {
 
 impl ToolAliasStore {
     fn load_default() -> Self {
-        let default_path = PathBuf::from("capabilities/mcp/aliases.json");
+        let default_path = PathBuf::from("../capabilities/mcp/aliases.json");
         Self::load(default_path)
     }
 
@@ -3218,8 +3218,8 @@ impl MissingCapabilityResolver {
         use std::path::Path;
 
         let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        // Try workspace root 'capabilities/mcp/overrides.json'. If we are inside rtfs_compiler, go up one level
-        let overrides_path = if root.ends_with("rtfs_compiler") {
+        // Try workspace root 'capabilities/mcp/overrides.json'. If we are inside ccos, go up one level
+        let overrides_path = if root.ends_with("ccos") {
             root.parent()
                 .unwrap_or(&root)
                 .join("capabilities/mcp/overrides.json")

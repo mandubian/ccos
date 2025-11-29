@@ -432,13 +432,13 @@ impl ModularPlannerBuilder {
         );
 
         // Setup cache directory for MCP tools
-        let cache_dir = PathBuf::from("capabilities/discovered/mcp");
+        let cache_dir = PathBuf::from("../capabilities/discovered/mcp");
         let mcp_resolution = McpResolution::new(mcp_discovery)
             .with_cache_dir(cache_dir)
             .with_no_cache(self.no_cache);
 
         if self.discover_mcp {
-            println!("   ✅ Enabled MCP Resolution (cache: capabilities/discovered/mcp/)");
+            println!("   ✅ Enabled MCP Resolution (cache: ../capabilities/discovered/mcp/)");
             if self.no_cache {
                 println!("   🔄 Cache disabled, will refresh from server");
             }

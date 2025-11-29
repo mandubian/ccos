@@ -2495,7 +2495,7 @@ impl CapabilityMarketplace {
             .unwrap_or_else(|| {
                 std::env::var("CCOS_CAPABILITY_STORAGE")
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| std::path::PathBuf::from("capabilities/discovered"))
+                    .unwrap_or_else(|_| std::path::PathBuf::from("../capabilities/discovered"))
             });
 
         if !dir.exists() {

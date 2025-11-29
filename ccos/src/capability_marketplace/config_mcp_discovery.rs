@@ -160,7 +160,7 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
                 use_cache: true,
                 register_in_marketplace: true, // Register in marketplace
                 export_to_rtfs: true, // Export to RTFS files
-                export_directory: Some("capabilities/discovered".to_string()),
+                export_directory: Some("../capabilities/discovered".to_string()),
                 auth_headers: config.auth_token.as_ref().map(|token| {
                     let mut headers = std::collections::HashMap::new();
                     headers.insert("Authorization".to_string(), format!("Bearer {}", token));
