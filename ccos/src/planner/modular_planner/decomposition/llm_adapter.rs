@@ -26,9 +26,9 @@ impl CcosLlmAdapter {
 #[async_trait(?Send)]
 impl PlannerLlmProvider for CcosLlmAdapter {
     async fn generate_text(&self, prompt: &str) -> Result<String, DecompositionError> {
-        self.provider.generate_text(prompt)
+        self.provider
+            .generate_text(prompt)
             .await
             .map_err(|e| DecompositionError::LlmError(e.to_string()))
     }
 }
-

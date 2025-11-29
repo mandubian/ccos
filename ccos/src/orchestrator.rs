@@ -1731,9 +1731,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -1820,9 +1818,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -1905,9 +1901,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -1944,9 +1938,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -1998,9 +1990,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2047,9 +2037,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2085,9 +2073,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2114,9 +2100,9 @@ mod tests {
             StepProfileDeriver::derive_profile("analyze-data", &intensive_expr, &context).unwrap();
 
         // Intensive operations should get higher resource limits
-        assert!(profile.resource_limits.max_execution_time_ms >= 300000);        // 5+ minutes
+        assert!(profile.resource_limits.max_execution_time_ms >= 300000); // 5+ minutes
         assert!(profile.resource_limits.max_memory_bytes >= 1024 * 1024 * 1024); // 1+ GB
-        assert!(profile.resource_limits.max_cpu_usage >= 2.0);                   // Multi-core
+        assert!(profile.resource_limits.max_cpu_usage >= 2.0); // Multi-core
     }
 
     #[tokio::test]
@@ -2124,9 +2110,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2162,9 +2146,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2209,9 +2191,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2252,9 +2232,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2291,9 +2269,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2330,9 +2306,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                crate::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(

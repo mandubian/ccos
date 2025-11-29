@@ -4,23 +4,23 @@
 //! to convert goals into executable plans, storing all intermediate intents
 //! in the IntentGraph.
 
+use regex::Regex;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use uuid::Uuid;
-use regex::Regex;
 
 use super::decomposition::{
     DecompositionContext, DecompositionError, DecompositionStrategy, HybridDecomposition,
 };
-use super::types::ToolSummary;
 use super::resolution::{
     CompositeResolution, ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability,
 };
-use super::types::{IntentType, SubIntent, DomainHint};
-use crate::intent_graph::IntentGraph;
+use super::types::ToolSummary;
+use super::types::{DomainHint, IntentType, SubIntent};
 use crate::intent_graph::storage::Edge;
+use crate::intent_graph::IntentGraph;
 use crate::types::{EdgeType, GenerationContext, IntentStatus, StorableIntent, TriggerSource};
 
 /// Errors that can occur during planning
@@ -105,13 +105,33 @@ pub struct PlanningTrace {
 
 #[derive(Debug)]
 pub enum TraceEvent {
-    DecompositionStarted { strategy: String },
-    DecompositionCompleted { num_intents: usize, confidence: f64 },
-    IntentCreated { intent_id: String, description: String },
-    EdgeCreated { from: String, to: String, edge_type: String },
-    ResolutionStarted { intent_id: String },
-    ResolutionCompleted { intent_id: String, capability: String },
-    ResolutionFailed { intent_id: String, reason: String },
+    DecompositionStarted {
+        strategy: String,
+    },
+    DecompositionCompleted {
+        num_intents: usize,
+        confidence: f64,
+    },
+    IntentCreated {
+        intent_id: String,
+        description: String,
+    },
+    EdgeCreated {
+        from: String,
+        to: String,
+        edge_type: String,
+    },
+    ResolutionStarted {
+        intent_id: String,
+    },
+    ResolutionCompleted {
+        intent_id: String,
+        capability: String,
+    },
+    ResolutionFailed {
+        intent_id: String,
+        reason: String,
+    },
 }
 
 /// The main modular planner orchestrator.
@@ -159,9 +179,9 @@ impl ModularPlanner {
         self.config = config;
         self
     }
-    
+
     /// Create a fallback resolution when no capability is found.
-    /// 
+    ///
     /// This can either:
     /// 1. Ask the user for guidance (if the intent seems user-actionable)
     /// 2. Mark as NeedsReferral for arbiter escalation
@@ -171,7 +191,7 @@ impl ModularPlanner {
         error: &ResolutionError,
     ) -> ResolvedCapability {
         use crate::planner::modular_planner::types::IntentType;
-        
+
         // If the intent is about data transformation or output, we might synthesize it
         match &sub_intent.intent_type {
             IntentType::DataTransform { .. } | IntentType::Output { .. } => {
@@ -209,7 +229,7 @@ impl ModularPlanner {
                         sub_intent.description
                     ),
                 );
-                
+
                 ResolvedCapability::BuiltIn {
                     capability_id: "ccos.user.ask".to_string(),
                     arguments: args,
@@ -234,21 +254,27 @@ impl ModularPlanner {
             goal: goal.to_string(),
             events: vec![],
         };
-        
+
         // 0. Eager tool discovery (if enabled)
         let available_tools: Option<Vec<ToolSummary>> = if self.config.eager_discovery {
             println!("\n📦 Discovering available tools...");
-            
+
             // Infer domain hints to restrict search
             let domain_hints = DomainHint::infer_all_from_text(goal);
             if !domain_hints.is_empty() {
-                 println!("   🎯 Inferred domains: {:?}", domain_hints);
+                println!("   🎯 Inferred domains: {:?}", domain_hints);
             }
-            
-            let tools = self.resolution.list_available_tools(Some(&domain_hints)).await;
-            
+
+            let tools = self
+                .resolution
+                .list_available_tools(Some(&domain_hints))
+                .await;
+
             if !tools.is_empty() {
-                println!("   ✅ Found {} tools for grounded decomposition", tools.len());
+                println!(
+                    "   ✅ Found {} tools for grounded decomposition",
+                    tools.len()
+                );
                 Some(tools)
             } else {
                 println!("   ⚠️ No tools discovered, using abstract decomposition");
@@ -268,10 +294,13 @@ impl ModularPlanner {
             .with_verbose_llm(self.config.verbose_llm)
             .with_show_prompt(self.config.show_prompt)
             .with_confirm_llm(self.config.confirm_llm);
-        
+
         let tools_slice = available_tools.as_ref().map(|v| v.as_slice());
 
-        let decomp_result = self.decomposition.decompose(goal, tools_slice, &decomp_context).await?;
+        let decomp_result = self
+            .decomposition
+            .decompose(goal, tools_slice, &decomp_context)
+            .await?;
 
         trace.events.push(TraceEvent::DecompositionCompleted {
             num_intents: decomp_result.sub_intents.len(),
@@ -294,12 +323,13 @@ impl ModularPlanner {
                 intent_id: intent_id.clone(),
             });
 
-            match self.resolution.resolve(sub_intent, &resolution_context).await {
+            match self
+                .resolution
+                .resolve(sub_intent, &resolution_context)
+                .await
+            {
                 Ok(resolved) => {
-                    let cap_id = resolved
-                        .capability_id()
-                        .unwrap_or("unknown")
-                        .to_string();
+                    let cap_id = resolved.capability_id().unwrap_or("unknown").to_string();
                     trace.events.push(TraceEvent::ResolutionCompleted {
                         intent_id: intent_id.clone(),
                         capability: cap_id,
@@ -311,7 +341,7 @@ impl ModularPlanner {
                         intent_id: intent_id.clone(),
                         reason: e.to_string(),
                     });
-                    
+
                     // Try to create a fallback: ask user for help or mark as needs referral
                     let fallback = self.create_fallback_resolution(sub_intent, &e);
                     resolutions.insert(intent_id.clone(), fallback);
@@ -320,7 +350,8 @@ impl ModularPlanner {
         }
 
         // 4. Generate RTFS plan from resolved intents
-        let rtfs_plan = self.generate_rtfs_plan(&decomp_result.sub_intents, &intent_ids, &resolutions)?;
+        let rtfs_plan =
+            self.generate_rtfs_plan(&decomp_result.sub_intents, &intent_ids, &resolutions)?;
 
         Ok(PlanResult {
             root_intent_id: root_id,
@@ -423,7 +454,10 @@ impl ModularPlanner {
                 updated_at: now,
                 metadata: {
                     let mut meta = HashMap::new();
-                    meta.insert("intent_type".to_string(), format!("{:?}", sub_intent.intent_type));
+                    meta.insert(
+                        "intent_type".to_string(),
+                        format!("{:?}", sub_intent.intent_type),
+                    );
                     if let Some(ref domain) = sub_intent.domain_hint {
                         meta.insert("domain_hint".to_string(), format!("{:?}", domain));
                     }
@@ -520,22 +554,22 @@ impl ModularPlanner {
             let var_name = format!("step_{}", idx + 1);
 
             let call_expr = match resolutions.get(intent_id) {
-                Some(resolved) => {
-                    match resolved {
-                        ResolvedCapability::Local { .. } |
-                        ResolvedCapability::Remote { .. } |
-                        ResolvedCapability::BuiltIn { .. } |
-                        ResolvedCapability::Synthesized { .. } => {
-                            self.generate_call_expr(resolved, sub_intent, &bindings, sub_intents)
-                        }
-                        ResolvedCapability::NeedsReferral { suggested_action, .. } => {
-                            format!(
-                                r#"(call "ccos.user.ask" {{:prompt "Cannot proceed: {}"}})"#,
-                                suggested_action.replace('"', "\\\"")
-                            )
-                        }
+                Some(resolved) => match resolved {
+                    ResolvedCapability::Local { .. }
+                    | ResolvedCapability::Remote { .. }
+                    | ResolvedCapability::BuiltIn { .. }
+                    | ResolvedCapability::Synthesized { .. } => {
+                        self.generate_call_expr(resolved, sub_intent, &bindings, sub_intents)
                     }
-                }
+                    ResolvedCapability::NeedsReferral {
+                        suggested_action, ..
+                    } => {
+                        format!(
+                            r#"(call "ccos.user.ask" {{:prompt "Cannot proceed: {}"}})"#,
+                            suggested_action.replace('"', "\\\"")
+                        )
+                    }
+                },
                 None => {
                     format!(
                         r#"(call "ccos.user.ask" {{:prompt "No resolution for step: {}"}})"#,
@@ -564,11 +598,11 @@ impl ModularPlanner {
 
     /// Format a single argument value for RTFS, using schema for type coercion
     fn format_arg_value(
-        &self, 
-        key: &str, 
-        value: &str, 
+        &self,
+        key: &str,
+        value: &str,
         schema: Option<&serde_json::Value>,
-        previous_bindings: &[(String, String)]
+        previous_bindings: &[(String, String)],
     ) -> String {
         // Check for LLM-generated step references like {{step0.result}}
         // The LLM sometimes generates 0-based step indices in handlebars syntax
@@ -576,7 +610,7 @@ impl ModularPlanner {
         lazy_static::lazy_static! {
             static ref STEP_REF: Regex = Regex::new(r"\{\{step(\d+)\.result\}\}").unwrap();
         }
-        
+
         if let Some(captures) = STEP_REF.captures(value) {
             if let Some(idx_str) = captures.get(1) {
                 if let Ok(idx) = idx_str.as_str().parse::<usize>() {
@@ -588,7 +622,7 @@ impl ModularPlanner {
                 }
             }
         }
-        
+
         // Check if schema tells us this should be a number
         if let Some(schema) = schema {
             if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
@@ -612,7 +646,7 @@ impl ModularPlanner {
                 }
             }
         }
-        
+
         // Also try to infer from value itself if it looks like a number or boolean
         if value.parse::<i64>().is_ok() || value.parse::<f64>().is_ok() {
             return format!(":{} {}", key, value);
@@ -621,7 +655,7 @@ impl ModularPlanner {
         if lower == "true" || lower == "false" {
             return format!(":{} {}", key, lower);
         }
-        
+
         // Default: quote as string
         format!(":{} \"{}\"", key, value.replace('"', "\\\""))
     }
@@ -636,7 +670,7 @@ impl ModularPlanner {
     ) -> String {
         let capability_id = resolved_capability.capability_id().unwrap_or("unknown");
         let arguments = resolved_capability.arguments().unwrap();
-        
+
         // Get input schema if available (for type coercion)
         let input_schema = match resolved_capability {
             ResolvedCapability::Remote { input_schema, .. } => input_schema.as_ref(),
@@ -649,13 +683,13 @@ impl ModularPlanner {
         let mut used_dependency_vars = std::collections::HashSet::new();
 
         let mut args_parts: Vec<String> = Vec::new();
-        
+
         // Add explicit arguments (with type coercion and ref replacement)
         for (key, value) in arguments {
             let formatted = self.format_arg_value(key, value, input_schema, previous_bindings);
-            
+
             // Validate that the formatted argument adheres to RTFS syntax
-            // Only allow :keyword value pairs where value is either a quoted string, 
+            // Only allow :keyword value pairs where value is either a quoted string,
             // a number, a boolean, or a variable reference (starting with step_)
             // This is a safety check to ensure no raw handlebars or invalid syntax leaks through
             if formatted.starts_with(':') {
@@ -663,7 +697,7 @@ impl ModularPlanner {
             } else {
                 log::warn!("Skipping invalid RTFS argument syntax: {}", formatted);
             }
-            
+
             // Check if this argument consumed a dependency
             lazy_static::lazy_static! {
                 static ref STEP_REF: Regex = Regex::new(r"\{\{step(\d+)\.result\}\}").unwrap();
@@ -678,7 +712,7 @@ impl ModularPlanner {
                 }
             }
         }
-        
+
         if has_dependencies {
             // Add reference to previous step if not already in args
             // This creates data flow from previous steps
@@ -686,17 +720,17 @@ impl ModularPlanner {
                 let dep_idx = sub_intent.dependencies[0];
                 if dep_idx < previous_bindings.len() {
                     let dep_var = &previous_bindings[dep_idx].0;
-                    
+
                     // Only inject if:
                     // 1. We haven't used this dependency in an explicit argument (via {{step.result}})
                     // 2. We don't have an explicit argument that matches the variable name (old logic)
                     let already_used_explicitly = used_dependency_vars.contains(dep_var);
                     let already_has_arg_value = arguments.values().any(|v| v == dep_var);
-                    
+
                     if !already_used_explicitly && !already_has_arg_value {
                         // Attempt to infer parameter name from dependency and schema
                         let param_name = if let Some(dep_intent) = all_sub_intents.get(dep_idx) {
-                                self.infer_param_name(dep_intent, resolved_capability)
+                            self.infer_param_name(dep_intent, resolved_capability)
                         } else {
                             "_previous_result".to_string()
                         };
@@ -705,7 +739,7 @@ impl ModularPlanner {
                 }
             }
         }
-        
+
         if args_parts.is_empty() {
             format!(r#"(call "{}" {{}})"#, capability_id)
         } else {
@@ -714,9 +748,17 @@ impl ModularPlanner {
     }
 
     /// Helper to infer a parameter name from a dependency intent and consumer capability schema
-    fn infer_param_name(&self, producer_intent: &SubIntent, consumer_capability: &ResolvedCapability) -> String {
+    fn infer_param_name(
+        &self,
+        producer_intent: &SubIntent,
+        consumer_capability: &ResolvedCapability,
+    ) -> String {
         // 1. Try schema-based matching if available
-        if let ResolvedCapability::Remote { input_schema: Some(schema), .. } = consumer_capability {
+        if let ResolvedCapability::Remote {
+            input_schema: Some(schema),
+            ..
+        } = consumer_capability
+        {
             if let Some(best_match) = self.match_topic_to_schema(producer_intent, schema) {
                 return best_match;
             }
@@ -726,9 +768,12 @@ impl ModularPlanner {
         match &producer_intent.intent_type {
             IntentType::UserInput { prompt_topic } => {
                 let normalized = prompt_topic.trim().to_lowercase();
-                
+
                 // Manual overrides for common terms
-                if normalized.contains("page size") || normalized == "limit" || normalized == "count" {
+                if normalized.contains("page size")
+                    || normalized == "limit"
+                    || normalized == "count"
+                {
                     return "per_page".to_string();
                 }
                 if normalized == "page" {
@@ -743,7 +788,11 @@ impl ModularPlanner {
     }
 
     /// Match intent topic to schema properties using fuzzy matching
-    fn match_topic_to_schema(&self, intent: &SubIntent, schema: &serde_json::Value) -> Option<String> {
+    fn match_topic_to_schema(
+        &self,
+        intent: &SubIntent,
+        schema: &serde_json::Value,
+    ) -> Option<String> {
         let topic = match &intent.intent_type {
             IntentType::UserInput { prompt_topic } => prompt_topic.to_lowercase(),
             _ => return None,
@@ -751,7 +800,7 @@ impl ModularPlanner {
 
         // Get properties from JSON schema
         let properties = schema.get("properties")?.as_object()?;
-        
+
         let mut best_match = None;
         let mut best_score = 0.0;
 
@@ -772,8 +821,11 @@ impl ModularPlanner {
             // 3. Token overlap
             let topic_tokens: Vec<&str> = topic.split_whitespace().collect();
             let prop_tokens: Vec<&str> = prop_lower.split('_').collect(); // snake_case
-            
-            let matches = topic_tokens.iter().filter(|t| prop_tokens.contains(t)).count();
+
+            let matches = topic_tokens
+                .iter()
+                .filter(|t| prop_tokens.contains(t))
+                .count();
             if matches > 0 {
                 score += 0.3 * (matches as f64);
             }
@@ -801,9 +853,9 @@ mod tests {
     use super::*;
     use crate::intent_graph::config::IntentGraphConfig;
     use crate::planner::modular_planner::decomposition::PatternDecomposition;
-    use crate::planner::modular_planner::resolution::CatalogResolution;
     use crate::planner::modular_planner::resolution::semantic::CapabilityCatalog;
     use crate::planner::modular_planner::resolution::semantic::CapabilityInfo;
+    use crate::planner::modular_planner::resolution::CatalogResolution;
 
     struct MockCatalog;
 
@@ -846,7 +898,10 @@ mod tests {
 
         // First should be user input (resolved to builtin)
         let first_resolution = &result.resolutions[&result.intent_ids[0]];
-        assert!(matches!(first_resolution, ResolvedCapability::BuiltIn { .. }));
+        assert!(matches!(
+            first_resolution,
+            ResolvedCapability::BuiltIn { .. }
+        ));
 
         // Should have generated RTFS
         assert!(result.rtfs_plan.contains("call"));
@@ -874,9 +929,12 @@ mod tests {
         args.insert("owner".to_string(), "mandubian".to_string());
         args.insert("repo".to_string(), "ccos".to_string());
 
-        let sub_intent = SubIntent::new("test", IntentType::ApiCall { 
-            action: crate::planner::modular_planner::types::ApiAction::List 
-        });
+        let sub_intent = SubIntent::new(
+            "test",
+            IntentType::ApiCall {
+                action: crate::planner::modular_planner::types::ApiAction::List,
+            },
+        );
 
         let resolved = ResolvedCapability::Remote {
             capability_id: "mcp.github.list_issues".to_string(),
@@ -886,12 +944,7 @@ mod tests {
             confidence: 1.0,
         };
 
-        let expr = planner.generate_call_expr(
-            &resolved,
-            &sub_intent,
-            &[],
-            &[sub_intent.clone()],
-        );
+        let expr = planner.generate_call_expr(&resolved, &sub_intent, &[], &[sub_intent.clone()]);
 
         assert!(expr.contains("mcp.github.list_issues"));
         assert!(expr.contains(":owner"));

@@ -4,7 +4,10 @@ use url::Url;
 /// Returns `Some(owner/repo)` if parse succeeds and there are at least two path segments.
 pub fn derive_server_name_from_repo_url(url: &str) -> Option<String> {
     if let Ok(parsed) = Url::parse(url) {
-        let mut segs: Vec<&str> = parsed.path_segments().map(|s| s.collect()).unwrap_or_default();
+        let mut segs: Vec<&str> = parsed
+            .path_segments()
+            .map(|s| s.collect())
+            .unwrap_or_default();
         segs.retain(|s| !s.is_empty());
         if segs.len() >= 2 {
             let owner = segs[0];
@@ -30,8 +33,8 @@ pub fn extract_suggestion_from_text(text: &str, key: &str) -> Option<String> {
     // key: value or key -> value — allow case-insensitive, word-boundary matches and quoted values
     // e.g. "repo: hello-world" or "Repo -> \"hello-world\""
     // Support several separator forms: ":", "->", "=", or a plain hyphen.
-        let colon_re = regex::Regex::new(&format!(
-            "(?i)\\b{}\\b\\s*(?::|->|=|-)\\s*\"?([a-zA-Z0-9_\\-]+(?:/[a-zA-Z0-9_\\-]+)?)\"?",
+    let colon_re = regex::Regex::new(&format!(
+        "(?i)\\b{}\\b\\s*(?::|->|=|-)\\s*\"?([a-zA-Z0-9_\\-]+(?:/[a-zA-Z0-9_\\-]+)?)\"?",
         regex::escape(key)
     ))
     .ok();

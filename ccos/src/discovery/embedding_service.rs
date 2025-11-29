@@ -83,7 +83,9 @@ impl EmbeddingService {
     pub fn provider_description(&self) -> String {
         match &self.provider {
             EmbeddingProvider::OpenRouter { model, .. } => format!("OpenRouter ({})", model),
-            EmbeddingProvider::Local { base_url, model } => format!("Local ({} @ {})", model, base_url),
+            EmbeddingProvider::Local { base_url, model } => {
+                format!("Local ({} @ {})", model, base_url)
+            }
         }
     }
 

@@ -359,9 +359,14 @@ impl DelegatingArbiter {
         &self.llm_config
     }
 
+    /// Query the LLM directly with a prompt
+    pub async fn query_llm(&self, prompt: &str) -> Result<String, RuntimeError> {
+        self.llm_provider.generate_text(prompt).await
+    }
+
     /// Select an MCP tool and extract arguments from a natural language hint
     /// This is a specialized method for MCP discovery that bypasses delegation analysis
-    /// 
+    ///
     /// `tool_schemas` is a map from tool name to its input schema JSON (properties only)
     pub async fn select_mcp_tool(
         &self,
@@ -374,7 +379,7 @@ impl DelegatingArbiter {
         let mut vars = HashMap::new();
         vars.insert("hint".to_string(), hint.to_string());
         vars.insert("tools".to_string(), tool_list);
-        
+
         // Build schema information string for the prompt
         let schema_info = if let Some(schemas) = tool_schemas {
             let mut schema_strings = Vec::new();
@@ -383,7 +388,11 @@ impl DelegatingArbiter {
                     if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
                         let param_names: Vec<String> = properties.keys().cloned().collect();
                         if !param_names.is_empty() {
-                            schema_strings.push(format!("  - {}: parameters: {}", tool_name, param_names.join(", ")));
+                            schema_strings.push(format!(
+                                "  - {}: parameters: {}",
+                                tool_name,
+                                param_names.join(", ")
+                            ));
                         }
                     }
                 }
@@ -402,7 +411,10 @@ impl DelegatingArbiter {
             .prompt_manager
             .render("tool_selection", "v1", &vars)
             .unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to load tool_selection prompt: {}. Using fallback.", e);
+                eprintln!(
+                    "Warning: Failed to load tool_selection prompt: {}. Using fallback.",
+                    e
+                );
                 format!(
                     r#"Select the best tool from this list: {}
 
@@ -917,8 +929,11 @@ The tool name MUST be one of: {}"#,
         context: Option<HashMap<String, Value>>,
     ) -> Result<DelegationAnalysis, RuntimeError> {
         // Debug: Log the intent being analyzed
-        eprintln!("DEBUG: Analyzing delegation for intent: name={:?}, goal='{}'", intent.name, intent.goal);
-        
+        eprintln!(
+            "DEBUG: Analyzing delegation for intent: name={:?}, goal='{}'",
+            intent.name, intent.goal
+        );
+
         let prompt = self
             .create_delegation_analysis_prompt(intent, context)
             .await?;
@@ -929,7 +944,10 @@ The tool name MUST be one of: {}"#,
         } else {
             prompt.clone()
         };
-        eprintln!("DEBUG: Delegation analysis prompt preview: {}", prompt_preview);
+        eprintln!(
+            "DEBUG: Delegation analysis prompt preview: {}",
+            prompt_preview
+        );
 
         let response = self.llm_provider.generate_text(&prompt).await?;
 
@@ -1696,42 +1714,41 @@ Plan:"#,
 
         // Try to parse the last JSON blob
         let last_blob = json_blobs.last().unwrap();
-        let json_response: serde_json::Value =
-            serde_json::from_str(last_blob).map_err(|e| {
-                // Generate user-friendly error message with full response preview
-                let response_preview = if response.len() > 500 {
-                    format!(
-                        "{}...\n[truncated, total length: {} chars]",
-                        &response[..500],
-                        response.len()
-                    )
-                } else {
-                    response.to_string()
-                };
+        let json_response: serde_json::Value = serde_json::from_str(last_blob).map_err(|e| {
+            // Generate user-friendly error message with full response preview
+            let response_preview = if response.len() > 500 {
+                format!(
+                    "{}...\n[truncated, total length: {} chars]",
+                    &response[..500],
+                    response.len()
+                )
+            } else {
+                response.to_string()
+            };
 
-                let response_lines: Vec<&str> = response.lines().collect();
-                let line_preview = if response_lines.len() > 10 {
-                    format!(
-                        "{}\n... [{} more lines]",
-                        response_lines[..10].join("\n"),
-                        response_lines.len() - 10
-                    )
-                } else {
-                    response.to_string()
-                };
+            let response_lines: Vec<&str> = response.lines().collect();
+            let line_preview = if response_lines.len() > 10 {
+                format!(
+                    "{}\n... [{} more lines]",
+                    response_lines[..10].join("\n"),
+                    response_lines.len() - 10
+                )
+            } else {
+                response.to_string()
+            };
 
-                let cleaned_preview = if last_blob.len() > 400 {
-                    format!(
-                        "{}...\n[truncated, total length: {} chars]",
-                        &last_blob[..400],
-                        last_blob.len()
-                    )
-                } else {
-                    last_blob.clone()
-                };
+            let cleaned_preview = if last_blob.len() > 400 {
+                format!(
+                    "{}...\n[truncated, total length: {} chars]",
+                    &last_blob[..400],
+                    last_blob.len()
+                )
+            } else {
+                last_blob.clone()
+            };
 
-                RuntimeError::Generic(format!(
-                    "❌ Failed to parse delegation analysis JSON\n\n\
+            RuntimeError::Generic(format!(
+                "❌ Failed to parse delegation analysis JSON\n\n\
                     📋 Expected format: A JSON object with fields:\n\
                     {{\n\
                       \"should_delegate\": true/false,\n\
@@ -1755,9 +1772,9 @@ Plan:"#,
                     • Invalid JSON syntax (unclosed brackets, missing quotes, etc.)\n\
                     • Response is empty or contains only whitespace\n\n\
                     🔧 Tip: The LLM should respond ONLY with valid JSON, no explanatory text.",
-                    line_preview, cleaned_preview, e
-                ))
-            })?;
+                line_preview, cleaned_preview, e
+            ))
+        })?;
 
         // Validate required fields
         if !json_response.is_object() {

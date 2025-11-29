@@ -59,7 +59,10 @@ pub async fn preload_discovered_capabilities(
 
     let mut total_loaded = 0usize;
     for dir in dirs_vec {
-        eprintln!("DEBUG: preload_discovered_capabilities dir={}", dir.display());
+        eprintln!(
+            "DEBUG: preload_discovered_capabilities dir={}",
+            dir.display()
+        );
         match marketplace.import_capabilities_from_rtfs_dir(&dir).await {
             Ok(count) => {
                 eprintln!("DEBUG: import_capabilities_from_rtfs_dir count={}", count);
@@ -120,17 +123,17 @@ pub fn parse_simple_mcp_rtfs(path: &Path) -> RuntimeResult<Option<CapabilityMani
         let after_key = &content[start..];
         let mut chars = after_key.chars();
         let mut offset = 0;
-        
+
         // Skip whitespace to find opening quote
         loop {
-             match chars.next() {
-                 Some(c) if c.is_whitespace() => offset += c.len_utf8(),
-                 Some('"') => {
-                     offset += 1; // skip quote
-                     break;
-                 }
-                 _ => return None, // Found non-whitespace before quote, or EOF
-             }
+            match chars.next() {
+                Some(c) if c.is_whitespace() => offset += c.len_utf8(),
+                Some('"') => {
+                    offset += 1; // skip quote
+                    break;
+                }
+                _ => return None, // Found non-whitespace before quote, or EOF
+            }
         }
 
         let after_quote = &content[start + offset..];
@@ -145,16 +148,18 @@ pub fn parse_simple_mcp_rtfs(path: &Path) -> RuntimeResult<Option<CapabilityMani
     let description = extract_quoted(":description");
     let server_url = extract_quoted(":server_url").or_else(|| extract_quoted(":server-url"));
     let tool_name = extract_quoted(":tool_name").or_else(|| extract_quoted(":tool-name"));
-    
+
     if std::env::var("CCOS_DEBUG_DISCOVERY").is_ok() {
         eprintln!("DEBUG: parse_simple_mcp_rtfs path={:?}", path);
-        eprintln!("DEBUG: id={:?} name={:?} server_url={:?} tool_name={:?}", id, name, server_url, tool_name);
+        eprintln!(
+            "DEBUG: id={:?} name={:?} server_url={:?} tool_name={:?}",
+            id, name, server_url, tool_name
+        );
     }
 
     let requires_session =
         extract_quoted(":requires_session").or_else(|| extract_quoted(":requires-session"));
-    let auth_env_var =
-        extract_quoted(":auth_env_var").or_else(|| extract_quoted(":auth-env-var"));
+    let auth_env_var = extract_quoted(":auth_env_var").or_else(|| extract_quoted(":auth-env-var"));
     let version = extract_quoted(":version").unwrap_or_else(|| "1.0.0".to_string());
 
     let id = match id {
@@ -350,14 +355,17 @@ pub fn load_override_parameters(capability_id: &str) -> Option<(Vec<String>, Vec
 pub fn tokenize_identifier(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut seen = HashSet::new();
-    
+
     // Common English stopwords to filter out
     let stopwords: HashSet<&str> = [
-        "of", "for", "the", "a", "an", "in", "on", "at", "to", "from", "by", 
-        "with", "and", "or", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "but", "if", "then", "else",
-        "when", "where", "why", "how", "all", "any", "some", "no", "not",
-    ].iter().cloned().collect();
+        "of", "for", "the", "a", "an", "in", "on", "at", "to", "from", "by", "with", "and", "or",
+        "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+        "did", "but", "if", "then", "else", "when", "where", "why", "how", "all", "any", "some",
+        "no", "not",
+    ]
+    .iter()
+    .cloned()
+    .collect();
 
     for token in text.split(|c: char| !c.is_ascii_alphanumeric()) {
         let tk = token.trim().to_ascii_lowercase();
