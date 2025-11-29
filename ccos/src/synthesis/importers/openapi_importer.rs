@@ -2,7 +2,7 @@ use crate::capability_marketplace::types::{
     CapabilityManifest, CapabilityProvenance, OpenApiAuth, OpenApiCapability, OpenApiOperation,
     ProviderType,
 };
-use crate::synthesis::auth_injector::AuthInjector;
+use crate::synthesis::introspection::auth_injector::AuthInjector;
 use chrono::Utc;
 use rtfs::ast::TypeExpr;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};

@@ -1,7 +1,7 @@
 use crate::capability_marketplace::types::CapabilityManifest;
-use crate::synthesis::api_introspector::APIIntrospector;
-use crate::synthesis::auth_injector::AuthInjector;
-use crate::synthesis::mcp_introspector::MCPIntrospector;
+use crate::synthesis::introspection::api_introspector::APIIntrospector;
+use crate::synthesis::introspection::auth_injector::AuthInjector;
+use crate::synthesis::introspection::mcp_introspector::MCPIntrospector;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

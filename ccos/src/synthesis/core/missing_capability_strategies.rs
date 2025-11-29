@@ -20,7 +20,7 @@ use crate::planner::modular_planner::types::{
     ApiAction, DomainHint, IntentType, OutputFormat, ToolSummary, TransformType,
 };
 use crate::planner::modular_planner::{ResolutionContext, ResolutionError};
-use crate::synthesis::missing_capability_resolver::{MissingCapabilityRequest, ResolutionResult};
+use super::missing_capability_resolver::{MissingCapabilityRequest, ResolutionResult};
 
 /// Trait for missing capability resolution strategies
 #[async_trait]

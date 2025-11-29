@@ -1,44 +1,84 @@
+//! Capability synthesis module.
+//!
+//! This module provides the capability synthesis pipeline for creating, resolving,
+//! and registering capabilities from various sources including:
+//! - Dialogue interactions (user conversations)
+//! - API introspection (OpenAPI, GraphQL, MCP)
+//! - Missing capability resolution
+//!
+//! ## Module Structure
+//!
+//! - `core/` - Core resolution and synthesis components
+//! - `introspection/` - API and protocol introspection
+//! - `importers/` - API specification importers
+//! - `dialogue/` - Dialogue-based synthesis pipeline
+//! - `registration/` - Capability registration workflow
+//! - `runtime/` - Runtime resolution and trust management
+//! - `primitives/` - Primitive synthesis templates
+
 use rtfs::runtime::error::RuntimeResult;
 
-pub mod api_introspector;
-pub mod artifact_generator;
-pub mod auth_injector;
-pub mod capability_synthesizer;
-pub mod continuous_resolution;
-pub mod dependency_extractor;
-pub mod feature_flags;
-pub mod governance_policies;
-pub mod graphql_importer;
-pub mod http_wrapper;
-pub mod mcp_introspector;
-pub mod missing_capability_resolver;
-pub mod missing_capability_strategies;
-pub mod openapi_importer;
-pub mod preference_schema;
+// ===== Modular Submodules =====
+pub mod core;
+pub mod dialogue;
+pub mod importers;
+pub mod introspection;
 pub mod primitives;
-pub mod registration_flow;
-pub mod schema_builder;
-pub mod schema_serializer;
-pub mod server_trust;
-pub mod skill_extractor;
-pub mod static_analyzers;
-pub mod status;
-pub mod telemetry;
-pub mod validation_harness;
-pub mod web_search_discovery;
+pub mod registration;
+pub mod runtime;
 
-// Integration tests live in a sibling file to keep the main module tidy.
+// Standalone modules (not moved)
+pub mod status;
+pub mod telemetry; // NOTE: Currently unused externally - candidate for removal
+
+// Integration tests
 #[cfg(test)]
 mod integration_tests;
 #[cfg(test)]
 mod runtime_integration_tests;
 
-// Explicitly re-export commonly used items so examples and consumers can
-// import them from `ccos::ccos::synthesis` directly.
-pub use preference_schema::{extract_with_metrics, ParamType};
-// Keep a blanket re-export for convenience (non-breaking)
-pub use preference_schema::*;
-pub use skill_extractor::*;
+// ===== Backward-Compatible Re-exports =====
+// These maintain the old import paths for existing code
+
+// Core modules
+pub use core::dependency_extractor;
+pub use core::feature_flags;
+pub use core::missing_capability_resolver;
+pub use core::missing_capability_strategies;
+pub use core::schema_serializer;
+
+// Introspection modules
+pub use introspection::api_introspector;
+pub use introspection::auth_injector;
+pub use introspection::mcp_introspector;
+
+// Importer modules
+pub use importers::graphql_importer;
+pub use importers::http_wrapper;
+pub use importers::openapi_importer;
+
+// Dialogue modules
+pub use dialogue::artifact_generator;
+pub use dialogue::capability_synthesizer;
+pub use dialogue::preference_schema;
+pub use dialogue::schema_builder;
+pub use dialogue::skill_extractor;
+
+// Registration modules
+pub use registration::governance_policies;
+pub use registration::registration_flow;
+pub use registration::static_analyzers;
+pub use registration::validation_harness;
+
+// Runtime modules
+pub use runtime::continuous_resolution;
+pub use runtime::server_trust;
+pub use runtime::web_search_discovery;
+
+// Re-export commonly used items for convenience
+pub use dialogue::preference_schema::{extract_with_metrics, ParamType};
+pub use dialogue::preference_schema::*;
+pub use dialogue::skill_extractor::*;
 pub use status::*;
 
 // ===== Public Data Types for Synthesis Pipeline =====

@@ -1,5 +1,5 @@
 use crate::capability_marketplace::types::CapabilityManifest;
-use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
+use crate::synthesis::core::schema_serializer::type_expr_to_rtfs_compact;
 use rtfs::ast::{Keyword, MapTypeEntry, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};

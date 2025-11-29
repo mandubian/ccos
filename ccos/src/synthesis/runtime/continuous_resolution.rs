@@ -7,10 +7,10 @@
 //! - Repeatable resolution with safe fallbacks
 
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::synthesis::mcp_introspector::MCPIntrospector;
+use crate::synthesis::introspection::mcp_introspector::MCPIntrospector;
 use crate::mcp::registry::MCPRegistryClient;
-use crate::synthesis::missing_capability_resolver::MissingCapabilityResolver;
-use crate::synthesis::registration_flow::RegistrationFlow;
+use crate::synthesis::core::missing_capability_resolver::MissingCapabilityResolver;
+use crate::synthesis::registration::registration_flow::RegistrationFlow;
 use chrono::{DateTime, Utc};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::collections::HashMap;
@@ -868,7 +868,7 @@ impl Default for ResolutionConfig {
 mod tests {
     use super::*;
     use crate::checkpoint_archive::CheckpointArchive;
-    use crate::synthesis::missing_capability_resolver::MissingCapabilityResolver;
+    use crate::synthesis::core::missing_capability_resolver::MissingCapabilityResolver;
 
     #[tokio::test]
     async fn test_continuous_resolution_loop() {
@@ -964,7 +964,7 @@ mod tests {
         };
 
         let methods = loop_instance.get_resolution_methods(&low_risk);
-        assert_eq!(methods.len(), 6);
+        assert_eq!(methods.len(), 7); // McpRegistry, OpenApiImport, GraphQLImport, HttpWrapper, LlmSynthesis, WebSearch, Manual
         assert!(matches!(methods[0], ResolutionMethod::McpRegistry));
 
         let critical_risk = RiskAssessment {
