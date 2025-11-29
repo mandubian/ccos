@@ -17,7 +17,7 @@ use super::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use crate::streaming::{
     McpStreamingProvider, StreamConfig, StreamHandle, StreamType, StreamingProvider,
 };
-use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;
+// use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
 use chrono::Utc;
 use rtfs::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
@@ -569,7 +569,10 @@ impl CapabilityMarketplace {
             if agent.name() == "NetworkDiscovery" {
                 match agent.discover().await {
                     Ok(capabilities) => {
-                        eprintln!("Discovered {} capabilities from network source", capabilities.len());
+                        eprintln!(
+                            "Discovered {} capabilities from network source",
+                            capabilities.len()
+                        );
                         all_capabilities.extend(capabilities);
                     }
                     Err(e) => {
@@ -749,7 +752,6 @@ impl CapabilityMarketplace {
         &self,
         manifest: CapabilityManifest,
     ) -> RuntimeResult<()> {
-
         let id = manifest.id.clone();
 
         let catalog_manifest = manifest.clone();
@@ -1543,7 +1545,7 @@ impl CapabilityMarketplace {
                 if let Some(resolver) = registry.get_missing_capability_resolver() {
                     let mut context = std::collections::HashMap::new();
                     context.insert("source".to_string(), "marketplace_miss".to_string());
-                    
+
                     // Extract args for context if possible (best effort)
                     let args = match inputs {
                         Value::Vector(v) => v.clone(),
@@ -1551,16 +1553,17 @@ impl CapabilityMarketplace {
                         _ => vec![],
                     };
 
-                    if let Err(e) = resolver.handle_missing_capability(
-                        id.to_string(),
-                        args,
-                        context,
-                    ) {
-                        eprintln!("Warning: Failed to queue missing capability '{}': {}", id, e);
+                    if let Err(e) =
+                        resolver.handle_missing_capability(id.to_string(), args, context)
+                    {
+                        eprintln!(
+                            "Warning: Failed to queue missing capability '{}': {}",
+                            id, e
+                        );
                     }
                 }
             }
-            
+
             return Err(RuntimeError::UnknownCapability(id.to_string()));
         };
 
@@ -2187,6 +2190,81 @@ impl CapabilityMarketplace {
         Ok(written)
     }
 
+    /// Export capabilities to a single RTFS module file.
+    /// This writes multiple `(capability ...)` expressions into one file.
+    pub async fn export_capabilities_to_rtfs_module_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> RuntimeResult<usize> {
+        let caps = self.capabilities.read().await;
+        let mut written = 0usize;
+        let mut rtfs_content = String::new();
+
+        rtfs_content.push_str(";; CCOS Capability Module Export\n");
+        rtfs_content.push_str(&format!(";; Generated at: {}\n\n", chrono::Utc::now()));
+        rtfs_content.push_str("(do\n");
+
+        for cap in caps.values() {
+            // Convert to SerializableManifest first to filter out non-serializable ones
+            let serializable = match Option::<SerializableManifest>::from(cap) {
+                Some(s) => s,
+                None => {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Skipping non-serializable provider for capability {}",
+                            cap.id
+                        ));
+                    }
+                    continue;
+                }
+            };
+
+            // Re-convert to manifest to ensure it matches what we want to serialize
+            // (SerializableManifest is an intermediate step that ensures provider is compatible)
+            let manifest: CapabilityManifest = serializable.into();
+
+            // Try to find the implementation code or generate a default one
+            let implementation_code = manifest
+                .metadata
+                .get("rtfs_implementation")
+                .cloned()
+                .or_else(|| {
+                    // Try to reconstruct implementation from provider metadata
+                    match &manifest.provider {
+                        crate::capability_marketplace::types::ProviderType::Http(http) => Some(format!(
+                            "(fn [input] (call :http.request :method \"POST\" :url \"{}\" :body input))",
+                            http.base_url
+                        )),
+                        crate::capability_marketplace::types::ProviderType::MCP(mcp) => Some(format!(
+                            "(fn [input] (call :ccos.capabilities.mcp.call :server-url \"{}\" :tool-name \"{}\" :input input))",
+                            mcp.server_url, mcp.tool_name
+                        )),
+                        _ => None,
+                    }
+                })
+                .unwrap_or_else(|| {
+                    // Fallback stub
+                    "(fn [input] (error \"Implementation not available in export\"))".to_string()
+                });
+
+            let cap_rtfs = crate::synthesis::missing_capability_resolver::MissingCapabilityResolver::manifest_to_rtfs(
+                &manifest,
+                &implementation_code,
+            );
+
+            rtfs_content.push_str(&cap_rtfs);
+            rtfs_content.push_str("\n\n");
+            written += 1;
+        }
+
+        rtfs_content.push_str(")\n"); // Close the (do ...) block
+
+        std::fs::write(&path, rtfs_content)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write RTFS module export file: {}", e)))?;
+
+        Ok(written)
+    }
+
     /// Export serializable capabilities to a JSON file.
     /// Skips non-serializable providers (Local, Stream, Registry, Plugin).
     pub async fn export_capabilities_to_file<P: AsRef<Path>>(
@@ -2278,7 +2356,11 @@ impl CapabilityMarketplace {
             if !path.is_file() {
                 continue;
             }
-            if path.extension().and_then(|s| s.to_str()).map_or(true, |ext| ext != "rtfs") {
+            if path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map_or(true, |ext| ext != "rtfs")
+            {
                 continue;
             }
 
@@ -2330,5 +2412,4 @@ impl CapabilityMarketplace {
 
         Ok(loaded)
     }
-
 }
