@@ -695,7 +695,10 @@ impl CCOSEnvironment {
                         // Evaluate expression using the evaluator's environment directly
                         // We swap the environment out to pass it mutably, then put it back
                         // This ensures side effects (like defn) persist in the evaluator's environment
-                        let mut env = std::mem::replace(&mut evaluator.env, rtfs::runtime::environment::Environment::new());
+                        let mut env = std::mem::replace(
+                            &mut evaluator.env,
+                            rtfs::runtime::environment::Environment::new(),
+                        );
                         last_result = evaluator.evaluate_with_env(&expr, &mut env)?;
                         evaluator.env = env;
 
