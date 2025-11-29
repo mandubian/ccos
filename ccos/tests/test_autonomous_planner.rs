@@ -55,7 +55,8 @@ async fn test_autonomous_planner_with_simple_goal() -> Result<(), Box<dyn Error>
     if std::env::var("OPENROUTER_API_KEY").is_err() {
         // If stub, expect to see the plan being generated, even if execution fails meaningfully
         assert!(
-            stderr.contains("WARNING: Delegating arbiter is running with the stub LLM provider") || stdout.contains("call :system.time.get_current_ms"),
+            stderr.contains("WARNING: Delegating arbiter is running with the stub LLM provider")
+                || stdout.contains("call :system.time.get_current_ms"),
             "Stderr should indicate stub LLM or stdout should contain call to get_current_time_ms"
         );
         assert!(
@@ -65,11 +66,11 @@ async fn test_autonomous_planner_with_simple_goal() -> Result<(), Box<dyn Error>
     } else {
         // If real LLM, expect success and no failure messages
         assert!(
-            !stdout.contains("❌ Plan execution failed") && !stderr.contains("❌ Plan execution failed"),
+            !stdout.contains("❌ Plan execution failed")
+                && !stderr.contains("❌ Plan execution failed"),
             "Output should NOT contain explicit plan execution failure with real LLM"
         );
     }
-
 
     Ok(())
 }
