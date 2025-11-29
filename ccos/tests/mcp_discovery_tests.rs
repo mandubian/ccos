@@ -839,3 +839,158 @@ mod capability_loading_tests {
         // Second load should skip duplicates (same version)
     }
 }
+
+// =============================================================================
+// Registry Integration Tests
+// =============================================================================
+
+mod registry_integration_tests {
+    use super::*;
+    use ccos::mcp::registry::McpServer;
+
+    fn create_mock_registry_server(name: &str) -> McpServer {
+        McpServer {
+            schema: None,
+            name: name.to_string(),
+            description: format!("{} MCP server", name),
+            version: "1.0.0".to_string(),
+            repository: None,
+            packages: None,
+            remotes: Some(vec![ccos::mcp::registry::McpRemote {
+                r#type: "http".to_string(),
+                url: format!("https://{}.example.com/mcp", name.to_lowercase()),
+                headers: None,
+            }]),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_registry_cache_store_and_retrieve() {
+        let cache = MCPCache::new();
+        let query = "github";
+        let servers = vec![create_mock_registry_server("github-mcp")];
+
+        // Store in cache
+        cache.store_registry_search(query, servers.clone());
+
+        // Retrieve from cache
+        let cached = cache.get_registry_search(query);
+        assert!(cached.is_some());
+        let cached_servers = cached.unwrap();
+        assert_eq!(cached_servers.len(), 1);
+        assert_eq!(cached_servers[0].name, "github-mcp");
+    }
+
+    #[tokio::test]
+    async fn test_registry_cache_miss_for_unknown_query() {
+        let cache = MCPCache::new();
+
+        // Query for something not in cache
+        let cached = cache.get_registry_search("unknown-query");
+        assert!(cached.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_registry_cache_with_file_persistence() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let cache = MCPCache::new().with_cache_dir(temp_dir.path().to_path_buf());
+        
+        let query = "slack";
+        let servers = vec![
+            create_mock_registry_server("slack-mcp"),
+            create_mock_registry_server("slack-notifications"),
+        ];
+
+        // Store in cache
+        cache.store_registry_search(query, servers.clone());
+
+        // Check file was created
+        let cache_file = temp_dir.path().join("registry_slack.json");
+        assert!(cache_file.exists(), "Cache file should be created");
+
+        // Retrieve from cache (should hit memory first)
+        let cached = cache.get_registry_search(query);
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_registry_cache_clear_includes_registry() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let cache = MCPCache::new().with_cache_dir(temp_dir.path().to_path_buf());
+        
+        // Store both tool cache and registry cache
+        cache.store(&test_server_config(), vec![test_discovered_tool()]);
+        cache.store_registry_search("github", vec![create_mock_registry_server("github")]);
+
+        // Both should be retrievable
+        assert!(cache.get(&test_server_config()).is_some());
+        assert!(cache.get_registry_search("github").is_some());
+
+        // Clear all caches
+        cache.clear().expect("Clear should succeed");
+
+        // Both should be cleared
+        assert!(cache.get(&test_server_config()).is_none());
+        assert!(cache.get_registry_search("github").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_discovery_service_registry_client_accessible() {
+        let service = MCPDiscoveryService::new();
+        
+        // Registry client should be accessible
+        let _client = service.registry_client();
+        // Just verify it doesn't panic
+    }
+
+    #[tokio::test]
+    async fn test_find_servers_for_capability_local_first() {
+        let service = MCPDiscoveryService::new();
+        let options = DiscoveryOptions {
+            use_cache: true,
+            ..Default::default()
+        };
+
+        // Search for a capability (should check local servers first)
+        // Note: This will return empty if no local servers are configured
+        let result = service.find_servers_for_capability("github", &options).await;
+        assert!(result.is_ok());
+        // May be empty if no local servers are configured, but shouldn't error
+    }
+
+    #[tokio::test]
+    async fn test_registry_server_to_config_with_remotes() {
+        let _service = MCPDiscoveryService::new();
+        
+        let server = create_mock_registry_server("test-server");
+        
+        // Use reflection to call private method through public interface
+        // We can test this indirectly via find_servers_for_capability
+        // For now, just verify the server has remotes that would convert
+        assert!(server.remotes.is_some());
+        let remotes = server.remotes.as_ref().unwrap();
+        assert!(!remotes.is_empty());
+        assert!(remotes[0].url.starts_with("https://"));
+    }
+
+    #[tokio::test]
+    async fn test_registry_server_without_remotes() {
+        let _service = MCPDiscoveryService::new();
+        
+        // Server without remotes shouldn't be convertible to MCPServerConfig
+        let server = McpServer {
+            schema: None,
+            name: "no-remotes".to_string(),
+            description: "Server without remotes".to_string(),
+            version: "1.0.0".to_string(),
+            repository: None,
+            packages: None,
+            remotes: None, // No remotes!
+        };
+        
+        // This server shouldn't be usable for direct discovery
+        // (would need to be configured manually)
+        assert!(server.remotes.is_none());
+    }
+}

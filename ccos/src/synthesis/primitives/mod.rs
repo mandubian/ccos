@@ -13,6 +13,7 @@ use serde_json::Value as JsonValue;
 
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::discovery::need_extractor::CapabilityNeed;
+use crate::utils::value_conversion;
 use rtfs::ast::{Keyword, MapTypeEntry, TypeExpr};
 
 pub mod executor;
@@ -247,7 +248,8 @@ fn binding_map_from_type_expr(
                 if entry.optional {
                     ty = TypeExpr::Optional(Box::new(ty));
                 }
-                map.insert(format!(":{}", entry.key.0), ty);
+                let key_str = value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()));
+                map.insert(format!(":{}", key_str), ty);
             }
             map
         }

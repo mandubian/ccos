@@ -29,6 +29,7 @@ use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
 use crate::synthesis::server_trust::{
     create_default_trust_registry, ServerCandidate, ServerSelectionHandler, ServerTrustRegistry,
 };
+use crate::utils::value_conversion;
 use rtfs::ast::TypeExpr;
 use rtfs::ast::{
     Expression, Keyword as RtfsKeyword, Literal, MapKey, MapTypeEntry, PrimitiveType,
@@ -712,7 +713,7 @@ impl MissingCapabilityResolver {
         match expr {
             TypeExpr::Map { entries, wildcard } => {
                 for entry in entries {
-                    keys.insert(entry.key.0.clone());
+                    keys.insert(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone())));
                     Self::collect_map_keys(&entry.value_type, keys);
                 }
                 if let Some(wild) = wildcard {
@@ -889,11 +890,7 @@ impl MissingCapabilityResolver {
             Expression::Map(entries) => {
                 let mut map = HashMap::new();
                 for (key, value) in entries {
-                    let key_str = match key {
-                        MapKey::Keyword(keyword) => keyword.0.clone(),
-                        MapKey::String(s) => s.clone(),
-                        MapKey::Integer(i) => i.to_string(),
-                    };
+                    let key_str = value_conversion::map_key_to_string(&key);
                     map.insert(key_str, value);
                 }
 
@@ -929,7 +926,9 @@ impl MissingCapabilityResolver {
     fn literal_to_string(expr: &Expression) -> Option<String> {
         match expr {
             Expression::Literal(Literal::String(s)) => Some(s.clone()),
-            Expression::Literal(Literal::Keyword(k)) => Some(k.0.clone()),
+            Expression::Literal(Literal::Keyword(k)) => {
+                Some(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(k.clone())))
+            }
             Expression::Literal(Literal::Symbol(symbol)) => Some(symbol.0.clone()),
             Expression::Literal(Literal::Nil) => None,
             _ => None,
@@ -942,11 +941,7 @@ impl MissingCapabilityResolver {
             Expression::Map(entries) => {
                 let mut map = HashMap::new();
                 for (key, value) in entries {
-                    let key_str = match key {
-                        MapKey::Keyword(keyword) => keyword.0.clone(),
-                        MapKey::String(s) => s.clone(),
-                        MapKey::Integer(i) => i.to_string(),
-                    };
+                    let key_str = value_conversion::map_key_to_string(&key);
                     if let Some(val) = Self::literal_to_string(value) {
                         map.insert(key_str, val);
                     }
@@ -3819,7 +3814,7 @@ fn expression_ast_to_type_expr(expr: &Expression) -> Result<TypeExpr, String> {
                     Ok(kind)
                 } else {
                     Ok(TypeExpr::Primitive(PrimitiveType::Custom(RtfsKeyword(
-                        k.0.clone(),
+                        value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(k.clone())),
                     ))))
                 }
             }
@@ -3975,7 +3970,9 @@ fn expression_sequence_items(expr: &Expression) -> Option<&[Expression]> {
 
 fn expr_to_symbol_name(expr: &Expression) -> Option<String> {
     match expr {
-        Expression::Literal(Literal::Keyword(k)) => Some(k.0.clone()),
+        Expression::Literal(Literal::Keyword(k)) => {
+            Some(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(k.clone())))
+        }
         Expression::Literal(Literal::Symbol(s)) => Some(s.0.clone()),
         _ => None,
     }
