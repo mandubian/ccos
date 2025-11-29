@@ -1,4 +1,6 @@
-use ccos::examples_common::discovery_utils::{derive_server_name_from_repo_url, extract_suggestion_from_text};
+use ccos::examples_common::discovery_utils::{
+    derive_server_name_from_repo_url, extract_suggestion_from_text,
+};
 
 #[test]
 fn test_derive_server_name_from_repo_url_ok() {

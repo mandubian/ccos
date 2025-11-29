@@ -15,6 +15,7 @@ fn sample_manifest() -> CapabilityManifest {
             server_url: "https://example.com/mcp".to_string(),
             tool_name: "issues".to_string(),
             timeout_ms: 30_000,
+            auth_token: None,
         }),
         "1.0.0".to_string(),
     );
