@@ -21,7 +21,6 @@ use crate::capability_marketplace::CapabilityMarketplace;
 use crate::synthesis::mcp_introspector::MCPIntrospector;
 use crate::mcp::types::DiscoveredMCPTool;
 use crate::mcp::registry::MCPRegistryClient;
-use crate::mcp::discovery_session::{MCPServerInfo as SessionServerInfo, MCPSessionManager};
 
 /// MCP server info
 #[derive(Debug, Clone)]
@@ -60,30 +59,44 @@ use crate::catalog::CatalogService;
 use crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery;
 
 /// Runtime implementation of McpDiscovery using real MCP servers
+/// 
+/// This implementation always uses the unified `MCPDiscoveryService` for all
+/// discovery operations, providing consistent behavior with caching, rate limiting, etc.
 pub struct RuntimeMcpDiscovery {
     registry_client: MCPRegistryClient,
-    session_manager: Arc<MCPSessionManager>,
     marketplace: Arc<CapabilityMarketplace>,
     /// Optional catalog for indexing discovered tools
     catalog: Option<Arc<CatalogService>>,
     /// Local config discovery agent for resolving servers
     config_discovery: LocalConfigMcpDiscovery,
-    /// Unified discovery service (optional, uses legacy if not provided)
-    unified_service: Option<Arc<crate::mcp::core::MCPDiscoveryService>>,
+    /// Unified discovery service - always used
+    discovery_service: Arc<crate::mcp::core::MCPDiscoveryService>,
 }
 
 impl RuntimeMcpDiscovery {
     pub fn new(
-        session_manager: Arc<MCPSessionManager>,
         marketplace: Arc<CapabilityMarketplace>,
     ) -> Self {
         Self {
             registry_client: MCPRegistryClient::new(),
-            session_manager,
             marketplace,
             catalog: None,
             config_discovery: LocalConfigMcpDiscovery::new(),
-            unified_service: None,
+            discovery_service: Arc::new(crate::mcp::core::MCPDiscoveryService::new()),
+        }
+    }
+
+    /// Create with a custom discovery service
+    pub fn with_discovery_service(
+        marketplace: Arc<CapabilityMarketplace>,
+        discovery_service: Arc<crate::mcp::core::MCPDiscoveryService>,
+    ) -> Self {
+        Self {
+            registry_client: MCPRegistryClient::new(),
+            marketplace,
+            catalog: None,
+            config_discovery: LocalConfigMcpDiscovery::new(),
+            discovery_service,
         }
     }
 
@@ -92,60 +105,18 @@ impl RuntimeMcpDiscovery {
         self.catalog = Some(catalog);
         self
     }
-
-    /// Use unified discovery service
-    pub fn with_unified_service(
-        mut self,
-        unified_service: Arc<crate::mcp::core::MCPDiscoveryService>,
-    ) -> Self {
-        self.unified_service = Some(unified_service);
-        self
-    }
 }
 
 #[async_trait(?Send)]
 impl McpDiscovery for RuntimeMcpDiscovery {
     async fn get_server_for_domain(&self, domain: &DomainHint) -> Option<McpServerInfo> {
-        // Use unified service if available
-        if let Some(ref unified) = self.unified_service {
-            if let Some(config) = unified.get_server_for_domain(domain) {
-                return Some(McpServerInfo {
-                    name: config.name.clone(),
-                    url: config.endpoint.clone(),
-                    namespace: config.name.clone(),
-                });
-            }
-            return None;
+        if let Some(config) = self.discovery_service.get_server_for_domain(domain) {
+            return Some(McpServerInfo {
+                name: config.name.clone(),
+                url: config.endpoint.clone(),
+                namespace: config.name.clone(),
+            });
         }
-
-        // Legacy implementation
-        let hint = match domain {
-            DomainHint::GitHub => "github",
-            DomainHint::Slack => "slack",
-            DomainHint::FileSystem => "filesystem",
-            DomainHint::Database => "database",
-            DomainHint::Web => "web",
-            DomainHint::Email => "email",
-            DomainHint::Calendar => "calendar",
-            DomainHint::Generic => "general",
-            DomainHint::Custom(s) => s.as_str(),
-        };
-
-        // Get all known servers from centralized discovery
-        let configs = self.config_discovery.get_all_server_configs();
-
-        // Find matching server
-        for config in configs {
-            // Simple fuzzy match on name or endpoint
-            if config.name.contains(hint) || hint.contains(&config.name) {
-                return Some(McpServerInfo {
-                    name: config.name.clone(),
-                    url: config.endpoint.clone(),
-                    namespace: config.name.clone(),
-                });
-            }
-        }
-
         None
     }
 
@@ -159,101 +130,43 @@ impl McpDiscovery for RuntimeMcpDiscovery {
             protocol_version: "2024-11-05".to_string(),
         };
 
-        // Use unified service if available
-        if let Some(ref unified) = self.unified_service {
-            let options = crate::mcp::types::DiscoveryOptions {
-                introspect_output_schemas: false,
-                use_cache: true,
-                register_in_marketplace: false,
-                export_to_rtfs: false,
-                export_directory: None,
-                auth_headers: None,
-                ..Default::default()
-            };
+        let options = crate::mcp::types::DiscoveryOptions {
+            introspect_output_schemas: false,
+            use_cache: true,
+            register_in_marketplace: false,
+            export_to_rtfs: false,
+            export_directory: None,
+            auth_headers: None,
+            ..Default::default()
+        };
 
-            match unified.discover_tools(&config, &options).await {
-                Ok(discovered_tools) => {
-                    let tools = discovered_tools
-                        .into_iter()
-                        .map(|t| McpToolInfo {
-                            name: t.tool_name.clone(),
-                            description: t.description.unwrap_or_default(),
-                            input_schema: t.input_schema_json.clone(),
-                            server: server.clone(),
-                        })
-                        .collect();
-                    return Ok(tools);
-                }
-                Err(e) => {
-                    return Err(format!("Unified service discovery failed: {}", e));
-                }
+        match self.discovery_service.discover_tools(&config, &options).await {
+            Ok(discovered_tools) => {
+                let tools = discovered_tools
+                    .into_iter()
+                    .map(|t| McpToolInfo {
+                        name: t.tool_name.clone(),
+                        description: t.description.unwrap_or_default(),
+                        input_schema: t.input_schema_json.clone(),
+                        server: server.clone(),
+                    })
+                    .collect();
+                Ok(tools)
             }
+            Err(e) => Err(format!("Discovery service failed: {}", e)),
         }
-
-        // Legacy implementation
-        // Reuse the session manager from RuntimeMcpDiscovery
-        let provider = crate::capability_marketplace::mcp_discovery::MCPDiscoveryProvider::with_session_manager(
-            config,
-            self.session_manager.clone(),
-        );
-
-        // Discover raw tools
-        let raw_tools = provider
-            .discover_raw_tools()
-            .await
-            .map_err(|e| format!("MCP tools/list failed: {}", e))?;
-
-        let tools = raw_tools
-            .into_iter()
-            .map(|t| McpToolInfo {
-                name: t.name,
-                description: t.description.unwrap_or_default(),
-                input_schema: t.input_schema,
-                server: server.clone(),
-            })
-            .collect();
-
-        Ok(tools)
     }
 
     async fn register_tool(&self, tool: &McpToolInfo) -> Result<String, String> {
-        // Use unified service if available
-        if let Some(ref unified) = self.unified_service {
-            let config = crate::capability_marketplace::mcp_discovery::MCPServerConfig {
-                name: tool.server.name.clone(),
-                endpoint: tool.server.url.clone(),
-                auth_token: None,
-                timeout_seconds: 30,
-                protocol_version: "2024-11-05".to_string(),
-            };
+        let config = crate::capability_marketplace::mcp_discovery::MCPServerConfig {
+            name: tool.server.name.clone(),
+            endpoint: tool.server.url.clone(),
+            auth_token: None,
+            timeout_seconds: 30,
+            protocol_version: "2024-11-05".to_string(),
+        };
 
-            // Reconstruct DiscoveredMCPTool from McpToolInfo
-            let discovered_tool = DiscoveredMCPTool {
-                tool_name: tool.name.clone(),
-                description: Some(tool.description.clone()),
-                input_schema: tool
-                    .input_schema
-                    .as_ref()
-                    .and_then(|s| MCPIntrospector::type_expr_from_json_schema(s).ok()),
-                output_schema: None,
-                input_schema_json: tool.input_schema.clone(),
-            };
-
-            // Use unified service to create manifest
-            let manifest = unified.tool_to_manifest(&discovered_tool, &config);
-
-            // Register using unified service (handles marketplace + catalog)
-            unified
-                .register_capability(&manifest)
-                .await
-                .map_err(|e| format!("Failed to register capability: {}", e))?;
-
-            return Ok(manifest.id);
-        }
-
-        // Legacy implementation
-        let introspector = MCPIntrospector::new();
-
+        // Reconstruct DiscoveredMCPTool from McpToolInfo
         let discovered_tool = DiscoveredMCPTool {
             tool_name: tool.name.clone(),
             description: Some(tool.description.clone()),
@@ -261,60 +174,30 @@ impl McpDiscovery for RuntimeMcpDiscovery {
                 .input_schema
                 .as_ref()
                 .and_then(|s| MCPIntrospector::type_expr_from_json_schema(s).ok()),
-            output_schema: None, // We don't have output schema from tools/list usually, could introspect
+            output_schema: None,
             input_schema_json: tool.input_schema.clone(),
         };
 
-        // Create capability manifest
-        let introspection_result = crate::synthesis::mcp_introspector::MCPIntrospectionResult {
-            server_url: tool.server.url.clone(),
-            server_name: tool.server.name.clone(),
-            protocol_version: "2024-11-05".to_string(), // Assume recent version
-            tools: vec![discovered_tool.clone()],
-        };
+        // Use discovery service to create manifest
+        let manifest = self.discovery_service.tool_to_manifest(&discovered_tool, &config);
 
-        let manifest = introspector
-            .create_capability_from_mcp_tool(&discovered_tool, &introspection_result)
-            .map_err(|e| format!("Failed to create manifest: {}", e))?;
-
-        // Register in marketplace
-        self.marketplace
-            .register_capability_manifest(manifest.clone())
+        // Register using discovery service (handles marketplace + catalog)
+        self.discovery_service
+            .register_capability(&manifest)
             .await
             .map_err(|e| format!("Failed to register capability: {}", e))?;
-
-        // Index in catalog if available
-        if let Some(ref catalog) = self.catalog {
-            use crate::catalog::CatalogSource;
-            catalog.register_capability(&manifest, CatalogSource::Discovered);
-            log::debug!("[mcp] Indexed capability '{}' in catalog", manifest.id);
-        }
 
         Ok(manifest.id)
     }
 
     async fn list_known_servers(&self) -> Vec<McpServerInfo> {
-        // Use unified service if available
-        if let Some(ref unified) = self.unified_service {
-            return unified
-                .list_known_servers()
-                .into_iter()
-                .map(|config| McpServerInfo {
-                    name: config.name.clone(),
-                    url: config.endpoint.clone(),
-                    namespace: config.name.clone(),
-                })
-                .collect();
-        }
-
-        // Legacy implementation
-        self.config_discovery
-            .get_all_server_configs()
+        self.discovery_service
+            .list_known_servers()
             .into_iter()
             .map(|config| McpServerInfo {
                 name: config.name.clone(),
-                url: config.endpoint,
-                namespace: config.name,
+                url: config.endpoint.clone(),
+                namespace: config.name.clone(),
             })
             .collect()
     }

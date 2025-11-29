@@ -31,7 +31,6 @@ use crate::planner::modular_planner::resolution::{
 use crate::planner::modular_planner::{
     CatalogResolution, DecompositionStrategy, ModularPlanner, PatternDecomposition, PlannerConfig,
 };
-use crate::mcp::discovery_session::MCPSessionManager;
 use async_trait::async_trait;
 use rtfs::config::types::{AgentConfig, LlmProfile};
 use tokio::sync::Mutex as AsyncMutex;
@@ -414,14 +413,20 @@ impl ModularPlannerBuilder {
                 auth_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
             }
         }
-        let discovery_session_manager = Arc::new(MCPSessionManager::new(Some(auth_headers)));
+        
+        // Create discovery service with auth headers
+        let discovery_service = Arc::new(
+            crate::mcp::core::MCPDiscoveryService::with_auth_headers(Some(auth_headers))
+                .with_marketplace(env.ccos.get_capability_marketplace())
+                .with_catalog(env.ccos.get_catalog()),
+        );
 
-        // Create runtime MCP discovery using our real session pool
+        // Create runtime MCP discovery using the unified discovery service
         // Pass catalog so discovered tools are indexed for CatalogResolution
         let mcp_discovery = Arc::new(
-            RuntimeMcpDiscovery::new(
-                discovery_session_manager,
+            RuntimeMcpDiscovery::with_discovery_service(
                 env.ccos.get_capability_marketplace(),
+                discovery_service,
             )
             .with_catalog(env.ccos.get_catalog()),
         );
