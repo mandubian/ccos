@@ -2,21 +2,26 @@
 //!
 //! Discovers and resolves capabilities from MCP servers.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::path::PathBuf;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::{ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability};
-use crate::planner::modular_planner::types::{IntentType, SubIntent, DomainHint, ToolSummary, ApiAction};
-use crate::planner::modular_planner::decomposition::grounded_llm::{EmbeddingProvider, cosine_similarity};
+use crate::planner::modular_planner::decomposition::grounded_llm::{
+    cosine_similarity, EmbeddingProvider,
+};
+use crate::planner::modular_planner::types::{
+    ApiAction, DomainHint, IntentType, SubIntent, ToolSummary,
+};
 
 // Imports for RuntimeMcpDiscovery
-use crate::synthesis::mcp_registry_client::McpRegistryClient;
-use crate::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo as SessionServerInfo};
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::synthesis::mcp_introspector::{MCPIntrospector, DiscoveredMCPTool};
+use crate::synthesis::mcp_introspector::MCPIntrospector;
+use crate::mcp::types::DiscoveredMCPTool;
+use crate::mcp::registry::MCPRegistryClient;
+use crate::mcp::discovery_session::{MCPServerInfo as SessionServerInfo, MCPSessionManager};
 
 /// MCP server info
 #[derive(Debug, Clone)]
@@ -40,13 +45,13 @@ pub struct McpToolInfo {
 pub trait McpDiscovery: Send + Sync {
     /// Get MCP server for a domain hint
     async fn get_server_for_domain(&self, domain: &DomainHint) -> Option<McpServerInfo>;
-    
+
     /// Discover tools from an MCP server
     async fn discover_tools(&self, server: &McpServerInfo) -> Result<Vec<McpToolInfo>, String>;
-    
+
     /// Register a discovered tool as a capability
     async fn register_tool(&self, tool: &McpToolInfo) -> Result<String, String>;
-    
+
     /// List all known MCP servers
     async fn list_known_servers(&self) -> Vec<McpServerInfo>;
 }
@@ -56,13 +61,15 @@ use crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery
 
 /// Runtime implementation of McpDiscovery using real MCP servers
 pub struct RuntimeMcpDiscovery {
-    registry_client: McpRegistryClient,
+    registry_client: MCPRegistryClient,
     session_manager: Arc<MCPSessionManager>,
     marketplace: Arc<CapabilityMarketplace>,
     /// Optional catalog for indexing discovered tools
     catalog: Option<Arc<CatalogService>>,
     /// Local config discovery agent for resolving servers
     config_discovery: LocalConfigMcpDiscovery,
+    /// Unified discovery service (optional, uses legacy if not provided)
+    unified_service: Option<Arc<crate::mcp::core::MCPDiscoveryService>>,
 }
 
 impl RuntimeMcpDiscovery {
@@ -71,17 +78,27 @@ impl RuntimeMcpDiscovery {
         marketplace: Arc<CapabilityMarketplace>,
     ) -> Self {
         Self {
-            registry_client: McpRegistryClient::new(),
+            registry_client: MCPRegistryClient::new(),
             session_manager,
             marketplace,
             catalog: None,
             config_discovery: LocalConfigMcpDiscovery::new(),
+            unified_service: None,
         }
     }
-    
+
     /// Add catalog for indexing discovered tools
     pub fn with_catalog(mut self, catalog: Arc<CatalogService>) -> Self {
         self.catalog = Some(catalog);
+        self
+    }
+
+    /// Use unified discovery service
+    pub fn with_unified_service(
+        mut self,
+        unified_service: Arc<crate::mcp::core::MCPDiscoveryService>,
+    ) -> Self {
+        self.unified_service = Some(unified_service);
         self
     }
 }
@@ -89,6 +106,19 @@ impl RuntimeMcpDiscovery {
 #[async_trait(?Send)]
 impl McpDiscovery for RuntimeMcpDiscovery {
     async fn get_server_for_domain(&self, domain: &DomainHint) -> Option<McpServerInfo> {
+        // Use unified service if available
+        if let Some(ref unified) = self.unified_service {
+            if let Some(config) = unified.get_server_for_domain(domain) {
+                return Some(McpServerInfo {
+                    name: config.name.clone(),
+                    url: config.endpoint.clone(),
+                    namespace: config.name.clone(),
+                });
+            }
+            return None;
+        }
+
+        // Legacy implementation
         let hint = match domain {
             DomainHint::GitHub => "github",
             DomainHint::Slack => "slack",
@@ -103,7 +133,7 @@ impl McpDiscovery for RuntimeMcpDiscovery {
 
         // Get all known servers from centralized discovery
         let configs = self.config_discovery.get_all_server_configs();
-        
+
         // Find matching server
         for config in configs {
             // Simple fuzzy match on name or endpoint
@@ -129,6 +159,37 @@ impl McpDiscovery for RuntimeMcpDiscovery {
             protocol_version: "2024-11-05".to_string(),
         };
 
+        // Use unified service if available
+        if let Some(ref unified) = self.unified_service {
+            let options = crate::mcp::types::DiscoveryOptions {
+                introspect_output_schemas: false,
+                use_cache: true,
+                register_in_marketplace: false,
+                export_to_rtfs: false,
+                export_directory: None,
+                auth_headers: None,
+            };
+
+            match unified.discover_tools(&config, &options).await {
+                Ok(discovered_tools) => {
+                    let tools = discovered_tools
+                        .into_iter()
+                        .map(|t| McpToolInfo {
+                            name: t.tool_name.clone(),
+                            description: t.description.unwrap_or_default(),
+                            input_schema: t.input_schema_json.clone(),
+                            server: server.clone(),
+                        })
+                        .collect();
+                    return Ok(tools);
+                }
+                Err(e) => {
+                    return Err(format!("Unified service discovery failed: {}", e));
+                }
+            }
+        }
+
+        // Legacy implementation
         // Reuse the session manager from RuntimeMcpDiscovery
         let provider = crate::capability_marketplace::mcp_discovery::MCPDiscoveryProvider::with_session_manager(
             config,
@@ -136,28 +197,68 @@ impl McpDiscovery for RuntimeMcpDiscovery {
         );
 
         // Discover raw tools
-        let raw_tools = provider.discover_raw_tools().await
+        let raw_tools = provider
+            .discover_raw_tools()
+            .await
             .map_err(|e| format!("MCP tools/list failed: {}", e))?;
 
-        let tools = raw_tools.into_iter().map(|t| {
-            McpToolInfo {
+        let tools = raw_tools
+            .into_iter()
+            .map(|t| McpToolInfo {
                 name: t.name,
                 description: t.description.unwrap_or_default(),
                 input_schema: t.input_schema,
                 server: server.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(tools)
     }
 
     async fn register_tool(&self, tool: &McpToolInfo) -> Result<String, String> {
+        // Use unified service if available
+        if let Some(ref unified) = self.unified_service {
+            let config = crate::capability_marketplace::mcp_discovery::MCPServerConfig {
+                name: tool.server.name.clone(),
+                endpoint: tool.server.url.clone(),
+                auth_token: None,
+                timeout_seconds: 30,
+                protocol_version: "2024-11-05".to_string(),
+            };
+
+            // Reconstruct DiscoveredMCPTool from McpToolInfo
+            let discovered_tool = DiscoveredMCPTool {
+                tool_name: tool.name.clone(),
+                description: Some(tool.description.clone()),
+                input_schema: tool
+                    .input_schema
+                    .as_ref()
+                    .and_then(|s| MCPIntrospector::type_expr_from_json_schema(s).ok()),
+                output_schema: None,
+                input_schema_json: tool.input_schema.clone(),
+            };
+
+            // Use unified service to create manifest
+            let manifest = unified.tool_to_manifest(&discovered_tool, &config);
+
+            // Register using unified service (handles marketplace + catalog)
+            unified
+                .register_capability(&manifest)
+                .await
+                .map_err(|e| format!("Failed to register capability: {}", e))?;
+
+            return Ok(manifest.id);
+        }
+
+        // Legacy implementation
         let introspector = MCPIntrospector::new();
-        
+
         let discovered_tool = DiscoveredMCPTool {
             tool_name: tool.name.clone(),
             description: Some(tool.description.clone()),
-            input_schema: tool.input_schema.as_ref()
+            input_schema: tool
+                .input_schema
+                .as_ref()
                 .and_then(|s| MCPIntrospector::type_expr_from_json_schema(s).ok()),
             output_schema: None, // We don't have output schema from tools/list usually, could introspect
             input_schema_json: tool.input_schema.clone(),
@@ -171,15 +272,16 @@ impl McpDiscovery for RuntimeMcpDiscovery {
             tools: vec![discovered_tool.clone()],
         };
 
-        let manifest = introspector.create_capability_from_mcp_tool(
-            &discovered_tool,
-            &introspection_result
-        ).map_err(|e| format!("Failed to create manifest: {}", e))?;
+        let manifest = introspector
+            .create_capability_from_mcp_tool(&discovered_tool, &introspection_result)
+            .map_err(|e| format!("Failed to create manifest: {}", e))?;
 
         // Register in marketplace
-        self.marketplace.register_capability_manifest(manifest.clone()).await
+        self.marketplace
+            .register_capability_manifest(manifest.clone())
+            .await
             .map_err(|e| format!("Failed to register capability: {}", e))?;
-        
+
         // Index in catalog if available
         if let Some(ref catalog) = self.catalog {
             use crate::catalog::CatalogSource;
@@ -191,7 +293,23 @@ impl McpDiscovery for RuntimeMcpDiscovery {
     }
 
     async fn list_known_servers(&self) -> Vec<McpServerInfo> {
-        self.config_discovery.get_all_server_configs().into_iter()
+        // Use unified service if available
+        if let Some(ref unified) = self.unified_service {
+            return unified
+                .list_known_servers()
+                .into_iter()
+                .map(|config| McpServerInfo {
+                    name: config.name.clone(),
+                    url: config.endpoint.clone(),
+                    namespace: config.name.clone(),
+                })
+                .collect();
+        }
+
+        // Legacy implementation
+        self.config_discovery
+            .get_all_server_configs()
+            .into_iter()
             .map(|config| McpServerInfo {
                 name: config.name.clone(),
                 url: config.endpoint,
@@ -243,7 +361,7 @@ impl CachedToolInfo {
             },
         }
     }
-    
+
     pub fn to_tool_summary(&self) -> ToolSummary {
         // Infer domain from server name
         let domain = match self.server_name.to_lowercase().as_str() {
@@ -252,9 +370,12 @@ impl CachedToolInfo {
             s if s.contains("file") || s.contains("fs") => DomainHint::FileSystem,
             _ => DomainHint::Generic,
         };
-        
+
         // Infer action from tool name
-        let action = if self.name.starts_with("list_") || self.name.starts_with("get_all") || self.name.contains("_list") {
+        let action = if self.name.starts_with("list_")
+            || self.name.starts_with("get_all")
+            || self.name.contains("_list")
+        {
             ApiAction::List
         } else if self.name.starts_with("get_") || self.name.starts_with("read_") {
             ApiAction::Get
@@ -269,7 +390,7 @@ impl CachedToolInfo {
         } else {
             ApiAction::Other(self.name.clone())
         };
-        
+
         ToolSummary {
             name: self.name.clone(),
             description: self.description.clone(),
@@ -281,7 +402,7 @@ impl CachedToolInfo {
 }
 
 /// MCP resolution strategy.
-/// 
+///
 /// Discovers capabilities from MCP servers based on domain hints.
 pub struct McpResolution {
     discovery: Arc<dyn McpDiscovery>,
@@ -307,85 +428,93 @@ impl McpResolution {
             no_cache: false,
         }
     }
-    
+
     pub fn with_embedding(mut self, provider: Arc<dyn EmbeddingProvider>) -> Self {
         self.embedding_provider = Some(provider);
         self
     }
-    
+
     /// Enable file-based caching to specified directory
     pub fn with_cache_dir(mut self, dir: PathBuf) -> Self {
         self.cache_dir = Some(dir);
         self
     }
-    
+
     /// Disable loading from cache (will still save)
     pub fn with_no_cache(mut self, no_cache: bool) -> Self {
         self.no_cache = no_cache;
         self
     }
-    
+
     /// Load tools from file cache
     fn load_from_file_cache(&self, server_name: &str) -> Option<Vec<McpToolInfo>> {
         if self.no_cache {
             return None;
         }
-        
+
         let cache_dir = self.cache_dir.as_ref()?;
         let cache_file = cache_dir.join(format!("{}_tools.json", server_name));
-        
+
         if !cache_file.exists() {
             return None;
         }
-        
+
         let content = std::fs::read_to_string(&cache_file).ok()?;
         let cached: Vec<CachedToolInfo> = serde_json::from_str(&content).ok()?;
-        
+
         // Check cache age (24 hours max)
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        
+
         if let Some(first) = cached.first() {
             if now - first.cached_at > 86400 {
                 println!("   ⏰ Cache for {} is stale, will refresh", server_name);
                 return None;
             }
         }
-        
-        println!("   📂 Loaded {} tools from cache for {}", cached.len(), server_name);
+
+        println!(
+            "   📂 Loaded {} tools from cache for {}",
+            cached.len(),
+            server_name
+        );
         Some(cached.into_iter().map(|c| c.to_mcp_tool_info()).collect())
     }
-    
+
     /// Save tools to file cache
     fn save_to_file_cache(&self, server_name: &str, tools: &[McpToolInfo]) {
         let cache_dir = match &self.cache_dir {
             Some(d) => d,
             None => return,
         };
-        
+
         // Create directory if needed
         if let Err(e) = std::fs::create_dir_all(cache_dir) {
             log::warn!("Failed to create cache dir: {}", e);
             return;
         }
-        
+
         let cache_file = cache_dir.join(format!("{}_tools.json", server_name));
         let cached: Vec<CachedToolInfo> = tools.iter().map(CachedToolInfo::from).collect();
-        
+
         match serde_json::to_string_pretty(&cached) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&cache_file, json) {
                     log::warn!("Failed to write cache: {}", e);
                 } else {
-                    println!("   💾 Saved {} tools to cache: {}", tools.len(), cache_file.display());
+                    println!(
+                        "   💾 Saved {} tools to cache: {}",
+                        tools.len(),
+                        cache_file.display()
+                    );
                 }
             }
             Err(e) => log::warn!("Failed to serialize cache: {}", e),
         }
     }
-    
+
     /// Get or discover tools from cache
     async fn get_tools(&self, server: &McpServerInfo) -> Result<Vec<McpToolInfo>, ResolutionError> {
         // Check in-memory cache first
@@ -395,7 +524,7 @@ impl McpResolution {
                 return Ok(tools.clone());
             }
         }
-        
+
         // Check file cache
         if let Some(tools) = self.load_from_file_cache(&server.name) {
             // Store in memory cache
@@ -403,56 +532,63 @@ impl McpResolution {
             cache.insert(server.url.clone(), tools.clone());
             return Ok(tools);
         }
-        
+
         // Discover tools from server
         println!("   🔍 Discovering tools from MCP server: {}", server.name);
-        let tools = self.discovery.discover_tools(server).await
+        let tools = self
+            .discovery
+            .discover_tools(server)
+            .await
             .map_err(|e| ResolutionError::McpError(e))?;
-        
-        println!("   ✅ Discovered {} tools from {}", tools.len(), server.name);
-        
+
+        println!(
+            "   ✅ Discovered {} tools from {}",
+            tools.len(),
+            server.name
+        );
+
         // Save to file cache
         self.save_to_file_cache(&server.name, &tools);
-        
+
         // Cache in memory
         {
             let mut cache = self.tool_cache.lock().unwrap();
             cache.insert(server.url.clone(), tools.clone());
         }
-        
+
         Ok(tools)
     }
-    
+
     /// Score a tool against an intent
     async fn score_tool(&self, intent: &SubIntent, tool: &McpToolInfo) -> f64 {
         let query = format!("{}", intent.description);
-        
+
         // Use embeddings if available
         if let Some(ref emb) = self.embedding_provider {
             let query_emb = match emb.embed(&query).await {
                 Ok(e) => e,
                 Err(_) => return self.keyword_score(intent, tool),
             };
-            
+
             let tool_text = format!("{} {}", tool.name, tool.description);
             let tool_emb = match emb.embed(&tool_text).await {
                 Ok(e) => e,
                 Err(_) => return self.keyword_score(intent, tool),
             };
-            
+
             return cosine_similarity(&query_emb, &tool_emb);
         }
-        
+
         self.keyword_score(intent, tool)
     }
-    
+
     /// Keyword-based scoring
     fn keyword_score(&self, intent: &SubIntent, tool: &McpToolInfo) -> f64 {
         let tool_lower = format!("{} {}", tool.name, tool.description).to_lowercase();
         let desc_lower = intent.description.to_lowercase();
-        
+
         let mut score = 0.0;
-        
+
         // Word overlap
         let words: Vec<&str> = desc_lower.split_whitespace().collect();
         let mut matches = 0;
@@ -464,7 +600,7 @@ impl McpResolution {
         if !words.is_empty() {
             score = matches as f64 / words.len() as f64;
         }
-        
+
         // Action keyword boost
         if let IntentType::ApiCall { ref action } = intent.intent_type {
             for kw in action.matching_keywords() {
@@ -474,31 +610,35 @@ impl McpResolution {
                 }
             }
         }
-        
+
         // Resource type matching (issues, pull_requests, etc.)
         if let Some(resource) = intent.extracted_params.get("resource") {
             if tool.name.to_lowercase().contains(&resource.to_lowercase()) {
                 score += 0.25;
             }
         }
-        
+
         score.min(1.0)
     }
-    
+
     /// Extract arguments from intent to pass to tool
-    fn extract_arguments(&self, intent: &SubIntent, _tool: &McpToolInfo) -> HashMap<String, String> {
+    fn extract_arguments(
+        &self,
+        intent: &SubIntent,
+        _tool: &McpToolInfo,
+    ) -> HashMap<String, String> {
         let mut args = HashMap::new();
-        
+
         // Copy all non-internal params
         for (key, value) in &intent.extracted_params {
             if !key.starts_with('_') {
                 args.insert(key.clone(), value.clone());
             }
         }
-        
+
         // If tool has input schema, we could validate/transform args here
         // For now, pass through as-is
-        
+
         args
     }
 }
@@ -508,13 +648,13 @@ impl ResolutionStrategy for McpResolution {
     fn name(&self) -> &str {
         "mcp"
     }
-    
+
     fn can_handle(&self, intent: &SubIntent) -> bool {
         // Can handle API calls if domain hint suggests MCP
         if !matches!(intent.intent_type, IntentType::ApiCall { .. }) {
             return false;
         }
-        
+
         // Need a domain hint that maps to MCP servers
         if let Some(ref domain) = intent.domain_hint {
             !domain.likely_mcp_servers().is_empty()
@@ -522,42 +662,51 @@ impl ResolutionStrategy for McpResolution {
             false
         }
     }
-    
+
     async fn resolve(
         &self,
         intent: &SubIntent,
         _context: &ResolutionContext,
     ) -> Result<ResolvedCapability, ResolutionError> {
         // Get domain hint
-        let domain = intent.domain_hint.as_ref()
+        let domain = intent
+            .domain_hint
+            .as_ref()
             .ok_or_else(|| ResolutionError::NotFound("No domain hint".to_string()))?;
-        
+
         // Get MCP server for domain
-        let server = self.discovery.get_server_for_domain(domain).await
-            .ok_or_else(|| ResolutionError::NotFound(
-                format!("No MCP server for domain {:?}", domain)
-            ))?;
-        
+        let server = self
+            .discovery
+            .get_server_for_domain(domain)
+            .await
+            .ok_or_else(|| {
+                ResolutionError::NotFound(format!("No MCP server for domain {:?}", domain))
+            })?;
+
         // Discover tools
         let tools = self.get_tools(&server).await?;
-        
+
         if tools.is_empty() {
-            return Err(ResolutionError::NotFound(
-                format!("No tools found on MCP server: {}", server.name)
-            ));
+            return Err(ResolutionError::NotFound(format!(
+                "No tools found on MCP server: {}",
+                server.name
+            )));
         }
-        
+
         // Check if LLM already suggested a tool (grounded decomposition)
         if let Some(suggested_tool) = intent.extracted_params.get("_suggested_tool") {
             // Direct lookup by tool name - trust the LLM's grounded choice
             if let Some(tool) = tools.iter().find(|t| t.name == *suggested_tool) {
                 println!("   🎯 Using LLM-suggested tool: {}", suggested_tool);
-                
-                let capability_id = self.discovery.register_tool(tool).await
+
+                let capability_id = self
+                    .discovery
+                    .register_tool(tool)
+                    .await
                     .map_err(|e| ResolutionError::McpError(e))?;
-                
+
                 let arguments = self.extract_arguments(intent, tool);
-                
+
                 return Ok(ResolvedCapability::Remote {
                     capability_id,
                     server_url: tool.server.url.clone(),
@@ -566,10 +715,13 @@ impl ResolutionStrategy for McpResolution {
                     confidence: 1.0, // High confidence - LLM chose from exact tool list
                 });
             } else {
-                println!("   ⚠️ Suggested tool '{}' not found, falling back to scoring", suggested_tool);
+                println!(
+                    "   ⚠️ Suggested tool '{}' not found, falling back to scoring",
+                    suggested_tool
+                );
             }
         }
-        
+
         // Fallback: Score all tools (for non-grounded decomposition)
         let mut scored: Vec<(McpToolInfo, f64)> = Vec::new();
         for tool in tools {
@@ -578,25 +730,28 @@ impl ResolutionStrategy for McpResolution {
                 scored.push((tool, score));
             }
         }
-        
+
         // Sort by score
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        
+
         if scored.is_empty() {
             return Err(ResolutionError::NotFound(format!(
                 "No MCP tools above threshold for: {}",
                 intent.description
             )));
         }
-        
+
         let (best_tool, best_score) = scored.remove(0);
-        
+
         // Register the tool as a capability
-        let capability_id = self.discovery.register_tool(&best_tool).await
+        let capability_id = self
+            .discovery
+            .register_tool(&best_tool)
+            .await
             .map_err(|e| ResolutionError::McpError(e))?;
-        
+
         let arguments = self.extract_arguments(intent, &best_tool);
-        
+
         Ok(ResolvedCapability::Remote {
             capability_id,
             server_url: best_tool.server.url.clone(),
@@ -605,11 +760,11 @@ impl ResolutionStrategy for McpResolution {
             confidence: best_score,
         })
     }
-    
+
     async fn list_available_tools(&self, domain_hints: Option<&[DomainHint]>) -> Vec<ToolSummary> {
         // Try to get tools from all known MCP servers
         let mut all_tools = Vec::new();
-        
+
         let servers_to_query = if let Some(hints) = domain_hints {
             if hints.is_empty() {
                 // Empty hints -> unknown domain -> search ALL servers
@@ -622,11 +777,11 @@ impl ResolutionStrategy for McpResolution {
                         servers.push(s);
                     } else if let DomainHint::Generic = hint {
                         // If Generic is requested, maybe search everything too?
-                        // Or just rely on builtin. 
+                        // Or just rely on builtin.
                         // For now, let's assume Generic doesn't map to a specific MCP server unless configured.
                     }
                 }
-                
+
                 // If specific hints yielded nothing (e.g. unknown domain but not empty hints?), fallback to all
                 if servers.is_empty() {
                     self.discovery.list_known_servers().await
@@ -638,14 +793,14 @@ impl ResolutionStrategy for McpResolution {
             // No hints provided (None) -> search ALL servers
             self.discovery.list_known_servers().await
         };
-        
+
         for server in servers_to_query {
             // Deduplicate by URL to avoid querying same server multiple times
             if all_tools.iter().any(|t: &ToolSummary| {
-                // Check if we already have tools from this domain/server? 
+                // Check if we already have tools from this domain/server?
                 // Hard to check from ToolSummary alone without metadata.
                 // But `get_tools` handles caching, so it's cheap to call.
-                false 
+                false
             }) {
                 continue;
             }
@@ -658,7 +813,7 @@ impl ResolutionStrategy for McpResolution {
                         if let Err(e) = self.discovery.register_tool(tool).await {
                             log::warn!("Failed to register tool '{}': {}", tool.name, e);
                         }
-                        
+
                         // Convert to ToolSummary for grounded decomposition
                         let cached = CachedToolInfo::from(tool);
                         all_tools.push(cached.to_tool_summary());
@@ -669,11 +824,11 @@ impl ResolutionStrategy for McpResolution {
                 }
             }
         }
-        
+
         // Deduplicate tools by name/id
         all_tools.sort_by(|a, b| a.name.cmp(&b.name));
         all_tools.dedup_by(|a, b| a.name == b.name);
-        
+
         all_tools
     }
 }
@@ -681,9 +836,9 @@ impl ResolutionStrategy for McpResolution {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     struct MockMcpDiscovery;
-    
+
     #[async_trait(?Send)]
     impl McpDiscovery for MockMcpDiscovery {
         async fn get_server_for_domain(&self, domain: &DomainHint) -> Option<McpServerInfo> {
@@ -696,31 +851,32 @@ mod tests {
                 _ => None,
             }
         }
-        
-        async fn discover_tools(&self, _server: &McpServerInfo) -> Result<Vec<McpToolInfo>, String> {
-            Ok(vec![
-                McpToolInfo {
-                    name: "list_issues".to_string(),
-                    description: "List issues in a repository".to_string(),
-                    input_schema: None,
-                    server: McpServerInfo {
-                        name: "github".to_string(),
-                        url: "https://api.github.com/mcp".to_string(),
-                        namespace: "github".to_string(),
-                    },
+
+        async fn discover_tools(
+            &self,
+            _server: &McpServerInfo,
+        ) -> Result<Vec<McpToolInfo>, String> {
+            Ok(vec![McpToolInfo {
+                name: "list_issues".to_string(),
+                description: "List issues in a repository".to_string(),
+                input_schema: None,
+                server: McpServerInfo {
+                    name: "github".to_string(),
+                    url: "https://api.github.com/mcp".to_string(),
+                    namespace: "github".to_string(),
                 },
-            ])
+            }])
         }
-        
-    async fn register_tool(&self, tool: &McpToolInfo) -> Result<String, String> {
-        Ok(format!("mcp.{}.{}", tool.server.namespace, tool.name))
+
+        async fn register_tool(&self, tool: &McpToolInfo) -> Result<String, String> {
+            Ok(format!("mcp.{}.{}", tool.server.namespace, tool.name))
+        }
+
+        async fn list_known_servers(&self) -> Vec<McpServerInfo> {
+            vec![]
+        }
     }
 
-    async fn list_known_servers(&self) -> Vec<McpServerInfo> {
-        vec![]
-    }
-}
-    
     #[tokio::test]
     async fn test_mcp_resolution() {
         use crate::planner::modular_planner::types::ApiAction;
@@ -728,17 +884,22 @@ mod tests {
         let discovery = Arc::new(MockMcpDiscovery);
         let strategy = McpResolution::new(discovery);
         let context = ResolutionContext::new();
-        
+
         let intent = SubIntent::new(
             "List issues from repository",
-            IntentType::ApiCall { action: ApiAction::List },
+            IntentType::ApiCall {
+                action: ApiAction::List,
+            },
         )
         .with_domain(DomainHint::GitHub)
         .with_param("owner", "mandubian")
         .with_param("repo", "ccos");
-        
-        let result = strategy.resolve(&intent, &context).await.expect("Should resolve");
-        
+
+        let result = strategy
+            .resolve(&intent, &context)
+            .await
+            .expect("Should resolve");
+
         match result {
             ResolvedCapability::Remote { capability_id, .. } => {
                 assert_eq!(capability_id, "mcp.github.list_issues");

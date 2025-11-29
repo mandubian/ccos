@@ -1,11 +1,12 @@
 use crate::capability_marketplace::types::CapabilityDiscovery;
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
-use crate::synthesis::mcp_introspector::{DiscoveredMCPTool, MCPIntrospector};
-use crate::synthesis::mcp_session::{MCPSessionManager, MCPServerInfo, MCPSession};
+use crate::synthesis::mcp_introspector::MCPIntrospector;
+use crate::mcp::types::DiscoveredMCPTool;
+use crate::mcp::discovery_session::{MCPServerInfo, MCPSession, MCPSessionManager};
 use async_trait::async_trait;
 use chrono::Utc;
 use rtfs::ast::{
-    Expression, Keyword, Literal, MapKey, MapTypeEntry, PrimitiveType, Symbol, TypeExpr, TopLevel,
+    Expression, Keyword, Literal, MapKey, MapTypeEntry, PrimitiveType, Symbol, TopLevel, TypeExpr,
 };
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -99,6 +100,8 @@ pub struct RTFSModuleDefinition {
 pub struct MCPDiscoveryProvider {
     config: MCPServerConfig,
     session_manager: std::sync::Arc<MCPSessionManager>,
+    /// Optional unified discovery service (if provided, uses it; otherwise uses legacy implementation)
+    unified_service: Option<std::sync::Arc<crate::mcp::core::MCPDiscoveryService>>,
 }
 
 impl MCPDiscoveryProvider {
@@ -254,7 +257,11 @@ impl MCPDiscoveryProvider {
 
         let session_manager = std::sync::Arc::new(MCPSessionManager::new(auth_headers));
 
-        Ok(Self { config, session_manager })
+        Ok(Self {
+            config,
+            session_manager,
+            unified_service: None,
+        })
     }
 
     /// Create a new MCP discovery provider with an existing session manager
@@ -262,7 +269,23 @@ impl MCPDiscoveryProvider {
         config: MCPServerConfig,
         session_manager: std::sync::Arc<MCPSessionManager>,
     ) -> Self {
-        Self { config, session_manager }
+        Self {
+            config,
+            session_manager,
+            unified_service: None,
+        }
+    }
+
+    /// Create a new MCP discovery provider using the unified discovery service
+    pub fn with_unified_service(
+        config: MCPServerConfig,
+        unified_service: std::sync::Arc<crate::mcp::core::MCPDiscoveryService>,
+    ) -> Self {
+        Self {
+            config,
+            session_manager: std::sync::Arc::new(MCPSessionManager::new(None)), // Not used when unified service is provided
+            unified_service: Some(unified_service),
+        }
     }
 
     /// Establish a session with the MCP server
@@ -283,7 +306,8 @@ impl MCPDiscoveryProvider {
         let session = self.get_session().await?;
 
         // Use session manager to make request
-        let response = self.session_manager
+        let response = self
+            .session_manager
             .make_request(&session, "tools/list", serde_json::json!({}))
             .await?;
 
@@ -310,6 +334,30 @@ impl MCPDiscoveryProvider {
 
     /// Discover tools from the MCP server
     pub async fn discover_tools(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
+        // Use unified service if available
+        if let Some(ref unified) = self.unified_service {
+            let options = crate::mcp::types::DiscoveryOptions {
+                introspect_output_schemas: false, // Can be made configurable
+                use_cache: true,
+                register_in_marketplace: false,
+                export_to_rtfs: false,
+                export_directory: None,
+                auth_headers: self.build_auth_headers(),
+            };
+
+            let discovered_tools = unified.discover_tools(&self.config, &options).await?;
+
+            // Convert to manifests
+            let mut capabilities = Vec::new();
+            for tool in discovered_tools {
+                let manifest = unified.tool_to_manifest(&tool, &self.config);
+                capabilities.push(manifest);
+            }
+
+            return Ok(capabilities);
+        }
+
+        // Legacy implementation
         let tools = self.discover_raw_tools().await?;
 
         // Convert MCP tools to capability manifests
@@ -329,7 +377,8 @@ impl MCPDiscoveryProvider {
         let session = self.get_session().await?;
 
         // Use session manager to make request
-        let response = self.session_manager
+        let response = self
+            .session_manager
             .make_request(&session, "resources/list", serde_json::json!({}))
             .await?;
 
@@ -356,33 +405,40 @@ impl MCPDiscoveryProvider {
 
     /// Patch input schema for list_issues to fix known API inconsistencies
     fn patch_list_issues_schema(&self, mut input_schema: Option<TypeExpr>) -> Option<TypeExpr> {
-        if let Some(TypeExpr::Map { entries, wildcard: _ }) = &mut input_schema {
+        if let Some(TypeExpr::Map {
+            entries,
+            wildcard: _,
+        }) = &mut input_schema
+        {
             for entry in entries {
                 let key = entry.key.0.as_str();
                 match key {
                     "state" => {
                         // Force state to be Optional(Enum(OPEN, CLOSED))
                         // Discard whatever was there if it was wrong (e.g. containing ALL)
-                        entry.value_type = Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
-                            Literal::String("OPEN".to_string()),
-                            Literal::String("CLOSED".to_string()),
-                        ]))));
-                    },
+                        entry.value_type =
+                            Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
+                                Literal::String("OPEN".to_string()),
+                                Literal::String("CLOSED".to_string()),
+                            ]))));
+                    }
                     "direction" => {
                         // Force direction to be Optional(Enum(ASC, DESC))
-                        entry.value_type = Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
-                            Literal::String("ASC".to_string()),
-                            Literal::String("DESC".to_string()),
-                        ]))));
-                    },
+                        entry.value_type =
+                            Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
+                                Literal::String("ASC".to_string()),
+                                Literal::String("DESC".to_string()),
+                            ]))));
+                    }
                     "orderBy" => {
                         // Force orderBy to be Optional(Enum(CREATED_AT, UPDATED_AT, COMMENTS))
-                        entry.value_type = Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
-                            Literal::String("CREATED_AT".to_string()),
-                            Literal::String("UPDATED_AT".to_string()),
-                            Literal::String("COMMENTS".to_string()),
-                        ]))));
-                    },
+                        entry.value_type =
+                            Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
+                                Literal::String("CREATED_AT".to_string()),
+                                Literal::String("UPDATED_AT".to_string()),
+                                Literal::String("COMMENTS".to_string()),
+                            ]))));
+                    }
                     _ => {}
                 }
             }
@@ -802,10 +858,7 @@ impl MCPDiscoveryProvider {
         // Use the real RTFS parser instead of string hacks
         use rtfs::parser::parse;
         let top_levels = parse(&rtfs_content).map_err(|e| {
-            RuntimeError::Generic(format!(
-                "Failed to parse RTFS file '{}': {}",
-                file_path, e
-            ))
+            RuntimeError::Generic(format!("Failed to parse RTFS file '{}': {}", file_path, e))
         })?;
 
         // Try module format first, then individual capability format
@@ -839,7 +892,8 @@ impl MCPDiscoveryProvider {
                     );
 
                     for prop in &cap_def.properties {
-                        capability_map.insert(MapKey::Keyword(prop.key.clone()), prop.value.clone());
+                        capability_map
+                            .insert(MapKey::Keyword(prop.key.clone()), prop.value.clone());
                     }
 
                     // Extract input/output schemas if present
@@ -960,10 +1014,7 @@ impl MCPDiscoveryProvider {
         while i < items.len() {
             if let Expression::Literal(Literal::Keyword(key)) = &items[i] {
                 if i + 1 < items.len() {
-                    capability_map.insert(
-                        MapKey::Keyword(key.clone()),
-                        items[i + 1].clone(),
-                    );
+                    capability_map.insert(MapKey::Keyword(key.clone()), items[i + 1].clone());
                     i += 2;
                 } else {
                     i += 1;
@@ -990,7 +1041,10 @@ impl MCPDiscoveryProvider {
     }
 
     /// Extract module definition from parsed RTFS AST
-    fn extract_module_from_ast(&self, top_levels: Vec<TopLevel>) -> RuntimeResult<RTFSModuleDefinition> {
+    fn extract_module_from_ast(
+        &self,
+        top_levels: Vec<TopLevel>,
+    ) -> RuntimeResult<RTFSModuleDefinition> {
         // Find the mcp-capabilities-module definition
         // It could be in a Module definition or as an Expression with a def form
         for top_level in top_levels {
@@ -1016,7 +1070,10 @@ impl MCPDiscoveryProvider {
     }
 
     /// Try to extract module from a ModuleDefinition
-    fn extract_module_from_module_def(&self, module_def: &rtfs::ast::ModuleDefinition) -> RuntimeResult<RTFSModuleDefinition> {
+    fn extract_module_from_module_def(
+        &self,
+        module_def: &rtfs::ast::ModuleDefinition,
+    ) -> RuntimeResult<RTFSModuleDefinition> {
         // For now, return error as we need to implement proper module extraction
         Err(RuntimeError::Generic(
             "Module definition extraction not yet implemented".to_string(),
@@ -1037,7 +1094,10 @@ impl MCPDiscoveryProvider {
     }
 
     /// Extract module definition from the def body expression
-    fn extract_module_from_def_expression(&self, expr: &Expression) -> RuntimeResult<RTFSModuleDefinition> {
+    fn extract_module_from_def_expression(
+        &self,
+        expr: &Expression,
+    ) -> RuntimeResult<RTFSModuleDefinition> {
         let mut module_type = String::new();
         let mut server_config = MCPServerConfig {
             name: String::new(),
@@ -1052,61 +1112,69 @@ impl MCPDiscoveryProvider {
         // The body should be a Map expression
         if let Expression::Map(map) = expr {
             // Extract module-type
-            if let Some(Expression::Literal(Literal::String(s))) = 
-                map.get(&MapKey::Keyword(Keyword("module-type".to_string()))) {
+            if let Some(Expression::Literal(Literal::String(s))) =
+                map.get(&MapKey::Keyword(Keyword("module-type".to_string())))
+            {
                 module_type = s.clone();
             }
 
             // Extract generated-at
-            if let Some(Expression::Literal(Literal::String(s))) = 
-                map.get(&MapKey::Keyword(Keyword("generated-at".to_string()))) {
+            if let Some(Expression::Literal(Literal::String(s))) =
+                map.get(&MapKey::Keyword(Keyword("generated-at".to_string())))
+            {
                 generated_at = s.clone();
             }
 
             // Extract server-config
-            if let Some(Expression::Map(server_map)) = 
-                map.get(&MapKey::Keyword(Keyword("server-config".to_string()))) {
-                
-                if let Some(Expression::Literal(Literal::String(s))) = 
-                    server_map.get(&MapKey::Keyword(Keyword("name".to_string()))) {
+            if let Some(Expression::Map(server_map)) =
+                map.get(&MapKey::Keyword(Keyword("server-config".to_string())))
+            {
+                if let Some(Expression::Literal(Literal::String(s))) =
+                    server_map.get(&MapKey::Keyword(Keyword("name".to_string())))
+                {
                     server_config.name = s.clone();
                 }
 
-                if let Some(Expression::Literal(Literal::String(s))) = 
-                    server_map.get(&MapKey::Keyword(Keyword("endpoint".to_string()))) {
+                if let Some(Expression::Literal(Literal::String(s))) =
+                    server_map.get(&MapKey::Keyword(Keyword("endpoint".to_string())))
+                {
                     server_config.endpoint = s.clone();
                 }
 
-                if let Some(Expression::Literal(Literal::String(s))) = 
-                    server_map.get(&MapKey::Keyword(Keyword("auth-token".to_string()))) {
+                if let Some(Expression::Literal(Literal::String(s))) =
+                    server_map.get(&MapKey::Keyword(Keyword("auth-token".to_string())))
+                {
                     server_config.auth_token = Some(s.clone());
                 }
 
-                if let Some(Expression::Literal(Literal::Integer(n))) = 
-                    server_map.get(&MapKey::Keyword(Keyword("timeout-seconds".to_string()))) {
+                if let Some(Expression::Literal(Literal::Integer(n))) =
+                    server_map.get(&MapKey::Keyword(Keyword("timeout-seconds".to_string())))
+                {
                     server_config.timeout_seconds = *n as u64;
                 }
 
-                if let Some(Expression::Literal(Literal::String(s))) = 
-                    server_map.get(&MapKey::Keyword(Keyword("protocol-version".to_string()))) {
+                if let Some(Expression::Literal(Literal::String(s))) =
+                    server_map.get(&MapKey::Keyword(Keyword("protocol-version".to_string())))
+                {
                     server_config.protocol_version = s.clone();
                 }
             }
 
             // Extract capabilities array (can be List or Vector)
-            let cap_list = map.get(&MapKey::Keyword(Keyword("capabilities".to_string())))
+            let cap_list = map
+                .get(&MapKey::Keyword(Keyword("capabilities".to_string())))
                 .and_then(|expr| match expr {
                     Expression::List(list) => Some(list.as_slice()),
                     Expression::Vector(vec) => Some(vec.as_slice()),
                     _ => None,
                 });
-            
+
             if let Some(cap_list) = cap_list {
                 for cap_expr in cap_list {
                     if let Expression::Map(cap_map) = cap_expr {
-                        if let Some(capability_expr) = 
-                            cap_map.get(&MapKey::Keyword(Keyword("capability".to_string()))) {
-                            
+                        if let Some(capability_expr) =
+                            cap_map.get(&MapKey::Keyword(Keyword("capability".to_string())))
+                        {
                             let input_schema = cap_map
                                 .get(&MapKey::Keyword(Keyword("input-schema".to_string())))
                                 .and_then(|e| self.extract_type_expr(e));
@@ -1871,7 +1939,7 @@ impl MCPDiscoveryProvider {
 
     fn convert_string_to_type_expr(&self, s: &str) -> RuntimeResult<TypeExpr> {
         if s.ends_with('?') {
-            let base = &s[..s.len()-1];
+            let base = &s[..s.len() - 1];
             let base_type = self.convert_string_to_type_expr(base)?;
             return Ok(TypeExpr::Optional(Box::new(base_type)));
         }
@@ -1881,7 +1949,9 @@ impl MCPDiscoveryProvider {
             "number" | "float" => Ok(TypeExpr::Primitive(PrimitiveType::Float)),
             "boolean" | "bool" => Ok(TypeExpr::Primitive(PrimitiveType::Bool)),
             "any" => Ok(TypeExpr::Any),
-            _ => Ok(TypeExpr::Primitive(PrimitiveType::Custom(Keyword(s.to_string())))),
+            _ => Ok(TypeExpr::Primitive(PrimitiveType::Custom(Keyword(
+                s.to_string(),
+            )))),
         }
     }
 
@@ -1889,7 +1959,9 @@ impl MCPDiscoveryProvider {
     fn convert_rtfs_to_type_expr(&self, expr: &Expression) -> RuntimeResult<TypeExpr> {
         match expr {
             Expression::Symbol(symbol) => self.convert_string_to_type_expr(symbol.0.as_str()),
-            Expression::Literal(Literal::Keyword(k)) => self.convert_string_to_type_expr(k.0.as_str()),
+            Expression::Literal(Literal::Keyword(k)) => {
+                self.convert_string_to_type_expr(k.0.as_str())
+            }
             Expression::Map(map) => {
                 let mut entries = Vec::new();
                 for (key, value) in map {
@@ -1916,11 +1988,15 @@ impl MCPDiscoveryProvider {
                             for entry_expr in vec.iter().skip(1) {
                                 if let Expression::Vector(entry_vec) = entry_expr {
                                     if entry_vec.len() >= 2 {
-                                        if let Expression::Literal(Literal::Keyword(key_kw)) = &entry_vec[0] {
-                                            let value_type = self.convert_rtfs_to_type_expr(&entry_vec[1])?;
+                                        if let Expression::Literal(Literal::Keyword(key_kw)) =
+                                            &entry_vec[0]
+                                        {
+                                            let value_type =
+                                                self.convert_rtfs_to_type_expr(&entry_vec[1])?;
                                             // Treat as optional entry if the value type is optional
-                                            let is_optional = matches!(value_type, TypeExpr::Optional(_));
-                                            
+                                            let is_optional =
+                                                matches!(value_type, TypeExpr::Optional(_));
+
                                             entries.push(MapTypeEntry {
                                                 key: Keyword(key_kw.0.clone()),
                                                 value_type: Box::new(value_type),
@@ -1936,12 +2012,14 @@ impl MCPDiscoveryProvider {
                             });
                         }
                         "enum" => {
-                            let variants = vec.iter().skip(1).filter_map(|e| {
-                                match e {
+                            let variants = vec
+                                .iter()
+                                .skip(1)
+                                .filter_map(|e| match e {
                                     Expression::Literal(lit) => Some(lit.clone()),
-                                    _ => None
-                                }
-                            }).collect();
+                                    _ => None,
+                                })
+                                .collect();
                             return Ok(TypeExpr::Enum(variants));
                         }
                         "optional" => {

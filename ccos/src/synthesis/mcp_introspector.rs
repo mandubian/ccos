@@ -22,7 +22,8 @@
 //! 3. Terminate session when done
 
 use crate::capability_marketplace::types::CapabilityManifest;
-use crate::synthesis::mcp_session::{MCPServerInfo, MCPSessionManager};
+use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
+use crate::mcp::types::DiscoveredMCPTool;
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
 use rtfs::ast::{Keyword, MapTypeEntry, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
@@ -36,16 +37,6 @@ pub struct MCPIntrospectionResult {
     pub server_name: String,
     pub protocol_version: String,
     pub tools: Vec<DiscoveredMCPTool>,
-}
-
-/// A discovered MCP tool with its schema
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscoveredMCPTool {
-    pub tool_name: String,
-    pub description: Option<String>,
-    pub input_schema: Option<TypeExpr>,
-    pub output_schema: Option<TypeExpr>,
-    pub input_schema_json: Option<serde_json::Value>,
 }
 
 /// MCP introspector for discovering tools and generating RTFS capabilities
@@ -342,7 +333,8 @@ impl MCPIntrospector {
         );
 
         // Generate safe test inputs from input schema
-        let mut test_inputs = self.generate_safe_test_inputs(tool, false, input_overrides.clone())?;
+        let mut test_inputs =
+            self.generate_safe_test_inputs(tool, false, input_overrides.clone())?;
 
         // Create session manager
         let session_manager = MCPSessionManager::new(auth_headers);
@@ -841,19 +833,24 @@ impl MCPIntrospector {
                 mcp.server_url,
                 mcp.tool_name,
                 mcp.timeout_ms / 1000,
-                capability.metadata.get("mcp_protocol_version").map(|s| s.as_str()).unwrap_or("2024-11-05")
+                capability
+                    .metadata
+                    .get("mcp_protocol_version")
+                    .map(|s| s.as_str())
+                    .unwrap_or("2024-11-05")
             ),
             _ => "\"MCP\"".to_string(),
         };
 
-        let input_schema_json_entry = if let Some(schema) = capability.metadata.get("mcp_input_schema_json") {
-            // Escape backslashes first, then quotes, because the schema is a JSON string
-            // that will be embedded in an RTFS string literal.
-            let escaped = schema.replace("\\", "\\\\").replace("\"", "\\\"");
-            format!("\n    :mcp_input_schema_json \"{}\"", escaped)
-        } else {
-            String::new()
-        };
+        let input_schema_json_entry =
+            if let Some(schema) = capability.metadata.get("mcp_input_schema_json") {
+                // Escape backslashes first, then quotes, because the schema is a JSON string
+                // that will be embedded in an RTFS string literal.
+                let escaped = schema.replace("\\", "\\\\").replace("\"", "\\\"");
+                format!("\n    :mcp_input_schema_json \"{}\"", escaped)
+            } else {
+                String::new()
+            };
 
         format!(
             r#";; MCP Capability: {}
