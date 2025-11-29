@@ -21,6 +21,7 @@
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// MCP session information
 #[derive(Debug, Clone)]
@@ -50,15 +51,26 @@ pub struct MCPCapabilities {
 
 /// MCP session manager handles initialization and session lifecycle
 pub struct MCPSessionManager {
-    client: reqwest::Client,
+    client: Arc<reqwest::Client>,
     auth_headers: Option<HashMap<String, String>>,
 }
 
 impl MCPSessionManager {
-    /// Create a new MCP session manager
+    /// Create a new MCP session manager with a new HTTP client
     pub fn new(auth_headers: Option<HashMap<String, String>>) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: Arc::new(reqwest::Client::new()),
+            auth_headers,
+        }
+    }
+
+    /// Create a new MCP session manager with a shared HTTP client (for connection pooling)
+    pub fn with_client(
+        client: Arc<reqwest::Client>,
+        auth_headers: Option<HashMap<String, String>>,
+    ) -> Self {
+        Self {
+            client,
             auth_headers,
         }
     }

@@ -252,6 +252,55 @@ impl CapabilityManifest {
         self.agent_metadata = Some(metadata);
         self
     }
+
+    /// Get the last updated timestamp from metadata
+    pub fn last_updated(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.metadata
+            .get("last_updated")
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    }
+
+    /// Set the last updated timestamp in metadata
+    pub fn set_last_updated(mut self) -> Self {
+        self.metadata.insert(
+            "last_updated".to_string(),
+            chrono::Utc::now().to_rfc3339(),
+        );
+        self
+    }
+
+    /// Get the previous version from metadata
+    pub fn previous_version(&self) -> Option<String> {
+        self.metadata.get("previous_version").cloned()
+    }
+
+    /// Set the previous version in metadata (used when updating)
+    pub fn with_previous_version(mut self, previous_version: String) -> Self {
+        self.metadata.insert("previous_version".to_string(), previous_version);
+        self
+    }
+
+    /// Get version history from metadata
+    pub fn version_history(&self) -> Vec<String> {
+        self.metadata
+            .get("version_history")
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Add a version to the history
+    pub fn add_to_version_history(mut self, version: String) -> Self {
+        let mut history = self.version_history();
+        if !history.contains(&version) {
+            history.push(version);
+            self.metadata.insert(
+                "version_history".to_string(),
+                serde_json::to_string(&history).unwrap_or_default(),
+            );
+        }
+        self
+    }
 }
 
 /// Isolation policy for capability execution

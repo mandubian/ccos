@@ -18,6 +18,7 @@ use crate::mcp::types::*;
 use crate::mcp::cache::MCPCache;
 use crate::mcp::rate_limiter::{RateLimiter, RetryContext};
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
+use crate::capability_marketplace::versioning::{compare_versions, VersionComparison};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogService, CatalogSource};
 use crate::planner::modular_planner::types::DomainHint;
@@ -32,6 +33,8 @@ use std::sync::Arc;
 /// Provides a single API for discovering MCP capabilities across all CCOS modules.
 /// Consolidates discovery logic from resolution, marketplace, and introspection modules.
 pub struct MCPDiscoveryService {
+    /// Shared HTTP client for connection pooling and reuse
+    http_client: Arc<reqwest::Client>,
     session_manager: Arc<MCPSessionManager>,
     registry_client: MCPRegistryClient,
     config_discovery: LocalConfigMcpDiscovery,
@@ -47,8 +50,19 @@ pub struct MCPDiscoveryService {
 impl MCPDiscoveryService {
     /// Create a new MCP discovery service
     pub fn new() -> Self {
+        // Create a shared HTTP client with connection pooling
+        let http_client = Arc::new(
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(10) // Reuse connections
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()), // Fallback if builder fails
+        );
+        
         Self {
-            session_manager: Arc::new(MCPSessionManager::new(None)),
+            http_client: Arc::clone(&http_client),
+            session_manager: Arc::new(MCPSessionManager::with_client(http_client, None)),
             registry_client: MCPRegistryClient::new(),
             config_discovery: LocalConfigMcpDiscovery::new(),
             introspector: MCPIntrospector::new(),
@@ -61,8 +75,19 @@ impl MCPDiscoveryService {
 
     /// Create a new MCP discovery service with custom auth headers
     pub fn with_auth_headers(auth_headers: Option<HashMap<String, String>>) -> Self {
+        // Create a shared HTTP client with connection pooling
+        let http_client = Arc::new(
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .pool_max_idle_per_host(10) // Reuse connections
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()), // Fallback if builder fails
+        );
+        
         Self {
-            session_manager: Arc::new(MCPSessionManager::new(auth_headers)),
+            http_client: Arc::clone(&http_client),
+            session_manager: Arc::new(MCPSessionManager::with_client(http_client, auth_headers)),
             registry_client: MCPRegistryClient::new(),
             config_discovery: LocalConfigMcpDiscovery::new(),
             introspector: MCPIntrospector::new(),
@@ -229,8 +254,12 @@ impl MCPDiscoveryService {
         };
 
         // Create session manager with auth if needed
+        // Use shared HTTP client for connection pooling
         let session_manager = if auth_headers.is_some() {
-            Arc::new(MCPSessionManager::new(auth_headers.clone()))
+            Arc::new(MCPSessionManager::with_client(
+                Arc::clone(&self.http_client),
+                auth_headers.clone(),
+            ))
         } else {
             Arc::clone(&self.session_manager)
         };
@@ -293,9 +322,11 @@ impl MCPDiscoveryService {
             });
         }
 
-        // Output schema introspection (if requested)
-        // This is done after the initial discovery to avoid multiple sessions
-        if options.introspect_output_schemas && auth_headers.is_some() {
+        // Output schema introspection (if explicitly requested)
+        // This is expensive and skipped by default (lazy loading)
+        // Only run if both introspect_output_schemas is true AND lazy_output_schemas is false
+        let should_introspect = options.introspect_output_schemas && !options.lazy_output_schemas;
+        if should_introspect && auth_headers.is_some() {
             log::info!("🔍 Introspecting output schemas for {} tools...", discovered_tools.len());
             
             for tool in &mut discovered_tools {
@@ -422,11 +453,35 @@ impl MCPDiscoveryService {
         &self,
         manifest: &CapabilityManifest,
     ) -> RuntimeResult<()> {
-        // Register in marketplace if available
+        // Register or update in marketplace if available
         if let Some(ref marketplace) = self.marketplace {
-            marketplace
-                .register_capability_manifest(manifest.clone())
-                .await?;
+            // Use update_capability to handle version comparison
+            // This will register if new, or update with version tracking if existing
+            match marketplace.update_capability(manifest.clone(), false).await {
+                Ok(result) => {
+                    // Log version comparison if updated
+                    if result.updated {
+                        log::debug!(
+                            "Updated capability {}: {:?} (previous: {:?})",
+                            manifest.id,
+                            result.version_comparison,
+                            result.previous_version
+                        );
+                    }
+                }
+                Err(e) => {
+                    // If update fails due to breaking changes, log warning but continue
+                    // The capability won't be updated, but discovery continues
+                    log::warn!(
+                        "Failed to update capability {}: {}. Skipping update.",
+                        manifest.id, e
+                    );
+                    // Still try to register as new if it doesn't exist
+                    if let Err(reg_err) = marketplace.register_capability_manifest(manifest.clone()).await {
+                        log::warn!("Also failed to register as new: {}", reg_err);
+                    }
+                }
+            }
         }
 
         // Index in catalog if available
@@ -667,8 +722,11 @@ impl MCPDiscoveryService {
     ///
     /// This is a high-level method that:
     /// 1. Searches the registry for servers matching the query
-    /// 2. Attempts to discover tools from each found server
+    /// 2. Attempts to discover tools from each found server in parallel (with concurrency control)
     /// 3. Returns all discovered tools across all servers
+    ///
+    /// Parallel discovery is controlled by `options.max_parallel_discoveries` to
+    /// prevent overwhelming servers and getting rate-limited or banned.
     pub async fn discover_from_registry(
         &self,
         capability_query: &str,
@@ -676,37 +734,248 @@ impl MCPDiscoveryService {
     ) -> RuntimeResult<Vec<(MCPServerConfig, Vec<DiscoveredMCPTool>)>> {
         let servers = self.find_servers_for_capability(capability_query, options).await?;
         
-        let mut results = Vec::new();
+        if servers.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Use parallel discovery with concurrency control
+        let max_parallel = options.max_parallel_discoveries;
+        log::info!(
+            "🔍 Discovering from {} server(s) with max parallelism: {}",
+            servers.len(),
+            max_parallel
+        );
+
+        // Create a semaphore to limit concurrent discoveries
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_parallel));
+        let mut handles = Vec::new();
+
         for server_config in servers {
-            match self.discover_tools(&server_config, options).await {
-                Ok(tools) => {
-                    if !tools.is_empty() {
-                        log::info!(
-                            "✅ Discovered {} tools from '{}'",
-                            tools.len(),
-                            server_config.name
+            let permit = Arc::clone(&semaphore);
+            let service = self.clone_for_parallel();
+            let options_clone = options.clone();
+            let server_config_clone = server_config.clone();
+
+            let handle = tokio::spawn(async move {
+                // Acquire permit (blocks if max_parallel discoveries are in progress)
+                let _permit = permit.acquire().await.unwrap();
+                
+                match service.discover_tools(&server_config_clone, &options_clone).await {
+                    Ok(tools) => {
+                        if !tools.is_empty() {
+                            log::info!(
+                                "✅ Discovered {} tools from '{}'",
+                                tools.len(),
+                                server_config_clone.name
+                            );
+                            Ok((server_config_clone, tools))
+                        } else {
+                            Err(RuntimeError::Generic(format!(
+                                "No tools found from '{}'",
+                                server_config_clone.name
+                            )))
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "⚠️ Failed to discover from '{}': {}",
+                            server_config_clone.name,
+                            e
                         );
-                        results.push((server_config, tools));
+                        Err(e)
                     }
                 }
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all discoveries to complete and collect results
+        let mut results = Vec::new();
+        for handle in handles {
+            match handle.await {
+                Ok(Ok((server_config, tools))) => {
+                    results.push((server_config, tools));
+                }
+                Ok(Err(e)) => {
+                    // Already logged, continue with other servers
+                    log::debug!("Discovery task failed: {}", e);
+                }
                 Err(e) => {
-                    log::warn!(
-                        "⚠️ Failed to discover from '{}': {}",
-                        server_config.name,
-                        e
-                    );
-                    // Continue with other servers
+                    log::warn!("Discovery task panicked: {}", e);
                 }
             }
         }
 
+        log::info!(
+            "✅ Parallel discovery complete: {} server(s) succeeded, {} total tools",
+            results.len(),
+            results.iter().map(|(_, tools)| tools.len()).sum::<usize>()
+        );
+
         Ok(results)
+    }
+
+    /// Clone the service for parallel execution
+    /// This creates a lightweight clone that shares the same underlying resources
+    fn clone_for_parallel(&self) -> Self {
+        Self {
+            http_client: Arc::clone(&self.http_client),
+            session_manager: Arc::clone(&self.session_manager),
+            registry_client: MCPRegistryClient::new(), // Registry client is stateless
+            config_discovery: LocalConfigMcpDiscovery::new(), // Config discovery is stateless
+            introspector: MCPIntrospector::new(), // Introspector is stateless
+            cache: Arc::clone(&self.cache), // Share cache
+            rate_limiter: Arc::clone(&self.rate_limiter), // Share rate limiter
+            marketplace: self.marketplace.as_ref().map(Arc::clone),
+            catalog: self.catalog.as_ref().map(Arc::clone),
+        }
     }
 
     /// Get the registry client (for direct access when needed)
     pub fn registry_client(&self) -> &MCPRegistryClient {
         &self.registry_client
     }
+
+    // ================================
+    // Cache Warming Methods
+    // ================================
+
+    /// Warm the cache for a list of servers (on-demand)
+    ///
+    /// This method proactively discovers tools from the specified servers
+    /// and populates the cache. Useful for pre-loading frequently used servers.
+    ///
+    /// Discovery is done in parallel with concurrency control to avoid
+    /// overwhelming servers.
+    ///
+    /// # Arguments
+    /// * `servers` - List of server configurations to warm
+    /// * `options` - Discovery options (cache will be enabled automatically)
+    ///
+    /// # Returns
+    /// Statistics about the warming operation (successful/failed servers)
+    pub async fn warm_cache_for_servers(
+        &self,
+        servers: &[MCPServerConfig],
+        options: &DiscoveryOptions,
+    ) -> RuntimeResult<CacheWarmingStats> {
+        if servers.is_empty() {
+            return Ok(CacheWarmingStats {
+                total_servers: 0,
+                successful: 0,
+                failed: 0,
+                cached_tools: 0,
+            });
+        }
+
+        log::info!("🔥 Warming cache for {} server(s)...", servers.len());
+
+        // Create options with cache enabled
+        let mut warm_options = options.clone();
+        warm_options.use_cache = true; // Ensure cache is enabled
+        warm_options.introspect_output_schemas = false; // Skip expensive introspection during warming
+        warm_options.lazy_output_schemas = true; // Use lazy loading for warming
+
+        // Use parallel discovery with concurrency control
+        let max_parallel = warm_options.max_parallel_discoveries;
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_parallel));
+        let mut handles = Vec::new();
+
+        for server_config in servers {
+            let permit = Arc::clone(&semaphore);
+            let service = self.clone_for_parallel();
+            let options_clone = warm_options.clone();
+            let server_config_clone = server_config.clone();
+
+            let handle = tokio::spawn(async move {
+                let _permit = permit.acquire().await.unwrap();
+                
+                match service.discover_tools(&server_config_clone, &options_clone).await {
+                    Ok(tools) => {
+                        Ok((server_config_clone.name.clone(), tools.len()))
+                    }
+                    Err(e) => {
+                        log::debug!("Cache warming failed for '{}': {}", server_config_clone.name, e);
+                        Err((server_config_clone.name.clone(), e))
+                    }
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        // Collect results
+        let mut stats = CacheWarmingStats {
+            total_servers: servers.len(),
+            successful: 0,
+            failed: 0,
+            cached_tools: 0,
+        };
+
+        for handle in handles {
+            match handle.await {
+                Ok(Ok((server_name, tool_count))) => {
+                    stats.successful += 1;
+                    stats.cached_tools += tool_count;
+                    log::debug!("✅ Cache warmed for '{}': {} tools", server_name, tool_count);
+                }
+                Ok(Err((server_name, _))) => {
+                    stats.failed += 1;
+                    log::debug!("⚠️ Cache warming failed for '{}'", server_name);
+                }
+                Err(e) => {
+                    stats.failed += 1;
+                    log::warn!("Cache warming task panicked: {}", e);
+                }
+            }
+        }
+
+        log::info!(
+            "🔥 Cache warming complete: {}/{} servers successful, {} tools cached",
+            stats.successful,
+            stats.total_servers,
+            stats.cached_tools
+        );
+
+        Ok(stats)
+    }
+
+    /// Warm cache for all known configured servers (startup warming)
+    ///
+    /// This method discovers all servers from the local configuration
+    /// and warms the cache. Useful for startup initialization when you
+    /// want to pre-load all configured servers.
+    ///
+    /// # Arguments
+    /// * `options` - Discovery options (cache will be enabled automatically)
+    ///
+    /// # Returns
+    /// Statistics about the warming operation
+    pub async fn warm_cache_for_all_configured_servers(
+        &self,
+        options: &DiscoveryOptions,
+    ) -> RuntimeResult<CacheWarmingStats> {
+        let servers = self.config_discovery.get_all_server_configs();
+        log::info!(
+            "🔥 Warming cache for {} configured server(s)...",
+            servers.len()
+        );
+        self.warm_cache_for_servers(&servers, options).await
+    }
+}
+
+/// Statistics from cache warming operations
+#[derive(Debug, Clone)]
+pub struct CacheWarmingStats {
+    /// Total number of servers attempted
+    pub total_servers: usize,
+    /// Number of servers successfully warmed
+    pub successful: usize,
+    /// Number of servers that failed
+    pub failed: usize,
+    /// Total number of tools cached
+    pub cached_tools: usize,
 }
 
 impl Default for MCPDiscoveryService {

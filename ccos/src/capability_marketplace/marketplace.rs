@@ -5,6 +5,7 @@ use super::executors::{
 };
 use super::resource_monitor::ResourceMonitor;
 use super::types::*;
+use super::versioning::{compare_versions, detect_breaking_changes, VersionComparison};
 use crate::catalog::{CatalogService, CatalogSource};
 use crate::utils::value_conversion;
 use rtfs::ast::{MapKey, TypeExpr};
@@ -24,6 +25,19 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Result of updating a capability
+#[derive(Debug, Clone)]
+pub struct UpdateResult {
+    /// Whether the capability was updated (false if it was newly registered)
+    pub updated: bool,
+    /// Type of version change detected
+    pub version_comparison: VersionComparison,
+    /// List of breaking changes detected (empty if none)
+    pub breaking_changes: Vec<String>,
+    /// Previous version (None if newly registered)
+    pub previous_version: Option<String>,
+}
 
 /// Serializable representation of ProviderType (subset of variants without closures)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -802,6 +816,124 @@ impl CapabilityMarketplace {
         }
 
         Ok(())
+    }
+
+    /// Update a capability with version tracking and breaking change detection
+    ///
+    /// This method:
+    /// - Compares versions using semantic versioning
+    /// - Detects breaking changes
+    /// - Tracks version history
+    /// - Updates last_updated timestamp
+    /// - Emits audit events for version updates
+    pub async fn update_capability(
+        &self,
+        new_manifest: CapabilityManifest,
+        force: bool,
+    ) -> RuntimeResult<UpdateResult> {
+        let id = new_manifest.id.clone();
+        let mut caps = self.capabilities.write().await;
+
+        let existing = caps.get(&id).cloned();
+
+        match existing {
+            Some(existing_manifest) => {
+                // Compare versions
+                let version_comparison = match compare_versions(&existing_manifest.version, &new_manifest.version) {
+                    Ok(comp) => comp,
+                    Err(e) => {
+                        // If version parsing fails, treat as equal and log warning
+                        if let Some(cb) = &self.debug_callback {
+                            cb(format!(
+                                "Warning: Failed to parse versions for {}: {}. Treating as update.",
+                                id, e
+                            ));
+                        }
+                        VersionComparison::Equal
+                    }
+                };
+
+                // Detect breaking changes
+                let breaking_changes = detect_breaking_changes(&existing_manifest, &new_manifest)
+                    .unwrap_or_default();
+
+                // Check if update should be allowed
+                let is_breaking = !breaking_changes.is_empty()
+                    || matches!(version_comparison, VersionComparison::MajorUpdate);
+
+                if is_breaking && !force {
+                    return Err(RuntimeError::Generic(format!(
+                        "Breaking changes detected for capability '{}': {:?}. Use force=true to update anyway.",
+                        id, breaking_changes
+                    )));
+                }
+
+                // Prepare updated manifest with version metadata
+                let previous_version = existing_manifest.version.clone();
+                let mut updated_manifest = new_manifest;
+                updated_manifest = updated_manifest
+                    .with_previous_version(previous_version.clone())
+                    .add_to_version_history(previous_version.clone())
+                    .set_last_updated();
+
+                // Update the capability
+                caps.insert(id.clone(), updated_manifest.clone());
+
+                // Prepare audit event data
+                let mut audit_data = HashMap::new();
+                audit_data.insert("old_version".to_string(), previous_version.clone());
+                audit_data.insert("new_version".to_string(), updated_manifest.version.clone());
+                audit_data.insert(
+                    "version_comparison".to_string(),
+                    format!("{:?}", version_comparison),
+                );
+                audit_data.insert(
+                    "breaking_changes_count".to_string(),
+                    breaking_changes.len().to_string(),
+                );
+                if !breaking_changes.is_empty() {
+                    audit_data.insert(
+                        "breaking_changes".to_string(),
+                        serde_json::to_string(&breaking_changes).unwrap_or_default(),
+                    );
+                }
+
+                // Emit audit event
+                self.emit_capability_audit_event("capability_updated", &id, Some(audit_data))
+                    .await?;
+
+                // Refresh catalog
+                drop(caps);
+                self.refresh_catalog_index().await;
+
+                Ok(UpdateResult {
+                    updated: true,
+                    version_comparison,
+                    breaking_changes,
+                    previous_version: Some(previous_version),
+                })
+            }
+            None => {
+                // Capability doesn't exist, register it as new
+                let mut new_manifest = new_manifest.set_last_updated();
+                caps.insert(id.clone(), new_manifest.clone());
+                drop(caps);
+
+                // Register in catalog
+                self.index_capability_in_catalog(&new_manifest).await;
+
+                // Emit audit event
+                self.emit_capability_audit_event("capability_registered", &id, None)
+                    .await?;
+
+                Ok(UpdateResult {
+                    updated: false, // Was registered, not updated
+                    version_comparison: VersionComparison::Equal,
+                    breaking_changes: Vec::new(),
+                    previous_version: None,
+                })
+            }
+        }
     }
 
     /// Emit audit event to Causal Chain
@@ -2452,29 +2584,30 @@ impl CapabilityMarketplace {
         for cap_def in module.capabilities {
             match parser.rtfs_to_capability_manifest(&cap_def) {
                 Ok(manifest) => {
-                    let mut caps = self.capabilities.write().await;
-                    // Check for duplicates - skip if already exists with same version
-                    if let Some(existing) = caps.get(&manifest.id) {
-                        if existing.version == manifest.version {
+                    // Use update_capability for proper version tracking
+                    match self.update_capability(manifest, false).await {
+                        Ok(result) => {
+                            if result.updated {
+                                if let Some(cb) = &self.debug_callback {
+                                    cb(format!(
+                                        "Updated capability: {} (version comparison: {:?})",
+                                        result.previous_version.as_ref().unwrap_or(&"unknown".to_string()),
+                                        result.version_comparison
+                                    ));
+                                }
+                            }
+                            loaded += 1;
+                        }
+                        Err(e) => {
+                            // If update fails due to breaking changes, log and skip
                             if let Some(cb) = &self.debug_callback {
                                 cb(format!(
-                                    "Skipping duplicate capability: {} (same version)",
-                                    manifest.id
+                                    "Skipping capability update due to breaking changes: {}",
+                                    e
                                 ));
                             }
-                            continue;
-                        }
-                        if let Some(cb) = &self.debug_callback {
-                            cb(format!(
-                                "Updating capability: {} (version {} -> {})",
-                                manifest.id,
-                                existing.version,
-                                manifest.version
-                            ));
                         }
                     }
-                    caps.insert(manifest.id.clone(), manifest);
-                    loaded += 1;
                 }
                 Err(err) => {
                     if let Some(cb) = &self.debug_callback {

@@ -177,6 +177,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .missing_capabilities
             .verbose_logging
             .unwrap_or(args.verbose),
+        base_backoff_seconds: 60,
+        max_backoff_seconds: 3600,
+        high_risk_auto_resolution: false,
+        human_approval_timeout_hours: 24,
     };
 
     let checkpoint_archive = Arc::new(CheckpointArchive::new());
