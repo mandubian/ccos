@@ -230,57 +230,65 @@ impl CapabilityExplorer {
             ..Default::default()
         };
         
-        match self.discovery_service.discover_tools(config, &options).await {
-            Ok(tools) => {
-                println!("  {} Discovered {} tool(s)", "✓".green(), tools.len().to_string().white().bold());
+        // Use discover_and_export_tools which also registers in marketplace
+        match self.discovery_service.discover_and_export_tools(config, &options).await {
+            Ok(manifests) => {
+                println!("  {} Discovered {} tool(s)", "✓".green(), manifests.len().to_string().white().bold());
                 println!();
                 
                 // Filter by hint if provided
-                let filtered_tools: Vec<_> = if let Some(ref h) = hint {
+                let filtered_manifests: Vec<_> = if let Some(ref h) = hint {
                     let h_lower = h.to_lowercase();
-                    tools.iter()
-                        .filter(|t| {
-                            t.tool_name.to_lowercase().contains(&h_lower) ||
-                            t.description.as_ref().map(|d| d.to_lowercase().contains(&h_lower)).unwrap_or(false)
+                    manifests.iter()
+                        .filter(|m| {
+                            m.name.to_lowercase().contains(&h_lower) ||
+                            m.description.to_lowercase().contains(&h_lower)
                         })
                         .collect()
                 } else {
-                    tools.iter().collect()
+                    manifests.iter().collect()
                 };
                 
-                if hint.is_some() && filtered_tools.len() < tools.len() {
+                if hint.is_some() && filtered_manifests.len() < manifests.len() {
                     println!("  {} Filtered to {} matching tool(s) for hint: '{}'", 
                         "🔎".cyan(),
-                        filtered_tools.len().to_string().white().bold(),
+                        filtered_manifests.len().to_string().white().bold(),
                         hint.as_ref().unwrap().cyan()
                     );
                     println!();
                 }
                 
-                // Convert to manifests and store
-                for tool in &filtered_tools {
-                    let manifest = self.discovery_service.tool_to_manifest(tool, config);
-                    
+                // Store discovered tools and explicitly register in marketplace
+                for manifest in filtered_manifests {
                     // Print tool summary
-                    println!("    {} {}", "•".green(), tool.tool_name.white().bold());
-                    if let Some(desc) = &tool.description {
-                        let short_desc = if desc.len() > 60 {
-                            format!("{}...", &desc[..57])
-                        } else {
-                            desc.clone()
-                        };
+                    println!("    {} {}", "•".green(), manifest.name.white().bold());
+                    let short_desc = if manifest.description.len() > 60 {
+                        format!("{}...", &manifest.description[..57])
+                    } else {
+                        manifest.description.clone()
+                    };
+                    if !short_desc.is_empty() {
                         println!("      {}", short_desc.dimmed());
+                    }
+                    
+                    // Explicitly register in marketplace (in case discovery service didn't)
+                    if let Err(e) = self.marketplace.register_capability_manifest(manifest.clone()).await {
+                        // Ignore errors if already registered
+                        log::debug!("Registration note for {}: {}", manifest.id, e);
                     }
                     
                     // Store discovered tool
                     self.discovered_tools.push(DiscoveredTool {
-                        manifest,
+                        manifest: manifest.clone(),
                         server_name: config.name.clone(),
                         discovery_hint: hint.clone(),
                     });
                 }
                 
+                // Verify registration
+                let registered_count = self.marketplace.list_capabilities().await.len();
                 println!();
+                println!("  {} {} capabilities registered in marketplace", "✓".green(), registered_count.to_string().white().bold());
                 println!("  {} Use '{}' to see all discovered capabilities", "💡".cyan(), "list".yellow());
             }
             Err(e) => {
@@ -595,7 +603,16 @@ impl CapabilityExplorer {
         println!();
         
         // Execute the capability
-        println!("  {} Executing...", "⏳".yellow());
+        println!("  {} Executing {} ...", "⏳".yellow(), manifest.id.cyan());
+        
+        // Debug: Check if capability is registered
+        let registered_caps = self.marketplace.list_capabilities().await;
+        let is_registered = registered_caps.iter().any(|c| c.id == manifest.id);
+        println!("  {} Capability in marketplace: {} (total: {})", 
+            if is_registered { "✓".green() } else { "✗".red() },
+            is_registered,
+            registered_caps.len()
+        );
         
         match self.marketplace.execute_capability(&manifest.id, &inputs).await {
             Ok(result) => {
