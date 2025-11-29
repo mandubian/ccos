@@ -23,7 +23,7 @@ impl LocalConfigMcpDiscovery {
         // Check common locations
         let candidates = vec![
             root.join("capabilities/mcp/overrides.json"),
-            root.join("ccos/capabilities/mcp/overrides.json"),
+            root.join("capabilities/mcp/overrides.json"),
             root.parent()
                 .unwrap_or(&root)
                 .join("capabilities/mcp/overrides.json"),
