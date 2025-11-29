@@ -13,12 +13,12 @@
 //!    c. Persists and registers it.
 //! 6. We retry the plan, and it succeeds.
 
-use std::sync::Arc;
-use ccos::CCOS;
-use rtfs::runtime::security::RuntimeContext;
 use ccos::capabilities::{MCPSessionHandler, SessionPoolManager};
 use ccos::synthesis::continuous_resolution::{ContinuousResolutionLoop, ResolutionConfig};
 use ccos::synthesis::registration_flow::RegistrationFlow;
+use ccos::CCOS;
+use rtfs::runtime::security::RuntimeContext;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,11 +28,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Enable Feature Flags via Environment Variables
     std::env::set_var("CCOS_MISSING_CAPABILITY_ENABLED", "true");
     std::env::set_var("CCOS_AUTO_RESOLUTION_ENABLED", "true");
-    std::env::set_var("CCOS_RUNTIME_DETECTION_ENABLED", "true"); 
+    std::env::set_var("CCOS_RUNTIME_DETECTION_ENABLED", "true");
     std::env::set_var("CCOS_HUMAN_APPROVAL_REQUIRED", "false"); // Auto-approve for demo
     std::env::set_var("CCOS_MCP_REGISTRY_ENABLED", "true");
     std::env::set_var("CCOS_OUTPUT_SCHEMA_INTROSPECTION_ENABLED", "true");
-    
+
     // Ensure MCP Auth is available
     if std::env::var("MCP_AUTH_TOKEN").is_err() {
         eprintln!("⚠️ MCP_AUTH_TOKEN not set. Discovery might fail.");
@@ -40,15 +40,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Initialize CCOS
     println!("Initializing CCOS...");
-    let ccos = Arc::new(CCOS::new_with_agent_config_and_configs_and_debug_callback(
-        ccos::intent_graph::config::IntentGraphConfig::default(),
-        None,
-        Some(rtfs::config::types::AgentConfig::default()),
-        None
-    ).await?);
+    let ccos = Arc::new(
+        CCOS::new_with_agent_config_and_configs_and_debug_callback(
+            ccos::intent_graph::config::IntentGraphConfig::default(),
+            None,
+            Some(rtfs::config::types::AgentConfig::default()),
+            None,
+        )
+        .await?,
+    );
 
     let marketplace = ccos.get_capability_marketplace();
-    
+
     // Configure Session Pool for MCP
     let mut session_pool_mgr = SessionPoolManager::new();
     session_pool_mgr.register_handler("mcp", Arc::new(MCPSessionHandler::new()));
@@ -78,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arc::clone(resolver),
             registration_flow,
             Arc::clone(&marketplace),
-            config
+            config,
         ))
     } else {
         eprintln!("❌ Resolver not available!");
@@ -156,9 +159,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n🏁 Execution Finished");
     println!("   Success: {}", result2.success);
-    
+
     if result2.success {
-        println!("🎉 The missing capability was successfully discovered, synthesized, and executed!");
+        println!(
+            "🎉 The missing capability was successfully discovered, synthesized, and executed!"
+        );
     } else {
         println!("❌ Execution failed again.");
         if let Some(err) = result2.metadata.get("error") {
