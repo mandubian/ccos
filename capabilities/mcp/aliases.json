@@ -1,80 +1,13 @@
 {
   "entries": [
     {
-      "capability": "ccos.github.get_issues",
-      "server_name": "github/github-mcp",
-      "server_url": "https://api.githubcopilot.com/mcp/",
-      "tool_name": "list_issues",
+      "capability": "com.example.chat.send_message",
+      "server_name": "slack",
+      "server_url": "https://mcp.slack.example/api/",
+      "tool_name": "post_message",
       "input_remap": {
-        "user": "owner",
-        "project": "repo"
-      }
-    },
-    {
-      "capability": "ccos.github.github-mcp.issue_read",
-      "server_name": "github/github-mcp",
-      "server_url": "https://api.githubcopilot.com/mcp/",
-      "tool_name": "issue_read",
-      "input_remap": {}
-    },
-    {
-      "capability": "ccos.github.issues.list",
-      "server_name": "github/github-mcp",
-      "server_url": "https://api.githubcopilot.com/mcp/",
-      "tool_name": "list_issues",
-      "input_remap": {
-        "user": "owner",
-        "project": "repo"
-      }
-    },
-    {
-      "capability": "ccos.github.list_issues",
-      "server_name": "github/github-mcp",
-      "server_url": "https://api.githubcopilot.com/mcp/",
-      "tool_name": "list_issues",
-      "input_remap": {
-        "user": "owner",
-        "project": "repo"
-      }
-    },
-    {
-      "capability": "github.issues.list",
-      "server_name": "github/github-mcp",
-      "server_url": "https://api.githubcopilot.com/mcp/",
-      "tool_name": "list_issues",
-      "input_remap": {
-        "user": "owner",
-        "project": "repo"
-      }
-    },
-    {
-      "capability": "mcp.github.github-mcp.get_issues",
-      "server_name": "github/github-mcp",
-      "server_url": "https://api.githubcopilot.com/mcp/",
-      "tool_name": "list_issues",
-      "input_remap": {
-        "user": "owner",
-        "project": "repo"
-      }
-    },
-    {
-      "capability": "mcp.github.github-mcp.get_repository_issues",
-      "server_name": "github/github-mcp",
-      "server_url": "https://api.githubcopilot.com/mcp/",
-      "tool_name": "list_issues",
-      "input_remap": {
-        "user": "owner",
-        "project": "repo"
-      }
-    },
-    {
-      "capability": "mcp.github.github-mcp.list_issues",
-      "server_name": "github/github-mcp",
-      "server_url": "https://api.githubcopilot.com/mcp/",
-      "tool_name": "list_issues",
-      "input_remap": {
-        "user": "owner",
-        "project": "repo"
+        "text": "message",
+        "channel": "channel_id"
       }
     }
   ]
