@@ -6,40 +6,25 @@
 2. **Moved `DiscoveredMCPTool` to `mcp/types.rs`** - Core type now in unified module
 3. **Automatic RTFS Export** - Discovered capabilities auto-export to `capabilities/discovered/`
 4. **Storage Layers Documented** - Clear explanation of Registry vs Cache vs RTFS files
+5. **Output Schema Introspection (Option 1)** - Implemented introspection of output schemas by calling tools with safe inputs
+6. **Test & Validate Unified Service (Option 6)** - Comprehensive test suite with 26 tests in `ccos/tests/mcp_discovery_tests.rs`
+7. **Rate Limiting & Retry Policies (Option 3)** - Token bucket rate limiting with exponential backoff retry in `ccos/src/mcp/rate_limiter.rs`
 
 ---
 
 ## 🎯 Next Steps (Choose One)
 
-### Option 1: Output Schema Introspection ⚡ (Quick Win)
+### ~~Option 1: Output Schema Introspection~~ ✅ COMPLETED
 **Priority**: Medium | **Effort**: 2-3 hours | **Impact**: High
 
-**What**: Implement the TODO in `mcp/core.rs` to actually introspect output schemas by calling tools with safe inputs.
+**Status**: Implemented in `ccos/src/mcp/core.rs`. The `discover_tools()` method now:
+- Uses `MCPIntrospector::introspect_output_schema()` when `introspect_output_schemas` option is enabled
+- Calls tools with minimal/safe inputs to infer output schemas
+- Falls back gracefully when introspection fails
 
-**Current State**:
-```rust
-// TODO: Implement output schema introspection by calling tool with safe inputs
-let output_schema = if options.introspect_output_schemas {
-    None  // Not implemented yet
-} else {
-    None
-};
-```
-
-**Implementation**:
-- Use `MCPIntrospector::introspect_output_schema()` (already exists!)
-- Call tool with minimal/safe inputs
-- Parse response to infer output schema
-- Handle errors gracefully (some tools may require auth)
-
-**Files to Modify**:
-- `ccos/src/mcp/core.rs` (line ~202)
-- Test in `ccos/examples/test_unified_mcp_discovery.rs`
-
-**Benefits**:
-- Better capability schemas = better plan validation
-- Enables data flow adapters (future work)
-- Improves capability matching accuracy
+**Files Modified**:
+- `ccos/src/mcp/core.rs` - Added introspection call in tool discovery loop
+- `ccos/examples/mcp_discovery_demo.rs` - Updated demo with introspection example
 
 ---
 
@@ -70,31 +55,21 @@ let output_schema = if options.introspect_output_schemas {
 
 ---
 
-### Option 3: Rate Limiting & Retry Policies 🛡️ (Reliability)
+### ~~Option 3: Rate Limiting & Retry Policies~~ ✅ COMPLETED
 **Priority**: High | **Effort**: 4-6 hours | **Impact**: High
 
-**What**: Add rate limiting and retry logic to MCP discovery to handle API limits gracefully.
+**Status**: Implemented in `ccos/src/mcp/rate_limiter.rs`. Features include:
+- **Token bucket rate limiting** with configurable requests/second and burst size
+- **Per-server rate limiting** for different limits on different servers
+- **Exponential backoff retry** with configurable max retries, delays, and jitter
+- **Retryable error detection** for 429, 503, and timeout errors
 
-**Current State**:
-- No rate limiting
-- No retry logic
-- Fails immediately on errors
-
-**Implementation**:
-- Add rate limiter (token bucket or similar)
-- Implement exponential backoff retry
-- Handle 429 (Too Many Requests) responses
-- Add configurable retry policies
-
-**Files to Modify**:
-- `ccos/src/mcp/core.rs` (add rate limiter)
-- `ccos/src/mcp/discovery_session.rs` (retry logic)
-- Add `RateLimitConfig` to `DiscoveryOptions`
-
-**Benefits**:
-- More reliable discovery
-- Better handling of API limits
-- Prevents overwhelming servers
+**Files Created/Modified**:
+- `ccos/src/mcp/rate_limiter.rs` (NEW) - Complete rate limiting implementation
+- `ccos/src/mcp/types.rs` - Added `RateLimitConfig` and `RetryPolicy` structs
+- `ccos/src/mcp/core.rs` - Integrated rate limiter and retry loop in `discover_tools()`
+- `ccos/src/mcp/mod.rs` - Exported new types
+- `ccos/tests/mcp_discovery_tests.rs` - Added tests for new fields
 
 ---
 
@@ -153,30 +128,23 @@ let output_schema = if options.introspect_output_schemas {
 
 ---
 
-### Option 6: Test & Validate Unified Service 🧪 (Quality)
+### ~~Option 6: Test & Validate Unified Service~~ ✅ COMPLETED
 **Priority**: High | **Effort**: 3-4 hours | **Impact**: High
 
-**What**: Comprehensive testing of the unified MCP discovery service.
+**Status**: Comprehensive test suite created with 26 tests in `ccos/tests/mcp_discovery_tests.rs`.
 
-**Current State**:
-- Basic example exists (`test_unified_mcp_discovery.rs`)
-- But no comprehensive test suite
+**Test Coverage**:
+- Cache tests (memory and file-based, TTL, clear, sanitization)
+- Discovery options tests (defaults, custom configuration)
+- Discovered tool tests (serialization, complex schemas)
+- Error handling tests (missing directories, invalid JSON)
+- Discovery service tests (creation, marketplace/catalog integration)
+- Async tests (cache usage, capability registration)
+- Integration tests (RTFS export, full discovery workflow)
 
-**Implementation**:
-- Unit tests for `MCPDiscoveryService`
-- Integration tests with mock MCP servers
-- Test caching behavior
-- Test error handling
-- Test RTFS export/import
-
-**Files to Create/Modify**:
-- `ccos/tests/mcp_discovery_tests.rs` (new)
-- `ccos/examples/test_unified_mcp_discovery.rs` (enhance)
-
-**Benefits**:
-- Confidence in unified service
-- Catch regressions early
-- Better documentation through tests
+**Files Created**:
+- `ccos/tests/mcp_discovery_tests.rs` - Comprehensive test suite
+- `ccos/examples/mcp_discovery_demo.rs` - Enhanced demo with rate limiting
 
 ---
 

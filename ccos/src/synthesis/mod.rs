@@ -11,7 +11,6 @@ pub mod governance_policies;
 pub mod graphql_importer;
 pub mod http_wrapper;
 pub mod mcp_introspector;
-pub mod mcp_proxy_adapter;
 pub mod missing_capability_resolver;
 pub mod missing_capability_strategies;
 pub mod openapi_importer;

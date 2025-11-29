@@ -343,6 +343,7 @@ impl MCPDiscoveryProvider {
                 export_to_rtfs: false,
                 export_directory: None,
                 auth_headers: self.build_auth_headers(),
+                ..Default::default()
             };
 
             let discovered_tools = unified.discover_tools(&self.config, &options).await?;

@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use rtfs::ast::TypeExpr;
 use serde::{Deserialize, Serialize};
+use crate::mcp::rate_limiter::{RateLimitConfig, RetryPolicy};
 
 // Re-export existing types to avoid duplication
 pub use crate::capability_marketplace::mcp_discovery::{
@@ -39,7 +40,7 @@ pub struct MCPDiscoveryResult {
 }
 
 /// Options for tool discovery
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DiscoveryOptions {
     /// Whether to introspect output schemas (requires calling tools)
     pub introspect_output_schemas: bool,
@@ -53,5 +54,24 @@ pub struct DiscoveryOptions {
     pub export_directory: Option<String>,
     /// Custom auth headers (overrides server config)
     pub auth_headers: Option<HashMap<String, String>>,
+    /// Retry policy for failed requests
+    pub retry_policy: RetryPolicy,
+    /// Rate limit configuration
+    pub rate_limit: RateLimitConfig,
+}
+
+impl Default for DiscoveryOptions {
+    fn default() -> Self {
+        Self {
+            introspect_output_schemas: false,
+            use_cache: false,
+            register_in_marketplace: false,
+            export_to_rtfs: false,
+            export_directory: None,
+            auth_headers: None,
+            retry_policy: RetryPolicy::default(),
+            rate_limit: RateLimitConfig::default(),
+        }
+    }
 }
 

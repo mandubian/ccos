@@ -6,9 +6,10 @@ use crate::capabilities::capability::Capability;
 use crate::capabilities::provider::CapabilityProvider;
 use crate::capabilities::providers::{JsonProvider, LocalFileProvider};
 use crate::synthesis::missing_capability_resolver::MissingCapabilityResolver;
+use crate::utils::value_conversion;
 use reqwest::blocking::Client as BlockingHttpClient;
 use reqwest::{Method as HttpMethod, Url};
-use rtfs::ast::{Keyword, MapKey};
+use rtfs::ast::MapKey;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::microvm::{ExecutionContext, MicroVMConfig, MicroVMFactory};
 use rtfs::runtime::security::{RuntimeContext, SecurityAuthorizer};
@@ -382,92 +383,6 @@ impl LocalProvider {
         Ok(Value::Boolean(true))
     }
 
-    // Helper functions for JSON conversion
-    fn json_value_to_rtfs_value(json_value: &serde_json::Value) -> Value {
-        match json_value {
-            serde_json::Value::Null => Value::Nil,
-            serde_json::Value::Bool(b) => Value::Boolean(*b),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Value::Integer(i)
-                } else if let Some(f) = n.as_f64() {
-                    Value::Float(f)
-                } else {
-                    Value::Integer(0)
-                }
-            }
-            serde_json::Value::String(s) => {
-                if s.starts_with(':') {
-                    Value::Keyword(Keyword(s[1..].to_string()))
-                } else {
-                    Value::String(s.clone())
-                }
-            }
-            serde_json::Value::Array(arr) => {
-                let values: Vec<Value> = arr.iter().map(Self::json_value_to_rtfs_value).collect();
-                Value::Vector(values)
-            }
-            serde_json::Value::Object(obj) => {
-                let mut map = std::collections::HashMap::new();
-                for (key, value) in obj {
-                    let map_key = if key.starts_with(':') {
-                        rtfs::ast::MapKey::Keyword(Keyword(key[1..].to_string()))
-                    } else {
-                        rtfs::ast::MapKey::String(key.clone())
-                    };
-                    map.insert(map_key, Self::json_value_to_rtfs_value(value));
-                }
-                Value::Map(map)
-            }
-        }
-    }
-
-    fn rtfs_value_to_json_value(rtfs_value: &Value) -> RuntimeResult<serde_json::Value> {
-        match rtfs_value {
-            Value::Nil => Ok(serde_json::Value::Null),
-            Value::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
-            Value::Integer(i) => Ok(serde_json::Value::Number(serde_json::Number::from(*i))),
-            Value::Float(f) => serde_json::Number::from_f64(*f)
-                .map(serde_json::Value::Number)
-                .ok_or_else(|| RuntimeError::Generic("Invalid float value".to_string())),
-            Value::String(s) => Ok(serde_json::Value::String(s.clone())),
-            Value::Vector(vec) => {
-                let json_array: Result<Vec<serde_json::Value>, RuntimeError> =
-                    vec.iter().map(Self::rtfs_value_to_json_value).collect();
-                Ok(serde_json::Value::Array(json_array?))
-            }
-            Value::Map(map) => {
-                let mut json_obj = serde_json::Map::new();
-                for (key, value) in map {
-                    let key_str = match key {
-                        rtfs::ast::MapKey::String(s) => s.clone(),
-                        rtfs::ast::MapKey::Keyword(k) => format!(":{}", k.0),
-                        _ => continue,
-                    };
-                    json_obj.insert(key_str, Self::rtfs_value_to_json_value(value)?);
-                }
-                Ok(serde_json::Value::Object(json_obj))
-            }
-            Value::Keyword(k) => Ok(serde_json::Value::String(format!(":{}", k.0))),
-            Value::Symbol(s) => Ok(serde_json::Value::String(format!("{}", s.0))),
-            Value::Timestamp(ts) => Ok(serde_json::Value::String(format!("@{}", ts))),
-            Value::Uuid(uuid) => Ok(serde_json::Value::String(format!("@{}", uuid))),
-            Value::ResourceHandle(handle) => Ok(serde_json::Value::String(format!("@{}", handle))),
-            Value::Function(_) => Err(RuntimeError::Generic(
-                "Cannot serialize functions to JSON".to_string(),
-            )),
-            Value::FunctionPlaceholder(_) => Err(RuntimeError::Generic(
-                "Cannot serialize function placeholders to JSON".to_string(),
-            )),
-            Value::Error(e) => Err(RuntimeError::Generic(format!(
-                "Cannot serialize errors to JSON: {}",
-                e.message
-            ))),
-            Value::List(_) => Err(RuntimeError::Generic(
-                "Cannot serialize lists to JSON (use vectors instead)".to_string(),
-            )),
-        }
-    }
 }
 
 impl CapabilityProvider for LocalProvider {
@@ -1031,20 +946,8 @@ impl CapabilityRegistry {
 			},
 		);
 
-        // MCP operations with session management
-        self.capabilities.insert(
-            "ccos.mcp.call-with-session".to_string(),
-            Capability {
-                id: "ccos.mcp.call-with-session".to_string(),
-                arity: Arity::Variadic(1),
-                func: Arc::new(|_args| {
-                    // MCP session management must be executed through MicroVM isolation
-                    Err(RuntimeError::Generic(
-                        "MCP operations must be executed through MicroVM isolation. Use CapabilityRegistry::execute_capability_with_microvm()".to_string(),
-                    ))
-                }),
-            },
-        );
+        // MCP operations are now handled via SessionPoolManager and marketplace
+        // No need to register ccos.mcp.call-with-session here
     }
 
     fn register_agent_capabilities(&mut self) {
@@ -1344,11 +1247,6 @@ impl CapabilityRegistry {
                 "CapabilityRegistry::execute_in_microvm called for {} http_mocking_enabled={}",
                 capability_id, self.http_mocking_enabled
             );
-        }
-
-        // For MCP operations with session management
-        if capability_id == "ccos.mcp.call-with-session" {
-            return self.execute_mcp_with_session(&args);
         }
 
         // For HTTP operations, return a mock response for testing
@@ -1718,68 +1616,6 @@ impl CapabilityRegistry {
         Ok(Value::Map(response_map))
     }
 
-    /// Execute MCP call with proper session management
-    ///
-    /// Expected args format (as keyword pairs):
-    /// :server-url "https://api.githubcopilot.com/mcp/"
-    /// :tool-name "list_issues"
-    /// :arguments {:owner "..." :repo "..."}
-    /// :auth-token "optional_bearer_token" (optional, can use GITHUB_PAT env)
-    fn execute_mcp_with_session(&self, args: &[Value]) -> RuntimeResult<Value> {
-        eprintln!(
-            "CapabilityRegistry::execute_mcp_with_session called with args={:?}",
-            args
-        );
-
-        // Parse arguments
-        let pairs = self.collect_keyword_pairs(args)?;
-
-        let server_url = pairs
-            .iter()
-            .find(|(k, _)| k == "server-url")
-            .and_then(|(_, v)| v.as_string())
-            .ok_or_else(|| RuntimeError::Generic(":server-url required".to_string()))?;
-
-        let tool_name = pairs
-            .iter()
-            .find(|(k, _)| k == "tool-name")
-            .and_then(|(_, v)| v.as_string())
-            .ok_or_else(|| RuntimeError::Generic(":tool-name required".to_string()))?;
-
-        let arguments = pairs
-            .iter()
-            .find(|(k, _)| k == "arguments")
-            .map(|(_, v)| v.clone())
-            .unwrap_or(Value::Map(std::collections::HashMap::new()));
-
-        let auth_token = pairs
-            .iter()
-            .find(|(k, _)| k == "auth-token")
-            .and_then(|(_, v)| v.as_string());
-
-        // TODO: Implement async session management
-        // For now, return a helpful error message
-        let mut error_map = std::collections::HashMap::new();
-        error_map.insert(
-            MapKey::Keyword(rtfs::ast::Keyword("status".to_string())),
-            Value::String("not_implemented".to_string()),
-        );
-        error_map.insert(
-            MapKey::Keyword(rtfs::ast::Keyword("message".to_string())),
-            Value::String("MCP session management requires async runtime - use local MCP server via MCP_SERVER_URL".to_string())
-        );
-        error_map.insert(
-            MapKey::Keyword(rtfs::ast::Keyword("server-url".to_string())),
-            Value::String(server_url.to_string()),
-        );
-        error_map.insert(
-            MapKey::Keyword(rtfs::ast::Keyword("tool-name".to_string())),
-            Value::String(tool_name.to_string()),
-        );
-
-        Ok(Value::Map(error_map))
-    }
-
     fn parse_http_request(&self, args: &[Value]) -> RuntimeResult<HttpRequestConfig> {
         if args.is_empty() {
             return Err(RuntimeError::ArityMismatch {
@@ -1961,16 +1797,13 @@ fn extract_headers(value: &Value) -> RuntimeResult<Vec<(String, String)>> {
     }
 }
 
+// Use shared utilities from value_conversion module
 fn map_key_to_string(key: &MapKey) -> String {
-    match key {
-        MapKey::String(s) => s.clone(),
-        MapKey::Keyword(k) => k.0.clone(),
-        MapKey::Integer(i) => i.to_string(),
-    }
+    value_conversion::map_key_to_string(key)
 }
 
 fn strip_leading_colon(input: &str) -> String {
-    input.trim_start_matches(':').to_string()
+    value_conversion::strip_leading_colon(input)
 }
 
 struct HttpRequestConfig {

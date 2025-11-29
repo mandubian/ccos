@@ -2,15 +2,15 @@
 
 ## Quick Test
 
-Run the test example:
+Run the demo example:
 
 ```bash
-cargo run --example test_unified_mcp_discovery
+cargo run --example mcp_discovery_demo
 ```
 
 ## What It Tests
 
-The test example (`ccos/examples/test_unified_mcp_discovery.rs`) verifies:
+The demo example (`ccos/examples/mcp_discovery_demo.rs`) verifies:
 
 1. **Service Creation**: Creates the unified MCP discovery service
 2. **Server Listing**: Lists all configured MCP servers

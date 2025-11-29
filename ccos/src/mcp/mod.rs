@@ -13,12 +13,14 @@
 //! - **Registry**: `registry.rs` - MCP Registry API client
 //! - **Types**: `types.rs` - Shared types and structures
 //! - **Cache**: `cache.rs` - Caching layer for discovered tools
+//! - **Rate Limiter**: `rate_limiter.rs` - Rate limiting and retry policies
 
 pub mod core;
 pub mod discovery_session;
 pub mod registry;
 pub mod types;
 pub mod cache;
+pub mod rate_limiter;
 
 // Re-export main types with consistent naming (all caps for acronyms)
 pub use discovery_session::{
@@ -27,7 +29,8 @@ pub use discovery_session::{
 pub use registry::{MCPRegistryClient, McpServer};
 pub use types::*;
 
-// Re-export core service when implemented
-// // Re-export core service
-pub use core::MCPDiscoveryService;
+// Re-export rate limiter types
+pub use rate_limiter::{RateLimitConfig, RetryPolicy, RateLimiter, RetryContext};
 
+// Re-export core service
+pub use core::MCPDiscoveryService;

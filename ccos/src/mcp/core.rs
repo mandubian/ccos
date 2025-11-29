@@ -10,11 +10,13 @@
 //! - Manifest creation from discovered tools
 //! - Automatic registration in marketplace and catalog
 //! - Caching support for discovered tools
+//! - Rate limiting and retry policies
 
 use crate::mcp::discovery_session::{MCPSessionManager, MCPServerInfo};
 use crate::mcp::registry::MCPRegistryClient;
 use crate::mcp::types::*;
 use crate::mcp::cache::MCPCache;
+use crate::mcp::rate_limiter::{RateLimiter, RetryContext};
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogService, CatalogSource};
@@ -35,6 +37,7 @@ pub struct MCPDiscoveryService {
     config_discovery: LocalConfigMcpDiscovery,
     introspector: MCPIntrospector,
     cache: Arc<MCPCache>,
+    rate_limiter: Arc<RateLimiter>,
     /// Optional marketplace for automatic registration
     marketplace: Option<Arc<CapabilityMarketplace>>,
     /// Optional catalog for automatic indexing
@@ -50,6 +53,7 @@ impl MCPDiscoveryService {
             config_discovery: LocalConfigMcpDiscovery::new(),
             introspector: MCPIntrospector::new(),
             cache: Arc::new(MCPCache::new()),
+            rate_limiter: Arc::new(RateLimiter::new()),
             marketplace: None,
             catalog: None,
         }
@@ -63,6 +67,7 @@ impl MCPDiscoveryService {
             config_discovery: LocalConfigMcpDiscovery::new(),
             introspector: MCPIntrospector::new(),
             cache: Arc::new(MCPCache::new()),
+            rate_limiter: Arc::new(RateLimiter::new()),
             marketplace: None,
             catalog: None,
         }
@@ -83,7 +88,7 @@ impl MCPDiscoveryService {
     /// Discover tools from an MCP server
     ///
     /// This is the core discovery method that all modules should use.
-    /// It handles session management, caching, and schema conversion.
+    /// It handles session management, caching, rate limiting, retries, and schema conversion.
     pub async fn discover_tools(
         &self,
         server_config: &MCPServerConfig,
@@ -96,7 +101,89 @@ impl MCPDiscoveryService {
             }
         }
 
-        // Build auth headers (use custom if provided, otherwise from config, then env)
+        // Apply rate limiting if enabled
+        if options.rate_limit.enabled {
+            self.rate_limiter.set_server_config(&server_config.endpoint, options.rate_limit.clone());
+            self.rate_limiter.acquire_async(&server_config.endpoint).await;
+        }
+
+        // Set up retry context
+        let mut retry_ctx = RetryContext::new(options.retry_policy.clone());
+
+        // Attempt discovery with retries
+        loop {
+            match self.discover_tools_inner(server_config, options).await {
+                Ok(tools) => {
+                    retry_ctx.success();
+                    return Ok(tools);
+                }
+                Err(e) => {
+                    // Check if we should retry
+                    let should_retry = self.is_retryable_error(&e, &options.retry_policy);
+                    
+                    if should_retry {
+                        if let Some(delay) = retry_ctx.next_attempt(Some(e.to_string())) {
+                            log::warn!(
+                                "Discovery failed for {} (attempt {}), retrying in {:?}: {}",
+                                server_config.name,
+                                retry_ctx.attempt,
+                                delay,
+                                e
+                            );
+                            tokio::time::sleep(delay).await;
+                            
+                            // Re-acquire rate limit token for retry
+                            if options.rate_limit.enabled {
+                                self.rate_limiter.acquire_async(&server_config.endpoint).await;
+                            }
+                            continue;
+                        }
+                    }
+                    
+                    // No more retries or non-retryable error
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    /// Check if an error is retryable based on the retry policy
+    fn is_retryable_error(&self, error: &RuntimeError, policy: &crate::mcp::rate_limiter::RetryPolicy) -> bool {
+        let error_str = error.to_string().to_lowercase();
+        
+        // Check for rate limiting (429)
+        if error_str.contains("429") || error_str.contains("too many requests") || error_str.contains("rate limit") {
+            return policy.should_retry_status(429);
+        }
+        
+        // Check for server errors
+        if error_str.contains("500") || error_str.contains("internal server error") {
+            return policy.should_retry_status(500);
+        }
+        if error_str.contains("502") || error_str.contains("bad gateway") {
+            return policy.should_retry_status(502);
+        }
+        if error_str.contains("503") || error_str.contains("service unavailable") {
+            return policy.should_retry_status(503);
+        }
+        if error_str.contains("504") || error_str.contains("gateway timeout") {
+            return policy.should_retry_status(504);
+        }
+        
+        // Check for network errors (transient)
+        if error_str.contains("timeout") || error_str.contains("connection") || error_str.contains("network") {
+            return true;
+        }
+        
+        false
+    }
+
+    /// Inner discovery method (without retry logic)
+    async fn discover_tools_inner(
+        &self,
+        server_config: &MCPServerConfig,
+        options: &DiscoveryOptions,
+    ) -> RuntimeResult<Vec<DiscoveredMCPTool>> {
         let auth_headers = if let Some(ref custom_auth) = options.auth_headers {
             Some(custom_auth.clone())
         } else if let Some(ref token) = server_config.auth_token {
@@ -197,21 +284,36 @@ impl MCPDiscoveryService {
                 (None, None)
             };
 
-            // Output schema introspection (if requested)
-            let output_schema = if options.introspect_output_schemas {
-                // TODO: Implement output schema introspection by calling tool with safe inputs
-                None
-            } else {
-                None
-            };
-
             discovered_tools.push(DiscoveredMCPTool {
                 tool_name,
                 description,
                 input_schema,
-                output_schema,
+                output_schema: None, // Will be filled in below if introspection is enabled
                 input_schema_json,
             });
+        }
+
+        // Output schema introspection (if requested)
+        // This is done after the initial discovery to avoid multiple sessions
+        if options.introspect_output_schemas && auth_headers.is_some() {
+            log::info!("🔍 Introspecting output schemas for {} tools...", discovered_tools.len());
+            
+            for tool in &mut discovered_tools {
+                match self.introspector.introspect_output_schema(
+                    tool,
+                    &server_config.endpoint,
+                    &server_config.name,
+                    auth_headers.clone(),
+                    None, // No input overrides
+                ).await {
+                    Ok((schema, _sample)) => {
+                        tool.output_schema = schema;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to introspect output schema for {}: {}", tool.tool_name, e);
+                    }
+                }
+            }
         }
 
         // Cache the results

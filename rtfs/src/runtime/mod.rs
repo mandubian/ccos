@@ -4,7 +4,6 @@
 //! implemented in the submodules listed below.
 
 pub mod capabilities;
-pub mod capability_marketplace;
 pub mod environment;
 pub mod error;
 pub mod evaluator;
