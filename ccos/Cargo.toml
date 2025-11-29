@@ -65,9 +65,11 @@ yansi = "1.0"
 rand = "0.8"
 dashmap = "5.5"
 
-# TUI Visualization
+# TUI/CLI dependencies
 ratatui = { version = "0.26" }
 crossterm = { version = "0.27" }
+colored = "2.1"
+textwrap = "0.16"
 
 # Web server and websockets
 axum = { version = "0.7", features = ["ws"] }

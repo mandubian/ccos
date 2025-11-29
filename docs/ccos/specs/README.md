@@ -127,12 +127,15 @@ CCOS complements open protocols. External tools and agents appear as capabilitie
 
 1) Explore the vision and architecture
 - Documentation Hub: ./docs/doc_organization.md
-- CCOS Core Specifications (RTFS 2.0 aligned):
-  - System Architecture: ./docs/ccos/specs-new/000-ccos-architecture-new.md
-  - Intent Graph: ./docs/ccos/specs-new/001-intent-graph-new.md
-  - Plans & Orchestration: ./docs/ccos/specs-new/002-plans-and-orchestration-new.md
-  - Causal Chain: ./docs/ccos/specs-new/003-causal-chain-new.md
-  - Capabilities & Marketplace: ./docs/ccos/specs-new/004-capabilities-and-marketplace-new.md
+- CCOS Core Specifications:
+  - System Architecture: ./docs/ccos/specs/000-ccos-architecture.md
+  - Intent Graph: ./docs/ccos/specs/001-intent-graph.md
+  - Plans & Orchestration: ./docs/ccos/specs/002-plans-and-orchestration.md
+  - Causal Chain: ./docs/ccos/specs/003-causal-chain.md
+  - **Capability System**: ./docs/ccos/specs/030-capability-system-architecture.md
+  - **MCP Discovery**: ./docs/ccos/specs/031-mcp-discovery-unified-service.md
+  - **Missing Capability Resolution**: ./docs/ccos/specs/032-missing-capability-resolution.md
+  - **Importers & Synthesis**: ./docs/ccos/specs/033-capability-importers-and-synthesis.md
 
 2) Understand the RTFS language
 - RTFS 2.0 Spec Hub: ./docs/rtfs-2.0/specs/README.md
@@ -148,16 +151,17 @@ CCOS is active and evolving. The RTFS 2.0 migration and reentrance demo are merg
 
 | Component                 | Status            | Notes                                                |
 | ------------------------- | ----------------- | ---------------------------------------------------- |
-| Core Specifications       | Complete          | RTFS 2.0 aligned (specs-new)                         |
+| Core Specifications       | Complete          | RTFS 2.0 aligned                                     |
 | Intent Graph              | In Progress       | Persistence and relations                            |
 | Causal Chain              | Basic Complete    | Immutable ledger; replay hooks                       |
 | Orchestrator              | Basic Complete    | Yield-resume engine; deterministic execution         |
-| Capability System         | Basic Complete    | Local/HTTP caps; attestation flow maturing           |
+| Capability System         | Complete          | CapabilityMarketplace, domains/categories, MCP       |
+| MCP Discovery             | Complete          | Unified service with domain inference, caching       |
+| Missing Cap Resolution    | Complete          | 4 strategies, backoff, risk assessment               |
 | Governance Kernel         | Basic Complete    | Plan/yield validation; quotas/ACLs                   |
 | Delegation Engine         | Basic Complete    | Policy selection; future agent delegation ready      |
 | Arbiter (LLM Bridge)      | In Progress       | Constrained outputs; plan compilation pipeline       |
 | RTFS 2.0 Language         | In Progress       | Purity, yields, IR verification, reentrancy          |
-| Marketplace / GFM         | Planned           | Discovery and dynamic routing                         |
 
 ---
 
