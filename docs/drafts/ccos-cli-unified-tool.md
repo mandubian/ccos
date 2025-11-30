@@ -12,7 +12,7 @@
 | [#168](https://github.com/mandubian/ccos/issues/168) | Create CLI skeleton with clap subcommands | 1 | Done |
 | [#169](https://github.com/mandubian/ccos/issues/169) | Implement approval queue for external server discovery | 2 | Done |
 | [#170](https://github.com/mandubian/ccos/issues/170) | Add goal-driven discovery with external registry search | 3 | Done |
-| [#171](https://github.com/mandubian/ccos/issues/171) | Implement server health monitoring and auto-dismissal | 4 | Partial |
+| [#171](https://github.com/mandubian/ccos/issues/171) | Implement server health monitoring and auto-dismissal | 4 | Done |
 | [#172](https://github.com/mandubian/ccos/issues/172) | Port capability_explorer to CLI subcommands | 5 | Pending |
 
 ## Overview
