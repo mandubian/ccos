@@ -1,19 +1,19 @@
 # CCOS CLI: Unified Command-Line Tool
 
-**Status**: Planning  
+**Status**: Implementation (Phases 1-3 complete)  
 **Created**: 2025-11-30  
 **Umbrella Issue**: [#167](https://github.com/mandubian/ccos/issues/167)
 
 ## GitHub Issues
 
-| Issue | Title | Phase | Priority |
+| Issue | Title | Phase | Status |
 |-------|-------|-------|----------|
 | [#167](https://github.com/mandubian/ccos/issues/167) | [Umbrella] CCOS CLI: Unified Command-Line Tool | - | - |
-| [#168](https://github.com/mandubian/ccos/issues/168) | Create CLI skeleton with clap subcommands | 1 | P0 |
-| [#169](https://github.com/mandubian/ccos/issues/169) | Implement approval queue for external server discovery | 2 | P0 |
-| [#170](https://github.com/mandubian/ccos/issues/170) | Add goal-driven discovery with external registry search | 3 | P1 |
-| [#171](https://github.com/mandubian/ccos/issues/171) | Implement server health monitoring and auto-dismissal | 4 | P1 |
-| [#172](https://github.com/mandubian/ccos/issues/172) | Port capability_explorer to CLI subcommands | 5 | P2 |
+| [#168](https://github.com/mandubian/ccos/issues/168) | Create CLI skeleton with clap subcommands | 1 | Done |
+| [#169](https://github.com/mandubian/ccos/issues/169) | Implement approval queue for external server discovery | 2 | Done |
+| [#170](https://github.com/mandubian/ccos/issues/170) | Add goal-driven discovery with external registry search | 3 | Done |
+| [#171](https://github.com/mandubian/ccos/issues/171) | Implement server health monitoring and auto-dismissal | 4 | Partial |
+| [#172](https://github.com/mandubian/ccos/issues/172) | Port capability_explorer to CLI subcommands | 5 | Pending |
 
 ## Overview
 
