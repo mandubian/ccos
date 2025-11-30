@@ -38,6 +38,7 @@ pub use values::{Function, Value};
 
 use crate::ast::{DoExpr, Expression, Literal, TopLevel};
 use crate::parser;
+use crate::compiler::expander::MacroExpander;
 // IrStrategy is re-exported below; avoid duplicate local import
 use crate::runtime::pure_host::create_pure_host;
 use std::sync::Arc;
@@ -59,6 +60,12 @@ pub trait RTFSRuntime {
 pub trait RuntimeStrategy: std::fmt::Debug + 'static {
     fn run(&mut self, program: &Expression) -> Result<ExecutionOutcome, RuntimeError>;
     fn clone_box(&self) -> Box<dyn RuntimeStrategy>;
+    /// Optional: inject a MacroExpander instance into the runtime so macro
+    /// expansion is canonical across compiler and runtime paths. Default is
+    /// no-op for strategies that don't need it.
+    fn set_macro_expander(&mut self, _expander: MacroExpander) {
+        // Default: do nothing
+    }
 }
 
 impl Clone for Box<dyn RuntimeStrategy> {
@@ -86,6 +93,12 @@ impl RuntimeStrategy for TreeWalkingStrategy {
 
     fn clone_box(&self) -> Box<dyn RuntimeStrategy> {
         Box::new(TreeWalkingStrategy::new(self.evaluator.clone()))
+    }
+
+    fn set_macro_expander(&mut self, expander: MacroExpander) {
+        // Forward the injected expander into the evaluator so it uses the
+        // shared MacroExpander instance instead of creating its own.
+        self.evaluator.set_macro_expander(expander);
     }
 }
 
@@ -119,7 +132,7 @@ impl Runtime {
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-        let evaluator = Evaluator::new(Arc::clone(&module_registry), security_context, host);
+            let evaluator = Evaluator::new(Arc::clone(&module_registry), security_context, host, crate::compiler::expander::MacroExpander::default());
         let strategy = Box::new(TreeWalkingStrategy::new(evaluator));
         Self::new(strategy)
     }
@@ -133,7 +146,7 @@ impl Runtime {
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-        let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
+            let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host, crate::compiler::expander::MacroExpander::default());
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!(
@@ -158,7 +171,7 @@ impl Runtime {
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-        let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host);
+            let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host, crate::compiler::expander::MacroExpander::default());
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!(
@@ -187,7 +200,7 @@ impl IrWithFallbackStrategy {
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-        let evaluator = Evaluator::new(Arc::clone(&module_registry), security_context, host);
+    let evaluator = Evaluator::new(Arc::clone(&module_registry), security_context, host, crate::compiler::expander::MacroExpander::default());
         let ast_strategy = TreeWalkingStrategy::new(evaluator);
 
         Self {
@@ -210,6 +223,12 @@ impl RuntimeStrategy for IrWithFallbackStrategy {
 
     fn clone_box(&self) -> Box<dyn RuntimeStrategy> {
         Box::new(self.clone())
+    }
+
+    fn set_macro_expander(&mut self, expander: MacroExpander) {
+        // Forward to both strategies so they share the same MacroExpander.
+        self.ir_strategy.set_macro_expander(expander.clone());
+        self.ast_strategy.set_macro_expander(expander);
     }
 }
 

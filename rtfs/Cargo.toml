@@ -72,3 +72,7 @@ wat = "1.0"
 tempfile = "3.8"
 filetime = "0.2"
 
+[[test]]
+name = "test_macros"
+path = "tests/test_macros.rs"
+

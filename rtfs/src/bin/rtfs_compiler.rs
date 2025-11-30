@@ -164,6 +164,7 @@ impl From<RuntimeType> for Box<dyn RuntimeStrategy> {
                     std::sync::Arc::new(module_registry),
                     rtfs::runtime::security::RuntimeContext::full(),
                     host,
+                    rtfs::compiler::expander::MacroExpander::default(),
                 );
                 Box::new(rtfs::runtime::TreeWalkingStrategy::new(evaluator))
             }
@@ -236,7 +237,7 @@ fn main() {
 
     // Phase 1: Parsing
     let parse_start = Instant::now();
-    let parsed_items = match parse_with_enhanced_errors(
+    let mut parsed_items = match parse_with_enhanced_errors(
         &input_content.content,
         Some(&input_content.source_name),
     ) {
@@ -354,13 +355,39 @@ fn main() {
     }
 
     // Phase 2: Process top-level items
+    // Expand macros across top-level items early so later phases (IR
+    // conversion / execution) don't need to repeatedly reconstruct a
+    // persistent expander. This centralizes expansion and ensures
+    // defmacro declarations are available for subsequent top-level items.
+    // Expand top-levels and capture the MacroExpander used so we can reuse
+    // the same macro registry during later runtime strategy injection.
+    let mut macro_expander = rtfs::compiler::expander::MacroExpander::default();
+    match rtfs::compiler::expander::expand_top_levels(&parsed_items) {
+        Ok((expanded, expander)) => {
+            if args.verbose {
+                println!("📄 Expanded top-level AST (macros applied)");
+            }
+            parsed_items = expanded;
+            macro_expander = expander;
+        }
+        Err(e) => {
+            eprintln!("Warning: macro expansion failed for top-level program: {}", e);
+        }
+    }
+
     let mut all_results = Vec::new();
+    // Persistent MacroExpander used across processing phases so top-level
+    // defmacro declarations are registered and available for subsequent
+    // expressions during dumping and execution. (kept for backward compatibility)
     let mut total_ir_time = std::time::Duration::ZERO;
     let mut total_opt_time = std::time::Duration::ZERO;
 
     if args.execute {
         // If IR dumping is requested, convert to IR first even when executing
         if args.dump_ir || args.dump_ir_optimized {
+            // Use a persistent MacroExpander across the dump pass so top-level
+            // defmacro declarations are recorded and subsequent expressions are
+            // expanded before IR conversion.
             for (i, item) in parsed_items.iter().enumerate() {
                 if let TopLevel::Expression(expr) = item {
                     // Convert to IR for dumping
@@ -374,7 +401,18 @@ fn main() {
                     }
 
                     let mut ir_converter = IrConverter::with_module_registry(&module_registry);
-                    match ir_converter.convert_expression(expr.clone()) {
+                    // Expand macros for this expression before converting to IR.
+                    let expanded_expr = match macro_expander.expand(expr, 0) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            eprintln!("Warning: macro expansion error for expression {}: {}", i + 1, e);
+                            expr.clone()
+                        }
+                    };
+                    if args.verbose {
+                        println!("📄 Expanded AST for expression {}: {:#?}", i + 1, expanded_expr);
+                    }
+                    match ir_converter.convert_expression(expanded_expr) {
                         Ok(ir_node) => {
                             let ir_time = ir_start.elapsed();
                             total_ir_time += ir_time;
@@ -413,8 +451,12 @@ fn main() {
         let exec_start = Instant::now();
 
         // Create a shared runtime strategy for all expressions to preserve state
-        let runtime_strategy: Box<dyn RuntimeStrategy> = args.runtime.clone().into();
-        let mut runtime = Runtime::new(runtime_strategy);
+    let mut runtime_strategy: Box<dyn RuntimeStrategy> = args.runtime.clone().into();
+    // Inject the persistent MacroExpander so runtime strategies share the same
+    // macro registry as the compiler expansion pass. Clone since MacroExpander
+    // implements Clone and strategies take ownership.
+    runtime_strategy.set_macro_expander(macro_expander.clone());
+    let mut runtime = Runtime::new(runtime_strategy);
 
         // For AST runtime, we can use eval_toplevel to preserve state
         if let RuntimeType::Ast = args.runtime {
@@ -430,6 +472,7 @@ fn main() {
                 std::sync::Arc::new(module_registry),
                 rtfs::runtime::security::RuntimeContext::full(),
                 host.clone(),
+                macro_expander.clone(),
             );
 
             // TODO: Call host.prepare_execution() when method is implemented
@@ -520,7 +563,18 @@ fn main() {
 
                             let mut ir_converter =
                                 IrConverter::with_module_registry(&module_registry);
-                            let ir_node = match ir_converter.convert_expression(expr.clone()) {
+                            // Expand macros here as well so IR conversion doesn't see macro nodes.
+                            let expanded_expr = match macro_expander.expand(expr, 0) {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    eprintln!("Warning: macro expansion error for expression {}: {}", i + 1, e);
+                                    expr.clone()
+                                }
+                            };
+                            if args.verbose {
+                                println!("📄 Expanded AST for expression {}: {:#?}", i + 1, expanded_expr);
+                            }
+                            let ir_node = match ir_converter.convert_expression(expanded_expr) {
                                 Ok(ir) => ir,
                                 Err(e) => {
                                     eprintln!(

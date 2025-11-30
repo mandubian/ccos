@@ -210,6 +210,7 @@ impl CCOSEnvironment {
             std::sync::Arc::new(module_registry),
             runtime_context,
             host.clone(),
+            rtfs::compiler::expander::MacroExpander::default(),
         ));
 
         // Register local capability: observability.ingestor:v1.ingest
@@ -997,6 +998,7 @@ impl CCOSEnvironment {
                                             module_registry.clone(),
                                             rtfs::runtime::security::RuntimeContext::full(),
                                             host_for_cap.clone(),
+                                            rtfs::compiler::expander::MacroExpander::default(),
                                         );
                                         // Provide the actual input under a conventional symbol 'input'
                                         eval.env.define(

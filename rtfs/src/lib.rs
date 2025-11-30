@@ -8,6 +8,7 @@ pub mod error_reporting;
 pub mod examples_helpers;
 pub mod input_handling;
 pub mod ir;
+pub mod compiler;
 pub mod parser;
 pub mod parser_error_reporter;
 pub mod runtime;
