@@ -27,7 +27,7 @@ pub async fn execute(
     ctx: &mut CliContext,
     command: RtfsCommand,
 ) -> RuntimeResult<()> {
-    let formatter = OutputFormatter::new(ctx.output_format);
+    let _formatter = OutputFormatter::new(ctx.output_format);
 
     match command {
         RtfsCommand::Eval { expr } => {
@@ -67,7 +67,7 @@ pub async fn execute(
             }
         }
         RtfsCommand::Repl => {
-            formatter.status("Starting RTFS REPL...");
+            ctx.status("Starting RTFS REPL...");
             let mut cmd = Command::new("cargo");
             cmd.arg("run")
                .arg("--bin")
