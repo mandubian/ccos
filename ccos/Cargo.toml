@@ -81,6 +81,10 @@ default = ["repl"]
 repl = ["dep:rustyline", "rtfs/repl"]
 
 [[bin]]
+name = "ccos"
+path = "src/bin/ccos.rs"
+
+[[bin]]
 name = "rtfs-ccos-repl"
 path = "src/bin/rtfs_ccos_repl.rs"
 required-features = ["repl"]

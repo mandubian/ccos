@@ -4,6 +4,7 @@
 // Include the CCOS module structure
 // AgentRegistry migration: agent module removed (deprecated, use CapabilityMarketplace with :kind :agent)
 pub mod arbiter;
+pub mod cli;
 pub mod archivable_types;
 pub mod catalog;
 pub mod causal_chain;
