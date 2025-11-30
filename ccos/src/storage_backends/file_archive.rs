@@ -145,6 +145,7 @@ impl FileArchive {
     fn acquire_archive_lock(&self, timeout: Duration) -> Result<ArchiveLockGuard, String> {
         let lock_path = self.base_dir.join(".archive_lock");
         let start = std::time::Instant::now();
+        let mut forced_cleanup_attempted = false;
         loop {
             match std::fs::OpenOptions::new()
                 .write(true)
@@ -173,6 +174,14 @@ impl FileArchive {
                         }
                     }
                     if start.elapsed() > timeout {
+                        // As a last resort, attempt a best-effort cleanup of a potentially stale lock
+                        // and retry once before failing. This helps tests and crash-recovery scenarios.
+                        if lock_path.exists() && !forced_cleanup_attempted {
+                            let _ = std::fs::remove_file(&lock_path);
+                            forced_cleanup_attempted = true;
+                            // retry immediately after cleanup
+                            continue;
+                        }
                         return Err(format!("timeout acquiring archive lock: {}", e));
                     }
                     std::thread::sleep(Duration::from_millis(20));

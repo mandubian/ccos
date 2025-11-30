@@ -7,10 +7,206 @@ use std::collections::HashMap;
 
 // AST Node Imports - Ensure all used AST nodes are listed here
 use crate::ast::{
-    CatchClause, CatchPattern, DefExpr, DefnExpr, DefstructExpr, DefstructField, DelegationHint,
-    DoExpr, FnExpr, IfExpr, LetBinding, LetExpr, LogStepExpr, MatchClause, MatchExpr,
-    ParallelBinding, ParallelExpr, ParamDef, Pattern, TryCatchExpr, TypeExpr, WithResourceExpr,
+    CatchClause, CatchPattern, DefExpr, DefmacroExpr, DefnExpr, DefstructExpr, DefstructField,
+    DelegationHint, DoExpr, FnExpr, IfExpr, LetBinding, LetExpr, LogStepExpr, MatchClause,
+    MatchExpr, ParallelBinding, ParallelExpr, ParamDef, Pattern, TryCatchExpr, TypeExpr,
+    WithResourceExpr,
 };
+
+// ...
+
+pub(super) fn build_defmacro_expr(
+    defmacro_expr_pair: Pair<Rule>,
+) -> Result<DefmacroExpr, PestParseError> {
+    let defmacro_span = pair_to_source_span(&defmacro_expr_pair);
+    let mut pairs = defmacro_expr_pair.clone().into_inner();
+
+    // Consume defmacro_keyword if present
+    if let Some(p) = pairs.peek() {
+        if p.as_rule() == Rule::defmacro_keyword {
+            pairs.next();
+        }
+    }
+
+    // Skip whitespace/comments before symbol name
+    while let Some(p) = pairs.peek() {
+        if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+            pairs.next();
+        } else {
+            break;
+        }
+    }
+
+    let symbol_pair = pairs.next().ok_or_else(|| {
+        PestParseError::InvalidInput {
+            message: "defmacro requires a symbol (macro name)".to_string(),
+            span: Some(defmacro_span.clone()),
+        }
+    })?;
+    if symbol_pair.as_rule() != Rule::symbol {
+        return Err(PestParseError::InvalidInput {
+            message: format!(
+                "Expected symbol for defmacro name, found {:?}",
+                symbol_pair.as_rule()
+            ),
+            span: Some(pair_to_source_span(&symbol_pair)),
+        });
+    }
+    let name = build_symbol(symbol_pair.clone())?;
+
+    // Skip whitespace/comments before parameter list
+    while let Some(p) = pairs.peek() {
+        if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
+            pairs.next();
+        } else {
+            break;
+        }
+    }
+
+    let params_pair = pairs.next().unwrap();
+    if params_pair.as_rule() != Rule::fn_param_list {
+        return Err(PestParseError::InvalidInput {
+            message: format!(
+                "Expected fn_param_list for defmacro, found {:?}",
+                params_pair.as_rule()
+            ),
+            span: Some(pair_to_source_span(&params_pair)),
+        });
+    }
+
+    let mut params: Vec<ParamDef> = Vec::new();
+    let mut variadic_param: Option<ParamDef> = None;
+    let mut params_inner = params_pair.clone().into_inner().peekable();
+
+    while let Some(param_item_peek) = params_inner.peek() {
+        if param_item_peek.as_rule() == Rule::WHITESPACE
+            || param_item_peek.as_rule() == Rule::COMMENT
+        {
+            params_inner.next();
+            continue;
+        }
+        if param_item_peek.as_rule() == Rule::AMPERSAND {
+            let ampersand_pair = params_inner.next().unwrap();
+            while let Some(p) = params_inner.peek() {
+                if p.as_rule() == Rule::WHITESPACE {
+                    params_inner.next();
+                } else {
+                    break;
+                }
+            }
+            let rest_sym_pair =
+                params_inner
+                    .next()
+                    .ok_or_else(|| PestParseError::InvalidInput {
+                        message: "defmacro: & requires symbol".to_string(),
+                        span: Some(pair_to_source_span(&ampersand_pair)),
+                    })?;
+            if rest_sym_pair.as_rule() != Rule::symbol {
+                return Err(PestParseError::InvalidInput {
+                    message: format!(
+                        "Expected symbol after &, found {:?}",
+                        rest_sym_pair.as_rule()
+                    ),
+                    span: Some(pair_to_source_span(&rest_sym_pair)),
+                });
+            }
+            let rest_sym = build_symbol(rest_sym_pair.clone())?;
+            let mut rest_type: Option<TypeExpr> = None;
+            if let Some(peek_colon) = params_inner.peek() {
+                if peek_colon.as_rule() == Rule::COLON {
+                    let colon_for_variadic_type_pair = params_inner.next().unwrap();
+                    while let Some(p) = params_inner.peek() {
+                        if p.as_rule() == Rule::WHITESPACE {
+                            params_inner.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    let type_pair =
+                        params_inner
+                            .next()
+                            .ok_or_else(|| PestParseError::InvalidInput {
+                                message: "Expected type_expr after ':' for variadic parameter"
+                                    .to_string(),
+                                span: Some(pair_to_source_span(&colon_for_variadic_type_pair)),
+                            })?;
+                    rest_type = Some(build_type_expr(type_pair)?);
+                }
+            }
+            variadic_param = Some(ParamDef {
+                pattern: Pattern::Symbol(rest_sym),
+                type_annotation: rest_type,
+            });
+            break;
+        }
+        let param_def_pair = params_inner.next().unwrap();
+        let param_def_span = pair_to_source_span(&param_def_pair);
+
+        if param_def_pair.as_rule() != Rule::param_def {
+            return Err(PestParseError::InvalidInput {
+                message: format!("Expected param_def, found {:?}", param_def_pair.as_rule()),
+                span: Some(param_def_span.clone()),
+            });
+        }
+
+        let mut param_def_inner = param_def_pair.clone().into_inner();
+
+        let binding_pattern_pair =
+            param_def_inner
+                .next()
+                .ok_or_else(|| PestParseError::InvalidInput {
+                    message: "param_def missing binding_pattern".to_string(),
+                    span: Some(param_def_span.clone()),
+                })?;
+        let pattern = build_pattern(binding_pattern_pair)?;
+
+        let mut type_ann = None;
+        if let Some(colon_candidate_pair) = param_def_inner.next() {
+            if colon_candidate_pair.as_rule() == Rule::COLON {
+                let type_pair =
+                    param_def_inner
+                        .next()
+                        .ok_or_else(|| PestParseError::InvalidInput {
+                            message: "Expected type_expr after ':' in param_def".to_string(),
+                            span: Some(pair_to_source_span(&colon_candidate_pair)),
+                        })?;
+                type_ann = Some(build_type_expr(type_pair)?);
+            } else {
+                return Err(PestParseError::InvalidInput {
+                    message: format!(
+                        "Expected COLON in param_def, found {:?}",
+                        colon_candidate_pair.as_rule()
+                    ),
+                    span: Some(pair_to_source_span(&colon_candidate_pair)),
+                });
+            }
+        }
+        params.push(ParamDef {
+            pattern,
+            type_annotation: type_ann,
+        });
+    }
+
+    let body = pairs
+        .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
+        .map(build_expression)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if body.is_empty() {
+        return Err(PestParseError::InvalidInput {
+            message: "defmacro requires at least one body expression".to_string(),
+            span: Some(defmacro_span),
+        });
+    }
+
+    Ok(DefmacroExpr {
+        name,
+        params,
+        variadic_param,
+        body,
+    })
+}
+
 
 // Builder function imports from sibling modules
 // CORRECTED IMPORT: build_keyword_from_pair -> build_keyword
@@ -799,215 +995,6 @@ pub(super) fn build_defstruct_expr(
     })
 }
 
-pub(super) fn build_parallel_expr(
-    parallel_expr_pair: Pair<Rule>,
-) -> Result<ParallelExpr, PestParseError> {
-    let parallel_span = pair_to_source_span(&parallel_expr_pair);
-    // let mut pairs = parallel_expr_pair.clone().into_inner(); // Not needed if we iterate over original children
-
-    // Consume parallel_keyword if present - this logic might be redundant if handled by iteration
-    // if let Some(p) = pairs.peek() { ... }
-
-    let mut bindings = Vec::new();
-
-    // Process all parallel_binding pairs from the original parallel_expr_pair's children
-    for binding_pair_candidate in parallel_expr_pair.clone().into_inner() {
-        // Iterate over original children, clone for safety
-        match binding_pair_candidate.as_rule() {
-            Rule::parallel_keyword | Rule::WHITESPACE | Rule::COMMENT => continue,
-            Rule::parallel_binding => {
-                let binding_pair = binding_pair_candidate; // It is a parallel_binding
-                let binding_span = pair_to_source_span(&binding_pair);
-
-                let all_tokens: Vec<_> = binding_pair
-                    .clone()
-                    .into_inner()
-                    .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
-                    .collect();
-
-                let mut binding_inner = all_tokens.into_iter();
-
-                let symbol_pair =
-                    binding_inner
-                        .next()
-                        .ok_or_else(|| PestParseError::InvalidInput {
-                            message: "parallel_binding missing symbol".to_string(),
-                            span: Some(binding_span.clone()),
-                        })?;
-                if symbol_pair.as_rule() != Rule::symbol {
-                    return Err(PestParseError::InvalidInput {
-                        message: format!(
-                            "Expected symbol in parallel_binding, found {:?}",
-                            symbol_pair.as_rule()
-                        ),
-                        span: Some(pair_to_source_span(&symbol_pair)),
-                    });
-                }
-                let symbol = build_symbol(symbol_pair.clone())?;
-
-                let mut type_annotation: Option<TypeExpr> = None;
-                let expr_pair_opt;
-
-                // Peek at the next significant token to decide if it's a type_annotation or expression
-                let mut temp_binding_inner_peekable = binding_inner.clone().peekable();
-
-                if let Some(next_significant_token_peek) = temp_binding_inner_peekable.peek() {
-                    if next_significant_token_peek.as_rule() == Rule::type_annotation {
-                        let type_annotation_pair = binding_inner.next().unwrap(); // Consume the type_annotation pair
-                        let type_ann_span = pair_to_source_span(&type_annotation_pair);
-                        let mut type_ann_inner_iter = type_annotation_pair.into_inner();
-
-                        let mut found_type_expr = false;
-                        // Iterate through the inner parts of type_annotation (e.g. COLON, the actual type_expr rule)
-                        while let Some(token) = type_ann_inner_iter.next() {
-                            match token.as_rule() {
-                                Rule::COLON | Rule::WHITESPACE | Rule::COMMENT => continue,
-                                Rule::primitive_type
-                                | Rule::vector_type
-                                | Rule::tuple_type
-                                | Rule::map_type
-                                | Rule::function_type
-                                | Rule::resource_type
-                                | Rule::union_type
-                                | Rule::intersection_type
-                                | Rule::literal_type
-                                | Rule::symbol
-                                | Rule::type_expr => {
-                                    // Added Rule::type_expr
-                                    type_annotation = Some(build_type_expr(token)?);
-                                    found_type_expr = true;
-                                    break;
-                                }
-                                _ => {
-                                    // Unexpected token within type_annotation
-                                    return Err(PestParseError::InvalidInput { 
-                                        message: format!("Unexpected token {:?} in type_annotation of parallel_binding", token.as_rule()), 
-                                        span: Some(pair_to_source_span(&token)) 
-                                    });
-                                }
-                            }
-                        }
-                        if !found_type_expr {
-                            return Err(PestParseError::InvalidInput {
-                                message: "Malformed or empty type_annotation in parallel_binding"
-                                    .to_string(),
-                                span: Some(type_ann_span),
-                            });
-                        }
-                        expr_pair_opt = binding_inner.next(); // Next token after type_annotation is the expression
-                    } else {
-                        // No type_annotation, the current token is the expression
-                        expr_pair_opt = binding_inner.next();
-                    }
-                } else {
-                    // This case means there was a symbol but nothing after it (neither type_annotation nor expression)
-                    expr_pair_opt = binding_inner.next(); // Will be None, handled by ok_or_else below
-                }
-
-                let actual_expr_pair =
-                    expr_pair_opt.ok_or_else(|| PestParseError::InvalidInput {
-                        message: "parallel_binding missing expression".to_string(),
-                        span: Some(binding_span.clone()),
-                    })?;
-
-                let expression = build_expression(actual_expr_pair)?;
-                bindings.push(ParallelBinding {
-                    symbol,
-                    type_annotation,
-                    expression: Box::new(expression),
-                });
-            }
-            unknown_rule_type => {
-                return Err(PestParseError::InvalidInput {
-                    message: format!(
-                        "Expected Rule::parallel_binding or ignorable token, found {:?}",
-                        unknown_rule_type
-                    ),
-                    span: Some(pair_to_source_span(&binding_pair_candidate)),
-                });
-            }
-        }
-    }
-
-    if bindings.is_empty() {
-        return Err(PestParseError::InvalidInput {
-            message: "parallel expression requires at least one binding".to_string(),
-            span: Some(parallel_span),
-        });
-    }
-
-    Ok(ParallelExpr { bindings })
-}
-
-pub(super) fn build_with_resource_expr(
-    with_resource_expr_pair: Pair<Rule>,
-) -> Result<WithResourceExpr, PestParseError> {
-    let with_resource_span = pair_to_source_span(&with_resource_expr_pair);
-    let mut iter = with_resource_expr_pair.clone().into_inner().peekable();
-
-    // Skip keyword and whitespace
-    while let Some(p) = iter.peek() {
-        match p.as_rule() {
-            Rule::with_resource_keyword | Rule::WHITESPACE | Rule::COMMENT => {
-                iter.next();
-            }
-            _ => break,
-        }
-    }
-
-    // Binding: symbol ~ type_expr ~ expression
-    let symbol_pair = iter.next().ok_or_else(|| PestParseError::InvalidInput {
-        message: "with-resource requires a symbol in binding".to_string(),
-        span: Some(with_resource_span.clone()),
-    })?;
-    let symbol_span = pair_to_source_span(&symbol_pair);
-    if symbol_pair.as_rule() != Rule::symbol {
-        return Err(PestParseError::InvalidInput {
-            message: format!(
-                "Expected symbol for with-resource binding, found {:?}",
-                symbol_pair.as_rule()
-            ),
-            span: Some(symbol_span.clone()),
-        });
-    }
-    let resource_symbol = build_symbol(symbol_pair)?;
-
-    let type_expr_pair = iter.next().ok_or_else(|| PestParseError::InvalidInput {
-        message: "with-resource requires a type_expr in binding".to_string(),
-        span: Some(symbol_span),
-    })?;
-    let type_expr_span = pair_to_source_span(&type_expr_pair);
-    let resource_type = build_type_expr(type_expr_pair)?;
-
-    let resource_init_pair = iter.next().ok_or_else(|| PestParseError::InvalidInput {
-        message: "with-resource requires an initialization expression in binding".to_string(),
-        span: Some(type_expr_span),
-    })?;
-    let resource_init = Box::new(build_expression(resource_init_pair)?);
-
-    let mut body = Vec::new();
-    for p in iter {
-        match p.as_rule() {
-            Rule::WHITESPACE | Rule::COMMENT => continue,
-            _ => body.push(build_expression(p)?),
-        }
-    }
-
-    if body.is_empty() {
-        return Err(PestParseError::InvalidInput {
-            message: "with-resource expression requires a body".to_string(),
-            span: Some(with_resource_span),
-        });
-    }
-
-    Ok(WithResourceExpr {
-        resource_symbol,
-        resource_type,
-        resource_init: resource_init, // Corrected field name
-        body,
-    })
-}
-
 pub(super) fn build_try_catch_expr(
     try_catch_expr_pair: Pair<Rule>,
 ) -> Result<TryCatchExpr, PestParseError> {
@@ -1379,102 +1366,6 @@ pub(super) fn build_match_expr(match_expr_pair: Pair<Rule>) -> Result<MatchExpr,
 
 // Helper function to build MatchPattern from a Pair<Rule>
 // This function is now implemented in super::common::build_match_pattern
-
-pub(super) fn build_log_step_expr(
-    log_step_expr_pair: Pair<Rule>,
-) -> Result<LogStepExpr, PestParseError> {
-    let mut pairs = log_step_expr_pair.clone().into_inner().peekable();
-
-    // Consume log_step_keyword if present
-    if let Some(p) = pairs.peek() {
-        if p.as_rule() == Rule::log_step_keyword {
-            pairs.next();
-        }
-    }
-
-    // Consume whitespace
-    while let Some(p) = pairs.peek() {
-        if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
-            pairs.next();
-        } else {
-            break;
-        }
-    }
-
-    let mut level = None;
-    if let Some(p) = pairs.peek() {
-        if p.as_rule() == Rule::keyword {
-            level = Some(build_keyword(pairs.next().unwrap())?);
-        }
-    }
-
-    // Consume whitespace
-    while let Some(p) = pairs.peek() {
-        if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
-            pairs.next();
-        } else {
-            break;
-        }
-    }
-
-    // The original implementation was too restrictive. This new implementation
-    // allows for a more flexible structure, which seems to be what the failing
-    // tests are using. The evaluator seems to handle this structure correctly.
-    let values = pairs
-        .filter(|p| p.as_rule() != Rule::WHITESPACE && p.as_rule() != Rule::COMMENT)
-        .map(build_expression)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(LogStepExpr {
-        level,
-        values,
-        location: None, // Location is not parsed from the arguments anymore.
-    })
-}
-
-/// Build a discover-agents expression from parsed pairs
-/// Syntax: (discover-agents criteria-map options-map?)
-pub(super) fn build_discover_agents_expr(
-    discover_agents_expr_pair: Pair<Rule>,
-) -> Result<crate::ast::DiscoverAgentsExpr, PestParseError> {
-    let discover_agents_span = pair_to_source_span(&discover_agents_expr_pair);
-    let mut pairs = discover_agents_expr_pair.clone().into_inner().peekable();
-
-    while let Some(p) = pairs.peek() {
-        match p.as_rule() {
-            Rule::discover_agents_keyword | Rule::WHITESPACE | Rule::COMMENT => {
-                pairs.next();
-            }
-            _ => break,
-        }
-    }
-
-    let criteria_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
-        message: "discover-agents requires criteria expression".to_string(),
-        span: Some(discover_agents_span.clone()),
-    })?;
-    let _criteria_span = pair_to_source_span(&criteria_pair);
-    let criteria = Box::new(build_expression(criteria_pair)?);
-
-    while let Some(p) = pairs.peek() {
-        if p.as_rule() == Rule::WHITESPACE || p.as_rule() == Rule::COMMENT {
-            pairs.next();
-        } else {
-            break;
-        }
-    }
-
-    let options = if let Some(_options_pair_peeked) = pairs.peek() {
-        // Ensure it's not just leftover from a previous rule or something unexpected
-        // A more robust check might involve checking if options_pair_peeked.as_rule() is an expression type
-        let options_pair = pairs.next().unwrap(); // consume the peeked pair
-        Some(Box::new(build_expression(options_pair)?))
-    } else {
-        None
-    };
-
-    Ok(crate::ast::DiscoverAgentsExpr { criteria, options })
-}
 
 // -----------------------------------------------------------------------------
 // Metadata helpers

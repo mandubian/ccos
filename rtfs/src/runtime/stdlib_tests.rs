@@ -6,10 +6,10 @@ mod test_stdlib_loading {
     #[test]
     fn test_load_stdlib_creates_module() {
         // Create a fresh module registry
-        let mut registry = ModuleRegistry::new();
+        let registry = ModuleRegistry::new();
 
         // Load the stdlib
-        let result = load_stdlib(&mut registry);
+        let result = load_stdlib(&registry);
 
         // Verify the operation succeeded
         assert!(result.is_ok(), "Failed to load stdlib: {:?}", result.err());

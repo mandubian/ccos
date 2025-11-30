@@ -6,7 +6,7 @@
 use rtfs::runtime::security::RuntimeContext;
 
 /// Predefined security policies for common use cases
-/// 
+///
 /// These policies provide presets for common execution scenarios in CCOS.
 /// They configure RuntimeContext with appropriate capability allowlists for CCOS capabilities.
 pub struct SecurityPolicies;
@@ -115,4 +115,3 @@ impl SecurityPolicies {
         ctx
     }
 }
-

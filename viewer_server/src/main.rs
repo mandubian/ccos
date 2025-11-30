@@ -13,7 +13,7 @@ use uuid::Uuid; // for execution run identifiers
 mod snapshot;
 
 // CCOS runtime types for background arbiter calls
-use rtfs_compiler::ccos::{CCOS, runtime_service};
+use rtfs_compiler::ccos::{PlanAutoRepairOptions, CCOS, runtime_service};
 use crate::snapshot::build_architecture_snapshot; // re-exported for binary
 use rtfs_compiler::ccos::arbiter::arbiter_engine::ArbiterEngine;
 
@@ -1362,8 +1362,14 @@ async fn main() {
                                 continue;
                             }
                             let plan = plan_opt.unwrap();
+                            let mut repair_options = PlanAutoRepairOptions::default();
+                            repair_options.additional_context =
+                                Some(format!("Intent ID: {}", intent_id));
 
-                            match ccos.get_orchestrator().execute_plan(&plan, &ctx).await {
+                            match ccos
+                                .validate_and_execute_plan_with_auto_repair(plan, &ctx, repair_options)
+                                .await
+                            {
                                 Ok(exec_res) => {
                                     let now = chrono::Utc::now().timestamp();
                                     results.insert(intent_id.clone(), serde_json::json!({

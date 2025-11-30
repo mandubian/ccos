@@ -44,9 +44,9 @@ impl RecursiveSynthesizer {
             default_max_depth: max_depth,
         }
     }
-    
+
     /// Synthesize a capability by treating the need as a new intent
-    /// 
+    ///
     /// This is the core recursive synthesis logic:
     /// 1. Transform capability need → Intent
     /// 2. Refine intent via clarifying questions (if arbiter available)
@@ -62,21 +62,13 @@ impl RecursiveSynthesizer {
     ) -> RuntimeResult<SynthesizedCapability> {
         let depth = context.current_depth;
         let indent = "  ".repeat(depth);
-        
+
         eprintln!(
             "{}🔄 [Depth {}] Starting synthesis for: {}",
             indent, depth, need.capability_class
         );
-        
-        // Check cycle detection
-        if self.cycle_detector.has_cycle(&need.capability_class) {
-            return Err(RuntimeError::Generic(format!(
-                "Cycle detected: capability {} already being synthesized",
-                need.capability_class
-            )));
-        }
-        
-        // Check depth limit
+
+        // Check depth limit first
         if !self.cycle_detector.can_go_deeper() {
             eprintln!(
                 "{}⚠️  [Depth {}] Max depth {} reached for {}",
@@ -87,35 +79,115 @@ impl RecursiveSynthesizer {
                 self.default_max_depth, need.capability_class
             )));
         }
-        
-        // Mark as visited
+
+        // Check if capability already exists in marketplace (parent may have already synthesized it)
+        // This prevents re-synthesizing capabilities that were already created at a parent level
+        let marketplace = self.discovery_engine.get_marketplace();
+        if let Some(manifest) = marketplace.get_capability(&need.capability_class).await {
+            eprintln!(
+                "{}  → Capability already exists in marketplace: {}",
+                indent, manifest.id
+            );
+            eprintln!(
+                "{}  ✓ Using existing capability (no re-synthesis needed)",
+                indent
+            );
+            // Return the existing capability (we'll create a SynthesizedCapability wrapper)
+            return Ok(SynthesizedCapability {
+                manifest: manifest.clone(),
+                orchestrator_rtfs: "".to_string(), // Not available for existing capabilities
+                plan: None,
+                sub_intents: vec![],
+                depth: self.cycle_detector.current_depth(),
+            });
+        }
+
+        // Check cycle detection (only if not already in marketplace)
+        // This prevents infinite loops when a capability needs itself
+        if self.cycle_detector.has_cycle(&need.capability_class) {
+            eprintln!(
+                "{}  ✗ Cycle detected: {} is already being synthesized in this path",
+                indent, need.capability_class
+            );
+            return Err(RuntimeError::Generic(format!(
+                "Cycle detected: capability {} already being synthesized",
+                need.capability_class
+            )));
+        }
+
+        // Mark as visited (tracks capabilities currently in synthesis path)
         self.cycle_detector.visit(&need.capability_class);
-        
+
+        // Find related capabilities in marketplace to provide as examples
+        let related_caps = self
+            .discovery_engine
+            .find_related_capabilities(&need.capability_class, 5)
+            .await;
+        let related_cap_ids: Vec<String> = related_caps.iter().map(|m| m.id.clone()).collect();
+        if !related_cap_ids.is_empty() {
+            eprintln!(
+                "{}  → Found {} related capabilities in marketplace for reference",
+                indent,
+                related_cap_ids.len()
+            );
+        }
+
         // Transform capability need into intent
         let parent_intent_id = context.visited_intents.last().map(|s| s.as_str());
-        let intent = IntentTransformer::need_to_intent(need, parent_intent_id);
-        
+
+        // Try to get parent intent goal for richer context
+        let parent_goal_summary = if let Some(parent_id) = parent_intent_id {
+            // Clone the Arc first so the lock can be released
+            let intent_graph = self.discovery_engine.get_intent_graph();
+            let goal_opt = {
+                if let Ok(ig) = intent_graph.lock() {
+                    ig.get_intent(&parent_id.to_string())
+                        .map(|intent| intent.goal.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(ref goal) = goal_opt {
+                eprintln!("{}  → Retrieved parent goal: \"{}\"", indent, goal);
+            }
+            goal_opt
+        } else {
+            None
+        };
+
+        let intent = IntentTransformer::need_to_intent(
+            need,
+            parent_intent_id,
+            &related_cap_ids,
+            parent_goal_summary.as_deref(),
+        );
+
         eprintln!(
             "{}  → Created intent: {} (parent: {:?})",
             indent, intent.intent_id, parent_intent_id
         );
-        
+
         // Store intent in intent graph
         {
             let intent_graph = self.discovery_engine.get_intent_graph();
-            let mut ig = intent_graph.lock()
-                .map_err(|e| RuntimeError::Generic(format!("Failed to lock intent graph: {}", e)))?;
-            
+            let mut ig = intent_graph.lock().map_err(|e| {
+                RuntimeError::Generic(format!("Failed to lock intent graph: {}", e))
+            })?;
+
             let storable_intent = crate::types::StorableIntent {
                 intent_id: intent.intent_id.clone(),
                 name: intent.name.clone(),
                 original_request: intent.original_request.clone(),
                 rtfs_intent_source: "".to_string(),
                 goal: intent.goal.clone(),
-                constraints: intent.constraints.iter()
+                constraints: intent
+                    .constraints
+                    .iter()
                     .map(|(k, v)| (k.clone(), v.to_string()))
                     .collect(),
-                preferences: intent.preferences.iter()
+                preferences: intent
+                    .preferences
+                    .iter()
                     .map(|(k, v)| (k.clone(), v.to_string()))
                     .collect(),
                 success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
@@ -127,23 +199,55 @@ impl RecursiveSynthesizer {
                 priority: 0,
                 created_at: intent.created_at,
                 updated_at: intent.updated_at,
-                metadata: intent.metadata.iter()
+                metadata: intent
+                    .metadata
+                    .iter()
                     .map(|(k, v)| (k.clone(), v.to_string()))
                     .collect(),
             };
             ig.store_intent(storable_intent)?;
         }
-        
+
         // Generate plan using delegating arbiter if available
         eprintln!("{}  → Generating plan via delegating arbiter...", indent);
+        eprintln!("{}  📝 Intent sent to delegating arbiter:", indent);
+        eprintln!("{}    Goal: {}", indent, intent.goal);
+        eprintln!(
+            "{}    Constraints: {:?}",
+            indent,
+            intent.constraints.keys().collect::<Vec<_>>()
+        );
+        eprintln!(
+            "{}    Preferences: {:?}",
+            indent,
+            intent.preferences.keys().collect::<Vec<_>>()
+        );
+
         let plan = if let Some(ref arbiter) = self.delegating_arbiter {
             // Use arbiter to generate plan from intent
-            let generated_plan = arbiter.intent_to_plan(&intent).await
-                .map_err(|e| RuntimeError::Generic(format!(
+            let generated_plan = arbiter.intent_to_plan(&intent).await.map_err(|e| {
+                RuntimeError::Generic(format!(
                     "Failed to generate plan for synthesized intent {}: {}",
                     intent.intent_id, e
-                )))?;
+                ))
+            })?;
             eprintln!("{}  ✓ Plan generated successfully", indent);
+            eprintln!("{}  📥 Delegating arbiter response (RTFS plan):", indent);
+            // Log the generated plan RTFS
+            if let crate::types::PlanBody::Rtfs(rtfs) = &generated_plan.body {
+                eprintln!("{}  📄 Generated plan RTFS:", indent);
+                for line in rtfs.lines().take(20) {
+                    // Show first 20 lines
+                    eprintln!("{}    {}", indent, line);
+                }
+                if rtfs.lines().count() > 20 {
+                    eprintln!(
+                        "{}    ... ({} more lines)",
+                        indent,
+                        rtfs.lines().count() - 20
+                    );
+                }
+            }
             generated_plan
         } else {
             // No arbiter available - create minimal stub plan
@@ -154,24 +258,225 @@ impl RecursiveSynthesizer {
                 vec![intent.intent_id.clone()],
             )
         };
-        
+
         // Extract capability needs from the generated plan
         eprintln!("{}  → Extracting sub-capability needs from plan...", indent);
         let sub_needs = CapabilityNeedExtractor::extract_from_plan(&plan);
+
+        // Validate that the plan declares a service (not just asks questions)
+        let plan_rtfs = match &plan.body {
+            crate::types::PlanBody::Rtfs(rtfs) => rtfs,
+            crate::types::PlanBody::Wasm(_) => "",
+        };
+        let has_user_ask = plan_rtfs.contains(":ccos.user.ask");
+        let has_service_call = plan_rtfs.contains("(call :");
+        let has_user_ask_only = has_user_ask && !has_service_call;
+
+        // More detailed validation: check if service calls exist AND are different from self
+        let self_reference_only =
+            sub_needs.len() == 1 && sub_needs[0].capability_class == need.capability_class;
+
+        if has_user_ask_only || (sub_needs.is_empty() && !has_service_call) {
+            eprintln!(
+                "{}  ⚠️  WARNING: Plan only asks questions but doesn't declare a service capability.",
+                indent
+            );
+            eprintln!(
+                "{}  ⚠️  Expected plan to declare and call a specific service (e.g., restaurant.api.search)",
+                indent
+            );
+        } else if self_reference_only {
+            eprintln!(
+                "{}  ⚠️  WARNING: Plan only calls itself - this indicates incomplete synthesis",
+                indent
+            );
+        } else if has_service_call && !self_reference_only {
+            eprintln!(
+                "{}  ✓ Plan validation passed: contains valid service calls",
+                indent
+            );
+        }
+
+        // Check for self-referencing cycles: if the plan only calls itself, search remote registries
+        let mut sub_needs = sub_needs;
+        if sub_needs.len() == 1 && sub_needs[0].capability_class == need.capability_class {
+            eprintln!(
+                "{}  ⚠️  WARNING: Plan only calls itself ({}) - searching remote registries...",
+                indent, need.capability_class
+            );
+
+            // Search MCP registry
+            eprintln!("{}  → Searching MCP registry...", indent);
+            if let Some(mcp_manifest) = self
+                .discovery_engine
+                .search_mcp_registry(need)
+                .await
+                .map_err(|e| RuntimeError::Generic(format!("MCP search error: {}", e)))?
+            {
+                eprintln!("{}  ✓ Found in MCP registry: {}", indent, mcp_manifest.id);
+                // Register and return the MCP capability
+                let marketplace = self.discovery_engine.get_marketplace();
+                if let Err(e) = marketplace
+                    .register_capability_manifest(mcp_manifest.clone())
+                    .await
+                {
+                    eprintln!("{}  ⚠️  Failed to register MCP capability: {}", indent, e);
+                }
+                return Ok(SynthesizedCapability {
+                    manifest: mcp_manifest,
+                    orchestrator_rtfs: "".to_string(),
+                    plan: Some(plan),
+                    sub_intents: vec![],
+                    depth: self.cycle_detector.current_depth(),
+                });
+            }
+
+            // Search OpenAPI services
+            // DISABLED: Web search and OpenAPI discovery temporarily disabled to avoid timeouts
+            // eprintln!("{}  → Searching OpenAPI services...", indent);
+            // if let Some(openapi_manifest) = self.discovery_engine.search_openapi(need).await
+            //     .map_err(|e| RuntimeError::Generic(format!("OpenAPI search error: {}", e)))? {
+            //     eprintln!("{}  ✓ Found via OpenAPI: {}", indent, openapi_manifest.id);
+            //     // Register and return the OpenAPI capability
+            //     let marketplace = self.discovery_engine.get_marketplace();
+            //     if let Err(e) = marketplace.register_capability_manifest(openapi_manifest.clone()).await {
+            //         eprintln!("{}  ⚠️  Failed to register OpenAPI capability: {}", indent, e);
+            //     }
+            //     return Ok(SynthesizedCapability {
+            //         manifest: openapi_manifest,
+            //         orchestrator_rtfs: "".to_string(),
+            //         plan: Some(plan),
+            //         sub_intents: vec![],
+            //         depth: self.cycle_detector.current_depth(),
+            //     });
+            // }
+
+            // Try local RTFS synthesis for simple operations (ONLY if MCP didn't find anything)
+            // IMPORTANT: We only synthesize if no MCP capability was found above - if MCP found something,
+            // we would have returned early and never reached this point.
+            eprintln!(
+                "{}  → Attempting local RTFS synthesis (MCP found nothing, using fallback)...",
+                indent
+            );
+            if crate::discovery::local_synthesizer::LocalSynthesizer::can_synthesize_locally(need) {
+                match crate::discovery::local_synthesizer::LocalSynthesizer::synthesize_locally(
+                    need,
+                ) {
+                    Ok(local_manifest) => {
+                        eprintln!(
+                            "{}  ✓ Synthesized as local RTFS capability: {}",
+                            indent, local_manifest.id
+                        );
+
+                        // Display the generated RTFS code
+                        if let Some(rtfs_code) = local_manifest.metadata.get("rtfs_implementation")
+                        {
+                            eprintln!("{}  📝 Generated RTFS code:", indent);
+                            eprintln!("{}  {}", indent, "─".repeat(74));
+                            for line in rtfs_code.lines() {
+                                eprintln!("{}  {}", indent, line);
+                            }
+                            eprintln!("{}  {}", indent, "─".repeat(74));
+                        }
+
+                        // Save the capability to disk
+                        if let Err(e) = self
+                            .discovery_engine
+                            .save_synthesized_capability(&local_manifest)
+                            .await
+                        {
+                            eprintln!(
+                                "{}  ⚠️  Failed to save synthesized capability: {}",
+                                indent, e
+                            );
+                        } else {
+                            eprintln!("{}  💾 Saved synthesized capability to disk", indent);
+                        }
+
+                        // Register and return the local capability
+                        let marketplace = self.discovery_engine.get_marketplace();
+                        if let Err(e) = marketplace
+                            .register_capability_manifest(local_manifest.clone())
+                            .await
+                        {
+                            eprintln!("{}  ⚠️  Failed to register local capability: {}", indent, e);
+                        }
+                        return Ok(SynthesizedCapability {
+                            manifest: local_manifest,
+                            orchestrator_rtfs: "".to_string(),
+                            plan: Some(plan),
+                            sub_intents: vec![],
+                            depth: self.cycle_detector.current_depth(),
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!("{}  ⚠️  Local synthesis failed: {}", indent, e);
+                        eprintln!("{}  → Falling back to incomplete marking", indent);
+                    }
+                }
+            } else {
+                eprintln!("{}  → Capability is not a simple local operation", indent);
+            }
+
+            // Not found anywhere - mark as incomplete/not_found
+            eprintln!(
+                "{}  ✗ Not found in MCP registry (OpenAPI search disabled) - marking as incomplete/not_found",
+                indent
+            );
+            let incomplete_manifest =
+                crate::discovery::engine::DiscoveryEngine::create_incomplete_capability(need);
+            let marketplace = self.discovery_engine.get_marketplace();
+            if let Err(e) = marketplace
+                .register_capability_manifest(incomplete_manifest.clone())
+                .await
+            {
+                eprintln!(
+                    "{}  ⚠️  Failed to register incomplete capability: {}",
+                    indent, e
+                );
+            } else {
+                eprintln!(
+                    "{}  ⚠️  Registered incomplete capability: {} (status: incomplete/not_found)",
+                    indent, incomplete_manifest.id
+                );
+                eprintln!(
+                    "{}  → User notification: Capability '{}' is needed but not found. It requires manual implementation or external service integration.",
+                    indent, need.capability_class
+                );
+            }
+
+            // Clear sub_needs to prevent recursion
+            sub_needs.clear();
+
+            // Return incomplete capability
+            return Ok(SynthesizedCapability {
+                manifest: incomplete_manifest,
+                orchestrator_rtfs: "".to_string(),
+                plan: Some(plan),
+                sub_intents: vec![],
+                depth: self.cycle_detector.current_depth(),
+            });
+        }
+
         eprintln!(
             "{}  ✓ Found {} sub-capability needs",
-            indent, sub_needs.len()
+            indent,
+            sub_needs.len()
         );
         for sub_need in &sub_needs {
             eprintln!(
                 "{}    • {} (inputs: {:?}, outputs: {:?})",
-                indent, sub_need.capability_class, sub_need.required_inputs, sub_need.expected_outputs
+                indent,
+                sub_need.capability_class,
+                sub_need.required_inputs,
+                sub_need.expected_outputs
             );
         }
-        
+
         // Use queue-based approach to avoid async recursion issues
         // This processes sub-capabilities iteratively instead of recursively
         let mut sub_intents = Vec::new();
+        let mut skipped_capabilities = Vec::new();
         let mut processing_queue: Vec<(CapabilityNeed, usize, Vec<String>)> = sub_needs
             .into_iter()
             .map(|need| {
@@ -180,78 +485,144 @@ impl RecursiveSynthesizer {
                 (need, context.current_depth + 1, visited)
             })
             .collect();
-        
+
         let marketplace = self.discovery_engine.get_marketplace();
-        
+
         // Process queue until empty or max depth reached
         if !processing_queue.is_empty() {
-            eprintln!("{}  → Processing {} sub-capabilities in queue...", indent, processing_queue.len());
+            eprintln!(
+                "{}  → Processing {} sub-capabilities in queue...",
+                indent,
+                processing_queue.len()
+            );
         }
-        
+
         while let Some((sub_need, depth, visited)) = processing_queue.pop() {
             let sub_indent = "  ".repeat(depth);
-            
+
             // Check depth limit
             if depth > self.default_max_depth {
                 eprintln!(
                     "{}⚠️  [Depth {}] Max depth {} reached for {}",
                     sub_indent, depth, self.default_max_depth, sub_need.capability_class
                 );
+                skipped_capabilities
+                    .push((sub_need.capability_class.clone(), "max depth".to_string()));
                 continue;
             }
-            
+
             // Check cycle detection using a simpler approach
             // Check if we've already synthesized a capability with this class at this depth
             // We could enhance this to track capability classes separately, but for now
             // we rely on depth limits and the cycle detector in synthesize_as_intent
-            
+
             // Try to discover the sub-capability in marketplace first
-            eprintln!("{}  → [Depth {}] Checking marketplace for: {}", sub_indent, depth, sub_need.capability_class);
-            if marketplace.get_capability(&sub_need.capability_class).await.is_some() {
+            eprintln!(
+                "{}  → [Depth {}] Checking marketplace for: {}",
+                sub_indent, depth, sub_need.capability_class
+            );
+            if marketplace
+                .get_capability(&sub_need.capability_class)
+                .await
+                .is_some()
+            {
                 // Found in marketplace - no need to synthesize
-                eprintln!("{}    ✓ Found in marketplace, skipping synthesis", sub_indent);
+                eprintln!(
+                    "{}    ✓ Found in marketplace, skipping synthesis",
+                    sub_indent
+                );
                 continue;
             }
-            
+
+            // Check if this capability is currently being synthesized by a parent
+            // by checking the cycle detector (which tracks visited capabilities in this synthesis tree)
+            // If so, it's a true cycle (capability needs itself) - skip it gracefully
+            // Note: go_deeper() clones the visited set, so we can check what would be in the deeper detector
+            if self.cycle_detector.has_cycle(&sub_need.capability_class) {
+                eprintln!(
+                    "{}    ⚠️  Skipping: {} is already being synthesized in this path",
+                    sub_indent, sub_need.capability_class
+                );
+                eprintln!(
+                    "{}      (Cycle detected - capability would depend on itself)",
+                    sub_indent
+                );
+                skipped_capabilities.push((
+                    sub_need.capability_class.clone(),
+                    "cycle detected".to_string(),
+                ));
+                continue;
+            }
+
             // Not found - synthesize it using queue-based approach
             eprintln!("{}    → Not found, synthesizing...", sub_indent);
             // Create a new context for this depth level
             let mut sub_context = DiscoveryContext::new(self.default_max_depth);
             sub_context.current_depth = depth;
             sub_context.visited_intents = visited.clone();
-            
+
             // Synthesize the sub-capability
             let mut deeper_synthesizer = self.go_deeper();
-            match deeper_synthesizer.synthesize_as_intent(&sub_need, &sub_context).await {
+            match deeper_synthesizer
+                .synthesize_as_intent(&sub_need, &sub_context)
+                .await
+            {
                 Ok(synthesized) => {
-                    eprintln!(
-                        "{}    ✓ [Depth {}] Successfully synthesized: {}",
-                        sub_indent, depth, synthesized.manifest.id
-                    );
-                    sub_intents.push(synthesized.manifest.id.clone());
-                    
-                    // Register synthesized sub-capability in marketplace
-                    if let Err(e) = marketplace.register_capability_manifest(synthesized.manifest.clone()).await {
+                    // Check if this is an incomplete capability
+                    let is_incomplete = synthesized
+                        .manifest
+                        .metadata
+                        .get("status")
+                        .map(|s| s == "incomplete")
+                        .unwrap_or(false);
+
+                    if is_incomplete {
+                        eprintln!(
+                            "{}    ⚠️  [Depth {}] Synthesized incomplete capability: {}",
+                            sub_indent, depth, synthesized.manifest.id
+                        );
+                        eprintln!(
+                            "{}      → Parent capability will be marked incomplete",
+                            sub_indent
+                        );
+                        skipped_capabilities.push((
+                            sub_need.capability_class.clone(),
+                            "sub-capability incomplete".to_string(),
+                        ));
+                    } else {
+                        eprintln!(
+                            "{}    ✓ [Depth {}] Successfully synthesized: {}",
+                            sub_indent, depth, synthesized.manifest.id
+                        );
+                        sub_intents.push(synthesized.manifest.id.clone());
+                    }
+
+                    // Register synthesized sub-capability in marketplace (even if incomplete)
+                    if let Err(e) = marketplace
+                        .register_capability_manifest(synthesized.manifest.clone())
+                        .await
+                    {
                         eprintln!(
                             "{}    ⚠️  Warning: Failed to register synthesized sub-capability {}: {}",
                             sub_indent, sub_need.capability_class, e
                         );
-                    } else {
+                    } else if !is_incomplete {
                         eprintln!("{}    ✓ Registered in marketplace", sub_indent);
                     }
-                    
+
                     // Extract sub-needs from the synthesized capability's plan and add to queue
                     // This enables full multi-level recursive synthesis
                     if let Some(ref sub_plan) = synthesized.plan {
                         let sub_sub_needs = CapabilityNeedExtractor::extract_from_plan(sub_plan);
-                        
+
                         if !sub_sub_needs.is_empty() {
                             eprintln!(
                                 "{}    → Found {} sub-sub-capabilities, adding to queue...",
-                                sub_indent, sub_sub_needs.len()
+                                sub_indent,
+                                sub_sub_needs.len()
                             );
                         }
-                        
+
                         // Add new sub-needs to the queue with incremented depth
                         for sub_sub_need in sub_sub_needs {
                             let capability_class = sub_sub_need.capability_class.clone();
@@ -260,7 +631,9 @@ impl RecursiveSynthesizer {
                             processing_queue.push((sub_sub_need, depth + 1, new_visited));
                             eprintln!(
                                 "{}      • Queued: {} (depth {})",
-                                sub_indent, capability_class, depth + 1
+                                sub_indent,
+                                capability_class,
+                                depth + 1
                             );
                         }
                     }
@@ -273,48 +646,95 @@ impl RecursiveSynthesizer {
                 }
             }
         }
-        
+
         if sub_intents.is_empty() && !processing_queue.is_empty() {
             eprintln!("{}  → All sub-capabilities processed", indent);
         }
-        
+
         // Extract RTFS orchestrator from plan
         let orchestrator_rtfs = match &plan.body {
             crate::types::PlanBody::Rtfs(rtfs) => rtfs.clone(),
             crate::types::PlanBody::Wasm(_) => {
                 // Fallback for WASM plans
-                format!("(plan \"synthesized-{}\" :body (do (log \"WASM plan not yet supported\")))",
-                    need.capability_class)
+                format!(
+                    "(plan \"synthesized-{}\" :body (do (log \"WASM plan not yet supported\")))",
+                    need.capability_class
+                )
             }
         };
-        
+
         // Create a minimal manifest using the constructor
         // Use a stub handler - the actual implementation will be registered later
         let capability_id = need.capability_class.clone();
-        let stub_handler: Arc<dyn Fn(&rtfs::runtime::values::Value) -> RuntimeResult<rtfs::runtime::values::Value> + Send + Sync> = 
+        let stub_handler: Arc<dyn Fn(&rtfs::runtime::values::Value) -> RuntimeResult<rtfs::runtime::values::Value> + Send + Sync> =
             Arc::new(move |_input: &rtfs::runtime::values::Value| -> RuntimeResult<rtfs::runtime::values::Value> {
                 Err(RuntimeError::Generic(
                     format!("Synthesized capability {} not yet implemented", capability_id)
                 ))
             });
-        
-        let manifest = CapabilityManifest::new(
+
+        // Check if any sub-capability was skipped because it was incomplete
+        let has_incomplete_sub_capability = skipped_capabilities
+            .iter()
+            .any(|(_, reason)| reason == "sub-capability incomplete");
+
+        let mut manifest = CapabilityManifest::new(
             need.capability_class.clone(),
-            format!("Synthesized {}", need.capability_class),
-            format!("Recursively synthesized capability: {}", need.rationale),
+            if has_incomplete_sub_capability {
+                format!("[INCOMPLETE] {}", need.capability_class)
+            } else {
+                format!("Synthesized {}", need.capability_class)
+            },
+            if has_incomplete_sub_capability {
+                format!(
+                    "Capability incomplete: sub-capability dependencies not found - {}",
+                    need.rationale
+                )
+            } else {
+                format!("Recursively synthesized capability: {}", need.rationale)
+            },
             crate::capability_marketplace::types::ProviderType::Local(
                 crate::capability_marketplace::types::LocalCapability {
                     handler: stub_handler,
-                }
+                },
             ),
-            "1.0.0".to_string(),
+            if has_incomplete_sub_capability {
+                "0.0.0-incomplete".to_string()
+            } else {
+                "1.0.0".to_string()
+            },
         );
-        
+
+        // Add metadata if incomplete
+        if has_incomplete_sub_capability {
+            manifest
+                .metadata
+                .insert("status".to_string(), "incomplete".to_string());
+            manifest.metadata.insert(
+                "discovery_method".to_string(),
+                "sub_capability_incomplete".to_string(),
+            );
+        }
+
         eprintln!(
-            "{}✓ [Depth {}] Synthesis complete for: {} (sub-capabilities: {})",
-            indent, depth, need.capability_class, sub_intents.len()
+            "{}✓ [Depth {}] Synthesis complete for: {} (sub-capabilities: {}, skipped: {}){}",
+            indent,
+            depth,
+            need.capability_class,
+            sub_intents.len(),
+            skipped_capabilities.len(),
+            if has_incomplete_sub_capability {
+                " → INCOMPLETE"
+            } else {
+                ""
+            }
         );
-        
+        if !skipped_capabilities.is_empty() {
+            for (cap, reason) in &skipped_capabilities {
+                eprintln!("{}  ⚠️  Skipped: {} ({})", indent, cap, reason);
+            }
+        }
+
         Ok(SynthesizedCapability {
             manifest,
             orchestrator_rtfs,
@@ -323,7 +743,7 @@ impl RecursiveSynthesizer {
             depth: self.cycle_detector.current_depth(),
         })
     }
-    
+
     /// Create a new synthesizer for a deeper recursion level
     pub fn go_deeper(&self) -> Self {
         Self {
@@ -337,4 +757,3 @@ impl RecursiveSynthesizer {
         }
     }
 }
-

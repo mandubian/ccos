@@ -1,7 +1,8 @@
 ---
+description: When Feature Complete (implementation, test and doc): Commit if needed
 alwaysApply: false
 ---
-# When Feature Complete: Document and Commit if needed
+# When Feature Complete (implementation, test and doc): Commit if needed
 
 ## 🚀 **Documentation and Commit Rule**
 
@@ -17,11 +18,18 @@ When you have successfully implemented and tested a complete feature, not a tiny
 - **Update progress reports** (like WORKTREE_PROGRESS.md) with completion status
 - **Add usage examples** if the feature is user-facing in docs/ccos/guides or docs/rtfs-2.0/guides, never in root direct
 
-### 2. **Commit when you think it is meaningful to commit** 💾
+### 2. **Test or execute the feature before committing** 💾
+- **Test or execute the feature before committing**
+- **If the feature is not working, do not commit**
+- **If the feature is working, commit**
+- **If the feature is working, but you are not sure if it is working, do not commit**
+- **If the feature is working, but you are not sure if it is working, do not commit**
+
+### 3. **Commit when you think it is meaningful to commit** 💾
 - **DO NOT wait** until the end of a PR or issue to commit
 - **Commit as soon as** the feature is implemented and tested
 - **Use descriptive commit messages** that explain what was implemented
 - **Include test results** in commit messages if relevant
 - **Reference issue numbers** in commit messages when applicable
 
-### 3. **Do not add documentation in root directory except if very generic**
+### 4. **Do not add documentation in root directory except if very generic**

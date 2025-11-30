@@ -1,18 +1,18 @@
 // streaming.rs
 // All stream-related types, traits, and aliases for CCOS/RTFS
 
-use rtfs::ast::{Keyword, MapKey, TypeExpr};
-use rtfs::runtime::{
-    error::{RuntimeError, RuntimeResult},
-    type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext},
-    values::Value,
-};
 use chrono::Utc;
 use eventsource_stream::Event as SseMessage;
 use futures::StreamExt;
 use log::{error, info, warn};
 use reqwest::{Client, Url};
 use reqwest_eventsource::{Event as ReqwestEvent, EventSource};
+use rtfs::ast::{Keyword, MapKey, TypeExpr};
+use rtfs::runtime::{
+    error::{RuntimeError, RuntimeResult},
+    type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext},
+    values::Value,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{hash_map::Entry, HashMap, HashSet, VecDeque};

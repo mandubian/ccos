@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use rtfs::parser::parse_expression;
 use rtfs::runtime::evaluator::Evaluator;
 use rtfs::runtime::host_interface::HostInterface;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 /// Benchmark RTFS parsing performance
 fn benchmark_parsing(c: &mut Criterion) {
     let mut group = c.benchmark_group("parsing");
-    
+
     let test_cases = vec![
         ("simple_int", "42"),
         ("simple_string", "\"hello world\""),
@@ -25,23 +25,21 @@ fn benchmark_parsing(c: &mut Criterion) {
 
     for (name, expr) in test_cases {
         group.bench_with_input(BenchmarkId::from_parameter(name), &expr, |b, &expr| {
-            b.iter(|| {
-                parse_expression(black_box(expr))
-            });
+            b.iter(|| parse_expression(black_box(expr)));
         });
     }
-    
+
     group.finish();
 }
 
 /// Benchmark RTFS evaluation performance
 fn benchmark_evaluation(c: &mut Criterion) {
     let mut group = c.benchmark_group("evaluation");
-    
+
     let host: Arc<dyn HostInterface> = Arc::new(PureHost::new());
     let module_registry = Arc::new(ModuleRegistry::new());
     let context = RuntimeContext::full();
-    
+
     let test_cases = vec![
         ("literal_int", "42"),
         ("literal_string", "\"hello\""),
@@ -61,27 +59,34 @@ fn benchmark_evaluation(c: &mut Criterion) {
                     module_registry.clone(),
                     context.clone(),
                     host.clone(),
+                    rtfs::compiler::expander::MacroExpander::default(),
                 );
                 evaluator.evaluate(black_box(parsed))
             });
         });
     }
-    
+
     group.finish();
 }
 
 /// Benchmark pattern matching performance
 fn benchmark_pattern_matching(c: &mut Criterion) {
     let mut group = c.benchmark_group("pattern_matching");
-    
+
     let host: Arc<dyn HostInterface> = Arc::new(PureHost::new());
     let module_registry = Arc::new(ModuleRegistry::new());
     let context = RuntimeContext::full();
-    
+
     let test_cases = vec![
         ("match_int", "(match 42 [42 \"found\"] [_ \"not found\"])"),
-        ("match_string", "(match \"hello\" [\"hello\" :greeting] [_ :unknown])"),
-        ("match_vector", "(match [1 2 3] [[1 2 3] :exact] [[1 & rest] :partial] [_ :none])"),
+        (
+            "match_string",
+            "(match \"hello\" [\"hello\" :greeting] [_ :unknown])",
+        ),
+        (
+            "match_vector",
+            "(match [1 2 3] [[1 2 3] :exact] [[1 & rest] :partial] [_ :none])",
+        ),
         ("match_map", "(match {:a 1} [{:a 1} :match] [_ :nomatch])"),
     ];
 
@@ -93,23 +98,24 @@ fn benchmark_pattern_matching(c: &mut Criterion) {
                     module_registry.clone(),
                     context.clone(),
                     host.clone(),
+                    rtfs::compiler::expander::MacroExpander::default(),
                 );
                 evaluator.evaluate(black_box(parsed))
             });
         });
     }
-    
+
     group.finish();
 }
 
 /// Benchmark stdlib function performance
 fn benchmark_stdlib(c: &mut Criterion) {
     let mut group = c.benchmark_group("stdlib");
-    
+
     let host: Arc<dyn HostInterface> = Arc::new(PureHost::new());
     let module_registry = Arc::new(ModuleRegistry::new());
     let context = RuntimeContext::full();
-    
+
     let test_cases = vec![
         ("map", "(map inc [1 2 3 4 5])"),
         ("filter", "(filter even? [1 2 3 4 5 6 7 8 9 10])"),
@@ -126,12 +132,13 @@ fn benchmark_stdlib(c: &mut Criterion) {
                     module_registry.clone(),
                     context.clone(),
                     host.clone(),
+                    rtfs::compiler::expander::MacroExpander::default(),
                 );
                 evaluator.evaluate(black_box(parsed))
             });
         });
     }
-    
+
     group.finish();
 }
 
@@ -143,4 +150,3 @@ criterion_group!(
     benchmark_stdlib
 );
 criterion_main!(benches);
-

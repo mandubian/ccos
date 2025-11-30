@@ -1,8 +1,8 @@
-use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::parser::parse_expression;
 use rtfs::runtime::evaluator::Evaluator;
 use rtfs::runtime::module_runtime::ModuleRegistry;
+use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::runtime::secure_stdlib::SecureStandardLibrary;
 use rtfs::runtime::values::Value;
 use std::sync::Arc;
@@ -19,7 +19,12 @@ impl SecureStdlibTestRunner {
         let module_registry = Arc::new(ModuleRegistry::new());
         let security_context = rtfs::runtime::security::RuntimeContext::pure();
         let host = create_pure_host();
-        let evaluator = Evaluator::new(module_registry, security_context, host);
+        let evaluator = Evaluator::new(
+            module_registry,
+            security_context,
+            host,
+            rtfs::compiler::expander::MacroExpander::default(),
+        );
 
         Self { evaluator, env }
     }

@@ -772,6 +772,88 @@ impl CausalChain {
     ) -> &crate::causal_chain::metrics::WmIngestLatencyMetrics {
         self.metrics.get_wm_ingest_latency_metrics()
     }
+
+    // ---------------------------------------------------------------------
+    // Export and Replay Support
+    // ---------------------------------------------------------------------
+
+    /// Export all actions for a given plan as a serializable format for replay/audit
+    /// Returns actions in chronological order with full context needed for replay
+    ///
+    /// Actions are logged in real-time as events occur during plan execution.
+    /// This function ensures chronological order by sorting by timestamp.
+    pub fn export_plan_actions(&self, plan_id: &PlanId) -> Vec<&Action> {
+        let mut actions = self.get_actions_for_plan(plan_id);
+        actions.sort_by_key(|a| a.timestamp);
+        actions
+    }
+
+    /// Export all actions for a given intent as a serializable format for replay/audit
+    /// Returns actions in chronological order with full context needed for replay
+    ///
+    /// Actions are logged in real-time as events occur during intent execution.
+    /// This function ensures chronological order by sorting by timestamp.
+    pub fn export_intent_actions(&self, intent_id: &IntentId) -> Vec<&Action> {
+        let mut actions = self.get_actions_for_intent(intent_id);
+        actions.sort_by_key(|a| a.timestamp);
+        actions
+    }
+
+    /// Export all actions in chronological order for full chain replay
+    /// This preserves the complete immutable audit trail
+    ///
+    /// Actions are logged in real-time as events occur, so the ledger's Vec insertion
+    /// order should match chronological order. This function sorts by timestamp to
+    /// guarantee chronological correctness even if there are edge cases.
+    pub fn export_all_actions(&self) -> Vec<&Action> {
+        let actions = self.get_all_actions();
+        // Actions are appended to Vec in real-time as events occur, preserving
+        // insertion order. We sort by timestamp to guarantee chronological order.
+        let mut sorted: Vec<&Action> = actions.iter().collect();
+        sorted.sort_by_key(|a| a.timestamp);
+        sorted
+    }
+
+    /// Export actions matching a query in chronological order
+    /// Useful for selective replay of specific event types or time ranges
+    ///
+    /// Actions are logged in real-time as events occur, preserving chronological order.
+    /// This function ensures chronological order by sorting by timestamp.
+    pub fn export_actions(&self, query: &CausalQuery) -> Vec<&Action> {
+        let mut actions = self.query_actions(query);
+        actions.sort_by_key(|a| a.timestamp);
+        actions
+    }
+
+    /// Get execution trace for a plan - ordered sequence of actions with parent-child relationships
+    /// Returns a tree-structured representation suitable for replay
+    ///
+    /// Actions are logged in real-time during plan execution, preserving chronological order.
+    /// This function ensures actions are sorted by timestamp for guaranteed chronological correctness.
+    pub fn get_plan_execution_trace(&self, plan_id: &PlanId) -> Vec<&Action> {
+        // Get all plan actions (already in insertion order, which should match chronological)
+        let mut all_actions = self.get_actions_for_plan(plan_id);
+
+        // Sort by timestamp to guarantee chronological order
+        all_actions.sort_by_key(|a| a.timestamp);
+
+        all_actions
+    }
+
+    /// Verify chain integrity and return diagnostic information
+    /// Returns (is_valid, total_actions, first_timestamp, last_timestamp)
+    pub fn verify_and_summarize(
+        &self,
+    ) -> Result<(bool, usize, Option<u64>, Option<u64>), RuntimeError> {
+        let is_valid = self.verify_integrity()?;
+        let total_actions = self.get_action_count();
+        let actions = self.get_all_actions();
+
+        let first_timestamp = actions.first().map(|a| a.timestamp);
+        let last_timestamp = actions.last().map(|a| a.timestamp);
+
+        Ok((is_valid, total_actions, first_timestamp, last_timestamp))
+    }
 }
 
 #[cfg(test)]
@@ -984,5 +1066,198 @@ mod tests {
         // Ensure the sink got the action id
         let guard = received.lock().unwrap();
         assert!(guard.iter().any(|id| id == &action.action_id));
+    }
+
+    #[test]
+    fn test_export_plan_actions_chronological_order() {
+        let mut chain = CausalChain::new().unwrap();
+        let plan_id = "plan-export-test".to_string();
+        let intent_id = "intent-export-test".to_string();
+
+        // Create actions with varying timestamps (simulate real-time logging)
+        let action1 = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action2 = Action::new(
+            ActionType::CapabilityCall,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_name("test.capability");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action3 = Action::new(
+            ActionType::PlanCompleted,
+            plan_id.clone(),
+            intent_id.clone(),
+        );
+
+        // Append actions (not in chronological order to test sorting)
+        chain.append(&action3).unwrap();
+        chain.append(&action1).unwrap();
+        chain.append(&action2).unwrap();
+
+        // Export and verify chronological order
+        let exported = chain.export_plan_actions(&plan_id);
+        assert_eq!(exported.len(), 3);
+        assert!(exported[0].timestamp <= exported[1].timestamp);
+        assert!(exported[1].timestamp <= exported[2].timestamp);
+        assert_eq!(exported[0].action_type, ActionType::PlanStarted);
+        assert_eq!(exported[1].action_type, ActionType::CapabilityCall);
+        assert_eq!(exported[2].action_type, ActionType::PlanCompleted);
+    }
+
+    #[test]
+    fn test_export_intent_actions_chronological_order() {
+        let mut chain = CausalChain::new().unwrap();
+        let plan_id = "plan-intent-export".to_string();
+        let intent_id = "intent-export-test-2".to_string();
+
+        let action1 = Action::new(
+            ActionType::IntentCreated,
+            plan_id.clone(),
+            intent_id.clone(),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action2 = Action::new(
+            ActionType::IntentStatusChanged,
+            plan_id.clone(),
+            intent_id.clone(),
+        );
+
+        chain.append(&action2).unwrap();
+        chain.append(&action1).unwrap();
+
+        let exported = chain.export_intent_actions(&intent_id);
+        assert_eq!(exported.len(), 2);
+        assert!(exported[0].timestamp <= exported[1].timestamp);
+    }
+
+    #[test]
+    fn test_export_all_actions_chronological_order() {
+        let mut chain = CausalChain::new().unwrap();
+        let plan_id1 = "plan-1".to_string();
+        let plan_id2 = "plan-2".to_string();
+        let intent_id = "intent-all".to_string();
+
+        let action1 = Action::new(ActionType::PlanStarted, plan_id1.clone(), intent_id.clone());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action2 = Action::new(ActionType::PlanStarted, plan_id2.clone(), intent_id.clone());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action3 = Action::new(
+            ActionType::PlanCompleted,
+            plan_id1.clone(),
+            intent_id.clone(),
+        );
+
+        // Append out of order
+        chain.append(&action3).unwrap();
+        chain.append(&action1).unwrap();
+        chain.append(&action2).unwrap();
+
+        let exported = chain.export_all_actions();
+        assert_eq!(exported.len(), 3);
+        // Verify chronological order
+        for i in 0..(exported.len() - 1) {
+            assert!(
+                exported[i].timestamp <= exported[i + 1].timestamp,
+                "Actions not in chronological order at index {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_plan_execution_trace() {
+        let mut chain = CausalChain::new().unwrap();
+        let plan_id = "plan-trace-test".to_string();
+        let intent_id = "intent-trace".to_string();
+
+        let action1 = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action2_id = format!("action-{}", uuid::Uuid::new_v4());
+        let action2 = Action::new(
+            ActionType::CapabilityCall,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_parent(Some(action1.action_id.clone()))
+        .with_name("test.capability");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action3 = Action::new(
+            ActionType::PlanCompleted,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_parent(Some(action2.action_id.clone()));
+
+        chain.append(&action3).unwrap();
+        chain.append(&action1).unwrap();
+        chain.append(&action2).unwrap();
+
+        let trace = chain.get_plan_execution_trace(&plan_id);
+        assert_eq!(trace.len(), 3);
+        // Verify chronological order
+        assert!(trace[0].timestamp <= trace[1].timestamp);
+        assert!(trace[1].timestamp <= trace[2].timestamp);
+        // Verify parent-child relationships are preserved
+        assert_eq!(trace[0].action_type, ActionType::PlanStarted);
+        assert_eq!(trace[1].parent_action_id, Some(trace[0].action_id.clone()));
+    }
+
+    #[test]
+    fn test_verify_and_summarize() {
+        let mut chain = CausalChain::new().unwrap();
+        let intent = Intent::new("Test summarize".to_string());
+        let action = chain.create_action(intent, None).unwrap();
+
+        let result = ExecutionResult {
+            success: true,
+            value: Value::Nil,
+            metadata: HashMap::new(),
+        };
+
+        chain.record_result(action, result).unwrap();
+
+        let (is_valid, total_actions, first_ts, last_ts) = chain.verify_and_summarize().unwrap();
+
+        assert!(is_valid);
+        assert!(total_actions > 0);
+        assert!(first_ts.is_some());
+        assert!(last_ts.is_some());
+        assert!(first_ts.unwrap() <= last_ts.unwrap());
+    }
+
+    #[test]
+    fn test_export_actions_with_query() {
+        let mut chain = CausalChain::new().unwrap();
+        let plan_id = "plan-query".to_string();
+        let intent_id = "intent-query".to_string();
+
+        let action1 = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action2 = Action::new(
+            ActionType::CapabilityCall,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_name("test.capability");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let action3 = Action::new(ActionType::InternalStep, plan_id.clone(), intent_id.clone());
+
+        chain.append(&action1).unwrap();
+        chain.append(&action2).unwrap();
+        chain.append(&action3).unwrap();
+
+        // Query for only CapabilityCall actions
+        let query = CausalQuery {
+            intent_id: None,
+            plan_id: Some(plan_id.clone()),
+            action_type: Some(ActionType::CapabilityCall),
+            time_range: None,
+            parent_action_id: None,
+        };
+
+        let exported = chain.export_actions(&query);
+        assert_eq!(exported.len(), 1);
+        assert_eq!(exported[0].action_type, ActionType::CapabilityCall);
     }
 }

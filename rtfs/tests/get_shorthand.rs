@@ -37,8 +37,7 @@ impl HostInterface for StubHost {
         &self,
         cap: &str,
         args: &[rtfs::runtime::values::Value],
-    ) -> Result<rtfs::runtime::values::Value, rtfs::runtime::error::RuntimeError>
-    {
+    ) -> Result<rtfs::runtime::values::Value, rtfs::runtime::error::RuntimeError> {
         match cap {
             "ccos.state.kv.put" => Ok(rtfs::runtime::values::Value::Nil), // Put operations return nil
             "ccos.state.kv.get" => {
@@ -49,9 +48,7 @@ impl HostInterface for StubHost {
                             map.get(&MapKey::Keyword(Keyword("key".to_string())))
                         {
                             if key == "k" {
-                                return Ok(rtfs::runtime::values::Value::String(
-                                    "v".to_string(),
-                                ));
+                                return Ok(rtfs::runtime::values::Value::String("v".to_string()));
                             }
                         }
                     }
@@ -78,7 +75,11 @@ fn test_get_shorthand_and_builtin_get() -> Result<(), rtfs::runtime::error::Runt
     // prepare evaluator
     let module_registry = Arc::new(ModuleRegistry::new());
     let host = Arc::new(StubHost);
-    let mut ev = Evaluator::new_with_defaults(module_registry, host);
+    let mut ev = Evaluator::new_with_defaults(
+        module_registry,
+        host,
+        rtfs::compiler::expander::MacroExpander::default(),
+    );
 
     // Test shorthand get with host capabilities (set! removed in migration)
     let set_prog = "(do (step \"set\" (call :ccos.state.kv.put {:key \"k\" :value \"v\"})))";

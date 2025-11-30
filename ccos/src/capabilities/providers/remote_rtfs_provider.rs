@@ -1,6 +1,6 @@
 use crate::capabilities::provider::{
-    CapabilityDescriptor, CapabilityProvider, ExecutionContext, HealthStatus, Permission,
-    ProviderMetadata, ResourceLimits, SecurityRequirements, NetworkAccess,
+    CapabilityDescriptor, CapabilityProvider, ExecutionContext, HealthStatus, NetworkAccess,
+    Permission, ProviderMetadata, ResourceLimits, SecurityRequirements,
 };
 use rtfs::ast::{PrimitiveType, TypeExpr};
 use rtfs::runtime::{RuntimeError, RuntimeResult, Value};
@@ -184,7 +184,10 @@ impl RemoteRTFSProvider {
             serde_json::Value::Object(map) => {
                 let mut result = std::collections::HashMap::new();
                 for (k, v) in map {
-                    result.insert(rtfs::ast::MapKey::String(k.clone()), Self::json_to_value(v)?);
+                    result.insert(
+                        rtfs::ast::MapKey::String(k.clone()),
+                        Self::json_to_value(v)?,
+                    );
                 }
                 Ok(Value::Map(result))
             }
@@ -239,21 +242,17 @@ impl RemoteRTFSProvider {
             });
         }
 
-        let endpoint = args[0]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[0].type_name().to_string(),
-                operation: "ccos.remote.execute (endpoint)".to_string(),
-            })?;
+        let endpoint = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[0].type_name().to_string(),
+            operation: "ccos.remote.execute (endpoint)".to_string(),
+        })?;
 
-        let code = args[1]
-            .as_string()
-            .ok_or_else(|| RuntimeError::TypeError {
-                expected: "string".to_string(),
-                actual: args[1].type_name().to_string(),
-                operation: "ccos.remote.execute (code)".to_string(),
-            })?;
+        let code = args[1].as_string().ok_or_else(|| RuntimeError::TypeError {
+            expected: "string".to_string(),
+            actual: args[1].type_name().to_string(),
+            operation: "ccos.remote.execute (code)".to_string(),
+        })?;
 
         // Optional context (arg 2)
         let context = if args.len() > 2 {
@@ -367,7 +366,10 @@ impl CapabilityProvider for RemoteRTFSProvider {
         }
     }
 
-    fn initialize(&mut self, _config: &crate::capabilities::provider::ProviderConfig) -> Result<(), String> {
+    fn initialize(
+        &mut self,
+        _config: &crate::capabilities::provider::ProviderConfig,
+    ) -> Result<(), String> {
         Ok(())
     }
 
@@ -379,7 +381,8 @@ impl CapabilityProvider for RemoteRTFSProvider {
         ProviderMetadata {
             name: "Remote RTFS Provider".to_string(),
             version: "0.1.0".to_string(),
-            description: "Execute RTFS code on remote CCOS endpoints with security propagation".to_string(),
+            description: "Execute RTFS code on remote CCOS endpoints with security propagation"
+                .to_string(),
             author: "CCOS".to_string(),
             license: Some("MIT".to_string()),
             dependencies: vec!["reqwest".to_string(), "serde_json".to_string()],
@@ -441,4 +444,3 @@ mod tests {
         assert_eq!(json["count"], 42);
     }
 }
-

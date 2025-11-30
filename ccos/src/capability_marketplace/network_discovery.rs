@@ -305,6 +305,9 @@ impl NetworkDiscoveryProvider {
             permissions,
             effects,
             metadata,
+            agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         })
     }
 }
@@ -475,6 +478,9 @@ mod tests {
             permissions: vec![],
             effects: vec![],
             metadata: HashMap::new(),
+            agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         assert!(provider.validate_capability_manifest(&valid_manifest).is_ok());
@@ -505,6 +511,9 @@ mod tests {
             permissions: vec![],
             effects: vec![],
             metadata: HashMap::new(),
+            agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         assert!(provider.validate_capability_manifest(&invalid_manifest).is_err());

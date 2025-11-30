@@ -1,7 +1,7 @@
-use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::parser::parse_expression;
 use rtfs::runtime::evaluator::Evaluator;
 use rtfs::runtime::module_runtime::ModuleRegistry;
+use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::runtime::stdlib::StandardLibrary;
 use rtfs::runtime::values::Value;
 use std::sync::Arc;
@@ -18,7 +18,12 @@ impl StdlibTestRunner {
         let module_registry = Arc::new(ModuleRegistry::new());
         let security_context = rtfs::runtime::security::RuntimeContext::pure();
         let host = create_pure_host();
-        let evaluator = Evaluator::new(module_registry, security_context, host);
+        let evaluator = Evaluator::new(
+            module_registry,
+            security_context,
+            host,
+            rtfs::compiler::expander::MacroExpander::default(),
+        );
 
         Self { evaluator, env }
     }
@@ -442,7 +447,6 @@ fn test_type_predicate_functions() {
     let mut runner = StdlibTestRunner::new();
     runner.run_type_predicate_tests().unwrap();
 }
-
 
 #[test]
 fn test_all_stdlib_functions() {

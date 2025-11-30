@@ -681,7 +681,7 @@ impl ArbiterEngine for DummyArbiter {
                     metadata: HashMap::new(),
                 },
                 Arc::new(CapabilityMarketplace::new(Arc::new(RwLock::new(
-                    rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+                    crate::capabilities::registry::CapabilityRegistry::new(),
                 )))),
             )
             .await?;

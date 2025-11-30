@@ -162,3 +162,12 @@ let choice = input.trim();
 - [Metadata-Driven Capabilities](./metadata-driven-capabilities.md) - Capability metadata structure
 
 
+
+
+
+
+
+
+
+
+

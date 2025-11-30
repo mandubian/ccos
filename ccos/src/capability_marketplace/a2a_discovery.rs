@@ -255,6 +255,8 @@ impl A2ADiscoveryProvider {
                 
                 metadata
             },
+            domains: Vec::new(),
+            categories: Vec::new(),
         }
     }
 

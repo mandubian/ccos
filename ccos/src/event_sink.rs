@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 /// Mandatory audit surface for intent lifecycle transitions.
 /// The API uses stable string status representations for compatibility across versions.
-pub trait IntentEventSink: Debug + 'static {
+pub trait IntentEventSink: Debug + Send + Sync + 'static {
     fn log_intent_status_change(
         &self,
         plan_id: &str,

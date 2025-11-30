@@ -1,4 +1,5 @@
 pub mod capability;
+pub mod data_processing;
 pub mod defaults;
 pub mod mcp_session_handler;
 pub mod provider;

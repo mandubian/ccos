@@ -4,11 +4,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rtfs::ast::{Keyword, MapKey, Symbol};
+use rtfs::ast::Symbol;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::evaluator::Evaluator;
 use rtfs::runtime::execution_outcome::ExecutionOutcome;
-use rtfs::runtime::values::{Arity, BuiltinFunction, BuiltinFunctionWithContext, Function, Value};
+use rtfs::runtime::values::{Arity, BuiltinFunctionWithContext, Function, Value};
 use rtfs::runtime::Environment;
 
 /// Load CCOS-provided prelude into the given environment.
@@ -59,8 +59,16 @@ pub fn load_prelude(env: &mut Environment) {
             name: "println".to_string(),
             arity: Arity::Variadic(0),
             func: Arc::new(
-                |args: Vec<Value>, evaluator: &Evaluator, _env: &mut Environment| {
-                    evaluator.host.execute_capability("ccos.io.println", &args)
+                |args: Vec<Value>, _evaluator: &Evaluator, _env: &mut Environment| {
+                    // Direct host-side print for reliability in demos
+                    if args.is_empty() {
+                        println!("");
+                    } else {
+                        let parts: Vec<String> =
+                            args.into_iter().map(|v| format!("{}", v)).collect();
+                        println!("{}", parts.join(" "));
+                    }
+                    Ok(Value::Nil)
                 },
             ),
         })),
@@ -251,6 +259,20 @@ pub fn load_prelude(env: &mut Environment) {
             ),
         })),
     );
+
+    // Capability loading
+    env.define(
+        &Symbol("load-capability".to_string()),
+        Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+            name: "load-capability".to_string(),
+            arity: Arity::Fixed(1),
+            func: Arc::new(
+                |args: Vec<Value>, evaluator: &Evaluator, _env: &mut Environment| {
+                    load_capability(args, evaluator)
+                },
+            ),
+        })),
+    );
 }
 
 /// (kv/assoc! key k v [k v]...) -> get, assoc (pure), put, return new
@@ -395,4 +417,74 @@ fn kv_conj_bang(
         .host
         .execute_capability("ccos.state.kv.put", &[kv_key, updated.clone()]);
     Ok(updated)
+}
+
+/// (load-capability file-path) -> Loads a capability from an RTFS file
+///
+/// This function reads an RTFS file containing a capability definition,
+/// parses it, and returns the capability ID(s) found in the file.
+///
+/// Note: This function only parses and returns the capability ID(s).
+/// The actual registration happens when the file is executed via execute_file.
+/// For full functionality, use the environment's execute_file method or register
+/// a capability that handles file loading.
+fn load_capability(args: Vec<Value>, _evaluator: &Evaluator) -> RuntimeResult<Value> {
+    if args.len() != 1 {
+        return Err(RuntimeError::ArityMismatch {
+            function: "load-capability".into(),
+            expected: "1".into(),
+            actual: args.len(),
+        });
+    }
+
+    let file_path = match &args[0] {
+        Value::String(s) => s.clone(),
+        _ => {
+            return Err(RuntimeError::TypeError {
+                expected: "string".to_string(),
+                actual: args[0].type_name().to_string(),
+                operation: "load-capability".to_string(),
+            })
+        }
+    };
+
+    // Read the file
+    let code = std::fs::read_to_string(&file_path).map_err(|e| {
+        RuntimeError::Generic(format!(
+            "Failed to read capability file '{}': {}",
+            file_path, e
+        ))
+    })?;
+
+    // Parse the RTFS code to find capability definitions
+    let parsed = rtfs::parser::parse_with_enhanced_errors(&code, None).map_err(|e| {
+        RuntimeError::Generic(format!(
+            "Failed to parse capability file '{}': {}",
+            file_path, e
+        ))
+    })?;
+
+    // Find capability definitions and return their IDs
+    let mut registered_ids = Vec::new();
+    for top_level in parsed {
+        if let rtfs::ast::TopLevel::Capability(cap_def) = top_level {
+            registered_ids.push(cap_def.name.0.clone());
+        }
+    }
+
+    if registered_ids.is_empty() {
+        return Err(RuntimeError::Generic(format!(
+            "No capability definitions found in file '{}'",
+            file_path
+        )));
+    }
+
+    // Return the first capability ID found (or a list if multiple)
+    if registered_ids.len() == 1 {
+        Ok(Value::String(registered_ids[0].clone()))
+    } else {
+        Ok(Value::Vector(
+            registered_ids.into_iter().map(Value::String).collect(),
+        ))
+    }
 }

@@ -1,105 +1,117 @@
 # RTFS 2.0: Concurrency Model
 
-## 1. Synchronous Core
+## 1. Overview
 
-RTFS evaluation is fundamentally synchronous - one expression at a time. Concurrency is handled entirely through the host environment using structured concurrency patterns.
+RTFS 2.0 enforces a **strict host-mediated concurrency model**. The RTFS evaluator itself is single-threaded and synchronous. All parallel execution is achieved by delegating units of work (Tasks) to the CCOS Host.
 
-## 2. Host-Mediated Parallelism
+### Core Principles
 
-### Parallel Capability
+1.  **Synchronous Core**: The RTFS evaluator never manages threads or locks directly.
+2.  **Host Delegation**: Concurrency is a side-effect provided by the Host via capabilities.
+3.  **Closure-Based Units**: Parallel tasks are defined as RTFS closures (functions) capturing their environment.
+4.  **Isolated Execution**: Parallel branches run in isolated contexts; they cannot mutate shared RTFS state (variables), ensuring thread safety by design.
 
-The host provides a `:parallel` capability for concurrent execution:
+## 2. The `step-parallel` Special Form
 
-```rtfs
-;; Declarative parallel execution
-(def work {:user (task :api.get-user 123)
-           :posts (task :api.get-posts 123)
-           :prefs (task :api.get-prefs 123)})
+The primary interface for concurrency is the `step-parallel` special form.
 
-(def results (call :parallel work))
+### Syntax
 
-;; Results contain all concurrent operations
-(let [user (:user results)
-      posts (:posts results)
-      prefs (:prefs results)]
-  (process-data user posts prefs))
+```clojure
+(step-parallel
+  (expression-1)
+  (expression-2)
+  ...)
 ```
 
-### Task Construction
+### Semantics (Specification)
 
-Tasks are pure data structures representing deferred operations:
+When the evaluator encounters `step-parallel`:
 
-```rtfs
-;; Task creation
-(task :capability.name arg1 arg2 ...)
-(task :fs.read "/file.txt")
-(task :http.get "https://api.example.com/data")
+1.  **Capture**: It captures the current lexical environment.
+2.  **Package**: It wraps each expression into a 0-arity closure: `(fn [] expression-n)`.
+3.  **Yield**: It yields control to the Host with a request to the `:ccos.concurrent/parallel` capability, passing the closures as arguments.
+4.  **Resume**: It waits for the Host to return a vector of results (matching the order of expressions).
+
+### Example
+
+```clojure
+;; RTFS Code
+(let [user-id 123]
+  (step-parallel
+    (call :user.get-profile user-id)    ; Branch 1
+    (call :user.get-history user-id)))  ; Branch 2
 ```
 
-## 3. Structured Concurrency
+**Internal Execution Flow**:
+1.  Evaluator creates closures: `[(fn [] (call ...)), (fn [] (call ...))]`.
+2.  Evaluator yields: `RequiresHost(:ccos.concurrent/parallel, [Closure1, Closure2])`.
+3.  Host spawns 2 async tasks.
+4.  Host creates 2 new Evaluators (sharing code/registry, forked environment).
+5.  Host executes closures in parallel.
+6.  Host returns `[Profile, History]`.
+7.  Evaluator resumes and returns the vector.
 
-### Single Yield Point
+## 3. Host Capability: `:ccos.concurrent/parallel`
 
-Parallel execution uses one synchronous call to the host:
+The Host must implement the `:ccos.concurrent/parallel` capability to support this model.
 
-1. RTFS builds task map (pure data)
-2. Single `call :parallel` yields to host
-3. Host executes tasks concurrently
-4. Host resumes RTFS with result map
+### Capability Contract
 
-### Benefits
+-   **ID**: `ccos.concurrent/parallel`
+-   **Input**: `[Function]` (Variadic list of RTFS functions)
+-   **Output**: `[Value]` (Vector of results in order)
+-   **Error Behavior**:
+    -   If any branch fails, the Host typically returns the first error (fail-fast) or a composite error object (depending on configured policy).
+    -   Cancellations are propagated to all running branches.
 
-- **Declarative**: RTFS describes what, not how
-- **Efficient**: Single host round-trip
-- **Pure**: RTFS core remains synchronous
-- **Safe**: Host controls all parallelism
+### Isolation and Safety
 
-## 4. Sequential Fallback
+Since RTFS data structures are immutable and closures capture the environment at the point of definition:
+-   **No Shared Mutable State**: Branches cannot modify variables in the parent scope.
+-   **Thread Safety**: The Host can safely run branches in separate threads without locking RTFS data.
 
-For simple cases, sequential processing is preferred:
+## 4. Advanced Patterns
 
-```rtfs
-;; Sequential processing (simpler, more predictable)
-(defn process-items [items]
-  (map process-item items))
+### Parallel Map
+
+User-space functions can build on `step-parallel` to implement patterns like `pmap`.
+
+*(Note: This requires `apply` or macro support to expand dynamic lists into `step-parallel` arguments, or a direct `pmap` capability from the Host).*
+
+```clojure
+;; Conceptual pmap implementation using host capability directly
+(defn pmap [f coll]
+  (let [tasks (map (fn [x] (fn [] (f x))) coll)]
+    (call :ccos.concurrent/parallel tasks)))
 ```
 
-## 5. Error Handling in Parallel Operations
+### Futures and Async/Await
 
-Errors in parallel tasks are collected and returned:
+For non-blocking coordination without strict parallelism blocks, RTFS relies on Host "Futures".
 
-```rtfs
-(def results (call :parallel
-  {:success (task :safe.operation)
-   :failure (task :risky.operation)}))
-
-;; Check for errors
-(if (:error results)
-  (handle-parallel-error (:error results))
-  (process-success (:success results)))
+```clojure
+;; Start a background task via Host
+(let [future-id (call :ccos.async/spawn (fn [] (heavy-work)))]
+  ;; Do local work...
+  (local-work)
+  ;; Await result
+  (call :ccos.async/await future-id))
 ```
 
-## 6. Performance Considerations
+## 5. Implementation Strategy (Guide)
 
-### When to Use Parallelism
+To implement this model in CCOS:
 
-- I/O bound operations (network, file access)
-- Independent computations
-- Multiple external service calls
+1.  **Evaluator**: Modify `eval_step_parallel_form` to stop executing loop sequentially. Instead, construct `Value::Function` objects for each expression and yield `ExecutionOutcome::RequiresHost`.
+2.  **Host**: Register `ccos.concurrent/parallel`.
+3.  **Runtime**: The capability implementation needs access to the `ModuleRegistry` to spawn lightweight `Evaluator` instances for each task.
 
-### When to Avoid
+## 6. Comparison with Previous Models
 
-- CPU-bound computations (GIL/serial execution)
-- Dependent operations
-- Simple sequential work
-
-## 7. Host Implementation
-
-The host manages:
-- Thread pools
-- Task scheduling
-- Resource limits
-- Timeout handling
-- Error aggregation
-
-RTFS remains focused on pure computation and data transformation.
+| Feature | Old Model (Deprecated) | New Model (Host-Mediated) |
+| :--- | :--- | :--- |
+| **Keyword** | `parallel` | `step-parallel` (or direct capability call) |
+| **Execution** | Unclear/Mixed | Explicit Host Delegation |
+| **State** | Potential races | Strictly Isolated (Immutable capture) |
+| **Mechanism** | Evaluator magic | Standard Capability System |

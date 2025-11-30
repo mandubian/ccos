@@ -106,9 +106,7 @@ fn test_parse_symbol_keyword() {
     );
     assert_expr_parses_to!(
         "my-namespace/my-symbol",
-        Expression::Symbol(rtfs::ast::Symbol(
-            "my-namespace/my-symbol".to_string()
-        ))
+        Expression::Symbol(rtfs::ast::Symbol("my-namespace/my-symbol".to_string()))
     );
     assert_expr_parses_to!(
         ":my-keyword",
@@ -135,9 +133,7 @@ fn test_parse_collections() {
     assert_expr_parses_to!(
         "(+ 1 2)",
         Expression::FunctionCall {
-            callee: Box::new(Expression::Symbol(rtfs::ast::Symbol(
-                "+".to_string()
-            ))),
+            callee: Box::new(Expression::Symbol(rtfs::ast::Symbol("+".to_string()))),
             arguments: vec![
                 Expression::Literal(Literal::Integer(1)),
                 Expression::Literal(Literal::Integer(2)),
