@@ -1,0 +1,230 @@
+# OpenWeatherMap API
+# https://openweathermap.org/api
+# 
+# Provides current weather, forecasts, and historical data.
+# API key required - get one at https://openweathermap.org/appid
+
+[api]
+name = "openweathermap"
+title = "OpenWeatherMap API"
+base_url = "https://api.openweathermap.org"
+version = "2.5"
+description = "Access current weather data for any location including over 200,000 cities. Get weather forecasts, historical data, and more."
+domains = ["weather", "forecast", "climate", "meteorology"]
+documentation_url = "https://openweathermap.org/api"
+
+[auth]
+type = "api_key"
+location = "query"
+param_name = "appid"
+env_var = "OPENWEATHERMAP_API_KEY"
+required = true
+
+[rate_limits]
+requests_per_minute = 60
+requests_per_day = 1000
+
+# Current Weather Data
+[[endpoints]]
+id = "get_current_weather"
+name = "Get Current Weather"
+description = "Access current weather data for any location by city name, coordinates, or city ID"
+method = "GET"
+path = "/data/2.5/weather"
+
+[[endpoints.params]]
+name = "q"
+type = "string"
+location = "query"
+required = false
+description = "City name, state code and country code divided by comma (e.g., 'London,UK' or 'Paris,FR')"
+
+[[endpoints.params]]
+name = "lat"
+type = "float"
+location = "query"
+required = false
+description = "Latitude coordinate (-90 to 90)"
+
+[[endpoints.params]]
+name = "lon"
+type = "float"
+location = "query"
+required = false
+description = "Longitude coordinate (-180 to 180)"
+
+[[endpoints.params]]
+name = "id"
+type = "int"
+location = "query"
+required = false
+description = "City ID from OpenWeatherMap city list"
+
+[[endpoints.params]]
+name = "units"
+type = "string"
+location = "query"
+required = false
+description = "Units of measurement: 'standard' (Kelvin), 'metric' (Celsius), or 'imperial' (Fahrenheit)"
+default = "standard"
+
+[[endpoints.params]]
+name = "lang"
+type = "string"
+location = "query"
+required = false
+description = "Language code for weather description (e.g., 'en', 'fr', 'de', 'es')"
+
+# 5 Day / 3 Hour Forecast
+[[endpoints]]
+id = "get_forecast"
+name = "Get 5 Day Weather Forecast"
+description = "5 day weather forecast with data every 3 hours for any location"
+method = "GET"
+path = "/data/2.5/forecast"
+
+[[endpoints.params]]
+name = "q"
+type = "string"
+location = "query"
+required = false
+description = "City name, state code and country code divided by comma"
+
+[[endpoints.params]]
+name = "lat"
+type = "float"
+location = "query"
+required = false
+description = "Latitude coordinate"
+
+[[endpoints.params]]
+name = "lon"
+type = "float"
+location = "query"
+required = false
+description = "Longitude coordinate"
+
+[[endpoints.params]]
+name = "units"
+type = "string"
+location = "query"
+required = false
+description = "Units of measurement: 'standard', 'metric', or 'imperial'"
+
+[[endpoints.params]]
+name = "cnt"
+type = "int"
+location = "query"
+required = false
+description = "Number of timestamps to return (max 40)"
+
+# Air Pollution
+[[endpoints]]
+id = "get_air_pollution"
+name = "Get Air Pollution"
+description = "Get current air pollution data for any location by coordinates"
+method = "GET"
+path = "/data/2.5/air_pollution"
+
+[[endpoints.params]]
+name = "lat"
+type = "float"
+location = "query"
+required = true
+description = "Latitude coordinate"
+
+[[endpoints.params]]
+name = "lon"
+type = "float"
+location = "query"
+required = true
+description = "Longitude coordinate"
+
+# Geocoding
+[[endpoints]]
+id = "geocode_direct"
+name = "Geocode City Name"
+description = "Convert city name to geographic coordinates (lat/lon)"
+method = "GET"
+path = "/geo/1.0/direct"
+
+[[endpoints.params]]
+name = "q"
+type = "string"
+location = "query"
+required = true
+description = "City name, state code (US only), and country code divided by comma"
+
+[[endpoints.params]]
+name = "limit"
+type = "int"
+location = "query"
+required = false
+description = "Number of locations to return (max 5)"
+default = "5"
+
+# Reverse Geocoding
+[[endpoints]]
+id = "geocode_reverse"
+name = "Reverse Geocode"
+description = "Convert geographic coordinates to city name"
+method = "GET"
+path = "/geo/1.0/reverse"
+
+[[endpoints.params]]
+name = "lat"
+type = "float"
+location = "query"
+required = true
+description = "Latitude coordinate"
+
+[[endpoints.params]]
+name = "lon"
+type = "float"
+location = "query"
+required = true
+description = "Longitude coordinate"
+
+[[endpoints.params]]
+name = "limit"
+type = "int"
+location = "query"
+required = false
+description = "Number of locations to return (max 5)"
+
+# One Call API 3.0 (requires subscription)
+[[endpoints]]
+id = "onecall"
+name = "One Call API"
+description = "Get current weather, minute forecast for 1 hour, hourly forecast for 48 hours, daily forecast for 8 days, and historical data for 40+ years"
+method = "GET"
+path = "/data/3.0/onecall"
+subscription_required = true
+
+[[endpoints.params]]
+name = "lat"
+type = "float"
+location = "query"
+required = true
+description = "Latitude coordinate"
+
+[[endpoints.params]]
+name = "lon"
+type = "float"
+location = "query"
+required = true
+description = "Longitude coordinate"
+
+[[endpoints.params]]
+name = "exclude"
+type = "string"
+location = "query"
+required = false
+description = "Comma-separated list of parts to exclude: current, minutely, hourly, daily, alerts"
+
+[[endpoints.params]]
+name = "units"
+type = "string"
+location = "query"
+required = false
+description = "Units of measurement: 'standard', 'metric', or 'imperial'"
