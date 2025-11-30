@@ -1,6 +1,7 @@
 use crate::cli::CliContext;
 use clap::Args;
 use rtfs::runtime::error::RuntimeResult;
+use std::process::Command;
 
 #[derive(Args)]
 pub struct ExploreArgs {
@@ -13,16 +14,31 @@ pub async fn execute(
     _ctx: &mut CliContext,
     args: ExploreArgs,
 ) -> RuntimeResult<()> {
-    // For now, suggest using the existing capability_explorer
-    eprintln!("Interactive explorer launching...");
+    // Launch capability_explorer example as a subprocess for now
+    // In future this should be integrated directly
+    
+    let mut cmd = Command::new("cargo");
+    cmd.arg("run")
+       .arg("--example")
+       .arg("capability_explorer")
+       .arg("--");
+
     if let Some(s) = args.server {
-        eprintln!("Starting with server: {}", s);
+        cmd.arg("--server");
+        cmd.arg(s);
     }
-    eprintln!();
-    eprintln!("Note: For now, use the capability_explorer example:");
-    eprintln!("  cargo run --example capability_explorer -- --config ../config/agent_config.toml");
-    eprintln!();
-    eprintln!("See: https://github.com/mandubian/ccos/issues/172");
+
+    // Pass through config if we knew where it was, but here we use default
+    cmd.arg("--config");
+    cmd.arg("config/agent_config.toml");
+
+    let status = cmd.status().map_err(|e| {
+        rtfs::runtime::error::RuntimeError::Generic(format!("Failed to launch explorer: {}", e))
+    })?;
+
+    if !status.success() {
+        return Err(rtfs::runtime::error::RuntimeError::Generic("Explorer exited with error".to_string()));
+    }
 
     Ok(())
 }
