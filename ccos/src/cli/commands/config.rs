@@ -28,21 +28,21 @@ pub enum ConfigCommand {
     },
 }
 
-impl ConfigCommand {
-    pub async fn execute(&self, ctx: &CliContext) -> RuntimeResult<()> {
-        let formatter = OutputFormatter::new(ctx.output_format);
+pub async fn execute(ctx: &CliContext, command: ConfigCommand) -> RuntimeResult<()> {
+    let formatter = OutputFormatter::new(ctx.output_format);
 
-        match self {
-            ConfigCommand::Show { section } => {
-                self.show_config(ctx, section.as_deref(), &formatter)
-            }
-            ConfigCommand::Validate => self.validate_config(ctx, &formatter),
-            ConfigCommand::Init { output, force } => {
-                self.init_config(output, *force, &formatter)
-            }
+    match &command {
+        ConfigCommand::Show { section } => {
+            command.show_config(ctx, section.as_deref(), &formatter)
+        }
+        ConfigCommand::Validate => command.validate_config(ctx, &formatter),
+        ConfigCommand::Init { output, force } => {
+            command.init_config(output, *force, &formatter)
         }
     }
+}
 
+impl ConfigCommand {
     fn show_config(
         &self,
         ctx: &CliContext,
