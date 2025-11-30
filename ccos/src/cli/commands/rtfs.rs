@@ -1,8 +1,9 @@
 use crate::cli::CliContext;
 use crate::cli::OutputFormatter;
 use clap::Subcommand;
-use rtfs::runtime::error::RuntimeResult;
+use rtfs::runtime::error::{RuntimeResult, RuntimeError};
 use std::path::PathBuf;
+use std::process::Command;
 
 #[derive(Subcommand)]
 pub enum RtfsCommand {
@@ -30,14 +31,55 @@ pub async fn execute(
 
     match command {
         RtfsCommand::Eval { expr } => {
-            formatter.warning(&format!("RTFS eval not yet implemented. Expr: {}", expr));
+            // Using capability_explorer for RTFS eval temporarily to leverage its context
+            let mut cmd = Command::new("cargo");
+            cmd.arg("run")
+               .arg("--example")
+               .arg("capability_explorer")
+               .arg("--quiet")
+               .arg("--rtfs")
+               .arg(expr);
+            
+            let status = cmd.status().map_err(|e| {
+                RuntimeError::Generic(format!("Failed to run RTFS eval: {}", e))
+            })?;
+            
+            if !status.success() {
+                return Err(RuntimeError::Generic("RTFS evaluation failed".to_string()));
+            }
         }
         RtfsCommand::Run { file } => {
-            formatter.warning(&format!("RTFS run not yet implemented. File: {:?}", file));
+             // Using capability_explorer for RTFS run temporarily
+            let mut cmd = Command::new("cargo");
+            cmd.arg("run")
+               .arg("--example")
+               .arg("capability_explorer")
+               .arg("--quiet")
+               .arg("--rtfs-file")
+               .arg(file);
+               
+            let status = cmd.status().map_err(|e| {
+                RuntimeError::Generic(format!("Failed to run RTFS file: {}", e))
+            })?;
+            
+            if !status.success() {
+                return Err(RuntimeError::Generic("RTFS file execution failed".to_string()));
+            }
         }
         RtfsCommand::Repl => {
-            formatter.warning("RTFS REPL not yet implemented");
-            formatter.list_item("Use: cargo run --bin rtfs-repl");
+            formatter.status("Starting RTFS REPL...");
+            let mut cmd = Command::new("cargo");
+            cmd.arg("run")
+               .arg("--bin")
+               .arg("rtfs-ccos-repl");
+               
+            let status = cmd.status().map_err(|e| {
+                RuntimeError::Generic(format!("Failed to start REPL: {}", e))
+            })?;
+            
+            if !status.success() {
+                return Err(RuntimeError::Generic("REPL exited with error".to_string()));
+            }
         }
     }
 
