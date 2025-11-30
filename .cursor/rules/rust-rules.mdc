@@ -92,3 +92,20 @@ rules:
       cargo test --test custom_tests -- --option1 --option2 
     message: "Run custom tests for the project."
     severity: info
+
+# Code Factorization Guidelines
+# 
+# IMPORTANT: Before implementing utility functions, especially for value conversions,
+# ALWAYS check ccos::utils modules for existing shared utilities.
+#
+# Key shared utilities available:
+# - ccos::utils::value_conversion::rtfs_value_to_json - Convert RTFS Value to JSON
+# - ccos::utils::value_conversion::json_to_rtfs_value - Convert JSON to RTFS Value  
+# - ccos::utils::value_conversion::map_key_to_string - Convert MapKey to String
+# - ccos::utils::value_conversion::strip_leading_colon - Strip leading colon from strings
+#
+# When writing code:
+# 1. Check ccos::utils::value_conversion before implementing any RTFS↔JSON conversion
+# 2. Factorize common patterns into shared utility modules
+# 3. Avoid duplicating conversion logic - use existing utilities
+# 4. If you find duplicate code, extract it to ccos::utils

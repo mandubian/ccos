@@ -4,13 +4,17 @@ use crate::arbiter::delegating_arbiter::DelegatingArbiter;
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::discovery::config::DiscoveryConfig;
+use crate::discovery::discovery_agent::DiscoveryAgent;
 use crate::discovery::introspection_cache::IntrospectionCache;
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::discovery::recursive_synthesizer::RecursiveSynthesizer;
 use crate::intent_graph::IntentGraph;
+use crate::synthesis::primitives::PrimitiveContext;
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
+use crate::utils::value_conversion;
 use regex;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+use serde_json::Value as JsonValue;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -38,6 +42,8 @@ pub struct DiscoveryEngine {
     introspection_cache: Option<Arc<IntrospectionCache>>,
     /// Configuration for discovery behavior
     config: DiscoveryConfig,
+    /// Discovery agent for intelligent hint generation and ranking
+    discovery_agent: Option<Arc<DiscoveryAgent>>,
 }
 
 impl DiscoveryEngine {
@@ -46,12 +52,21 @@ impl DiscoveryEngine {
         marketplace: Arc<CapabilityMarketplace>,
         intent_graph: Arc<Mutex<IntentGraph>>,
     ) -> Self {
+        let config = DiscoveryConfig::from_env();
+        let discovery_agent = Some(Arc::new(DiscoveryAgent::new(
+            Arc::clone(&marketplace),
+            config.clone(),
+        )));
+        if std::env::var("CCOS_DEBUG").is_ok() {
+            eprintln!("🔍 DiscoveryEngine: Discovery agent initialized");
+        }
         Self {
             marketplace,
             intent_graph,
             delegating_arbiter: None,
             introspection_cache: None,
-            config: DiscoveryConfig::from_env(),
+            config,
+            discovery_agent,
         }
     }
 
@@ -61,12 +76,18 @@ impl DiscoveryEngine {
         intent_graph: Arc<Mutex<IntentGraph>>,
         agent_config: &rtfs::config::types::AgentConfig,
     ) -> Self {
+        let config = DiscoveryConfig::from_agent_config(&agent_config.discovery);
+        let discovery_agent = Some(Arc::new(DiscoveryAgent::new(
+            Arc::clone(&marketplace),
+            config.clone(),
+        )));
         Self {
             marketplace,
             intent_graph,
             delegating_arbiter: None,
             introspection_cache: None,
-            config: DiscoveryConfig::from_agent_config(&agent_config.discovery),
+            config,
+            discovery_agent,
         }
     }
 
@@ -76,12 +97,18 @@ impl DiscoveryEngine {
         intent_graph: Arc<Mutex<IntentGraph>>,
         delegating_arbiter: Option<Arc<DelegatingArbiter>>,
     ) -> Self {
+        let config = DiscoveryConfig::from_env();
+        let discovery_agent = Some(Arc::new(DiscoveryAgent::new(
+            Arc::clone(&marketplace),
+            config.clone(),
+        )));
         Self {
             marketplace,
             intent_graph,
             delegating_arbiter,
             introspection_cache: None,
-            config: DiscoveryConfig::from_env(),
+            config,
+            discovery_agent,
         }
     }
 
@@ -92,12 +119,18 @@ impl DiscoveryEngine {
         delegating_arbiter: Option<Arc<DelegatingArbiter>>,
         agent_config: &rtfs::config::types::AgentConfig,
     ) -> Self {
+        let config = DiscoveryConfig::from_agent_config(&agent_config.discovery);
+        let discovery_agent = Some(Arc::new(DiscoveryAgent::new(
+            Arc::clone(&marketplace),
+            config.clone(),
+        )));
         Self {
             marketplace,
             intent_graph,
             delegating_arbiter,
             introspection_cache: None,
-            config: DiscoveryConfig::from_agent_config(&agent_config.discovery),
+            config,
+            discovery_agent,
         }
     }
 
@@ -600,12 +633,84 @@ impl DiscoveryEngine {
         &self,
         need: &CapabilityNeed,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
-        // Use MCP registry client to search for servers
-        let registry_client = crate::synthesis::mcp_registry_client::McpRegistryClient::new();
+        eprintln!(
+            "  → search_mcp_registry called for: {}",
+            need.capability_class
+        );
+        eprintln!(
+            "  → Discovery agent available: {}",
+            self.discovery_agent.is_some()
+        );
 
-        // Extract search keywords from capability class
-        // e.g., "restaurant.api.reserve" -> search for "restaurant" and "reserve"
-        let keywords: Vec<&str> = need.capability_class.split('.').collect();
+        // Use discovery agent if available to get intelligent suggestions
+        let (keywords, registry_queries) = if let Some(ref agent) = self.discovery_agent {
+            eprintln!("  → Using discovery agent for intelligent query generation...");
+            // Learn vocabulary if not already done (lazy initialization)
+            if let Err(e) = agent.learn_vocabulary().await {
+                eprintln!("  ⚠️  Discovery agent vocabulary learning failed: {}", e);
+            } else {
+                eprintln!("  → Discovery agent vocabulary loaded");
+            }
+
+            // Get suggestions from agent (we'll use goal from rationale for now)
+            // TODO: Pass actual goal and intent when available
+            match agent.suggest(&need.rationale, None, need).await {
+                Ok(suggestion) => {
+                    eprintln!(
+                        "  → Discovery agent suggested {} hint(s) and {} query(ies)",
+                        suggestion.hints.len(),
+                        suggestion.registry_queries.len()
+                    );
+                    if !suggestion.hints.is_empty() {
+                        eprintln!("  → Hints: {:?}", suggestion.hints);
+                    }
+                    if !suggestion.registry_queries.is_empty() {
+                        eprintln!("  → Registry queries: {:?}", suggestion.registry_queries);
+                    }
+
+                    // Use first registry query as primary, extract keywords from it
+                    let primary_query = suggestion
+                        .registry_queries
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| need.capability_class.clone());
+                    let keywords: Vec<String> =
+                        primary_query.split_whitespace().map(String::from).collect();
+                    (keywords, suggestion.registry_queries)
+                }
+                Err(e) => {
+                    eprintln!("  ⚠️  Discovery agent suggestion failed: {}, falling back to legacy method", e);
+                    // Fallback to old method if agent fails
+                    let mut keywords: Vec<String> =
+                        need.capability_class.split('.').map(String::from).collect();
+                    let context_tokens = extract_context_tokens(&need.rationale);
+                    for token in context_tokens {
+                        if !keywords.iter().any(|k| k == &token) {
+                            keywords.insert(0, token);
+                        }
+                    }
+                    let search_query = keywords.join(" ");
+                    (keywords, vec![search_query])
+                }
+            }
+        } else {
+            eprintln!("  → Discovery agent not available, using legacy extraction method");
+            // Fallback: use old extraction method
+            let mut keywords: Vec<String> =
+                need.capability_class.split('.').map(String::from).collect();
+            let context_tokens = extract_context_tokens(&need.rationale);
+            for token in context_tokens {
+                if !keywords.iter().any(|k| k == &token) {
+                    keywords.insert(0, token);
+                }
+            }
+            let search_query = keywords.join(" ");
+            (keywords, vec![search_query])
+        };
+
+        // Use MCP registry client to search for servers
+        let registry_client = crate::mcp::registry::MCPRegistryClient::new();
+
         let search_query = keywords.join(" "); // Use space-separated keywords for search
 
         eprintln!("  → MCP registry search query: '{}'", search_query);
@@ -651,7 +756,29 @@ impl DiscoveryEngine {
             }
         }
 
-        // If no servers found with full query, try progressively simpler queries
+        // If no servers found with full query, try agent-suggested fallback queries
+        if servers.is_empty() && !registry_queries.is_empty() {
+            // Try remaining registry queries from agent
+            for query in registry_queries.iter().skip(1).take(3) {
+                eprintln!(
+                    "  → No servers found, trying agent-suggested query: '{}'",
+                    query
+                );
+                if let Ok(fallback_servers) = registry_client.search_servers(query).await {
+                    if !fallback_servers.is_empty() {
+                        eprintln!(
+                            "  → Found {} MCP server(s) for '{}'",
+                            fallback_servers.len(),
+                            query
+                        );
+                        servers.extend(fallback_servers);
+                        break; // Stop after first successful query
+                    }
+                }
+            }
+        }
+
+        // If still no servers, try progressively simpler queries (legacy fallback)
         // e.g., if "text filter by-content" finds nothing, try "text filter", then "filter"
         // This avoids matching completely unrelated servers like "textarttools" when searching for "text.filter"
         if servers.is_empty() && !keywords.is_empty() {
@@ -695,9 +822,11 @@ impl DiscoveryEngine {
                     Err(_) => Vec::new(),
                 };
                 servers.extend(fallback_servers);
-            } else if servers.is_empty() && !keywords.is_empty() {
-                // Fallback to first keyword only if we have just one keyword
-                let first_keyword = keywords[0];
+            }
+
+            // If still no servers, try the first keyword (often the context/platform)
+            if servers.is_empty() {
+                let first_keyword = &keywords[0];
                 eprintln!(
                     "  → No servers found, trying first keyword: '{}'",
                     first_keyword
@@ -783,7 +912,7 @@ impl DiscoveryEngine {
         for server in servers.iter() {
             // Try to get server URL from remotes first, then check for environment variable overrides
             let mut server_url = server.remotes.as_ref().and_then(|remotes| {
-                crate::synthesis::mcp_registry_client::McpRegistryClient::select_best_remote_url(
+                crate::mcp::registry::MCPRegistryClient::select_best_remote_url(
                     remotes,
                 )
             });
@@ -947,6 +1076,12 @@ impl DiscoveryEngine {
                     );
                 }
 
+                let auth_headers_for_schema = if auth_headers.is_empty() {
+                    None
+                } else {
+                    Some(auth_headers.clone())
+                };
+
                 // Check cache first if available
                 let introspection_result = if let Some(ref cache) = self.introspection_cache {
                     match cache.get_mcp(&url) {
@@ -1051,8 +1186,21 @@ impl DiscoveryEngine {
                                     None
                                 };
 
+                                // Extract semantic terms from goal/rationale for better matching
+                                let goal_text =
+                                    format!("{} {}", need.rationale, need.capability_class);
+                                // Use agent's semantic term extraction (public static method)
+                                let semantic_terms = crate::discovery::discovery_agent::DiscoveryAgent::extract_semantic_terms(&goal_text);
+
+                                if !semantic_terms.is_empty() {
+                                    eprintln!(
+                                        "  → Using semantic terms for tool matching: {:?}",
+                                        semantic_terms
+                                    );
+                                }
+
                                 for manifest in &capabilities {
-                                    let desc_score = if let Some(ref mut emb_svc) =
+                                    let mut desc_score = if let Some(ref mut emb_svc) =
                                         embedding_service
                                     {
                                         // Use embedding-based matching (more accurate)
@@ -1073,6 +1221,28 @@ impl DiscoveryEngine {
                                             &self.config,
                                         )
                                     };
+
+                                    // Boost score if semantic terms match capability name/description
+                                    if !semantic_terms.is_empty() {
+                                        let capability_text = format!(
+                                            "{} {} {}",
+                                            manifest.id, manifest.name, manifest.description
+                                        )
+                                        .to_lowercase();
+                                        let semantic_matches: usize = semantic_terms
+                                            .iter()
+                                            .filter(|term| capability_text.contains(term.as_str()))
+                                            .count();
+
+                                        if semantic_matches > 0 {
+                                            // Strong boost: 0.2-0.5 depending on match count
+                                            let semantic_boost =
+                                                (semantic_matches as f64 * 0.15).min(0.5);
+                                            desc_score += semantic_boost;
+                                            eprintln!("  → Boosted '{}' by {:.2} for semantic term matches ({}/{})", 
+                                                manifest.name, semantic_boost, semantic_matches, semantic_terms.len());
+                                        }
+                                    }
 
                                     if desc_score >= threshold {
                                         match &best_match {
@@ -1180,8 +1350,18 @@ impl DiscoveryEngine {
                                 }
 
                                 // Return the best match if found
-                                if let Some((manifest, score, match_type)) = best_match {
+                                if let Some((mut manifest, score, match_type)) = best_match {
                                     stats.matched_servers.push(server.name.clone());
+                                    self.enrich_manifest_output_schema(
+                                        &mut manifest,
+                                        &introspection,
+                                        &introspector,
+                                        &url,
+                                        &server.name,
+                                        &auth_headers_for_schema,
+                                        servers.len() == 1,
+                                    )
+                                    .await;
                                     if servers.len() == 1 {
                                         eprintln!(
                                             "  ✓ Semantic match found ({}): {} (score: {:.2})",
@@ -1251,7 +1431,18 @@ impl DiscoveryEngine {
                                         if servers.len() == 1 {
                                             eprintln!("  ✓ Substring match found: {}", manifest.id);
                                         }
-                                        return Ok(Some(manifest.clone()));
+                                        let mut matched_manifest = manifest.clone();
+                                        self.enrich_manifest_output_schema(
+                                            &mut matched_manifest,
+                                            &introspection,
+                                            &introspector,
+                                            &url,
+                                            &server.name,
+                                            &auth_headers_for_schema,
+                                            servers.len() == 1,
+                                        )
+                                        .await;
+                                        return Ok(Some(matched_manifest));
                                     }
                                 }
                             }
@@ -1500,7 +1691,7 @@ impl DiscoveryEngine {
     fn load_curated_overrides_for(
         &self,
         capability_id: &str,
-    ) -> RuntimeResult<Vec<crate::synthesis::mcp_registry_client::McpServer>> {
+    ) -> RuntimeResult<Vec<crate::mcp::registry::McpServer>> {
         use std::fs;
 
         // Define the override file structure
@@ -1512,7 +1703,7 @@ impl DiscoveryEngine {
         #[derive(serde::Deserialize)]
         struct CuratedEntry {
             pub matches: Vec<String>,
-            pub server: crate::synthesis::mcp_registry_client::McpServer,
+            pub server: crate::mcp::registry::McpServer,
         }
 
         let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -1724,6 +1915,50 @@ impl DiscoveryEngine {
             hints.extend(param_hints);
         }
 
+        if manifest.metadata.get("primitive_kind").is_some() {
+            if let Some(primitive_hint) = manifest.metadata.get("primitive_kind") {
+                hints.push(format!("Synthesized primitive: {}", primitive_hint));
+            }
+
+            let annotations = Self::primitive_annotations_value(manifest);
+            let required_inputs = Self::schema_bindings(manifest.input_schema.as_ref());
+            let expected_outputs = Self::schema_bindings(manifest.output_schema.as_ref());
+
+            if !required_inputs.is_empty()
+                || !expected_outputs.is_empty()
+                || annotations != JsonValue::Null
+            {
+                let primitive_need = CapabilityNeed::new(
+                    manifest.id.clone(),
+                    required_inputs.clone(),
+                    expected_outputs.clone(),
+                    manifest.description.clone(),
+                )
+                .with_annotations(annotations.clone())
+                .with_schemas(
+                    manifest.input_schema.clone(),
+                    manifest.output_schema.clone(),
+                );
+
+                let ctx = PrimitiveContext::from_manifest(&primitive_need, manifest, annotations);
+
+                if !ctx.input_schemas.is_empty() {
+                    let bindings: Vec<String> = ctx
+                        .input_schemas
+                        .keys()
+                        .map(|binding| binding.trim_start_matches(':').to_string())
+                        .collect();
+                    if !bindings.is_empty() {
+                        hints.push(format!("Inputs required: {}", bindings.join(", ")));
+                    }
+                }
+
+                if let Some(metadata) = Self::primitive_metadata_value(manifest) {
+                    hints.extend(Self::primitive_metadata_hints(&metadata));
+                }
+            }
+        }
+
         // Extract any parameter hints from metadata
         if let Some(hint) = manifest.metadata.get("parameter_hints") {
             hints.push(hint.clone());
@@ -1754,7 +1989,7 @@ impl DiscoveryEngine {
         match expr {
             rtfs::ast::TypeExpr::Map { entries, .. } => {
                 for entry in entries {
-                    let param_name = &entry.key.0;
+                    let param_name = value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()));
                     // Check if this parameter has constraints or enum values
                     let ty = &*entry.value_type;
                     // For enum types, extract the values
@@ -1765,7 +2000,9 @@ impl DiscoveryEngine {
                                 if let rtfs::ast::TypeExpr::Literal(lit) = v {
                                     match lit {
                                         rtfs::ast::Literal::String(s) => Some(s.clone()),
-                                        rtfs::ast::Literal::Keyword(k) => Some(k.0.clone()),
+                                        rtfs::ast::Literal::Keyword(k) => {
+                                            Some(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(k.clone())))
+                                        }
                                         _ => None,
                                     }
                                 } else {
@@ -1806,6 +2043,17 @@ impl DiscoveryEngine {
     /// Extract parameter names from a capability manifest
     fn extract_parameters_from_manifest(&self, manifest: &CapabilityManifest) -> Vec<String> {
         let mut parameters = Vec::new();
+
+        // Prefer primitive-aware extraction if metadata is available
+        if manifest.metadata.get("primitive_kind").is_some() {
+            if let Some(primitive_params) =
+                self.extract_parameters_from_primitive_manifest(manifest)
+            {
+                if !primitive_params.is_empty() {
+                    return primitive_params;
+                }
+            }
+        }
 
         // Try to extract from input schema if available
         if let Some(ref schema) = manifest.input_schema {
@@ -1849,6 +2097,185 @@ impl DiscoveryEngine {
         parameters
     }
 
+    fn extract_parameters_from_primitive_manifest(
+        &self,
+        manifest: &CapabilityManifest,
+    ) -> Option<Vec<String>> {
+        let annotations = Self::primitive_annotations_value(manifest);
+        let required_inputs = Self::schema_bindings(manifest.input_schema.as_ref());
+        let expected_outputs = Self::schema_bindings(manifest.output_schema.as_ref());
+
+        if required_inputs.is_empty()
+            && expected_outputs.is_empty()
+            && annotations == JsonValue::Null
+        {
+            return None;
+        }
+
+        let primitive_need = CapabilityNeed::new(
+            manifest.id.clone(),
+            required_inputs.clone(),
+            expected_outputs.clone(),
+            manifest.description.clone(),
+        )
+        .with_annotations(annotations.clone())
+        .with_schemas(
+            manifest.input_schema.clone(),
+            manifest.output_schema.clone(),
+        );
+
+        let ctx = PrimitiveContext::from_manifest(&primitive_need, manifest, annotations);
+
+        let mut params: Vec<String> = ctx
+            .input_schemas
+            .keys()
+            .map(|binding| binding.trim_start_matches(':').to_string())
+            .collect();
+
+        if params.is_empty() {
+            params = primitive_need.required_inputs.clone();
+        }
+
+        if params.is_empty() {
+            return None;
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        params.retain(|p| seen.insert(p.clone()));
+
+        Some(params)
+    }
+
+    fn primitive_annotations_value(manifest: &CapabilityManifest) -> JsonValue {
+        manifest
+            .metadata
+            .get("primitive_annotations")
+            .and_then(|raw| serde_json::from_str::<JsonValue>(raw).ok())
+            .unwrap_or(JsonValue::Null)
+    }
+
+    fn primitive_metadata_value(manifest: &CapabilityManifest) -> Option<JsonValue> {
+        manifest
+            .metadata
+            .get("primitive_metadata")
+            .and_then(|raw| serde_json::from_str::<JsonValue>(raw).ok())
+    }
+
+    fn primitive_metadata_hints(metadata: &JsonValue) -> Vec<String> {
+        let mut hints = Vec::new();
+
+        if let Some(kind) = metadata.get("primitive").and_then(|v| v.as_str()) {
+            match kind {
+                "filter" => {
+                    if let Some(fields) = metadata.get("search_fields").and_then(|v| v.as_array()) {
+                        if !fields.is_empty() {
+                            let list: Vec<String> = fields
+                                .iter()
+                                .filter_map(|f| f.as_str().map(|s| s.to_string()))
+                                .collect();
+                            if !list.is_empty() {
+                                hints.push(format!("Filter checks fields: {}", list.join(", ")));
+                            }
+                        }
+                    }
+                    if let Some(search_input) =
+                        metadata.get("search_input").and_then(|v| v.as_str())
+                    {
+                        hints.push(format!("Search input binding: {}", search_input));
+                    }
+                }
+                "map" => {
+                    if let Some(mapping) = metadata.get("mapping").and_then(|v| v.as_array()) {
+                        let pairs: Vec<String> = mapping
+                            .iter()
+                            .filter_map(|entry| {
+                                entry.as_array().and_then(|vals| {
+                                    if vals.len() == 2 {
+                                        let to = vals[0].as_str().unwrap_or_default();
+                                        let from = vals[1].as_str().unwrap_or_default();
+                                        if !to.is_empty() && !from.is_empty() {
+                                            Some(format!("{}←{}", to, from))
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                            })
+                            .collect();
+                        if !pairs.is_empty() {
+                            hints.push(format!("Field mapping: {}", pairs.join(", ")));
+                        }
+                    }
+                }
+                "project" => {
+                    if let Some(fields) = metadata.get("fields").and_then(|v| v.as_array()) {
+                        let list: Vec<String> = fields
+                            .iter()
+                            .filter_map(|f| f.as_str().map(|s| s.to_string()))
+                            .collect();
+                        if !list.is_empty() {
+                            hints.push(format!("Project retains fields: {}", list.join(", ")));
+                        }
+                    }
+                }
+                "reduce" => {
+                    if let Some(reducer) = metadata.get("reducer").and_then(|v| v.as_object()) {
+                        if let Some(func) = reducer.get("fn").and_then(|v| v.as_str()) {
+                            hints.push(format!("Reducer function: {}", func));
+                        }
+                        if let Some(field) = reducer
+                            .get("item_field")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                        {
+                            hints.push(format!("Reducer field: {}", field));
+                        }
+                    }
+                }
+                "sort" => {
+                    if let Some(sort_key) = metadata.get("sort_key").and_then(|v| v.as_str()) {
+                        let order = metadata
+                            .get("order")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(":asc");
+                        hints.push(format!("Sort by {} ({})", sort_key, order));
+                    }
+                }
+                "groupBy" => {
+                    if let Some(group_key) = metadata.get("group_key").and_then(|v| v.as_str()) {
+                        hints.push(format!("Group by {}", group_key));
+                    }
+                }
+                "join" => {
+                    if let Some(on) = metadata.get("on").and_then(|v| v.as_array()) {
+                        if on.len() == 2 {
+                            let left = on[0].as_str().unwrap_or_default();
+                            let right = on[1].as_str().unwrap_or_default();
+                            hints.push(format!("Join keys: {} = {}", left, right));
+                        }
+                    }
+                    if let Some(join_type) = metadata.get("type").and_then(|v| v.as_str()) {
+                        hints.push(format!("Join type: {}", join_type));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        hints
+    }
+
+    fn schema_bindings(schema: Option<&rtfs::ast::TypeExpr>) -> Vec<String> {
+        match schema {
+            Some(rtfs::ast::TypeExpr::Map { entries, .. }) => {
+                entries.iter().map(|entry| value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()))).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Extract parameter names from a TypeExpr (simple implementation)
     fn extract_params_from_type_expr(&self, expr: &rtfs::ast::TypeExpr) -> Vec<String> {
         let mut params = Vec::new();
@@ -1857,7 +2284,7 @@ impl DiscoveryEngine {
             rtfs::ast::TypeExpr::Map { entries, .. } => {
                 for entry in entries {
                     // Extract keyword name (remove the ':' prefix if present)
-                    let param_name = entry.key.0.clone();
+                    let param_name = value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()));
                     params.push(param_name);
                 }
             }
@@ -2102,7 +2529,7 @@ impl DiscoveryEngine {
 
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("./capabilities/generated"));
+            .unwrap_or_else(|_| std::path::PathBuf::from("../capabilities/generated"));
 
         fs::create_dir_all(&storage_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
@@ -2138,6 +2565,8 @@ impl DiscoveryEngine {
             .unwrap_or_else(|| ":any".to_string());
 
         // Create full capability RTFS file
+        let metadata_block = Self::format_metadata_map(&manifest.metadata);
+
         let capability_rtfs = format!(
             r#";; Synthesized capability: {}
 ;; Generated: {}
@@ -2146,6 +2575,7 @@ impl DiscoveryEngine {
   :version "{}"
   :description "{}"
   :synthesis-method "local_rtfs"
+  {}
   :permissions []
   :effects []
   :input-schema {}
@@ -2160,6 +2590,7 @@ impl DiscoveryEngine {
             manifest.name,
             manifest.version,
             manifest.description,
+            metadata_block,
             input_schema_str,
             output_schema_str,
             rtfs_code
@@ -2172,6 +2603,8 @@ impl DiscoveryEngine {
 
         Ok(())
     }
+
+    // (moved inside save_mcp_capability function)
 
     /// Save an MCP capability to disk (similar to synthesized capabilities)
     pub async fn save_mcp_capability(&self, manifest: &CapabilityManifest) -> RuntimeResult<()> {
@@ -2209,7 +2642,7 @@ impl DiscoveryEngine {
 
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("./capabilities/discovered"));
+            .unwrap_or_else(|_| std::path::PathBuf::from("../capabilities/discovered"));
 
         // Use hierarchical structure: capabilities/discovered/mcp/<namespace>/<tool>.rtfs
         // Parse capability ID: "mcp.namespace.tool_name" or "github.issues.list"
@@ -2263,21 +2696,31 @@ impl DiscoveryEngine {
         let input_schema_str = manifest
             .input_schema
             .as_ref()
-            .map(|s| format!("{:?}", s))
+            .map(type_expr_to_rtfs_compact)
             .unwrap_or_else(|| ":any".to_string());
         let output_schema_str = manifest
             .output_schema
             .as_ref()
-            .map(|s| format!("{:?}", s))
+            .map(type_expr_to_rtfs_compact)
             .unwrap_or_else(|| ":any".to_string());
 
         // Create full capability RTFS file
+        let output_snippet_comment = if let Some(snippet) = manifest.metadata.get("output_snippet")
+        {
+            format!(
+                ";; Sample output format:\n;; {}\n",
+                snippet.lines().take(5).collect::<Vec<_>>().join("\n;; ")
+            )
+        } else {
+            String::new()
+        };
+
         let capability_rtfs = format!(
             r#";; MCP Capability: {}
 ;; Generated: {}
 ;; MCP Server: {}
 ;; Tool: {}
-
+{}
 (capability "{}"
   :name "{}"
   :version "{}"
@@ -2308,6 +2751,7 @@ impl DiscoveryEngine {
             chrono::Utc::now().to_rfc3339(),
             server_url,
             tool_name,
+            output_snippet_comment,
             manifest.id,
             manifest.name,
             manifest.version,
@@ -2340,7 +2784,80 @@ impl DiscoveryEngine {
             _ => "Unknown".to_string(),
         }
     }
+
+    fn format_metadata_map(metadata: &std::collections::HashMap<String, String>) -> String {
+        if metadata.is_empty() {
+            "  :metadata nil".to_string()
+        } else {
+            let mut entries: Vec<_> = metadata.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            let mut lines = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                let escaped = value.replace('"', "\\\"");
+                lines.push(format!("    :{} \"{}\"", key, escaped));
+            }
+            format!("  :metadata {{\n{}\n  }}", lines.join("\n"))
+        }
+    }
+
+    // We deliberately avoid generating synthetic examples from the RTFS `TypeExpr`.
+    // Real snippet examples should be gathered via `introspect_output_schema`
+    // (this calls the MCP tool with safe inputs and returns an actual sample
+    // of the tool's response). If no real sample was captured during
+    // introspection, we leave the manifest without an `output_snippet` so the
+    // generated RTFS file does not contain a fabricated example.
+
+    async fn enrich_manifest_output_schema(
+        &self,
+        manifest: &mut CapabilityManifest,
+        introspection: &crate::synthesis::mcp_introspector::MCPIntrospectionResult,
+        introspector: &crate::synthesis::mcp_introspector::MCPIntrospector,
+        url: &str,
+        server_name: &str,
+        auth_headers: &Option<std::collections::HashMap<String, String>>,
+        log_errors: bool,
+    ) {
+        let headers = match auth_headers {
+            Some(inner) if !inner.is_empty() => inner.clone(),
+            _ => return,
+        };
+
+        if let Some(tool) = introspection
+            .tools
+            .iter()
+            .find(|tool| tool.tool_name == manifest.name)
+        {
+            match introspector
+                .introspect_output_schema(tool, url, server_name, Some(headers), None)
+                .await
+            {
+                Ok((Some(schema), sample_opt)) => {
+                    manifest.output_schema = Some(schema);
+                    if let Some(snippet) = sample_opt {
+                        manifest
+                            .metadata
+                            .insert("output_snippet".to_string(), snippet);
+                    }
+                }
+                Ok((None, Some(sample))) => {
+                    manifest
+                        .metadata
+                        .insert("output_snippet".to_string(), sample);
+                }
+                Ok((None, None)) => {}
+                Err(err) => {
+                    if log_errors {
+                        eprintln!(
+                            "     ⚠️ Output schema introspection failed for '{}': {}",
+                            manifest.name, err
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
+// Close impl DiscoveryEngine
 
 /// Result of a discovery attempt
 #[derive(Debug, Clone)]
@@ -2421,7 +2938,7 @@ fn eh_collect_schema_keys(schema: &rtfs::ast::TypeExpr, out: &mut Vec<String>) {
     match schema {
         rtfs::ast::TypeExpr::Map { entries, .. } => {
             for entry in entries {
-                out.push(entry.key.0.clone());
+                out.push(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone())));
             }
         }
         rtfs::ast::TypeExpr::Vector(inner) | rtfs::ast::TypeExpr::Optional(inner) => {
@@ -2482,4 +2999,77 @@ fn manifest_satisfies_need(
     }
 
     true
+}
+
+/// Extract high-value context tokens (platforms, services) from the rationale/goal text.
+fn extract_context_tokens(rationale: &str) -> Vec<String> {
+    // List of known platforms/services to prioritize in search context
+    // These are words that, if present in the goal, MUST be in the search query
+    // to find the right tool.
+    let high_value_contexts = [
+        "github",
+        "gitlab",
+        "bitbucket",
+        "jira",
+        "slack",
+        "discord",
+        "telegram",
+        "google",
+        "gmail",
+        "calendar",
+        "drive",
+        "aws",
+        "azure",
+        "gcp",
+        "cloud",
+        "postgres",
+        "mysql",
+        "sql",
+        "redis",
+        "mongo",
+        "linear",
+        "notion",
+        "trello",
+        "asana",
+        "stripe",
+        "paypal",
+        "weather",
+        "stock",
+        "finance",
+        "email",
+        "sms",
+        "filesystem",
+        "file",
+        "git",
+        "spotify",
+        "youtube",
+        "huggingface",
+        "openai",
+        "anthropic",
+        "llm",
+        "ai",
+    ];
+
+    let text_lower = rationale.to_ascii_lowercase();
+    let mut matches = Vec::new();
+
+    for &context in &high_value_contexts {
+        // Check if the context word appears as a distinct word in the text
+        // Using a simple contains check is usually sufficient given these are unique keywords
+        if text_lower.contains(context) {
+            matches.push(context.to_string());
+        }
+    }
+
+    // Filter out substrings (e.g. remove "git" if "github" is present)
+    let mut context_tokens = Vec::new();
+    for m in &matches {
+        // Only check if 'm' is a substring of ANOTHER match.
+        let is_substring = matches.iter().any(|other| other != m && other.contains(m));
+        if !is_substring {
+            context_tokens.push(m.clone());
+        }
+    }
+
+    context_tokens
 }

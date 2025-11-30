@@ -3,16 +3,27 @@
 //! This tool implements advanced CLI commands for managing missing capability resolution,
 //! monitoring, and observability as part of Phase 8 enhancements.
 
+use ccos::arbiter::arbiter_config::{
+    AgentRegistryConfig as ArbiterAgentRegistryConfig, DelegationConfig as ArbiterDelegationConfig,
+    LlmConfig as ArbiterLlmConfig, LlmProviderType, RetryConfig,
+};
+use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
 use ccos::capability_marketplace::types::{CapabilityManifest, LocalCapability, ProviderType};
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::checkpoint_archive::CheckpointArchive;
+use ccos::intent_graph::IntentGraph;
 use ccos::synthesis::feature_flags::MissingCapabilityConfig;
 use ccos::synthesis::missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig};
 use clap::{Parser, Subcommand};
+use rtfs::ast::{Keyword, MapKey};
+use rtfs::config::profile_selection::expand_profiles;
+use rtfs::config::types::{AgentConfig, LlmProfile};
 use rtfs::runtime::values::Value;
 use serde_json;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::fs;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
@@ -22,6 +33,14 @@ use tokio::time::sleep;
 #[clap(name = "resolve-deps")]
 #[clap(about = "CCOS Missing Capability Resolution Tool")]
 struct Args {
+    /// Path to agent configuration (TOML or JSON)
+    #[clap(short, long, default_value = "config/agent_config.toml")]
+    config: String,
+
+    /// Override the LLM profile declared in the agent configuration
+    #[clap(short, long)]
+    profile: Option<String>,
+
     /// Command to execute
     #[clap(subcommand)]
     command: Command,
@@ -124,45 +143,61 @@ enum Command {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // Initialize the capability marketplace and resolver
+    // Load agent configuration + select profile so downstream components share CCOS defaults
+    let agent_config = load_agent_config(&args.config)?;
+    apply_llm_profile(&agent_config, args.profile.as_deref())?;
+
+    // Initialize core runtime structures shared with delegation + synthesis
     let registry = Arc::new(RwLock::new(
-        rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+        ccos::capabilities::registry::CapabilityRegistry::new(),
     ));
     let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+    let intent_graph = Arc::new(Mutex::new(IntentGraph::new()?));
 
     // Bootstrap the marketplace with some test capabilities
     bootstrap_test_capabilities(&marketplace).await?;
 
-    let config = ResolverConfig {
-        max_attempts: 3,
-        auto_resolve: true,
-        verbose_logging: true, // Force verbose logging to see what's happening
+    let feature_config = MissingCapabilityConfig::from_agent_config(Some(&agent_config));
+
+    let resolver_feature_config = match feature_config.validate() {
+        Ok(_) => feature_config,
+        Err(err) => {
+            eprintln!(
+                "⚠️  Missing capability configuration invalid: {}. Falling back to env defaults.",
+                err
+            );
+            MissingCapabilityConfig::from_env()
+        }
+    };
+
+    let resolver_config = ResolverConfig {
+        max_attempts: resolver_feature_config.max_resolution_attempts,
+        auto_resolve: resolver_feature_config.feature_flags.auto_resolution,
+        verbose_logging: agent_config
+            .missing_capabilities
+            .verbose_logging
+            .unwrap_or(args.verbose),
+        base_backoff_seconds: 60,
+        max_backoff_seconds: 3600,
+        high_risk_auto_resolution: false,
+        human_approval_timeout_hours: 24,
     };
 
     let checkpoint_archive = Arc::new(CheckpointArchive::new());
 
-    // Enable missing capability resolution features for CLI tool
-    let mut feature_config = MissingCapabilityConfig::from_env();
-    feature_config.feature_flags.enabled = true;
-    feature_config.feature_flags.runtime_detection = true;
-    feature_config.feature_flags.auto_resolution = true;
-    feature_config.feature_flags.mcp_registry_enabled = true;
-    feature_config.feature_flags.importers_enabled = true;
-    feature_config.feature_flags.http_wrapper_enabled = true;
-    feature_config.feature_flags.llm_synthesis_enabled = true;
-    feature_config.feature_flags.web_search_enabled = true;
-    feature_config.feature_flags.continuous_resolution = true;
-    feature_config.feature_flags.auto_resume_enabled = true;
-    feature_config.feature_flags.audit_logging_enabled = true;
-    feature_config.feature_flags.validation_enabled = true;
-    feature_config.feature_flags.cli_tooling_enabled = true;
-
     let resolver = Arc::new(MissingCapabilityResolver::new(
         marketplace.clone(),
         checkpoint_archive,
-        config,
-        feature_config,
+        resolver_config,
+        resolver_feature_config,
     ));
+
+    if let Some(delegating) =
+        maybe_create_delegating_arbiter(Arc::clone(&marketplace), Arc::clone(&intent_graph)).await
+    {
+        resolver.set_delegating_arbiter(Some(Arc::clone(&delegating)));
+        println!("✅ Delegating arbiter configured for LLM synthesis.");
+    }
 
     match args.command {
         Command::Resolve {
@@ -216,6 +251,217 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn load_agent_config(path: &str) -> Result<AgentConfig, Box<dyn std::error::Error>> {
+    let raw = fs::read_to_string(path)?;
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "json" {
+        Ok(serde_json::from_str(&raw)?)
+    } else {
+        Ok(toml::from_str(&raw)?)
+    }
+}
+
+fn apply_llm_profile(
+    config: &AgentConfig,
+    profile_name: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
+
+    if let Some(llm_profiles) = &config.llm_profiles {
+        let (profiles, _meta, _why) = expand_profiles(config);
+        let chosen = profile_name
+            .map(|s| s.to_string())
+            .or_else(|| llm_profiles.default.clone())
+            .or_else(|| profiles.first().map(|p| p.name.clone()));
+
+        if let Some(name) = chosen {
+            if let Some(profile) = profiles.iter().find(|p| p.name == name) {
+                apply_profile_env(profile);
+                println!("Activated LLM profile '{}'.", name);
+            } else {
+                return Err(format!("profile '{}' not found in AgentConfig", name).into());
+            }
+        } else if let Some(first) = profiles.first() {
+            apply_profile_env(first);
+            println!("Activated default LLM profile '{}'.", first.name);
+        }
+    } else if let Some(requested) = profile_name {
+        return Err(format!(
+            "profile '{}' requested but no llm_profiles configured",
+            requested
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
+fn apply_profile_env(profile: &LlmProfile) {
+    std::env::set_var("CCOS_DELEGATING_MODEL", &profile.model);
+    std::env::set_var("CCOS_LLM_MODEL", &profile.model);
+    std::env::set_var("CCOS_LLM_PROVIDER_HINT", &profile.provider);
+
+    if let Some(url) = &profile.base_url {
+        std::env::set_var("CCOS_LLM_BASE_URL", url);
+    } else if profile.provider == "openrouter" {
+        if std::env::var("CCOS_LLM_BASE_URL").is_err() {
+            std::env::set_var("CCOS_LLM_BASE_URL", "https://openrouter.ai/api/v1");
+        }
+    }
+
+    if let Some(api_key) = profile.api_key.as_ref() {
+        set_api_key(&profile.provider, api_key);
+    } else if let Some(env) = &profile.api_key_env {
+        if let Ok(value) = std::env::var(env) {
+            set_api_key(&profile.provider, &value);
+        }
+    }
+
+    match profile.provider.as_str() {
+        "openai" => std::env::set_var("CCOS_LLM_PROVIDER", "openai"),
+        "claude" | "anthropic" => std::env::set_var("CCOS_LLM_PROVIDER", "anthropic"),
+        "openrouter" => {
+            std::env::set_var("CCOS_LLM_PROVIDER", "openrouter");
+            if std::env::var("CCOS_LLM_BASE_URL").is_err() {
+                std::env::set_var("CCOS_LLM_BASE_URL", "https://openrouter.ai/api/v1");
+            }
+        }
+        "local" => std::env::set_var("CCOS_LLM_PROVIDER", "local"),
+        "stub" => {
+            eprintln!("⚠️  WARNING: Using stub LLM provider (testing only)");
+            std::env::set_var("CCOS_LLM_PROVIDER", "stub");
+            std::env::set_var("CCOS_ALLOW_STUB_PROVIDER", "1");
+        }
+        other => std::env::set_var("CCOS_LLM_PROVIDER", other),
+    }
+}
+
+fn set_api_key(provider: &str, key: &str) {
+    match provider {
+        "openrouter" => std::env::set_var("OPENROUTER_API_KEY", key),
+        "claude" | "anthropic" => std::env::set_var("ANTHROPIC_API_KEY", key),
+        "gemini" => std::env::set_var("GEMINI_API_KEY", key),
+        "stub" => {}
+        _ => std::env::set_var("OPENAI_API_KEY", key),
+    }
+}
+
+async fn maybe_create_delegating_arbiter(
+    capability_marketplace: Arc<CapabilityMarketplace>,
+    intent_graph: Arc<Mutex<IntentGraph>>,
+) -> Option<Arc<DelegatingArbiter>> {
+    if !is_delegation_enabled() {
+        return None;
+    }
+
+    let model = match std::env::var("CCOS_DELEGATING_MODEL") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            eprintln!(
+                "⚠️  Delegation enabled but CCOS_DELEGATING_MODEL is not set. Skipping delegating arbiter."
+            );
+            return None;
+        }
+    };
+
+    let (api_key, base_url) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+        let base = std::env::var("CCOS_LLM_BASE_URL")
+            .ok()
+            .or_else(|| Some("https://openrouter.ai/api/v1".to_string()));
+        (Some(key), base)
+    } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+        (Some(key), None)
+    } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        (Some(key), std::env::var("CCOS_LLM_BASE_URL").ok())
+    } else {
+        (None, std::env::var("CCOS_LLM_BASE_URL").ok())
+    };
+
+    let provider_hint = std::env::var("CCOS_LLM_PROVIDER_HINT").unwrap_or_default();
+    let provider_type = if provider_hint.eq_ignore_ascii_case("stub")
+        || matches!(
+            model.as_str(),
+            "stub-model" | "deterministic-stub-model" | "stub"
+        ) {
+        LlmProviderType::Stub
+    } else if provider_hint.eq_ignore_ascii_case("anthropic") {
+        LlmProviderType::Anthropic
+    } else if provider_hint.eq_ignore_ascii_case("local") {
+        LlmProviderType::Local
+    } else {
+        LlmProviderType::OpenAI
+    };
+
+    let mut retry_config = RetryConfig::default();
+    if let Ok(v) = std::env::var("CCOS_LLM_RETRY_MAX_RETRIES") {
+        if let Ok(n) = v.parse::<u32>() {
+            retry_config.max_retries = n;
+        }
+    }
+    if let Ok(v) = std::env::var("CCOS_LLM_RETRY_SEND_FEEDBACK") {
+        retry_config.send_error_feedback = matches!(v.as_str(), "1" | "true" | "yes" | "on");
+    }
+    if let Ok(v) = std::env::var("CCOS_LLM_RETRY_SIMPLIFY_FINAL") {
+        retry_config.simplify_on_final_attempt = matches!(v.as_str(), "1" | "true" | "yes" | "on");
+    }
+    if let Ok(v) = std::env::var("CCOS_LLM_RETRY_USE_STUB_FALLBACK") {
+        retry_config.use_stub_fallback = matches!(v.as_str(), "1" | "true" | "yes" | "on");
+    }
+
+    let llm_config = ArbiterLlmConfig {
+        provider_type,
+        model,
+        api_key,
+        base_url,
+        max_tokens: Some(1000),
+        temperature: Some(0.7),
+        timeout_seconds: Some(30),
+        prompts: None,
+        retry_config,
+    };
+
+    let delegation_config = ArbiterDelegationConfig {
+        enabled: true,
+        threshold: 0.65,
+        max_candidates: 3,
+        min_skill_hits: None,
+        agent_registry: ArbiterAgentRegistryConfig::default(),
+        adaptive_threshold: None,
+        print_extracted_intent: Some(false),
+        print_extracted_plan: Some(false),
+    };
+
+    match DelegatingArbiter::new(
+        llm_config,
+        delegation_config,
+        capability_marketplace,
+        intent_graph,
+    )
+    .await
+    {
+        Ok(arbiter) => Some(Arc::new(arbiter)),
+        Err(err) => {
+            eprintln!(
+                "⚠️  Failed to initialise delegating arbiter (LLM synthesis will be skipped): {}",
+                err
+            );
+            None
+        }
+    }
+}
+
+fn is_delegation_enabled() -> bool {
+    std::env::var("CCOS_ENABLE_DELEGATION")
+        .ok()
+        .or_else(|| std::env::var("CCOS_USE_DELEGATING_ARBITER").ok())
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
 async fn handle_resolve(
     resolver: &Arc<MissingCapabilityResolver>,
     marketplace: &Arc<CapabilityMarketplace>,
@@ -231,17 +477,22 @@ async fn handle_resolve(
         println!("⚡ Force mode enabled - will attempt resolution even if capability exists");
     }
 
-    // Simulate a missing capability request
-    let mut context = HashMap::new();
-    context.insert("plan_id".to_string(), "test_plan".to_string());
-    context.insert("intent_id".to_string(), "test_intent".to_string());
-    context.insert("force_resolution".to_string(), force.to_string());
+    let (arguments, context) = build_sample_invocation(capability_id, force);
 
     println!("📋 Adding missing capability to resolution queue...");
     println!(
         "🔍 DEBUG: Attempting to resolve capability '{}'",
         capability_id
     );
+
+    if !arguments.is_empty() {
+        println!("🧪 Sample invocation payload:");
+        for (idx, value) in arguments.iter().enumerate() {
+            println!("   Arg {} => {}", idx, value);
+        }
+    } else {
+        println!("🧪 No sample arguments provided for this capability.");
+    }
 
     // Check if capability already exists in marketplace and track initial state
     let existing_capabilities = marketplace.list_capabilities().await;
@@ -262,11 +513,7 @@ async fn handle_resolve(
 
     let before_capability_ids: HashSet<String> = capability_ids.iter().cloned().collect();
 
-    resolver.handle_missing_capability(
-        capability_id.to_string(),
-        vec![Value::String("test_arg".to_string())],
-        context,
-    )?;
+    resolver.handle_missing_capability(capability_id.to_string(), arguments, context)?;
 
     println!("⚙️ Processing resolution queue...");
     resolver.process_queue().await?;
@@ -277,7 +524,7 @@ async fn handle_resolve(
     println!("   Pending: {}", stats.pending_count);
     println!("   In Progress: {}", stats.in_progress_count);
     println!("   Failed: {}", stats.failed_count);
-    println!("   Success Rate: {:.1}%", calculate_success_rate(&stats));
+    println!("   Success Rate: {:.1}%", calculate_success_rate(&resolver.get_queue_stats()));
 
     let post_resolution_capabilities = marketplace.list_capabilities().await;
     let mut reported_path = false;
@@ -306,6 +553,102 @@ async fn handle_resolve(
 
     println!("✅ Dependency resolution completed!");
     Ok(())
+}
+
+fn build_sample_invocation(
+    capability_id: &str,
+    force: bool,
+) -> (Vec<Value>, HashMap<String, String>) {
+    let mut context = HashMap::new();
+    context.insert("plan_id".to_string(), "test_plan".to_string());
+    context.insert("intent_id".to_string(), "test_intent".to_string());
+    context.insert("force_resolution".to_string(), force.to_string());
+
+    let mut arguments = Vec::new();
+
+    match capability_id {
+        "core.safe-div" => {
+            context.insert(
+                "scenario".to_string(),
+                "Guard division by zero and return either {:value <number>} or {:error {:message string}}".to_string(),
+            );
+
+            let mut payload = HashMap::new();
+            payload.insert(
+                MapKey::Keyword(Keyword::new("numerator")),
+                Value::Integer(42),
+            );
+            payload.insert(
+                MapKey::Keyword(Keyword::new("denominator")),
+                Value::Integer(0),
+            );
+            arguments.push(Value::Map(payload));
+        }
+        "core.filter-by-topic" => {
+            context.insert(
+                "scenario".to_string(),
+                "Filter articles by :topic while preserving original fields and returning both matches and match count."
+                    .to_string(),
+            );
+
+            let articles = vec![
+                make_article(
+                    "Understanding Async Rust",
+                    "rust",
+                    "Guide to async/await patterns in Rust.",
+                ),
+                make_article(
+                    "Macro Systems in Clojure",
+                    "clojure",
+                    "Explores macro capabilities in Clojure.",
+                ),
+                make_article(
+                    "Rust Ownership Deep Dive",
+                    "rust",
+                    "Ownership and borrowing rules with examples.",
+                ),
+            ];
+
+            let mut payload = HashMap::new();
+            payload.insert(
+                MapKey::Keyword(Keyword::new("articles")),
+                Value::Vector(articles),
+            );
+            payload.insert(
+                MapKey::Keyword(Keyword::new("topic")),
+                Value::String("rust".to_string()),
+            );
+            arguments.push(Value::Map(payload));
+
+            context.insert(
+                "expected_output".to_string(),
+                "Return {:matches [...] :count int} where :matches only includes entries whose :topic equals the requested topic."
+                    .to_string(),
+            );
+        }
+        _ => {
+            arguments.push(Value::String("test_arg".to_string()));
+        }
+    }
+
+    (arguments, context)
+}
+
+fn make_article(title: &str, topic: &str, summary: &str) -> Value {
+    let mut article = HashMap::new();
+    article.insert(
+        MapKey::Keyword(Keyword::new("title")),
+        Value::String(title.to_string()),
+    );
+    article.insert(
+        MapKey::Keyword(Keyword::new("topic")),
+        Value::String(topic.to_string()),
+    );
+    article.insert(
+        MapKey::Keyword(Keyword::new("summary")),
+        Value::String(summary.to_string()),
+    );
+    Value::Map(article)
 }
 
 async fn handle_resume(
@@ -414,7 +757,7 @@ async fn handle_stats(
     println!("   Pending: {}", stats.pending_count);
     println!("   In Progress: {}", stats.in_progress_count);
     println!("   Failed: {}", stats.failed_count);
-    println!("   Success Rate: {:.1}%", calculate_success_rate(&stats));
+    println!("   Success Rate: {:.1}%", calculate_success_rate(&resolver.get_queue_stats()));
 
     let total = stats.pending_count + stats.in_progress_count + stats.failed_count;
     if total > 0 {
@@ -696,6 +1039,8 @@ async fn bootstrap_test_capabilities(
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         marketplace.register_capability_manifest(manifest).await?;

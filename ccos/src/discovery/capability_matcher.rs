@@ -155,7 +155,7 @@ pub fn calculate_description_match_score_with_embedding(
     need_rationale: &str,
     manifest_description: &str,
     manifest_name: &str,
-    embedding_service: Option<&mut crate::discovery::embedding_service::EmbeddingService>,
+    _embedding_service: Option<&mut crate::discovery::embedding_service::EmbeddingService>,
 ) -> f64 {
     // For free text, use a tokenizer suited for sentences.
     let need_keywords = extract_keywords_from_text(need_rationale);
@@ -181,27 +181,37 @@ pub fn calculate_description_match_score_with_embedding(
     for need_kw in &need_keywords {
         if let Some(matched) = all_manifest_keywords.iter().find(|mk| *mk == need_kw) {
             matches += 1;
-            matched_manifest_kws.push(matched);
+            if !matched_manifest_kws.contains(&matched) {
+                matched_manifest_kws.push(matched);
+            }
         } else {
             // Check for partial matches (e.g., "list" in "list issues")
-            if all_manifest_keywords
+            if let Some(partial_match) = all_manifest_keywords
                 .iter()
-                .any(|mk| mk.contains(need_kw.as_str()) || need_kw.contains(mk.as_str()))
+                .find(|mk| mk.contains(need_kw.as_str()) || need_kw.contains(mk.as_str()))
             {
                 matches += 1;
-                if let Some(partial_match) = all_manifest_keywords
-                    .iter()
-                    .find(|mk| mk.contains(need_kw.as_str()) || need_kw.contains(mk.as_str()))
-                {
-                    if !matched_manifest_kws.contains(&partial_match) {
-                        matched_manifest_kws.push(partial_match);
-                    }
+                if !matched_manifest_kws.contains(&partial_match) {
+                    matched_manifest_kws.push(partial_match);
                 }
             } else {
                 mismatches += 1;
             }
         }
     }
+
+    // Penalize for unmatched keywords in the manifest
+    let unmatched_manifest_kws: Vec<&String> = all_manifest_keywords
+        .iter()
+        .filter(|mk| !matched_manifest_kws.contains(mk))
+        .collect();
+
+    let extra_keyword_penalty =
+        if !unmatched_manifest_kws.is_empty() && !all_manifest_keywords.is_empty() {
+            0.5 * (unmatched_manifest_kws.len() as f64 / all_manifest_keywords.len() as f64)
+        } else {
+            0.0
+        };
 
     // Base score from keyword matches
     let keyword_score = if need_keywords.is_empty() {
@@ -241,7 +251,9 @@ pub fn calculate_description_match_score_with_embedding(
     };
 
     // Combined score (capped at 1.0, floor at 0.0)
-    ((keyword_score + ordered_bonus + substring_bonus - mismatch_penalty).max(0.0)).min(1.0)
+    ((keyword_score + ordered_bonus + substring_bonus - mismatch_penalty - extra_keyword_penalty)
+        .max(0.0))
+    .min(1.0)
 }
 
 /// Calculate similarity using embedding vectors (more accurate than keyword matching)
@@ -617,7 +629,8 @@ pub fn calculate_action_verb_match_score(need_verbs: &[String], manifest_verbs: 
 
     // Check for semantic similarity (e.g., "list" and "display" are similar)
     let similar_groups: Vec<Vec<&str>> = vec![
-        vec!["list", "display", "show", "get", "fetch", "retrieve"],
+        vec!["list", "display", "show"],          // Collection/View
+        vec!["get", "fetch", "retrieve", "read"], // Retrieval
         vec!["create", "add", "post", "insert", "generate"],
         vec!["update", "modify", "edit", "change", "set"],
         vec!["delete", "remove", "destroy"],
@@ -719,6 +732,223 @@ pub fn is_semantic_match(
     threshold: f64,
 ) -> bool {
     calculate_semantic_match_score(need_class, manifest_id, manifest_name) >= threshold
+}
+
+/// Calculate keyword overlap between two identifiers (Jaccard-like similarity)
+/// Splits on non-alphanumeric chars, computes intersection/max(|A|, |B|)
+pub fn keyword_overlap(lhs: &str, rhs: &str) -> f64 {
+    use std::collections::HashSet;
+
+    let lhs_tokens: HashSet<String> = lhs
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
+
+    let rhs_tokens: HashSet<String> = rhs
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
+
+    if lhs_tokens.is_empty() || rhs_tokens.is_empty() {
+        return 0.0;
+    }
+
+    let intersection = lhs_tokens.intersection(&rhs_tokens).count();
+    if intersection == 0 {
+        return 0.0;
+    }
+
+    intersection as f64 / lhs_tokens.len().max(rhs_tokens.len()) as f64
+}
+
+/// Comprehensive MCP tool scoring function
+/// Combines keyword overlap, description matching, action verb matching, and semantic equivalences
+/// Returns a score where higher is better (typically 0-10+ range)
+pub fn compute_mcp_tool_score(hint: &str, tool_name: &str, description: &str) -> f64 {
+    use std::collections::HashSet;
+
+    let mut score = 0.0;
+
+    // Use existing description matcher
+    score += calculate_description_match_score(hint, description, tool_name);
+
+    // Keyword overlap between hint and tool name
+    let overlap = keyword_overlap(hint, tool_name);
+    score += overlap * 2.5;
+
+    // Also check keyword overlap between hint and description
+    let desc_overlap = keyword_overlap(hint, description);
+    score += desc_overlap * 2.0;
+
+    // Extract last part of hint (e.g., "list" from "github.issues.list")
+    let hint_last = hint.split('.').last().unwrap_or(hint).to_ascii_lowercase();
+    let tool_lower = tool_name.to_ascii_lowercase();
+
+    // Exact match bonus
+    if tool_lower == hint_last {
+        score += 2.0;
+    } else if tool_lower.contains(&hint_last) || hint_last.contains(&tool_lower) {
+        score += 1.0;
+    }
+
+    // Normalized hint match
+    if hint
+        .replace('.', "_")
+        .to_ascii_lowercase()
+        .contains(&tool_lower)
+    {
+        score += 1.0;
+    }
+
+    // Check if description contains important keywords from the hint
+    let hint_keywords: Vec<&str> = hint
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| s.len() > 2)
+        .collect();
+    let desc_lower = description.to_ascii_lowercase();
+    for keyword in &hint_keywords {
+        if desc_lower.contains(&keyword.to_ascii_lowercase()) {
+            score += 0.5;
+        }
+    }
+
+    // Special semantic equivalences for common patterns
+    // Be careful to only apply these when context is clearly about self/me, not other entities
+    let hint_lower = hint.to_ascii_lowercase();
+
+    // "my user info" / "my profile" / "get me" → get_me mapping
+    // BUT NOT "of user X" or "by user Y" which refers to another user
+    let is_self_reference = (hint_lower.contains("my ")
+        || hint_lower.contains("my info")
+        || hint_lower.starts_with("me ")
+        || hint_lower.contains(" me ")
+        || hint_lower.ends_with(" me"))
+        && !hint_lower.contains("of user")
+        && !hint_lower.contains("by user")
+        && !hint_lower.contains("user ")
+        || hint_lower.contains("profile");
+
+    if is_self_reference && (tool_lower.contains("me") || desc_lower.contains("authenticated user"))
+    {
+        score += 2.0;
+    }
+    if (hint_lower.contains("auth")
+        || (hint_lower.contains("my") && hint_lower.contains("profile")))
+        && desc_lower.contains("authenticated")
+    {
+        score += 1.5;
+    }
+
+    // STRONG MATCH: Tool name contains ALL significant words from the hint
+    let stop_words = [
+        "the", "and", "for", "from", "with", "latest", "recent", "of", "to", "in", "on",
+    ];
+    let hint_words: HashSet<String> = hint_lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= 3 && !stop_words.contains(w))
+        .map(|s| s.to_string())
+        .collect();
+
+    // Normalize singular/plural for better matching
+    let hint_words_normalized: HashSet<String> = hint_words
+        .iter()
+        .flat_map(|w| {
+            let mut variants = vec![w.clone()];
+            // Add plural form if singular
+            if !w.ends_with('s') {
+                variants.push(format!("{}s", w));
+            }
+            // Add singular form if plural
+            if w.ends_with('s') && w.len() > 3 {
+                variants.push(w[..w.len() - 1].to_string());
+            }
+            variants
+        })
+        .collect();
+
+    let tool_words: HashSet<String> = tool_lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= 2)
+        .map(|s| s.to_string())
+        .collect();
+
+    // Count how many hint words appear in tool name (with normalization)
+    let matched_words: usize = hint_words_normalized
+        .iter()
+        .filter(|w| tool_words.contains(*w) || tool_lower.contains(w.as_str()))
+        .count();
+
+    // Count how many tool words DON'T appear in hint (penalty for extra words)
+    let unmatched_tool_words: usize = tool_words
+        .iter()
+        .filter(|w| {
+            !hint_words_normalized
+                .iter()
+                .any(|hw| hw == *w || hw.contains(w.as_str()) || w.contains(hw.as_str()))
+        })
+        .count();
+
+    if !hint_words.is_empty() && matched_words >= hint_words.len() {
+        // ALL significant words from hint found in tool name - very strong match
+        score += 3.0;
+        // Bonus if tool has NO extra unmatched words (exact match)
+        if unmatched_tool_words == 0 {
+            score += 2.0;
+        }
+    } else if matched_words > 0 {
+        // Partial match - but penalize for unmatched tool words
+        let partial_score = matched_words as f64 * 1.0;
+        let penalty = unmatched_tool_words as f64 * 0.5;
+        score += (partial_score - penalty).max(0.0);
+    }
+
+    // Action verb synonym matching using existing helper
+    let hint_verbs = extract_action_verbs(&hint_last);
+    let tool_verbs = extract_action_verbs(&tool_lower);
+    let action_verb_score = calculate_action_verb_match_score(&hint_verbs, &tool_verbs);
+    if action_verb_score > 0.0 {
+        score += action_verb_score * 2.0;
+        // Extra bonus if action verb matches AND we have good word overlap
+        if action_verb_score >= 0.8 && matched_words > 0 {
+            score += 1.5;
+        }
+    }
+
+    // Penalize for action verb mismatch (e.g., "list" vs "add")
+    let hint_full_verbs = extract_action_verbs(&hint_lower);
+    let tool_full_verbs = extract_action_verbs(&tool_lower);
+    if !hint_full_verbs.is_empty() && !tool_full_verbs.is_empty() {
+        // Check if verbs are in conflicting groups (e.g., "list" vs "add")
+        let read_verbs = [
+            "list", "get", "fetch", "retrieve", "read", "show", "display", "find", "search",
+        ];
+        let write_verbs = [
+            "add", "create", "update", "delete", "remove", "modify", "write", "post", "put",
+            "patch",
+        ];
+
+        let hint_is_read = hint_full_verbs
+            .iter()
+            .any(|v| read_verbs.contains(&v.as_str()));
+        let hint_is_write = hint_full_verbs
+            .iter()
+            .any(|v| write_verbs.contains(&v.as_str()));
+        let tool_is_read = tool_full_verbs
+            .iter()
+            .any(|v| read_verbs.contains(&v.as_str()));
+        let tool_is_write = tool_full_verbs
+            .iter()
+            .any(|v| write_verbs.contains(&v.as_str()));
+
+        // Penalize if hint wants read but tool is write, or vice versa
+        if (hint_is_read && tool_is_write) || (hint_is_write && tool_is_read) {
+            score -= 3.0;
+        }
+    }
+
+    score
 }
 
 #[cfg(test)]

@@ -418,6 +418,29 @@ impl Plan {
     }
 }
 
+impl Default for Plan {
+    fn default() -> Self {
+        Self {
+            plan_id: format!("plan-{}", Uuid::new_v4()),
+            name: None,
+            intent_ids: Vec::new(),
+            language: PlanLanguage::Rtfs20,
+            body: PlanBody::Rtfs(String::new()),
+            status: PlanStatus::Draft,
+            created_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            metadata: HashMap::new(),
+            input_schema: None,
+            output_schema: None,
+            policies: HashMap::new(),
+            capabilities_required: Vec::new(),
+            annotations: HashMap::new(),
+        }
+    }
+}
+
 impl Action {
     pub fn new(action_type: ActionType, plan_id: PlanId, intent_id: IntentId) -> Self {
         Self {

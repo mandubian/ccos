@@ -12,12 +12,12 @@ The original specifications in `../specs/` were written before the decoupling an
 
 ## Philosophy
 
-RTFS 2.0 is a **pure functional language** with a **strict host boundary**:
+RTFS 2.0 is a **pure functional language** designed to be securely hosted by a governing runtime like CCOS. It operates on a principle of a **strict host boundary**:
 
-- **Pure Kernel**: All RTFS code is referentially transparent
-- **Host Yielding**: Side effects are mediated through CCOS capabilities
-- **Security First**: Mandatory governance and audit trails
-- **Minimal & Extensible**: Small core with powerful extension mechanisms
+- **Pure Kernel**: All RTFS code is referentially transparent. It computes values and has no direct access to the outside world.
+- **Host Interaction**: Side effects and external actions are handled by the host (e.g., CCOS) through a formal `ExecutionOutcome::RequiresHost` mechanism. RTFS yields control, and the host executes the requested action.
+- **Governed Execution**: The host is responsible for security, governance, and auditing of all external effects requested by RTFS code.
+- **Minimal & Extensible**: The language has a small core, but its homoiconic nature allows it to be extended with powerful metaprogramming features.
 
 ## Design Purpose: LLM-Native Task Execution
 
@@ -29,11 +29,12 @@ RTFS 2.0 is architected as a **language designed for LLMs to generate data struc
 - **Type System**: Safety guardrails that catch LLM generation errors while remaining optional
 - **Homoiconic Design**: Code-as-data enables LLMs to analyze and transform their own outputs
 
-### Intent-Based Task Execution
-- **Host Boundary**: Clear separation between reasoning logic and external task actions
-- **Capability System**: Governed access to external services for verifiable task fulfillment
-- **Causal Chain**: Complete audit trail of LLM-generated workflow execution
-- **Governance**: Security validation of generated code against user intent
+### Enabling Governed Task Execution
+RTFS is designed to be a safe execution target for LLM-generated code. Its architecture enables a host system like CCOS to provide:
+- **Clear Host Boundary**: A formal separation between pure computation (RTFS) and external actions (host).
+- **Governed Capabilities**: RTFS code requests actions from the host, which is responsible for governing access to external services.
+- **Auditable Execution**: The host can build a complete audit trail (like CCOS's Causal Chain) of the workflow, as every effectful step is an explicit request from RTFS.
+- **Security Validation**: The host can validate every requested action against security policies before execution.
 
 ### Human-LLM-System Synergy
 - **Humans Specify**: High-level intents in natural language
@@ -48,11 +49,41 @@ This creates a **conversational programming paradigm** where LLMs can be "progra
 ### 00-philosophy.md
 Core principles and architectural foundations of RTFS 2.0.
 
-### 01-syntax-and-grammar.md
+### 01-language-overview.md
 Complete syntax reference, grammar rules, and language constructs.
 
-### 02-evaluation-and-runtime.md
+### 02-syntax-and-grammar.md
+Detailed grammar and syntax rules.
+
+### 03-core-syntax-data-types.md
+Core data types and structures.
+
+### 04-evaluation-and-runtime.md
 Evaluation model, scoping rules, and runtime architecture.
+
+### 04-host-boundary.md
+Host interaction mechanisms and the formal model for requesting external actions.
+
+### 05-pattern-matching-destructuring.md
+Pattern matching and destructuring capabilities.
+
+### 07-module-system.md
+Module system design and implementation.
+
+### 08-macro-system.md
+Compile-time metaprogramming, quasiquote, and hygienic macros.
+
+### 09-streaming-capabilities.md
+Streaming and reactive programming support.
+
+### 10-standard-library.md
+Comprehensive function reference for pure and impure operations.
+
+### 11-architecture-analysis.md
+Critical analysis of strengths, weaknesses, and future directions.
+
+### 12-ir-and-compilation.md
+Intermediate Representation (IR) and compilation process.
 
 ### 13-type-system.md (UPDATED - Formal Specification)
 **Complete formal type system** with subtyping, bidirectional type checking, soundness proofs, and theoretical foundations. Includes:
@@ -62,17 +93,20 @@ Evaluation model, scoping rules, and runtime architecture.
 - Algorithmic type checking specification
 - References to Pierce, Cardelli, Davies & Pfenning
 
-### 04-host-boundary-and-capabilities.md
-Host interaction mechanisms, capability system, and security model.
+### 14-concurrency-model.md
+Concurrency model and host-mediated parallelism.
 
-### 05-macro-system.md
-Compile-time metaprogramming, quasiquote, and hygienic macros.
+### 15-error-handling-recovery.md
+Error handling and recovery mechanisms.
 
-### 06-standard-library.md
-Comprehensive function reference for pure and impure operations.
+### 16-security-model.md
+Security model and sandboxing.
 
-### 07-architecture-analysis.md
-Critical analysis of strengths, weaknesses, and future directions.
+### 17-performance-optimization.md
+Performance optimization strategies.
+
+### 18-interoperability.md
+Interoperability with host systems and external services.
 
 ## Key Architectural Insights
 
@@ -155,12 +189,12 @@ For new readers:
 2. Read **01-language-overview.md** for language basics
 3. Study **04-evaluation-and-runtime.md** for execution model
 4. Read **13-type-system.md** for the formal type system specification
-5. Explore **07-host-boundary-and-capabilities.md** for CCOS integration
+5. Explore **04-host-boundary.md** for CCOS integration
 6. Review **11-architecture-analysis.md** for LLM-driven development insights
 
 For LLM developers:
 - Focus on **02-syntax-and-grammar.md** for generation patterns
-- Study **07-host-boundary-and-capabilities.md** for task execution
+- Study **04-host-boundary.md** for task execution
 - Review **10-standard-library.md** for available operations
 - See **[Type Checking Guide](../guides/type-checking-guide.md)** for practical type usage
 
@@ -315,12 +349,12 @@ Pure computation:
 Capability definition (conceptual RTFS form):
 
 ```clojure
-(defcap http/example.get
+(capability "http/example.get"
 	:name "Example GET"
-	:input {:url :string}
-	:output {:status :int :body :string}
+	:input-schema {:url :string}
+	:output-schema {:status :int :body :string}
 	:implementation
-	(host/call :http.get {:url (. input :url)}))
+	(fn [input] (host/call :http.get {:url (. input :url)})))
 ```
 
 Invocation:
@@ -334,14 +368,15 @@ Invocation:
 Plan-as-capability (using `:implementation` plan body):
 
 ```clojure
-(defcap demo/pipeline
+(capability "demo/pipeline"
 	:name "Demo pipeline"
-	:input {:x :int}
-	:output :int
+	:input-schema {:x :int}
+	:output-schema :int
 	:implementation
-	(let [a (+ (. input :x) 1)
-				b (* a 2)]
-		b))
+	(fn [input]
+		(let [a (+ (. input :x) 1)
+			  b (* a 2)]
+			b)))
 ```
 
 This registers a local capability whose handler evaluates the pure RTFS plan body with an `input` binding; any effects inside would route through the Host.
@@ -382,5 +417,3 @@ If you want deeper internals, see also:
 - `rtfs_compiler/src/runtime/security.rs` (RuntimeContext)
 - `ccos/src/capability_marketplace/types.rs` (providers, streaming)
 - `ccos/src/environment.rs` (plan-to-capability registration and Host wiring)
-</content>
-<parameter name="filePath">/home/mandubian/workspaces/mandubian/ccos/docs/rtfs-2.0/specs-new/README.md

@@ -659,7 +659,7 @@ impl ArbiterEngine for LlmArbiter {
         // For now, we don't pass a real marketplace; provider currently doesn't use it.
         let marketplace = Arc::new(crate::capability_marketplace::CapabilityMarketplace::new(
             Arc::new(tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+                crate::capabilities::registry::CapabilityRegistry::new(),
             )),
         ));
         provider.generate_plan(&rt_intent, marketplace).await

@@ -411,6 +411,34 @@ impl TypeExpr {
                 }
                 Ok(schema)
             }
+            TypeExpr::Map {
+                entries,
+                wildcard: _,
+            } => {
+                let mut properties = serde_json::Map::new();
+                let mut required = Vec::new();
+
+                for entry in entries {
+                    let key_name = entry.key.0.clone();
+                    properties.insert(key_name.clone(), entry.value_type.to_json()?);
+
+                    if !entry.optional {
+                        required.push(serde_json::Value::String(key_name));
+                    }
+                }
+
+                let mut schema = json!({
+                    "type": "object",
+                    "properties": properties,
+                    "additionalProperties": false
+                });
+
+                if !required.is_empty() {
+                    schema["required"] = serde_json::Value::Array(required);
+                }
+
+                Ok(schema)
+            }
             TypeExpr::Any => Ok(json!({})), // Accept anything
             TypeExpr::Never => Ok(json!({"not": {}})), // Accept nothing
             _ => {
@@ -587,11 +615,7 @@ pub enum Expression {
     Defn(#[validate] Box<DefnExpr>), // Added for defn as an expression
     Defmacro(#[validate] Box<DefmacroExpr>),
     Defstruct(#[validate] Box<DefstructExpr>), // Added for defstruct as an expression
-    DiscoverAgents(#[validate] DiscoverAgentsExpr),
-    LogStep(#[validate] Box<LogStepExpr>),
     TryCatch(#[validate] TryCatchExpr),
-    Parallel(#[validate] ParallelExpr),
-    WithResource(#[validate] WithResourceExpr),
     Match(#[validate] MatchExpr),
     For(#[validate] Box<ForExpr>),      // Added for for comprehension
     Deref(#[validate] Box<Expression>), // Added for @atom deref sugar
@@ -632,11 +656,7 @@ impl Validate for Expression {
             Expression::Defn(expr) => expr.validate(),
             Expression::Defmacro(expr) => expr.validate(),
             Expression::Defstruct(expr) => expr.validate(),
-            Expression::DiscoverAgents(expr) => expr.validate(),
-            Expression::LogStep(expr) => expr.validate(),
             Expression::TryCatch(expr) => expr.validate(),
-            Expression::Parallel(expr) => expr.validate(),
-            Expression::WithResource(expr) => expr.validate(),
             Expression::Match(expr) => expr.validate(),
             Expression::For(expr) => expr.validate(),
             Expression::Deref(expr) => expr.validate(),
@@ -653,16 +673,6 @@ pub struct MatchExpr {
     pub expression: Box<Expression>,
     #[validate(nested)]
     pub clauses: Vec<MatchClause>,
-}
-
-// Struct for LogStep Expression
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, JsonSchema, Validate)]
-#[schemars(rename_all = "camelCase")]
-pub struct LogStepExpr {
-    pub level: Option<Keyword>, // e.g., :info, :debug, :error
-    #[validate(nested)]
-    pub values: Vec<Expression>, // The expressions to log
-    pub location: Option<String>, // Optional string literal for source location hint
 }
 
 // Structs for Special Forms
@@ -760,35 +770,6 @@ pub struct DefstructField {
 }
 
 // --- New Special Form Structs ---
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
-#[schemars(rename_all = "camelCase")]
-pub struct ParallelExpr {
-    // parallel_binding = { "[" ~ symbol ~ (":" ~ type_expr)? ~ expression ~ "]" }
-    #[validate(nested)]
-    pub bindings: Vec<ParallelBinding>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
-#[schemars(rename_all = "camelCase")]
-pub struct ParallelBinding {
-    pub symbol: Symbol,
-    pub type_annotation: Option<TypeExpr>,
-    #[validate(nested)]
-    pub expression: Box<Expression>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
-#[schemars(rename_all = "camelCase")]
-pub struct WithResourceExpr {
-    // "[" ~ symbol ~ type_expr ~ expression ~ "]"
-    pub resource_symbol: Symbol,
-    pub resource_type: TypeExpr, // Type is mandatory in grammar
-    #[validate(nested)]
-    pub resource_init: Box<Expression>,
-    #[validate(nested)]
-    pub body: Vec<Expression>,
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
 #[schemars(rename_all = "camelCase")]
@@ -950,18 +931,6 @@ pub struct ForExpr {
     /// Body expression to evaluate for each combination
     #[validate(nested)]
     pub body: Box<Expression>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
-#[serde(rename_all = "camelCase")]
-pub struct DiscoverAgentsExpr {
-    /// Discovery criteria map (required)
-    #[validate(nested)]
-    pub criteria: Box<Expression>, // Must be a Map expression
-
-    /// Options map (optional)
-    #[validate(nested)]
-    pub options: Option<Box<Expression>>, // Optional Map expression
 }
 
 // Removed PlanExpr from RTFS core AST. Plan is a CCOS object extracted from

@@ -34,18 +34,29 @@ use std::sync::{Arc, Mutex};
 use super::causal_chain::CausalChain;
 use super::intent_graph::IntentGraph;
 use super::types::{
-    Action, ActionType, ExecutionResult, IntentStatus, Plan, PlanBody, PlanLanguage,
+    Action, ActionType, ExecutionResult, IntentId, IntentStatus, Plan, PlanBody, PlanId,
+    PlanLanguage,
 };
 use rtfs::ast::{Expression, Literal};
 
 use super::checkpoint_archive::{CheckpointArchive, CheckpointRecord};
 use super::plan_archive::PlanArchive;
+use super::types::StorableIntent;
 use chrono;
 use rtfs::runtime::host_interface::HostInterface;
 use rtfs::runtime::module_runtime::ModuleRegistry;
 use rtfs::runtime::values::Value as RtfsValue;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+
+/// Full execution context reconstructed from causal chain for replay
+/// Contains the plan, all referenced intents, and all actions in chronological order
+#[derive(Debug, Clone)]
+pub struct ReplayContext {
+    pub plan: Plan,
+    pub intents: Vec<StorableIntent>,
+    pub actions: Vec<Action>,
+}
 
 /// Represents the security and isolation profile for a single step execution
 #[derive(Debug, Clone)]
@@ -668,7 +679,16 @@ impl Orchestrator {
         let plan_id = plan.plan_id.clone();
         let primary_intent_id = plan.intent_ids.first().cloned().unwrap_or_default();
 
+        // --- 0. Ensure Plan is archived BEFORE logging to causal chain ---
+        // This guarantees causal chain consistency: every plan_id referenced in actions
+        // must exist in the plan archive for replay to work.
+        self.ensure_plan_archived(plan)?;
+
+        // Verify intent exists in IntentGraph if referenced
+        self.ensure_intent_exists(&primary_intent_id)?;
+
         // --- 1. Log PlanStarted Action ---
+        // Now safe to log - plan and intent are guaranteed to be stored
         let plan_action_id = self.log_action(
             Action::new(
                 ActionType::PlanStarted,
@@ -1119,9 +1139,7 @@ impl Orchestrator {
                             plan_def.properties.iter().find(|p| p.key.0 == "body")
                         {
                             // Format the body expression as RTFS string
-                            super::rtfs_bridge::extractors::expression_to_rtfs_string(
-                                &body_prop.value,
-                            )
+                            crate::rtfs_bridge::expression_to_rtfs_string(&body_prop.value)
                         } else {
                             raw_body // No :body property found, use as-is
                         }
@@ -1170,6 +1188,126 @@ impl Orchestrator {
         self.plan_archive
             .archive_plan(plan)
             .map_err(|e| RuntimeError::Generic(format!("Failed to archive plan: {}", e)))
+    }
+
+    /// Ensure plan is archived - required for causal chain consistency
+    /// Returns true if plan was already archived, false if newly archived
+    pub fn ensure_plan_archived(&self, plan: &Plan) -> RuntimeResult<bool> {
+        if self.plan_archive.get_plan_by_id(&plan.plan_id).is_some() {
+            Ok(true) // Already archived
+        } else {
+            self.store_plan(plan)?;
+            Ok(false) // Newly archived
+        }
+    }
+
+    /// Ensure intent exists in IntentGraph - required for causal chain consistency
+    pub fn ensure_intent_exists(&self, intent_id: &IntentId) -> RuntimeResult<()> {
+        if intent_id.is_empty() {
+            return Ok(()); // Empty intent ID is valid (for capability-internal plans)
+        }
+
+        let graph = self
+            .intent_graph
+            .lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+
+        if graph.get_intent(intent_id).is_none() {
+            return Err(RuntimeError::Generic(format!(
+                "Intent {} not found in IntentGraph - cannot ensure causal chain consistency",
+                intent_id
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Validate that all referenced entities (plan, intent) exist before logging action
+    /// This ensures causal chain consistency for replay
+    pub fn validate_action_prerequisites(
+        &self,
+        plan_id: &PlanId,
+        intent_id: &IntentId,
+    ) -> RuntimeResult<()> {
+        // Validate plan exists in archive
+        if self.plan_archive.get_plan_by_id(plan_id).is_none() {
+            return Err(RuntimeError::Generic(format!(
+                "Plan {} referenced in action does not exist in PlanArchive - causal chain inconsistency",
+                plan_id
+            )));
+        }
+
+        // Validate intent exists (if provided)
+        if !intent_id.is_empty() {
+            self.ensure_intent_exists(intent_id)?;
+        }
+
+        Ok(())
+    }
+
+    /// Reconstruct full execution context from causal chain for replay
+    /// Returns actions with their associated Plans and Intents
+    pub fn reconstruct_replay_context(&self, plan_id: &PlanId) -> RuntimeResult<ReplayContext> {
+        // Get all actions for this plan (clone to own the data)
+        let actions = {
+            let causal_chain = self
+                .causal_chain
+                .lock()
+                .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))?;
+            causal_chain
+                .export_plan_actions(plan_id)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        // Get the plan
+        let plan = self.get_plan_by_id(plan_id)?.ok_or_else(|| {
+            RuntimeError::Generic(format!(
+                "Plan {} not found in archive - cannot reconstruct execution context",
+                plan_id
+            ))
+        })?;
+
+        // Get all referenced intents
+        let mut intents = Vec::new();
+        let graph = self
+            .intent_graph
+            .lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+
+        for intent_id in &plan.intent_ids {
+            if let Some(intent) = graph.get_intent(intent_id) {
+                intents.push(intent.clone());
+            }
+        }
+
+        // Also collect unique intent IDs from actions (in case some are referenced but not in plan.intent_ids)
+        let mut referenced_intent_ids: std::collections::HashSet<String> =
+            plan.intent_ids.iter().cloned().collect();
+        for action in &actions {
+            if !action.intent_id.is_empty() {
+                referenced_intent_ids.insert(action.intent_id.clone());
+            }
+        }
+
+        // Add any missing intents
+        for intent_id in referenced_intent_ids {
+            if !plan.intent_ids.contains(&intent_id) {
+                if let Some(intent) = graph.get_intent(&intent_id) {
+                    // Only add if not already collected
+                    if !intents.iter().any(|i| i.intent_id == intent_id) {
+                        intents.push(intent.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(ReplayContext {
+            plan,
+            intents,
+            actions,
+        })
     }
 
     /// Extract exported variables from execution result
@@ -1562,7 +1700,11 @@ impl Orchestrator {
     }
 
     /// Helper to log an action to the Causal Chain.
+    /// Validates that referenced plan and intent exist before logging to ensure consistency.
     fn log_action(&self, action: Action) -> RuntimeResult<String> {
+        // Validate prerequisites before logging - ensures causal chain consistency
+        self.validate_action_prerequisites(&action.plan_id, &action.intent_id)?;
+
         let mut chain = self
             .causal_chain
             .lock()
@@ -1608,9 +1750,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -1697,9 +1837,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -1782,9 +1920,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -1821,9 +1957,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -1875,9 +2009,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -1924,9 +2056,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -1962,9 +2092,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2001,9 +2129,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2039,9 +2165,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2086,9 +2210,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2129,9 +2251,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2168,9 +2288,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(
@@ -2207,9 +2325,7 @@ mod tests {
         let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
         let graph = make_graph_with_sink(Arc::clone(&chain));
         let marketplace = Arc::new(CapabilityMarketplace::new(Arc::new(
-            tokio::sync::RwLock::new(
-                rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-            ),
+            tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
         let mut _orchestrator = Orchestrator::new(

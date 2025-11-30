@@ -21,7 +21,6 @@ use rtfs::ccos::synthesis::graphql_importer::{
     GraphQLArgument, GraphQLImporter, GraphQLOperation,
 };
 use rtfs::ccos::synthesis::http_wrapper::{HTTPEndpoint, HTTPWrapper};
-use rtfs::ccos::synthesis::mcp_proxy_adapter::{MCPProxyAdapter, MCPProxyConfig};
 use rtfs::ccos::synthesis::missing_capability_resolver::{
     MissingCapabilityResolver, ResolverConfig,
 };
@@ -327,40 +326,6 @@ async fn test_http_wrapper_comprehensive() {
     let inferred = wrapper.infer_parameter_types(&rest_endpoint);
     assert!(inferred.contains_key("page"));
     assert!(inferred.contains_key("limit"));
-}
-
-/// Test MCP proxy adapter
-#[tokio::test]
-async fn test_mcp_proxy_adapter() {
-    let config = MCPProxyConfig {
-        server_url: "http://localhost:3000".to_string(),
-        server_name: "test_server".to_string(),
-        auth_token: None,
-        timeout_seconds: 30,
-        auto_discover: true,
-    };
-
-    let adapter = MCPProxyAdapter::mock(config.clone()).expect("Should create mock adapter");
-    let proxies = adapter
-        .discover_and_proxy_tools()
-        .await
-        .expect("Should discover mock tools");
-    assert!(!proxies.is_empty(), "Should have mock tool proxies");
-
-    let proxy = &proxies[0];
-    let capability = adapter
-        .proxy_to_capability(proxy)
-        .expect("Should convert proxy to capability");
-    assert!(capability.id.starts_with("mcp."));
-    assert_eq!(
-        capability.metadata.get("mcp_server"),
-        Some(&config.server_name)
-    );
-
-    let implementation = adapter
-        .generate_proxy_implementation(proxy)
-        .expect("Should generate RTFS implementation");
-    assert!(implementation.contains(":mcp.tool.execute"));
 }
 
 /// Test capability synthesizer with various scenarios

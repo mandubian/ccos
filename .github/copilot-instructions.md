@@ -49,7 +49,7 @@ Add new tests in `tests/` mirroring existing style; use env flags for delegation
 
 ## 4. git and documentation
 - commit: commit as soon as a big-enough feature (not a tiny fix or code update) is implemented, don't wait for the end of worktree or staging area. Use present tense, imperative mood, reference issues/PRs when relevant.
-- PR: includea summary of changes, test results, known issues, and next steps.
+- PR: include a summary of changes, test results, known issues, and next steps.
 - docs: update relevant docs in `docs/ccos/specs/` or `docs/rtfs-2.0/specs/` when changing behavior or adding features. For examples or guides, put it in `docs/ccos/guides` and `docs/rtfs-2.0/guides`. Link to these docs in your PR description.
 
 ---
@@ -96,3 +96,34 @@ cargo run --bin rtfs-compiler -- --input file.rtfs --execute --show-timing --sho
 # For examples requiring an agent config, DO NOT USE config_minimal but this one
 cargo run --example EXAMPLE -- --config ../config/agent_config.toml
 ```
+
+---
+## 8. Code practice
+
+- When developing code, avoid creating solutions that are tailored to a single use case or example. Instead, focus on building reusable and general components. Any specific implementations should be confined to the examples or test cases.
+
+---
+## 9. Code Factorization and Shared Utilities (MANDATORY)
+
+**BEFORE implementing any utility function, ALWAYS check `ccos::utils` modules for existing shared utilities.**
+
+### Value Conversion Utilities
+For any RTFS Value ↔ serde_json::Value conversion, **MUST use** shared utilities from `ccos::utils::value_conversion`:
+- `rtfs_value_to_json(value: &Value) -> RuntimeResult<serde_json::Value>` - Convert RTFS Value to JSON
+- `json_to_rtfs_value(json: &serde_json::Value) -> RuntimeResult<Value>` - Convert JSON to RTFS Value
+- `map_key_to_string(key: &MapKey) -> String` - Convert MapKey to String
+- `strip_leading_colon(input: &str) -> String` - Strip leading colon from strings
+
+**DO NOT** implement custom conversion functions. If you find yourself writing RTFS↔JSON conversion code, stop and use the shared utilities instead.
+
+### General Factorization Rules
+1. **Check first**: Before implementing helper functions, search for existing utilities in `ccos::utils` modules
+2. **Factorize common patterns**: If you find similar code in multiple places, extract it to a shared utility module
+3. **Avoid duplication**: Do not duplicate conversion logic, map key handling, or string manipulation - these likely exist in `ccos::utils::value_conversion`
+4. **Extract to utils**: If you create a new utility function that could be reused, place it in the appropriate `ccos::utils` module
+
+### Examples of What to Check
+- RTFS Value ↔ JSON conversions → `ccos::utils::value_conversion`
+- MapKey string conversions → `ccos::utils::value_conversion::map_key_to_string`
+- Keyword/string manipulation → `ccos::utils::value_conversion::strip_leading_colon`
+- Any other common data transformations → Check `ccos::utils` modules first

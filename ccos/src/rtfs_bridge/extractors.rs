@@ -1,6 +1,8 @@
 use super::errors::RtfsBridgeError;
+use crate::rtfs_bridge::pretty_printer::expression_to_inline_string;
+pub use crate::rtfs_bridge::pretty_printer::expression_to_rtfs_string;
 use crate::types::{Intent, IntentStatus, Plan};
-use rtfs::ast::{Expression, Keyword, Literal, MapKey, Pattern};
+use rtfs::ast::{Expression, Keyword, Literal, MapKey};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 
@@ -89,7 +91,7 @@ fn extract_intent_from_function_call(
                 return Err(RtfsBridgeError::InvalidFieldType {
                     field: "name".to_string(),
                     expected: "string literal".to_string(),
-                    actual: expression_to_string(first_arg),
+                    actual: expression_to_inline_string(first_arg),
                 })
             }
         }
@@ -111,7 +113,7 @@ fn extract_intent_from_function_call(
             let key_name = map_key_to_string(key);
             match key_name.as_str() {
                 ":goal" | "goal" => {
-                    goal = Some(expression_to_string(value));
+                    goal = Some(expression_to_inline_string(value));
                 }
                 ":constraints" | "constraints" => {
                     if let Expression::Map(constraints_map) = value {
@@ -159,7 +161,7 @@ fn extract_intent_from_function_call(
                             // insert based on kw
                             match kw.0.as_str() {
                                 "goal" => {
-                                    goal = Some(expression_to_string(val));
+                                    goal = Some(expression_to_inline_string(val));
                                 }
                                 "constraints" => {
                                     if let Expression::Map(constraints_map) = val {
@@ -197,7 +199,7 @@ fn extract_intent_from_function_call(
                             let val = &arguments[i + 1];
                             match sym.0.as_str() {
                                 "goal" => {
-                                    goal = Some(expression_to_string(val));
+                                    goal = Some(expression_to_inline_string(val));
                                 }
                                 "constraints" => {
                                     if let Expression::Map(constraints_map) = val {
@@ -357,7 +359,7 @@ fn extract_plan_from_function_call(
                 return Err(RtfsBridgeError::InvalidFieldType {
                     field: "name".to_string(),
                     expected: "string literal".to_string(),
-                    actual: expression_to_string(first_arg),
+                    actual: expression_to_inline_string(first_arg),
                 })
             }
         }
@@ -387,7 +389,7 @@ fn extract_plan_from_function_call(
                     ":intent-ids" | "intent-ids" => {
                         if let Expression::Vector(ids_vec) = value {
                             for id_expr in ids_vec {
-                                intent_ids.push(expression_to_string(id_expr));
+                                intent_ids.push(expression_to_inline_string(id_expr));
                             }
                         }
                     }
@@ -408,7 +410,7 @@ fn extract_plan_from_function_call(
                     ":capabilities-required" | "capabilities-required" => {
                         if let Expression::Vector(caps_vec) = value {
                             for cap_expr in caps_vec {
-                                capabilities_required.push(expression_to_string(cap_expr));
+                                capabilities_required.push(expression_to_inline_string(cap_expr));
                             }
                         }
                     }
@@ -484,7 +486,7 @@ fn extract_plan_from_map(map: &HashMap<MapKey, Expression>) -> Result<Plan, Rtfs
 
     if let Some(Expression::Vector(ids_vec)) = map_get(map, ":intent-ids") {
         for id_expr in ids_vec {
-            intent_ids.push(expression_to_string(id_expr));
+            intent_ids.push(expression_to_inline_string(id_expr));
         }
     }
 
@@ -504,7 +506,7 @@ fn extract_plan_from_map(map: &HashMap<MapKey, Expression>) -> Result<Plan, Rtfs
 
     if let Some(Expression::Vector(caps_vec)) = map_get(map, ":capabilities-required") {
         for cap_expr in caps_vec {
-            capabilities_required.push(expression_to_string(cap_expr));
+            capabilities_required.push(expression_to_inline_string(cap_expr));
         }
     }
 
@@ -535,225 +537,6 @@ fn extract_plan_from_map(map: &HashMap<MapKey, Expression>) -> Result<Plan, Rtfs
 }
 
 // Helper functions
-fn expression_to_string(expr: &Expression) -> String {
-    match expr {
-        Expression::Literal(literal) => match literal {
-            Literal::String(s) => s.clone(), // Return raw string for compatibility with existing tests
-            Literal::Integer(i) => i.to_string(),
-            Literal::Float(f) => f.to_string(),
-            Literal::Boolean(b) => b.to_string(),
-            Literal::Nil => "nil".to_string(),
-            Literal::Keyword(k) => format!(":{}", k.0),
-            Literal::Symbol(s) => s.0.clone(),
-            // Fallback to RTFS serialization for any literal variants we don't explicitly handle
-            _ => expression_to_rtfs_string(&Expression::Literal(literal.clone())),
-        },
-        Expression::Symbol(s) => s.0.clone(),
-        Expression::FunctionCall { callee, arguments } => {
-            let callee_str = expression_to_string(callee);
-            let args_str = arguments
-                .iter()
-                .map(expression_to_string)
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("({} {})", callee_str, args_str)
-        }
-        Expression::Do(do_expr) => {
-            let exprs_str = do_expr
-                .expressions
-                .iter()
-                .map(expression_to_string)
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("(do {})", exprs_str)
-        }
-        Expression::Let(let_expr) => {
-            // compact string form: (let (p1 v1) (p2 v2) body...)
-            let bindings = let_expr
-                .bindings
-                .iter()
-                .map(|b| {
-                    format!(
-                        "({} {})",
-                        pattern_to_string(&b.pattern),
-                        expression_to_string(&b.value)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            let body_str = if let_expr.body.len() == 1 {
-                expression_to_string(&let_expr.body[0])
-            } else {
-                let parts = let_expr
-                    .body
-                    .iter()
-                    .map(expression_to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                format!("(do {})", parts)
-            };
-
-            format!("(let ({}) {})", bindings, body_str)
-        }
-        // Fallback: produce a compact string instead of Debug to avoid leaking AST debug forms
-        _ => expression_to_string(expr),
-    }
-}
-
-pub fn expression_to_rtfs_string(expr: &Expression) -> String {
-    match expr {
-        Expression::Literal(literal) => match literal {
-            Literal::String(s) => format!("\"{}\"", s), // Add quotes for proper RTFS syntax
-            Literal::Integer(i) => i.to_string(),
-            Literal::Float(f) => f.to_string(),
-            Literal::Boolean(b) => b.to_string(),
-            Literal::Nil => "nil".to_string(),
-            Literal::Keyword(k) => format!(":{}", k.0),
-            Literal::Symbol(s) => s.0.clone(),
-            // Unknown literal variants: fall back to compact string form rather than Debug
-            _ => expression_to_string(&Expression::Literal(literal.clone())),
-        },
-        Expression::Symbol(s) => s.0.clone(),
-        Expression::FunctionCall { callee, arguments } => {
-            let callee_str = expression_to_rtfs_string(callee);
-            let args_str = arguments
-                .iter()
-                .map(expression_to_rtfs_string)
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("({} {})", callee_str, args_str)
-        }
-        Expression::Do(do_expr) => {
-            let exprs_str = do_expr
-                .expressions
-                .iter()
-                .map(expression_to_rtfs_string)
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("(do {})", exprs_str)
-        }
-        Expression::Vector(vec) => {
-            let vals = vec
-                .iter()
-                .map(expression_to_rtfs_string)
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("[{}]", vals)
-        }
-        Expression::List(list) => {
-            let vals = list
-                .iter()
-                .map(expression_to_rtfs_string)
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("({})", vals)
-        }
-        Expression::Map(map) => {
-            // Serialize map in canonical RTFS form: {:key1 val1 :key2 val2}
-            let mut parts: Vec<String> = Vec::new();
-            for (k, v) in map {
-                let kstr = match k {
-                    rtfs::ast::MapKey::Keyword(kw) => format!(":{}", kw.0),
-                    rtfs::ast::MapKey::String(s) => format!("\"{}\"", s),
-                    rtfs::ast::MapKey::Integer(i) => i.to_string(),
-                };
-                parts.push(kstr);
-                parts.push(expression_to_rtfs_string(v));
-            }
-            format!("{{{}}}", parts.join(" "))
-        }
-        Expression::Let(let_expr) => {
-            // RTFS canonical form for let: (let [binding1 binding2 ...] body...)
-            // where each binding is a pattern-value pair
-            let bindings = let_expr
-                .bindings
-                .iter()
-                .map(|b| {
-                    format!(
-                        "{} {}",
-                        pattern_to_string(&b.pattern),
-                        expression_to_rtfs_string(&b.value)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            let body_str = if let_expr.body.len() == 1 {
-                expression_to_rtfs_string(&let_expr.body[0])
-            } else {
-                let parts = let_expr
-                    .body
-                    .iter()
-                    .map(expression_to_rtfs_string)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                format!("(do {})", parts)
-            };
-
-            format!("(let [{}] {})", bindings, body_str)
-        }
-        // Fallback: produce a compact string representation
-        _ => expression_to_string(expr),
-    }
-}
-
-// Convert a binding pattern into a readable string for RTFS output.
-fn pattern_to_string(pat: &Pattern) -> String {
-    match pat {
-        Pattern::Symbol(s) => s.0.clone(),
-        Pattern::Wildcard => "_".to_string(),
-        Pattern::VectorDestructuring {
-            elements,
-            rest,
-            as_symbol,
-        } => {
-            let mut parts: Vec<String> = elements.iter().map(pattern_to_string).collect();
-            if let Some(r) = rest {
-                parts.push(format!("& {}", r.0));
-            }
-            if let Some(a) = as_symbol {
-                parts.push(format!(":as {}", a.0));
-            }
-            format!("[{}]", parts.join(" "))
-        }
-        Pattern::MapDestructuring {
-            entries,
-            rest,
-            as_symbol,
-        } => {
-            let mut parts: Vec<String> = Vec::new();
-            for entry in entries {
-                match entry {
-                    rtfs::ast::MapDestructuringEntry::KeyBinding { key, pattern } => {
-                        let key_str = match key {
-                            rtfs::ast::MapKey::Keyword(kw) => format!(":{}", kw.0),
-                            rtfs::ast::MapKey::String(s) => format!("\"{}\"", s),
-                            rtfs::ast::MapKey::Integer(i) => i.to_string(),
-                        };
-                        parts.push(format!("{} {}", key_str, pattern_to_string(pattern)));
-                    }
-                    rtfs::ast::MapDestructuringEntry::Keys(keys) => {
-                        let ks = keys
-                            .iter()
-                            .map(|k| k.0.clone())
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        parts.push(format!(":keys [{}]", ks));
-                    }
-                }
-            }
-            if let Some(r) = rest {
-                parts.push(format!("& {}", r.0));
-            }
-            if let Some(a) = as_symbol {
-                parts.push(format!(":as {}", a.0));
-            }
-            format!("{{{}}}", parts.join(" "))
-        }
-    }
-}
-
 fn map_key_to_string(key: &MapKey) -> String {
     match key {
         MapKey::String(s) => s.clone(),
@@ -790,11 +573,13 @@ fn expression_to_value(expr: &Expression) -> Value {
             Literal::Nil => Value::Nil,
             Literal::Keyword(k) => Value::Keyword(k.clone()),
             // Fall back to a readable string for unknown literal forms
-            _ => Value::String(expression_to_string(&Expression::Literal(literal.clone()))),
+            _ => Value::String(expression_to_inline_string(&Expression::Literal(
+                literal.clone(),
+            ))),
         },
         Expression::Symbol(s) => Value::Symbol(s.clone()),
         // For other expressions, produce a compact string representation rather than raw Debug
-        _ => Value::String(expression_to_string(expr)),
+        _ => Value::String(expression_to_inline_string(expr)),
     }
 }
 

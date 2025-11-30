@@ -12,7 +12,7 @@ This document describes the runtime- and compiler-visible behavior added in the 
 - A persistent, shared `MacroExpander` registry that is captured by the compiler and injected into runtime evaluators (mandatory at construction)
 - Replacement of temporary unquote/quasiquote artifacts before IR conversion so IR never sees macro-templating artifacts
 
-## Macro Definition
+RTFS is designed to support a simple macro system for code transformation using quasiquote and unquote, but this functionality is not yet available in the current implementation.
 
 Use `defmacro` to define a macro. Macros receive AST nodes as arguments (not evaluated values), and must return an AST node or list of nodes.
 

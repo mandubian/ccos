@@ -52,6 +52,9 @@ pub struct AgentConfig {
     /// Catalog configuration (plan/capability reuse thresholds)
     #[serde(default)]
     pub catalog: CatalogConfig,
+    /// Missing capability resolution configuration
+    #[serde(default)]
+    pub missing_capabilities: MissingCapabilityRuntimeConfig,
 }
 
 /// A named LLM model profile that can be selected at runtime
@@ -200,6 +203,46 @@ impl Default for CatalogConfig {
             keyword_min_score: default_catalog_keyword_min_score(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct MissingCapabilityToolSelectorRuntimeConfig {
+    /// Enable or disable the LLM-based tool selector
+    pub enabled: Option<bool>,
+    /// Override prompt ID used for selection
+    pub prompt_id: Option<String>,
+    /// Override prompt version used for selection
+    pub prompt_version: Option<String>,
+    /// Limit number of tools provided to the selector
+    pub max_tools: Option<u32>,
+    /// Limit candidate description length
+    pub max_description_chars: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct MissingCapabilityRuntimeConfig {
+    /// Enable or disable missing capability runtime detection
+    pub enabled: Option<bool>,
+    /// Allow runtime detection of missing capabilities
+    #[serde(rename = "runtime_detection")]
+    pub runtime_detection: Option<bool>,
+    /// Automatically attempt resolution when a capability is missing
+    pub auto_resolution: Option<bool>,
+    /// Permit the resolver to call the LLM synthesis pipeline
+    pub llm_synthesis: Option<bool>,
+    /// Allow discovery fallback to web search
+    pub web_search: Option<bool>,
+    /// Require human approval before registering synthesized capabilities
+    pub human_approval_required: Option<bool>,
+    /// Emit verbose resolver logs
+    pub verbose_logging: Option<bool>,
+    /// Maximum resolution attempts before giving up
+    pub max_attempts: Option<u32>,
+    /// Enable output schema introspection (requires auth)
+    pub output_schema_introspection: Option<bool>,
+    /// Tool selector configuration (LLM-assisted matching)
+    #[serde(default)]
+    pub tool_selector: MissingCapabilityToolSelectorRuntimeConfig,
 }
 
 fn default_catalog_plan_min_score() -> f32 {
@@ -589,6 +632,7 @@ impl Default for AgentConfig {
             llm_profiles: None,
             discovery: DiscoveryConfig::default(),
             catalog: CatalogConfig::default(),
+            missing_capabilities: MissingCapabilityRuntimeConfig::default(),
         }
     }
 }

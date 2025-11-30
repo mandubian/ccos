@@ -1,4 +1,5 @@
 use super::types::*;
+use crate::utils::value_conversion;
 use async_trait::async_trait;
 use regex::Regex;
 use reqwest;
@@ -18,7 +19,13 @@ pub trait CapabilityExecutor: Send + Sync {
     async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value>;
 }
 
-pub struct MCPExecutor;
+use crate::capabilities::SessionPoolManager;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+pub struct MCPExecutor {
+    pub session_pool: Arc<RwLock<Option<Arc<SessionPoolManager>>>>,
+}
 
 #[async_trait(?Send)]
 impl CapabilityExecutor for MCPExecutor {
@@ -27,14 +34,176 @@ impl CapabilityExecutor for MCPExecutor {
     }
     async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
         if let ProviderType::MCP(mcp) = provider {
+            // eprintln!("[MCPExecutor] Executing tool '{}' on server '{}'", mcp.tool_name, mcp.server_url);
+            // eprintln!("[MCPExecutor] Inputs type: {}", inputs.type_name());
+
+            // Resolve auth token: inputs > provider > env
+            let auth_token_from_inputs = if let Value::Map(map) = inputs {
+                map.get(&MapKey::Keyword(rtfs::ast::Keyword(
+                    "auth-token".to_string(),
+                )))
+                .or_else(|| {
+                    map.get(&MapKey::Keyword(rtfs::ast::Keyword(
+                        "auth_token".to_string(),
+                    )))
+                })
+                .and_then(|v| {
+                    if let Value::String(s) = v {
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            };
+
+            let auth_token = auth_token_from_inputs
+                .or_else(|| mcp.auth_token.clone())
+                .or_else(|| std::env::var("MCP_AUTH_TOKEN").ok());
+
+            // Try to use SessionPoolManager if available
+            let guard = self.session_pool.read().await;
+            if let Some(pool) = guard.as_ref() {
+                // eprintln!("[MCPExecutor] Using SessionPoolManager");
+                let mut metadata = HashMap::new();
+                metadata.insert("mcp_server_url".to_string(), mcp.server_url.clone());
+                metadata.insert("mcp_tool_name".to_string(), mcp.tool_name.clone());
+                metadata.insert("mcp_timeout_ms".to_string(), mcp.timeout_ms.to_string());
+
+                if let Some(token) = &auth_token {
+                    metadata.insert("mcp_auth_token".to_string(), token.clone());
+                }
+
+                let pool_clone = pool.clone();
+                let tool_name = mcp.tool_name.clone();
+                let inputs_clone = inputs.clone();
+
+                // Execute via session pool
+                return pool_clone.execute_with_session(&tool_name, &metadata, &[inputs_clone]);
+            }
+
+            // No session pool - do direct MCP execution with initialization
             // Convert RTFS Value to JSON, preserving string/keyword map keys
             let input_json = A2AExecutor::value_to_json(inputs)
                 .map_err(|e| RuntimeError::Generic(format!("Failed to serialize inputs: {}", e)))?;
+
             let client = reqwest::Client::new();
+
+            // Step 1: Initialize MCP session
+            let init_request = json!({
+                "jsonrpc": "2.0",
+                "id": "init",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "ccos-mcp-executor",
+                        "version": "1.0.0"
+                    }
+                }
+            });
+
+            let mut init_builder = client.post(&mcp.server_url)
+                .header("Accept", "application/json")
+                .header("Accept", "text/event-stream");
+            if let Some(token) = &auth_token {
+                init_builder = init_builder.header("Authorization", format!("Bearer {}", token));
+            }
+
+            let init_response = init_builder
+                .json(&init_request)
+                .timeout(Duration::from_millis(mcp.timeout_ms))
+                .send()
+                .await
+                .map_err(|e| RuntimeError::Generic(format!("MCP initialization failed: {}", e)))?;
+            
+            // Check status and handle SSE format
+            let status = init_response.status();
+            if !status.is_success() {
+                let error_text = init_response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(RuntimeError::Generic(format!(
+                    "MCP initialization failed ({}): {}",
+                    status, error_text
+                )));
+            }
+            
+            // Extract session ID from response header first (MCP Streamable HTTP Transport spec)
+            let session_id_from_header = init_response.headers()
+                .get("mcp-session-id")
+                .and_then(|v| v.to_str().ok())
+                .map(String::from);
+            
+            log::debug!("MCP session ID from header: {:?}", session_id_from_header);
+            
+            let content_type = init_response.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("application/json");
+            
+            let init_json: serde_json::Value = if content_type.contains("text/event-stream") {
+                let body = init_response.text().await.map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to read SSE init response: {}", e))
+                })?;
+                let mut last_data = None;
+                for line in body.lines() {
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        if !data.trim().is_empty() {
+                            last_data = Some(data.to_string());
+                        }
+                    }
+                }
+                if let Some(data) = last_data {
+                    serde_json::from_str(&data).map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to parse SSE init data: {}", e))
+                    })?
+                } else {
+                    return Err(RuntimeError::Generic(
+                        "No data found in SSE init response".to_string()
+                    ));
+                }
+            } else {
+                init_response.json().await.map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to parse MCP init response: {}", e))
+                })?
+            };
+
+            // Check for initialization error
+            if let Some(error) = init_json.get("error") {
+                return Err(RuntimeError::Generic(format!(
+                    "MCP initialization error: {:?}",
+                    error
+                )));
+            }
+
+            // Extract session ID from response header (MCP Streamable HTTP Transport spec)
+            // The Mcp-Session-Id header is set in the response, not the body
+            let session_id = session_id_from_header.or_else(|| {
+                // Fallback: check if it's in the JSON response body (some servers)
+                init_json
+                    .get("result")
+                    .and_then(|r| r.get("sessionId"))
+                    .and_then(|s| s.as_str())
+                    .map(String::from)
+            });
+            
+            log::debug!("MCP session ID (final): {:?}", session_id);
+
             let tool_name = if mcp.tool_name.is_empty() || mcp.tool_name == "*" {
                 let tools_request = json!({"jsonrpc":"2.0","id":"tools_discovery","method":"tools/list","params":{}});
-                let response = client
-                    .post(&mcp.server_url)
+                let mut request_builder = client.post(&mcp.server_url)
+                    .header("Accept", "application/json")
+                    .header("Accept", "text/event-stream");
+                if let Some(token) = &auth_token {
+                    request_builder =
+                        request_builder.header("Authorization", format!("Bearer {}", token));
+                }
+                if let Some(ref sid) = session_id {
+                    request_builder = request_builder.header("Mcp-Session-Id", sid);
+                }
+
+                let response = request_builder
                     .json(&tools_request)
                     .timeout(std::time::Duration::from_millis(mcp.timeout_ms))
                     .send()
@@ -42,9 +211,48 @@ impl CapabilityExecutor for MCPExecutor {
                     .map_err(|e| {
                         RuntimeError::Generic(format!("Failed to connect to MCP server: {}", e))
                     })?;
-                let tools_response: serde_json::Value = response.json().await.map_err(|e| {
-                    RuntimeError::Generic(format!("Failed to parse MCP response: {}", e))
-                })?;
+                
+                // Check status and handle SSE format for tools/list
+                let status = response.status();
+                if !status.is_success() {
+                    let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                    return Err(RuntimeError::Generic(format!(
+                        "MCP tools/list failed ({}): {}",
+                        status, error_text
+                    )));
+                }
+                
+                let content_type = response.headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("application/json");
+                
+                let tools_response: serde_json::Value = if content_type.contains("text/event-stream") {
+                    let body = response.text().await.map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to read SSE tools response: {}", e))
+                    })?;
+                    let mut last_data = None;
+                    for line in body.lines() {
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            if !data.trim().is_empty() {
+                                last_data = Some(data.to_string());
+                            }
+                        }
+                    }
+                    if let Some(data) = last_data {
+                        serde_json::from_str(&data).map_err(|e| {
+                            RuntimeError::Generic(format!("Failed to parse SSE tools data: {}", e))
+                        })?
+                    } else {
+                        return Err(RuntimeError::Generic(
+                            "No data found in SSE tools response".to_string()
+                        ));
+                    }
+                } else {
+                    response.json().await.map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to parse MCP response: {}", e))
+                    })?
+                };
                 if let Some(result) = tools_response.get("result") {
                     if let Some(tools) = result.get("tools").and_then(|t| t.as_array()) {
                         if let Some(first_tool) = tools
@@ -72,16 +280,84 @@ impl CapabilityExecutor for MCPExecutor {
                 mcp.tool_name.clone()
             };
             let tool_request = json!({"jsonrpc":"2.0","id":"tool_call","method":"tools/call","params":{"name":tool_name,"arguments":input_json}});
-            let response = client
-                .post(&mcp.server_url)
+            let mut request_builder = client.post(&mcp.server_url)
+                .header("Accept", "application/json")
+                .header("Accept", "text/event-stream");
+            if let Some(token) = &auth_token {
+                request_builder =
+                    request_builder.header("Authorization", format!("Bearer {}", token));
+            }
+            if let Some(ref sid) = session_id {
+                request_builder = request_builder.header("Mcp-Session-Id", sid);
+            }
+
+            let response = request_builder
                 .json(&tool_request)
                 .timeout(std::time::Duration::from_millis(mcp.timeout_ms))
                 .send()
                 .await
                 .map_err(|e| RuntimeError::Generic(format!("Failed to execute MCP tool: {}", e)))?;
-            let tool_response: serde_json::Value = response.json().await.map_err(|e| {
-                RuntimeError::Generic(format!("Failed to parse tool response: {}", e))
+            
+            // Check status code first
+            let status = response.status();
+            
+            // Check content type to handle SSE vs JSON
+            let content_type = response.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+            
+            log::debug!("MCP tool response: status={}, content-type={}", status, content_type);
+            
+            // Read the body as text first for debugging
+            let body_text = response.text().await.map_err(|e| {
+                RuntimeError::Generic(format!("Failed to read response body: {}", e))
             })?;
+            
+            if body_text.is_empty() {
+                return Err(RuntimeError::Generic(format!(
+                    "MCP tool execution returned empty response (status={}, content-type={})",
+                    status, content_type
+                )));
+            }
+            
+            log::debug!("MCP tool response body (first 500 chars): {}", &body_text[..body_text.len().min(500)]);
+            
+            if !status.is_success() {
+                return Err(RuntimeError::Generic(format!(
+                    "MCP tool execution failed ({}): {}",
+                    status, body_text
+                )));
+            }
+            
+            let tool_response: serde_json::Value = if content_type.contains("text/event-stream") {
+                // Parse SSE response - extract the last data line
+                // SSE format: "data: {...}\n\n"
+                let mut last_data = None;
+                for line in body_text.lines() {
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        if !data.trim().is_empty() {
+                            last_data = Some(data.to_string());
+                        }
+                    }
+                }
+                
+                if let Some(data) = last_data {
+                    serde_json::from_str(&data).map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to parse SSE data: {}", e))
+                    })?
+                } else {
+                    return Err(RuntimeError::Generic(
+                        "No data found in SSE response".to_string()
+                    ));
+                }
+            } else {
+                // Parse as regular JSON
+                serde_json::from_str(&body_text).map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to parse tool response: {} (body: {})", e, &body_text[..body_text.len().min(200)]))
+                })?
+            };
             if let Some(error) = tool_response.get("error") {
                 return Err(RuntimeError::Generic(format!(
                     "MCP tool execution failed: {:?}",
@@ -178,74 +454,13 @@ impl A2AExecutor {
             ))
         }
     }
+    // Use shared value conversion utilities
     fn value_to_json(value: &Value) -> Result<serde_json::Value, RuntimeError> {
-        use serde_json::Value as JsonValue;
-        match value {
-            Value::Integer(i) => Ok(JsonValue::Number(serde_json::Number::from(*i))),
-            Value::Float(f) => Ok(JsonValue::Number(
-                serde_json::Number::from_f64(*f)
-                    .ok_or_else(|| RuntimeError::Generic("Invalid float value".to_string()))?,
-            )),
-            Value::String(s) => Ok(JsonValue::String(s.clone())),
-            Value::Boolean(b) => Ok(JsonValue::Bool(*b)),
-            Value::Vector(vec) => Ok(JsonValue::Array(
-                vec.iter()
-                    .map(|v| Self::value_to_json(v))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            Value::Map(map) => {
-                let mut json_map = serde_json::Map::new();
-                for (key, val) in map {
-                    let key_str = match key {
-                        MapKey::String(s) => s.clone(),
-                        MapKey::Keyword(k) => k.0.clone(),
-                        _ => {
-                            return Err(RuntimeError::Generic(
-                                "Map keys must be strings or keywords".to_string(),
-                            ))
-                        }
-                    };
-                    json_map.insert(key_str, Self::value_to_json(val)?);
-                }
-                Ok(JsonValue::Object(json_map))
-            }
-            Value::Nil => Ok(JsonValue::Null),
-            _ => Err(RuntimeError::Generic(format!(
-                "Cannot convert {} to JSON",
-                value.type_name()
-            ))),
-        }
+        value_conversion::rtfs_value_to_json(value)
     }
+    
     fn json_to_rtfs_value(json: &serde_json::Value) -> RuntimeResult<Value> {
-        match json {
-            serde_json::Value::String(s) => Ok(Value::String(s.clone())),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Ok(Value::Integer(i))
-                } else if let Some(f) = n.as_f64() {
-                    Ok(Value::Float(f))
-                } else {
-                    Err(RuntimeError::Generic("Invalid number format".to_string()))
-                }
-            }
-            serde_json::Value::Bool(b) => Ok(Value::Boolean(*b)),
-            serde_json::Value::Array(arr) => Ok(Value::Vector(
-                arr.iter()
-                    .map(|json| CapabilityMarketplace::json_to_rtfs_value(json))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            serde_json::Value::Object(obj) => {
-                let mut map = HashMap::new();
-                for (k, v) in obj {
-                    map.insert(
-                        rtfs::ast::MapKey::String(k.clone()),
-                        CapabilityMarketplace::json_to_rtfs_value(v)?,
-                    );
-                }
-                Ok(Value::Map(map))
-            }
-            serde_json::Value::Null => Ok(Value::Nil),
-        }
+        value_conversion::json_to_rtfs_value(json)
     }
 }
 
@@ -495,12 +710,9 @@ impl OpenApiExecutor {
         }
     }
 
+    // Use shared utility for map key conversion
     fn map_key_to_string(key: &MapKey) -> RuntimeResult<String> {
-        match key {
-            MapKey::String(s) => Ok(s.clone()),
-            MapKey::Keyword(k) => Ok(k.0.clone()),
-            MapKey::Integer(i) => Ok(i.to_string()),
-        }
+        Ok(value_conversion::map_key_to_string(key))
     }
 
     fn value_to_value_map(value: &Value) -> RuntimeResult<HashMap<String, Value>> {

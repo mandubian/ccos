@@ -1,0 +1,120 @@
+(plan
+  :name "cognitive-assistant-metaplan"
+  :description "A meta-plan to guide the development of a fully cognitive smart assistant. This plan uses CCOS to manage its own evolution, turning the implementation of the generalization plan into a series of executable steps."
+  :version "1.0"
+
+  ;; =================================================================================
+  ;; MILESTONE 1: FOUNDATIONS FOR SYNTHESIS & SAFE EXECUTION
+  ;; =================================================================================
+
+  (step
+    :id "wp1_localsynth_framework"
+    :description "Implement LocalSynth: a schema-aware primitive framework for capability synthesis."
+    :capability "ccos.dev.implement_feature"
+    :input {:feature_name "LocalSynth Framework"
+            :feature_description "Create a registry for generic, typed data primitives (filter, map, reduce, project, sort, groupBy, join) with strong type contracts. Implement a binding engine that uses schemas, not name heuristics, for wiring inputs/outputs."
+            :acceptance_criteria "Unit tests pass for each primitive. Binding engine correctly maps plan schemas to primitive schemas. Synthesized capabilities pass type validation."
+            :work_package_id "WP1"})
+
+  (step
+    :id "wp2_safe_rtfs_execution"
+    :description "Implement a secure and restricted RTFS runtime for executing synthesized capabilities."
+    :capability "ccos.dev.implement_feature"
+    :input {:feature_name "Safe RTFS Execution Runtime"
+            :feature_description "Develop a restricted RTFS runtime that only exposes the SecureStandardLibrary. Implement static analyzers to disallow side-effects, host calls, and other dangerous forms. Define a clear error model for unsafe code."
+            :acceptance_criteria "Synthesized capabilities execute successfully within the restricted runtime. Attempts to register or execute unsafe RTFS are rejected with clear, actionable errors."
+            :work_package_id "WP2"}
+    :depends_on ["wp1_localsynth_framework"])
+
+  (step
+    :id "wp6_canonical_rtfs_loader"
+    :description "Replace heuristic loaders with a single canonical RTFS parser."
+    :capability "ccos.dev.implement_feature"
+    :input {:feature_name "Canonical RTFS Loader"
+            :feature_description "Unify all RTFS parsing (for capabilities, plans, and other artifacts) through the canonical rtfs-parser crate. Remove all ad-hoc and heuristic-based loaders."
+            :acceptance_criteria "All existing and new RTFS files load via the canonical loader. Heuristic loading code is removed."
+            :work_package_id "WP6"}
+    :depends_on ["wp1_localsynth_framework"])
+
+  ;; =================================================================================
+  ;; MILESTONE 2: DYNAMIC DISCOVERY & ORCHESTRATION
+  ;; =================================================================================
+
+  (step
+    :id "wp3_configurable_discovery"
+    :description "Externalize capability discovery strategies to a configuration file."
+    :capability "ccos.dev.implement_feature"
+    :input {:feature_name "Configurable Discovery Strategies"
+            :feature_description "Implement a strategy registry (e.g., token, embedding, action-verb) and load the matching pipeline from a TOML configuration. This includes weights, thresholds, and overrides."
+            :acceptance_criteria "The smart assistant demo can switch discovery strategies (e.g., from token-based to embedding-based) without any code changes. Logs clearly show which strategies contributed to a match."
+            :work_package_id "WP3"}
+    :depends_on ["wp1_localsynth_framework"])
+
+  (step
+    :id "wp7_io_aliaser"
+    :description "Introduce an I/O aliaser to normalize data flow between plans and capabilities."
+    :capability "ccos.dev.implement_feature"
+    :input {:feature_name "I/O Aliaser Normalization"
+            :feature_description "Create a layer that maps plan-specific input/output names to canonical internal names (e.g., 'items', 'predicate') used by primitives, and vice-versa. This decouples synthesis from plan-specific naming."
+            :acceptance_criteria "Synthesizer templates use only canonical names. The aliaser correctly maps data to and from the plan's requested keys. Name-guessing heuristics are removed."
+            :work_package_id "WP7"}
+    :depends_on ["wp1_localsynth_framework"])
+
+  (step
+    :id "wp4_orchestrator_rewrite"
+    :description "Implement a rewrite engine to optimize orchestrator plans."
+    :capability "ccos.dev.implement_feature"
+    :input {:feature_name "Orchestrator Rewrite Engine"
+            :feature_description "Implement a rewrite pass that detects opportunities for optimization. This includes pushing filter/projection operations to server-side MCP calls (e.g., via GraphQL or query parameters) and collapsing chains of local primitives into a single synthesized function."
+            :acceptance_criteria "For a demo plan, the rewriter correctly identifies a filterable MCP tool and moves a local filter step to a server-side query parameter. The final output remains identical. Logs show proof of the rewrite."
+            :work_package_id "WP4"}
+    :depends_on ["wp2_safe_rtfs_execution" "wp3_configurable_discovery"])
+
+  ;; =================================================================================
+  ;; MILESTONE 3: LLM-DRIVEN EVOLUTION & USABILITY
+  ;; =================================================================================
+
+  (step
+    :id "wp5_llm_synthesis_mode"
+    :description "Enable an LLM to synthesize new RTFS capabilities on demand."
+    :capability "ccos.dev.implement_feature"
+    :input {:feature_name "LLM-driven RTFS Synthesis"
+            :feature_description "Create a capability that prompts an LLM with grammar hints and stdlib signatures to generate new capabilities. Implement a validation loop that can parse, analyze, test, and auto-repair the generated RTFS."
+            :acceptance_criteria "The system can successfully prompt an LLM to create at least two new, non-trivial capabilities that pass the full validation and testing loop and are successfully registered in the marketplace."
+            :work_package_id "WP5"}
+    :depends_on ["wp2_safe_rtfs_execution" "wp6_canonical_rtfs_loader"])
+
+  (step
+    :id "wp8_tracing_and_ux"
+    :description "Improve tracing, error handling, and visualization."
+    :capability "ccos.dev.implement_feature"
+    :input {:feature_name "Enhanced Tracing and UX"
+            :feature_description "Implement structured tracing for all major cognitive steps (discovery, synthesis, rewrite). Provide clear, typed auth-required errors. Enhance the planner visualization tool to render discovery events and schema validation feedback."
+            :acceptance_criteria "The demo output is debuggable, with clear tracing for each decision. Auth errors guide the user toward a solution. The visualizer provides a clear timeline of the planner's operations."
+            :work_package_id "WP8"}
+    :depends_on ["wp4_orchestrator_rewrite"])
+
+  ;; =================================================================================
+  ;; MILESTONE 4: DOCUMENTATION & TESTING
+  ;; =================================================================================
+
+  (step
+    :id "wp9_test_suite"
+    :description "Build a comprehensive test suite for the cognitive assistant framework."
+    :capability "ccos.dev.implement_feature"
+    :input {:feature_name "Comprehensive Test Suite"
+            :feature_description "Develop unit tests for primitives and schema binding, integration tests for the end-to-end demo (with and without auth, with and without rewrites), and fuzz/static analysis tests to ensure the safety of synthesized RTFS."
+            :acceptance_criteria "CI is green. Code coverage for the synthesis primitives is above 80%."
+            :work_package_id "WP9"}
+    :depends_on ["wp1_localsynth_framework" "wp2_safe_rtfs_execution" "wp4_orchestrator_rewrite" "wp5_llm_synthesis_mode"])
+
+  (step
+    :id "wp10_documentation"
+    :description "Create user and developer documentation for the new framework."
+    :capability "ccos.dev.implement_feature"
+    :input {:feature_name "System Documentation"
+            :feature_description "Write a developer guide covering the primitive framework, binding engine, and rewrite strategies. Write a user guide for configuring discovery and enabling LLM-based synthesis."
+            :acceptance_criteria "Documentation is reviewed and published. All examples in the documentation are tested and runnable."
+            :work_package_id "WP10"}
+    :depends_on ["wp9_test_suite"])
+)

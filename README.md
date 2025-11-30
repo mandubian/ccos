@@ -145,6 +145,7 @@ To understand my world, you can explore its design and implementation:
         *   [Plans & Orchestration](./docs/ccos/specs/002-plans-and-orchestration.md)
         *   [Causal Chain](./docs/ccos/specs/003-causal-chain.md)
         *   [Capabilities & Marketplace](./docs/ccos/specs/004-capabilities-and-marketplace.md)
+        *   [Modular Planner Architecture](./docs/ccos/specs/025-modular-planner-architecture.md)
 
 2.  **Understand My Language (RTFS)**:
     *   RTFS 2.0 Spec Hub: `docs/rtfs-2.0/specs/`

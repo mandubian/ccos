@@ -324,43 +324,8 @@ fn test_ir_conversion_try_catch() {
         if try_body.len() == 1));
 }
 
-#[test]
-fn test_ir_conversion_discover_agents() {
-    let mut converter = setup_converter();
-
-    // DiscoverAgents expression
-    let discover_expr = DiscoverAgentsExpr {
-        criteria: Box::new(Expression::Literal(Literal::String(
-            "capability:weather".to_string(),
-        ))),
-        options: None,
-    };
-    let ast = Expression::DiscoverAgents(discover_expr);
-    let ir = converter
-        .convert_expression(ast)
-        .expect("Should convert discover agents");
-    assert!(matches!(ir, IrNode::DiscoverAgents { .. }));
-}
-
-#[test]
-fn test_ir_conversion_log_step() {
-    let mut converter = setup_converter();
-
-    // LogStep expression
-    let log_expr = LogStepExpr {
-        level: Some(Keyword::new("info")),
-        values: vec![Expression::Literal(Literal::String(
-            "test message".to_string(),
-        ))],
-        location: None,
-    };
-    let ast = Expression::LogStep(Box::new(log_expr));
-    let ir = converter
-        .convert_expression(ast)
-        .expect("Should convert log step");
-    assert!(matches!(ir, IrNode::LogStep { values, .. } 
-        if values.len() == 1));
-}
+// Removed tests for discover-agents and log-step
+// These special forms have been moved to the Host layer (CCOS capabilities)
 
 #[test]
 fn test_ir_conversion_symbol_references() {

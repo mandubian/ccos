@@ -666,7 +666,7 @@ impl RecursiveSynthesizer {
         // Create a minimal manifest using the constructor
         // Use a stub handler - the actual implementation will be registered later
         let capability_id = need.capability_class.clone();
-        let stub_handler: Arc<dyn Fn(&rtfs::runtime::values::Value) -> RuntimeResult<rtfs::runtime::values::Value> + Send + Sync> = 
+        let stub_handler: Arc<dyn Fn(&rtfs::runtime::values::Value) -> RuntimeResult<rtfs::runtime::values::Value> + Send + Sync> =
             Arc::new(move |_input: &rtfs::runtime::values::Value| -> RuntimeResult<rtfs::runtime::values::Value> {
                 Err(RuntimeError::Generic(
                     format!("Synthesized capability {} not yet implemented", capability_id)
