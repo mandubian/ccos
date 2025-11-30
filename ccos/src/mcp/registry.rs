@@ -35,8 +35,8 @@ pub struct McpServer {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpRepository {
-    pub url: String,
-    pub source: String,
+    pub url: Option<String>,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,8 +339,12 @@ impl MCPRegistryClient {
         metadata.insert("mcp_server_version".to_string(), server.version.clone());
 
         if let Some(ref repo) = server.repository {
-            metadata.insert("mcp_repository_url".to_string(), repo.url.clone());
-            metadata.insert("mcp_repository_source".to_string(), repo.source.clone());
+            if let Some(ref url) = repo.url {
+                metadata.insert("mcp_repository_url".to_string(), url.clone());
+            }
+            if let Some(ref source) = repo.source {
+                metadata.insert("mcp_repository_source".to_string(), source.clone());
+            }
         }
 
         // Add package information if available

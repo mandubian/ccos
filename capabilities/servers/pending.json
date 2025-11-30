@@ -1,0 +1,80 @@
+{
+  "items": [
+    {
+      "id": "discovery-fb56e544-a9ec-4e81-8456-1099247219fa",
+      "source": {
+        "type": "McpRegistry",
+        "entry": {
+          "name": "ai.toolprint/hypertool-mcp"
+        }
+      },
+      "server_info": {
+        "name": "ai.toolprint/hypertool-mcp",
+        "endpoint": "",
+        "description": "Dynamically expose tools from proxied servers based on an Agent Persona"
+      },
+      "domain_match": [
+        "print"
+      ],
+      "risk_assessment": {
+        "level": "high",
+        "reasons": [
+          "external_registry"
+        ]
+      },
+      "requested_at": "2025-11-30T18:13:08.355538720Z",
+      "expires_at": "2025-12-01T18:13:08.355539592Z",
+      "requesting_goal": "print"
+    },
+    {
+      "id": "discovery-b727bbe0-dc54-42eb-a644-84abd2ce26a6",
+      "source": {
+        "type": "McpRegistry",
+        "entry": {
+          "name": "ai.toolprint/hypertool-mcp"
+        }
+      },
+      "server_info": {
+        "name": "ai.toolprint/hypertool-mcp",
+        "endpoint": "",
+        "description": "Dynamically expose tools from proxied servers based on an Agent Persona"
+      },
+      "domain_match": [
+        "print"
+      ],
+      "risk_assessment": {
+        "level": "high",
+        "reasons": [
+          "external_registry"
+        ]
+      },
+      "requested_at": "2025-11-30T18:13:54.964470004Z",
+      "expires_at": "2025-12-01T18:13:54.964470741Z",
+      "requesting_goal": "print"
+    },
+    {
+      "id": "search-086519b5-0bad-4111-90da-ca026b5128fa",
+      "source": {
+        "type": "LocalOverride",
+        "entry": {
+          "path": "/home/mandubian/workspaces/mandubian/ccos/capabilities/mcp/overrides.json"
+        }
+      },
+      "server_info": {
+        "name": "github/github-mcp",
+        "endpoint": "https://api.githubcopilot.com/mcp/",
+        "description": "Official GitHub MCP Server"
+      },
+      "domain_match": [],
+      "risk_assessment": {
+        "level": "low",
+        "reasons": [
+          "discovered_via_search"
+        ]
+      },
+      "requested_at": "2025-11-30T20:17:15.805396436Z",
+      "expires_at": "2025-12-30T20:17:15.805397398Z",
+      "requesting_goal": null
+    }
+  ]
+}

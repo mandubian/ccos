@@ -702,8 +702,8 @@ impl ServerSelectionHandler {
 
         let repository = match repo_source {
             Some(source) => Some(mcp::McpRepository {
-                url: url_input.to_string(),
-                source,
+                url: Some(url_input.to_string()),
+                source: Some(source),
             }),
             None => None,
         };
@@ -897,8 +897,8 @@ impl ServerCandidate {
     }
 
     /// Set repository information
-    pub fn with_repository(mut self, repository: String) -> Self {
-        self.repository = Some(repository);
+    pub fn with_repository(mut self, repository: Option<String>) -> Self {
+        self.repository = repository;
         self
     }
 

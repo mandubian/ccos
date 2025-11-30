@@ -2494,8 +2494,7 @@ impl MissingCapabilityResolver {
                     .server
                     .repository
                     .as_ref()
-                    .map(|repo| repo.url.clone())
-                    .unwrap_or_else(|| "".to_string());
+                    .and_then(|repo| repo.url.clone());
 
                 ServerCandidate::new(
                     domain,
@@ -3053,7 +3052,11 @@ impl MissingCapabilityResolver {
         if requested_lower.contains("github") {
             // Repository URL pointing to GitHub orgs that likely indicate officialness
             if let Some(repo) = &server.repository {
-                let repo_url_lower = repo.url.to_lowercase();
+                let repo_url_lower = repo
+                    .url
+                    .as_ref()
+                    .map(|u| u.to_lowercase())
+                    .unwrap_or_default();
                 if repo_url_lower.contains("github.com") {
                     // Mild boost for any GitHub-hosted repo
                     score += 1.0;

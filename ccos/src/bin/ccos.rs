@@ -14,7 +14,10 @@
 //! # Discovery commands (future)
 //! ccos discover goal "send SMS to customers"
 //! ccos discover server github
-//! ccos discover search "issues"
+//!
+//! # Server management (future)
+//! ccos server search "github"  # Search for servers
+//! ccos server list              # List configured servers
 //!
 //! # Server management (future)
 //! ccos server list

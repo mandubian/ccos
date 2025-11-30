@@ -1,8 +1,10 @@
+use crate::arbiter::llm_provider::LlmProvider;
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::synthesis::core::schema_serializer::type_expr_to_rtfs_compact;
 use rtfs::ast::{Keyword, MapTypeEntry, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// API introspection result containing discovered endpoints and their schemas
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,17 +91,38 @@ pub struct RateLimitInfo {
 pub struct APIIntrospector {
     /// Mock mode for testing
     mock_mode: bool,
+    /// Optional LLM provider for documentation parsing fallback
+    llm_provider: Option<Arc<dyn LlmProvider>>,
 }
 
 impl APIIntrospector {
     /// Create a new API introspector
     pub fn new() -> Self {
-        Self { mock_mode: false }
+        Self {
+            mock_mode: false,
+            llm_provider: None,
+        }
+    }
+
+    /// Create a new API introspector with an LLM provider
+    pub fn with_llm_provider(llm_provider: Arc<dyn LlmProvider>) -> Self {
+        Self {
+            mock_mode: false,
+            llm_provider: Some(llm_provider),
+        }
+    }
+
+    /// Set the LLM provider for documentation parsing
+    pub fn set_llm_provider(&mut self, llm_provider: Arc<dyn LlmProvider>) {
+        self.llm_provider = Some(llm_provider);
     }
 
     /// Create in mock mode for testing
     pub fn mock() -> Self {
-        Self { mock_mode: true }
+        Self {
+            mock_mode: true,
+            llm_provider: None,
+        }
     }
 
     /// Introspect an API from OpenAPI specification
@@ -737,15 +760,42 @@ impl APIIntrospector {
     }
 
     /// Discover endpoints by making API calls (fallback method)
+    /// Uses LLM doc parsing if an LLM provider is available
     async fn discover_endpoints_by_calls(
         &self,
         _base_url: &str,
         api_domain: &str,
     ) -> RuntimeResult<APIIntrospectionResult> {
-        // This would implement API discovery by making actual HTTP calls
-        // Return error - discovery by calls not yet implemented
+        // Try LLM doc parsing if provider is available
+        if let Some(ref llm_provider) = self.llm_provider {
+            log::info!(
+                "🤖 Attempting LLM-based documentation parsing for: {}",
+                api_domain
+            );
+
+            let parser = super::llm_doc_parser::LlmDocParser::new();
+
+            match parser
+                .parse_for_domain(api_domain, llm_provider.as_ref())
+                .await
+            {
+                Ok(result) => {
+                    log::info!(
+                        "✅ Successfully parsed {} endpoints via LLM for: {}",
+                        result.endpoints.len(),
+                        api_domain
+                    );
+                    return Ok(result);
+                }
+                Err(e) => {
+                    log::warn!("LLM doc parsing failed for {}: {}", api_domain, e);
+                }
+            }
+        }
+
+        // Return error - no methods worked
         Err(RuntimeError::Generic(format!(
-            "API discovery by HTTP calls not implemented for domain: {}",
+            "API discovery failed for domain: {}. No OpenAPI spec found, not in known APIs registry, not in APIs.guru, and LLM parsing unavailable or failed.",
             api_domain
         )))
     }
