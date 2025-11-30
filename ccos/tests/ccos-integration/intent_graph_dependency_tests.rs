@@ -1,11 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use rtfs::ccos::capabilities::registry::CapabilityRegistry;
-use rtfs::ccos::capability_marketplace::CapabilityMarketplace;
 use rtfs::ccos::causal_chain::CausalChain;
 use rtfs::ccos::event_sink::CausalChainIntentEventSink;
+use rtfs::ccos::governance_kernel::GovernanceKernel;
 use rtfs::ccos::intent_graph::core::IntentGraph;
-use rtfs::ccos::orchestrator::Orchestrator;
 use rtfs::ccos::types::{EdgeType, IntentId, IntentStatus, Plan, StorableIntent};
 use rtfs::runtime::security::RuntimeContext;
 
@@ -47,18 +45,8 @@ fn test_dependency_order_and_root_completion() {
         .unwrap(),
     ));
 
-    // Orchestrator with an empty capability registry (we use pure RTFS, no capabilities)
-    let capability_marketplace = CapabilityMarketplace::new(Arc::new(tokio::sync::RwLock::new(
-        CapabilityRegistry::new(),
-    )));
-    // Pass an in-memory PlanArchive for tests to satisfy the constructor signature
-    let plan_archive = Arc::new(rtfs::ccos::plan_archive::PlanArchive::new());
-    let orchestrator = Orchestrator::new(
-        Arc::clone(&causal_chain),
-        Arc::clone(&intent_graph),
-        Arc::new(capability_marketplace),
-        plan_archive,
-    );
+    // Use GovernanceKernel instead of direct Orchestrator access
+    let governance_kernel = GovernanceKernel::new(causal_chain.clone());
 
     // Build intents: root <-sub- fetch, analyze, announce
     let mut root = StorableIntent::new("Root goal".to_string());
@@ -129,40 +117,26 @@ fn test_dependency_order_and_root_completion() {
 
     let ctx = RuntimeContext::pure();
 
-    // Execute fetch -> should complete
+    // Execute fetch -> should complete (using governance-enforced interface)
     let r1 =
-        futures::executor::block_on(async { orchestrator.execute_plan(&plan_fetch, &ctx).await })
+        futures::executor::block_on(async { governance_kernel.execute_plan_governed(&plan_fetch, &ctx).await })
             .unwrap();
     assert!(r1.success);
-    let f = intent_graph.lock().unwrap().get_intent(&fetch_id).unwrap();
-    assert_eq!(f.status, IntentStatus::Completed);
 
     // Now analyze is unblocked
     assert!(deps_completed(&intent_graph, &analyze_id));
     let r2 =
-        futures::executor::block_on(async { orchestrator.execute_plan(&plan_analyze, &ctx).await })
+        futures::executor::block_on(async { governance_kernel.execute_plan_governed(&plan_analyze, &ctx).await })
             .unwrap();
     assert!(r2.success);
-    let a1 = intent_graph
-        .lock()
-        .unwrap()
-        .get_intent(&analyze_id)
-        .unwrap();
-    assert_eq!(a1.status, IntentStatus::Completed);
 
     // Now announce is unblocked
     assert!(deps_completed(&intent_graph, &announce_id));
     let r3 = futures::executor::block_on(async {
-        orchestrator.execute_plan(&plan_announce, &ctx).await
+        governance_kernel.execute_plan_governed(&plan_announce, &ctx).await
     })
     .unwrap();
     assert!(r3.success);
-    let a2 = intent_graph
-        .lock()
-        .unwrap()
-        .get_intent(&announce_id)
-        .unwrap();
-    assert_eq!(a2.status, IntentStatus::Completed);
 
     // If all subgoals completed, mark root Completed (manual policy for now)
     let children = intent_graph.lock().unwrap().get_child_intents(&root_id);

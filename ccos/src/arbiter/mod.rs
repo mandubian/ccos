@@ -49,7 +49,6 @@ pub mod arbiter_factory;
 pub mod delegating_arbiter;
 pub mod dummy_arbiter;
 pub mod hybrid_arbiter;
-pub mod legacy_arbiter;
 pub mod llm_arbiter;
 pub mod llm_provider;
 pub mod plan_generation;
@@ -63,7 +62,6 @@ pub use arbiter_factory::ArbiterFactory;
 pub use delegating_arbiter::DelegatingArbiter;
 pub use dummy_arbiter::DummyArbiter;
 pub use hybrid_arbiter::HybridArbiter;
-pub use legacy_arbiter::Arbiter;
 pub use llm_arbiter::LlmArbiter;
 pub use llm_provider::{LlmProvider, LlmProviderConfig, LlmProviderFactory, StubLlmProvider};
 pub use plan_generation::{

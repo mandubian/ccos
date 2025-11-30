@@ -10,12 +10,14 @@
 //! - Verifying capability attestations.
 //! - Logging all decisions and actions to the Causal Chain.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 
+use crate::capability_marketplace::types::CapabilityProvenance;
 use super::orchestrator::Orchestrator;
 
 use super::intent_graph::IntentGraph;
@@ -382,5 +384,271 @@ impl GovernanceKernel {
         let security_level = self.detect_security_level(capability_id);
         // Simulate high and critical operations in dry-run
         security_level == "high" || security_level == "critical"
+    }
+
+    // ---------------------------------------------------------------------
+    // Governance-Enforced Execution Interfaces
+    // ---------------------------------------------------------------------
+
+    /// Execute a plan through the governance pipeline.
+    /// This is the primary interface for external code to execute plans safely.
+    ///
+    /// # Security
+    /// This method ensures all plan execution goes through the GovernanceKernel,
+    /// providing constitutional validation, intent sanitization, and proper audit trails.
+    pub async fn execute_plan_governed(
+        &self,
+        plan: Plan,
+        context: &RuntimeContext,
+    ) -> RuntimeResult<ExecutionResult> {
+        // Use the existing validate_and_execute method which handles all governance checks
+        self.validate_and_execute(plan, context).await
+    }
+
+    /// Execute an entire intent graph through the governance pipeline.
+    /// This orchestrates child intents and manages shared context while ensuring governance compliance.
+    ///
+    /// # Security
+    /// This method ensures all plan execution within the intent graph goes through the GovernanceKernel.
+    pub async fn execute_intent_graph_governed(
+        &self,
+        root_intent_id: &str,
+        initial_context: &RuntimeContext,
+    ) -> RuntimeResult<ExecutionResult> {
+        // First validate that the root intent exists and can be executed
+        let intent_id = root_intent_id.to_string();
+        
+        // Get the root intent from the graph
+        let graph = self
+            .intent_graph
+            .lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+        
+        let root_intent = graph
+            .get_intent(&intent_id)
+            .ok_or_else(|| RuntimeError::Generic(format!("Intent not found: {}", root_intent_id)))?;
+        
+        drop(graph);
+
+        // Get all child intents for this root intent
+        let children = {
+            let graph = self
+                .intent_graph
+                .lock()
+                .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+            graph.get_child_intents(&intent_id)
+        };
+
+        // Execute each child intent through governance
+        let mut enhanced_context = initial_context.clone();
+        enhanced_context.cross_plan_params.clear();
+
+        let mut child_results = Vec::new();
+        for child_intent in children {
+            if let Some(child_plan) = self.get_plan_for_intent(&child_intent.intent_id)? {
+                // Execute each child plan through governance
+                let child_result = self.validate_and_execute(child_plan, &enhanced_context).await?;
+                let exported = self.extract_exported_variables(&child_result);
+                enhanced_context.cross_plan_params.extend(exported);
+                child_results.push((child_intent.intent_id.clone(), child_result));
+            }
+        }
+
+        // Execute root plan if it exists
+        let mut root_result = None;
+        if let Some(root_plan) = self.get_plan_for_intent(root_intent_id)? {
+            root_result = Some(self.validate_and_execute(root_plan, &enhanced_context).await?);
+        }
+
+        // Build result summary
+        let mut result_summary = Vec::new();
+
+        for (child_id, result) in &child_results {
+            if result.success {
+                result_summary.push(format!("{}: {}", child_id, result.value));
+            } else {
+                result_summary.push(format!("{}: failed", child_id));
+            }
+        }
+
+        if let Some(ref root) = root_result {
+            if root.success {
+                result_summary.push(format!("root: {}", root.value));
+            } else {
+                result_summary.push("root: failed".to_string());
+            }
+        }
+
+        if result_summary.is_empty() {
+            Ok(ExecutionResult {
+                success: false,
+                value: rtfs::runtime::values::Value::String("No plans executed".to_string()),
+                metadata: Default::default(),
+            })
+        } else {
+            Ok(ExecutionResult {
+                success: true,
+                value: rtfs::runtime::values::Value::String(format!(
+                    "Governed orchestration of {} plans: {}",
+                    child_results.len(),
+                    result_summary.join(", ")
+                )),
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    /// Get plan for a specific intent (governance-aware lookup)
+    fn get_plan_for_intent(&self, intent_id: &str) -> RuntimeResult<Option<Plan>> {
+        let graph = self
+            .intent_graph
+            .lock()
+            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+
+        // Get plans associated with this intent from the orchestrator's plan archive
+        // Use the governance-accessible method
+        let plan_archive = self.orchestrator.get_plan_archive();
+        
+        let archivable_plans = plan_archive.get_plans_for_intent(&intent_id.to_string());
+        
+        if let Some(archivable_plan) = archivable_plans.first() {
+            Ok(Some(Self::archivable_plan_to_plan(archivable_plan)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Helper function to convert ArchivablePlan to Plan (duplicated from orchestrator for governance use)
+    fn archivable_plan_to_plan(
+        archivable_plan: &super::archivable_types::ArchivablePlan,
+    ) -> Plan {
+        use rtfs::runtime::values::Value as RtfsValue;
+        use rtfs::parser::parse_expression;
+        use rtfs::runtime::evaluator::Evaluator;
+        use rtfs::runtime::execution_outcome::ExecutionOutcome;
+        use rtfs::runtime::module_runtime::ModuleRegistry;
+        use rtfs::runtime::pure_host::create_pure_host;
+        use rtfs::runtime::security::RuntimeContext;
+        use serde_json::Value as JsonValue;
+
+        // Helper function to parse RTFS or JSON strings
+        fn deserialize_value(value_str: &str) -> Option<Value> {
+            if let Ok(expr) = parse_expression(value_str) {
+                let module_registry = ModuleRegistry::new();
+                let security_context = RuntimeContext::pure();
+                let host = create_pure_host();
+                let evaluator =
+                    Evaluator::new(std::sync::Arc::new(module_registry), security_context, host, rtfs::compiler::expander::MacroExpander::default());
+
+                match evaluator.evaluate(&expr) {
+                    Ok(ExecutionOutcome::Complete(value)) => Some(value),
+                    _ => {
+                        serde_json::from_str::<JsonValue>(value_str)
+                            .ok()
+                            .map(convert_json_value)
+                    }
+                }
+            } else {
+                serde_json::from_str::<JsonValue>(value_str)
+                    .ok()
+                    .map(convert_json_value)
+            }
+        }
+
+        fn convert_json_value(json_val: JsonValue) -> Value {
+            match json_val {
+                JsonValue::Null => Value::Nil,
+                JsonValue::Bool(b) => Value::Boolean(b),
+                JsonValue::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        Value::Integer(i)
+                    } else if let Some(f) = n.as_f64() {
+                        Value::Float(f)
+                    } else {
+                        Value::String(n.to_string())
+                    }
+                }
+                JsonValue::String(s) => Value::String(s),
+                JsonValue::Array(arr) => {
+                    let runtime_vec: Vec<Value> = arr.into_iter().map(convert_json_value).collect();
+                    Value::Vector(runtime_vec)
+                }
+                JsonValue::Object(obj) => {
+                    let mut runtime_map = std::collections::HashMap::new();
+                    for (k, v) in obj {
+                        runtime_map.insert(rtfs::ast::MapKey::String(k), convert_json_value(v));
+                    }
+                    Value::Map(runtime_map)
+                }
+            }
+        }
+
+        // Extract the plan body
+        let raw_body = match &archivable_plan.body {
+            crate::archivable_types::ArchivablePlanBody::String(s) => s.clone(),
+            crate::archivable_types::ArchivablePlanBody::Legacy { steps, .. } => {
+                steps.first().cloned().unwrap_or_else(|| "()".to_string())
+            }
+        };
+
+        // If the body is a (plan ...) form, extract the :body property
+        let plan_body = if raw_body.trim().starts_with("(plan") {
+            match rtfs::parser::parse(&raw_body) {
+                Ok(top_levels) => {
+                    if let Some(rtfs::ast::TopLevel::Plan(plan_def)) = top_levels.first() {
+                        if let Some(body_prop) =
+                            plan_def.properties.iter().find(|p| p.key.0 == "body")
+                        {
+                            crate::rtfs_bridge::expression_to_rtfs_string(&body_prop.value)
+                        } else {
+                            raw_body
+                        }
+                    } else {
+                        raw_body
+                    }
+                }
+                Err(_) => raw_body,
+            }
+        } else {
+            raw_body
+        };
+
+        // Convert ArchivablePlan back to Plan
+        Plan {
+            plan_id: archivable_plan.plan_id.clone(),
+            name: archivable_plan.name.clone(),
+            intent_ids: archivable_plan.intent_ids.clone(),
+            language: super::types::PlanLanguage::Rtfs20,
+            body: super::types::PlanBody::Rtfs(plan_body),
+            status: archivable_plan.status.clone(),
+            created_at: archivable_plan.created_at,
+            metadata: archivable_plan
+                .metadata
+                .iter()
+                .filter_map(|(k, v)| deserialize_value(v).map(|val| (k.clone(), val)))
+                .collect(),
+            input_schema: archivable_plan.input_schema.as_ref().and_then(|s| deserialize_value(s)),
+            output_schema: archivable_plan.output_schema.as_ref().and_then(|s| deserialize_value(s)),
+            policies: archivable_plan
+                .policies
+                .iter()
+                .filter_map(|(k, v)| deserialize_value(v).map(|val| (k.clone(), val)))
+                .collect(),
+            capabilities_required: archivable_plan.capabilities_required.clone(),
+            annotations: archivable_plan
+                .annotations
+                .iter()
+                .filter_map(|(k, v)| deserialize_value(v).map(|val| (k.clone(), val)))
+                .collect(),
+        }
+    }
+
+    /// Extract exported variables from execution result (simplified version)
+    fn extract_exported_variables(&self, result: &ExecutionResult) -> HashMap<String, Value> {
+        let mut exported = HashMap::new();
+        if result.success {
+            exported.insert("result".to_string(), result.value.clone());
+        }
+        exported
     }
 }
