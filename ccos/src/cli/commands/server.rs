@@ -149,13 +149,31 @@ pub async fn execute(
             }
         }
         ServerCommand::Dismiss { name, reason } => {
-            formatter.warning(&format!(
-                "Server dismiss not yet implemented. Name: {}, Reason: {:?}",
-                name, reason
-            ));
+            let queue = ApprovalQueue::new(".");
+            let reason_str = reason.unwrap_or_else(|| "Manual dismissal".to_string());
+            
+            match queue.dismiss_server(&name, reason_str.clone()) {
+                Ok(_) => {
+                    formatter.success(&format!("Dismissed server '{}'", name));
+                    formatter.kv("Reason", &reason_str);
+                }
+                Err(e) => {
+                    formatter.warning(&format!("Failed to dismiss server: {}", e));
+                }
+            }
         }
         ServerCommand::Retry { name } => {
-            formatter.warning(&format!("Server retry not yet implemented. Name: {}", name));
+            let queue = ApprovalQueue::new(".");
+            match queue.retry_server(&name) {
+                Ok(_) => {
+                    formatter.success(&format!("Retried server '{}'", name));
+                    formatter.list_item("Server moved back to Approved list with reset health stats.");
+                }
+                Err(e) => {
+                    formatter.warning(&format!("Failed to retry server: {}", e));
+                    formatter.list_item("Check if the server is in the rejected/dismissed list.");
+                }
+            }
         }
     }
 

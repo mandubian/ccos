@@ -395,4 +395,64 @@ impl ApprovalQueue {
             Err(RuntimeError::Generic(format!("Discovery not found: {}", id)))
         }
     }
+
+    pub fn dismiss_server(&self, id: &str, reason: String) -> RuntimeResult<()> {
+        let mut approved_state = self.load_approved()?;
+        if let Some(pos) = approved_state.items.iter().position(|item| item.id == id || item.server_info.name == id) {
+            let item = approved_state.items.remove(pos);
+            self.save_approved(&approved_state)?;
+            
+            let rejected = RejectedDiscovery {
+                id: item.id,
+                source: item.source,
+                server_info: item.server_info,
+                domain_match: item.domain_match,
+                risk_assessment: item.risk_assessment,
+                requesting_goal: item.requesting_goal,
+                rejected_at: Utc::now(),
+                rejected_by: ApprovalAuthority::User("cli_user".to_string()),
+                rejection_reason: format!("Dismissed: {}", reason),
+            };
+            
+            let mut rejected_state = self.load_rejected()?;
+            rejected_state.items.push(rejected);
+            self.save_rejected(&rejected_state)?;
+            
+            Ok(())
+        } else {
+            Err(RuntimeError::Generic(format!("Server not found in approved list: {}", id)))
+        }
+    }
+
+    pub fn retry_server(&self, id: &str) -> RuntimeResult<()> {
+        let mut rejected_state = self.load_rejected()?;
+        if let Some(pos) = rejected_state.items.iter().position(|item| item.id == id || item.server_info.name == id) {
+            let item = rejected_state.items.remove(pos);
+            self.save_rejected(&rejected_state)?;
+            
+            let approved = ApprovedDiscovery {
+                id: item.id,
+                source: item.source,
+                server_info: item.server_info,
+                domain_match: item.domain_match,
+                risk_assessment: item.risk_assessment,
+                requesting_goal: item.requesting_goal,
+                approved_at: Utc::now(),
+                approved_by: ApprovalAuthority::User("cli_user".to_string()),
+                approval_reason: Some("Manually retried".to_string()),
+                last_successful_call: None,
+                consecutive_failures: 0,
+                total_calls: 0,
+                total_errors: 0,
+            };
+            
+            let mut approved_state = self.load_approved()?;
+            approved_state.items.push(approved);
+            self.save_approved(&approved_state)?;
+            
+            Ok(())
+        } else {
+            Err(RuntimeError::Generic(format!("Server not found in rejected/dismissed list: {}", id)))
+        }
+    }
 }
