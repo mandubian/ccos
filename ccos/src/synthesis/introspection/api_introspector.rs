@@ -165,8 +165,62 @@ impl APIIntrospector {
             }
         }
 
+        // Try known APIs registry as fallback
+        if let Ok(result) = self.try_known_apis(api_domain) {
+            eprintln!("✅ Found API in known APIs registry: {}", api_domain);
+            return Ok(result);
+        }
+
+        // Try APIs.guru directory
+        if let Ok(result) = self.try_apis_guru(api_domain).await {
+            eprintln!("✅ Found API in APIs.guru directory: {}", api_domain);
+            return Ok(result);
+        }
+
         // If no OpenAPI spec found, try to discover endpoints by making calls
         self.discover_endpoints_by_calls(base_url, api_domain).await
+    }
+
+    /// Try to find API in the known APIs registry
+    fn try_known_apis(&self, api_domain: &str) -> RuntimeResult<APIIntrospectionResult> {
+        let registry = super::known_apis::KnownApisRegistry::new()?;
+
+        if let Some(api) = registry.find_by_domain(api_domain) {
+            return registry.to_introspection_result(api);
+        }
+
+        Err(RuntimeError::Generic(format!(
+            "API not found in known APIs registry: {}",
+            api_domain
+        )))
+    }
+
+    /// Try to find API in APIs.guru directory
+    async fn try_apis_guru(&self, api_domain: &str) -> RuntimeResult<APIIntrospectionResult> {
+        eprintln!("🔍 Searching APIs.guru directory for: {}", api_domain);
+
+        let client = super::apis_guru::ApisGuruClient::new();
+
+        // Search for the API
+        let results = client.search(api_domain).await?;
+
+        if results.is_empty() {
+            return Err(RuntimeError::Generic(format!(
+                "API not found in APIs.guru: {}",
+                api_domain
+            )));
+        }
+
+        // Take the first (best) match
+        let result = &results[0];
+        eprintln!(
+            "📦 Found in APIs.guru: {} - {}",
+            result.api_id, result.title
+        );
+
+        // Fetch the OpenAPI spec
+        self.introspect_from_openapi(&result.openapi_url, api_domain)
+            .await
     }
 
     /// Create capabilities from introspection results
