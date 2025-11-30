@@ -1,18 +1,19 @@
 //! RTFS Runtime Reentrance Demo
 //!
-//! This example demonstrates true reentrance of RTFS runtime with orchestrator
-//! executing a program in several steps with proper continuation after host calls.
+//! This example demonstrates true reentrance of RTFS runtime with governance-controlled
+//! execution ensuring all plans pass through constitutional validation.
 //!
 //! The demo shows:
-//! 1. Multi-step RTFS program execution
-//! 2. Host capability calls that require reentrance
-//! 3. Context preservation across execution boundaries
-//! 4. Step-by-step orchestration with audit trails
+//! 1. Multi-step RTFS program execution with governance oversight
+//! 2. Host capability calls that require reentrance under security controls
+//! 3. Context preservation across execution boundaries with full audit trails
+//! 4. Step-by-step orchestration through governance-enforced interfaces
 
+use ccos::governance_kernel::GovernanceKernel;
 use ccos::types::{Intent, Plan, PlanBody, PlanLanguage};
 use ccos::{
     capabilities::registry::CapabilityRegistry, capability_marketplace::CapabilityMarketplace,
-    causal_chain::CausalChain, intent_graph::IntentGraph, orchestrator::Orchestrator,
+    causal_chain::CausalChain, intent_graph::IntentGraph,
     plan_archive::PlanArchive,
 };
 use rtfs::runtime::security::RuntimeContext;
@@ -23,7 +24,7 @@ use std::sync::{Arc, Mutex};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== RTFS Runtime Reentrance Demo ===\n");
 
-    // Initialize CCOS components
+    // Initialize CCOS components with governance security
     let intent_graph = Arc::new(Mutex::new(IntentGraph::new()?));
     let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
     let capability_registry = Arc::new(tokio::sync::RwLock::new(CapabilityRegistry::new()));
@@ -36,12 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Register demo capabilities
     register_demo_capabilities(&capability_marketplace).await?;
 
-    let orchestrator = Orchestrator::new(
-        causal_chain.clone(),
-        intent_graph,
-        capability_marketplace.clone(),
-        plan_archive,
-    );
+    // Create GovernanceKernel instead of direct Orchestrator access
+    let governance_kernel = GovernanceKernel::new(causal_chain.clone());
 
     // Create a multi-step RTFS program that demonstrates reentrance
     let rtfs_program = r#"
@@ -126,11 +123,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..RuntimeContext::pure()
     };
 
-    println!("🚀 Executing multi-step RTFS program with reentrance...");
+    println!("🚀 Executing multi-step RTFS program with governance-controlled reentrance...");
     println!("📋 Program:\n{}\n", rtfs_program);
 
-    // Execute the plan - this demonstrates reentrance
-    let execution_result = orchestrator.execute_plan(&plan, &context).await?;
+    // Execute the plan through governance-enforced interface
+    let execution_result = governance_kernel.execute_plan_governed(&plan, &context).await?;
 
     println!("\n✅ Execution completed!");
     println!("📊 Result: {:?}", execution_result.value);
@@ -151,10 +148,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n✨ Reentrance demo completed successfully!");
     println!("This demonstrates:");
-    println!("1. ✅ Multi-step RTFS execution");
-    println!("2. ✅ Host capability calls requiring reentrance");
-    println!("3. ✅ Context preservation across execution boundaries");
-    println!("4. ✅ Step-by-step orchestration with audit trails");
+    println!("1. ✅ Multi-step RTFS execution with governance oversight");
+    println!("2. ✅ Host capability calls requiring reentrance under security controls");
+    println!("3. ✅ Context preservation across execution boundaries with full audit trails");
+    println!("4. ✅ Step-by-step orchestration through governance-enforced interfaces");
 
     Ok(())
 }

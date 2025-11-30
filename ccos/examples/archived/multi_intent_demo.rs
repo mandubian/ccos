@@ -15,8 +15,8 @@ use tokio::sync::RwLock;
 
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::causal_chain::CausalChain;
+use ccos::governance_kernel::GovernanceKernel;
 use ccos::intent_graph::IntentGraph;
-use ccos::orchestrator::Orchestrator;
 use ccos::plan_archive::PlanArchive;
 use ccos::types::{ActionType, Intent, Plan};
 use rtfs::runtime::capabilities::registry::CapabilityRegistry;
@@ -146,12 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let marketplace = Arc::new(marketplace);
     let plan_archive = Arc::new(PlanArchive::new());
 
-    let orchestrator = Arc::new(Orchestrator::new(
-        Arc::clone(&causal_chain),
-        Arc::clone(&intent_graph),
-        Arc::clone(&marketplace),
-        Arc::clone(&plan_archive),
-    ));
+    let governance_kernel = Arc::new(GovernanceKernel::new(Arc::clone(&causal_chain)));
 
     // --- Arbiter config for intent generation ---
     let use_stub_intent = args.stub
@@ -246,7 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         llm_plans: bool,
         deterministic: bool,
         marketplace: Arc<CapabilityMarketplace>,
-        orchestrator: Arc<Orchestrator>,
+        governance_kernel: Arc<GovernanceKernel>,
         causal_chain: Arc<Mutex<CausalChain>>,
         arbiter: &dyn rtfs_compiler::ccos::arbiter::ArbiterEngine,
         verbose: bool,
@@ -336,10 +331,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  • Status: Active → Executing");
         }
 
-        // 4) Execute plan
+        // 4) Execute plan through governance-enforced interface
         println!("🚀 Executing plan {}", plan_id);
         let context = RuntimeContext::full();
-        let exec_res = orchestrator.execute_plan(&plan_result.plan, &context).await;
+        let exec_res = governance_kernel.execute_plan_governed(&plan_result.plan, &context).await;
 
         // 5) Print step outputs
         if let Ok(chain) = causal_chain.lock() {
@@ -463,7 +458,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.llm_plans,
             args.deterministic,
             Arc::clone(&marketplace),
-            Arc::clone(&orchestrator),
+            Arc::clone(&governance_kernel),
             Arc::clone(&causal_chain),
             arbiter.as_ref(),
             args.verbose,
@@ -480,7 +475,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.llm_plans,
             args.deterministic,
             Arc::clone(&marketplace),
-            Arc::clone(&orchestrator),
+            Arc::clone(&governance_kernel),
             Arc::clone(&causal_chain),
             arbiter.as_ref(),
             args.verbose,
@@ -505,7 +500,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.llm_plans,
             args.deterministic,
             Arc::clone(&marketplace),
-            Arc::clone(&orchestrator),
+            Arc::clone(&governance_kernel),
             Arc::clone(&causal_chain),
             arbiter.as_ref(),
             args.verbose,

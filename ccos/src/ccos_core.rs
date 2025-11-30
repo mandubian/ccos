@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 // AgentRegistry migration: Removed AgentRegistry import
 // Agents are now managed via CapabilityMarketplace with :kind :agent capabilities
 use crate::arbiter::prompt::{FilePromptStore, PromptStore};
-use crate::arbiter::{Arbiter, DelegatingArbiter};
+use crate::arbiter::DelegatingArbiter;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogEntryKind, CatalogFilter, CatalogHit, CatalogService};
 use crate::rtfs_bridge::RtfsErrorExplainer;
@@ -49,7 +49,7 @@ use crate::plan_archive::PlanArchive;
 /// The main CCOS system struct, which initializes and holds all core components.
 /// This is the primary entry point for interacting with the CCOS.
 pub struct CCOS {
-    pub arbiter: Arc<Arbiter>,
+    pub arbiter: Arc<DelegatingArbiter>,
     pub governance_kernel: Arc<GovernanceKernel>,
     pub orchestrator: Arc<Orchestrator>,
     // The following components are shared across the system
@@ -58,8 +58,6 @@ pub struct CCOS {
     pub capability_marketplace: Arc<CapabilityMarketplace>,
     pub plan_archive: Arc<PlanArchive>,
     pub rtfs_runtime: Arc<Mutex<dyn RTFSRuntime>>,
-    // Optional LLM-driven engine
-    pub delegating_arbiter: Option<Arc<DelegatingArbiter>>,
     // AgentRegistry migration: Removed agent_registry field
     // Agents are now managed via CapabilityMarketplace with :kind :agent capabilities
     pub agent_config: Arc<AgentConfig>, // Global agent configuration (future: loaded from RTFS form)
@@ -356,46 +354,16 @@ impl CCOS {
             Arc::clone(&intent_graph),
         ));
 
-        let arbiter = Arc::new(Arbiter::new(
-            crate::arbiter::legacy_arbiter::ArbiterConfig::default(),
-            Arc::clone(&intent_graph),
-        ));
-
         // AgentRegistry migration: Agents are now registered as capabilities with :kind :agent
         // TODO: Migrate delegation feedback tracking to CapabilityMarketplace
 
-        // Allow enabling delegation via environment variable for examples / dev runs
-        // If the AgentConfig doesn't explicitly enable delegation, allow an env override.
-        let enable_delegation = if let Some(v) = agent_config.delegation.enabled {
-            v
-        } else {
-            // Check for explicit disable first
-            if let Ok(s) = std::env::var("CCOS_DELEGATION_ENABLED") {
-                match s.as_str() {
-                    "0" | "false" | "no" | "off" => false,
-                    "1" | "true" | "yes" | "on" => true,
-                    _ => false,
-                }
-            } else {
-                // No explicit disable, check for enable flags
-                std::env::var("CCOS_ENABLE_DELEGATION")
-                    .ok()
-                    .or_else(|| std::env::var("CCOS_USE_DELEGATING_ARBITER").ok())
-                    .map(|s| {
-                        let s = s.as_str();
-                        matches!(s, "1" | "true" | "yes" | "on")
-                    })
-                    .unwrap_or(false)
-            }
-        };
-
-        // Initialize delegating arbiter if delegation is enabled in agent config (or via env)
-        let delegating_arbiter = if enable_delegation {
-            // Require explicit model selection so operators know which LLM powers delegation.
+        // Always create delegating arbiter - this is now the primary arbiter
+        let delegating_arbiter = {
+            // Determine model - use stub as fallback if no explicit model is provided
             let model = std::env::var("CCOS_DELEGATING_MODEL")
-                .expect("CCOS_DELEGATING_MODEL environment variable must be set");
+                .unwrap_or_else(|_| "stub".to_string());
 
-            // Prefer OpenRouter when OPENROUTER_API_KEY is provided, otherwise fallback to other providers.
+            // Determine API configuration - use stub if no API keys are available
             let (api_key, base_url) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
                 let base = std::env::var("CCOS_LLM_BASE_URL")
                     .ok()
@@ -416,6 +384,7 @@ impl CCOS {
                 || model == "stub-model"
                 || model == "deterministic-stub-model"
                 || model == "stub"
+                || api_key.is_none()
             {
                 crate::arbiter::arbiter_config::LlmProviderType::Stub
             } else if provider_hint.eq_ignore_ascii_case("anthropic") {
@@ -439,7 +408,6 @@ impl CCOS {
             };
 
             // Allow examples or environment to override retry config for the LLM provider.
-            // Useful for demos that want the provider to attempt a corrective re-prompt.
             let mut rc = llm_config.retry_config.clone();
             if let Ok(v) = std::env::var("CCOS_LLM_RETRY_MAX_RETRIES") {
                 if let Ok(n) = v.parse::<u32>() {
@@ -462,7 +430,6 @@ impl CCOS {
             };
 
             // Convert agent config delegation to arbiter delegation config
-            // TODO: Fix to_arbiter_config after RTFS/CCOS separation is complete
             let delegation_config = crate::arbiter::arbiter_config::DelegationConfig {
                 enabled: true,
                 threshold: 0.65,
@@ -478,24 +445,27 @@ impl CCOS {
                 print_extracted_plan: Some(false),
             };
 
-            // Create delegating arbiter
-            match crate::arbiter::DelegatingArbiter::new(
+            // Always create delegating arbiter - fail properly if LLM provider is not configured
+            let delegating_arbiter = crate::arbiter::DelegatingArbiter::new(
                 llm_config,
                 delegation_config,
                 Arc::clone(&capability_marketplace),
                 Arc::clone(&intent_graph),
             )
             .await
-            {
-                Ok(arbiter) => Some(Arc::new(arbiter)),
-                Err(e) => {
-                    eprintln!("Warning: Failed to initialize delegating arbiter: {}", e);
-                    None
-                }
-            }
-        } else {
-            None
+            .map_err(|e| {
+                RuntimeError::Generic(format!(
+                    "Failed to initialize DelegatingArbiter. This typically means no LLM provider is configured. \
+                    Please set one of: CCOS_LLM_PROVIDER_HINT=openai|anthropic|local with OPENAI_API_KEY, ANTHROPIC_API_KEY, \
+                    or OPENROUTER_API_KEY with CCOS_LLM_BASE_URL. Error: {}",
+                    e
+                ))
+            })?;
+            Arc::new(delegating_arbiter)
         };
+
+        // The delegating_arbiter is now the primary arbiter
+        let arbiter = Arc::clone(&delegating_arbiter);
 
         // Initialize checkpoint archive
         let checkpoint_archive = Arc::new(crate::checkpoint_archive::CheckpointArchive::new());
@@ -537,9 +507,8 @@ impl CCOS {
             ),
         );
 
-        if let Some(delegating) = delegating_arbiter.clone() {
-            missing_capability_resolver.set_delegating_arbiter(Some(delegating));
-        }
+        // Always set the delegating arbiter for missing capability resolution
+        missing_capability_resolver.set_delegating_arbiter(Some(Arc::clone(&delegating_arbiter)));
 
         // Set the resolver in the capability registry
         {
@@ -558,7 +527,7 @@ impl CCOS {
             rtfs_runtime: Arc::new(Mutex::new(Runtime::new_with_tree_walking_strategy(
                 Arc::new(ModuleRegistry::new()),
             ))),
-            delegating_arbiter,
+            // AgentRegistry migration: removed agent_registry
             agent_config,
             missing_capability_resolver: Some(missing_capability_resolver),
             debug_callback: debug_callback.clone(),
@@ -860,77 +829,61 @@ impl CCOS {
             )
         });
         // 1. Arbiter: Generate a plan from the natural language request.
-        let proposed_plan = if let Some(da) = &self.delegating_arbiter {
-            // Use delegating arbiter to produce a plan via its engine API
-            use crate::arbiter::ArbiterEngine;
-            let intent = da
-                .natural_language_to_intent(natural_language_request, None)
-                .await?;
+        // Use delegating arbiter to produce a plan via its engine API
+        use crate::arbiter::ArbiterEngine;
+        let intent = self.arbiter
+            .natural_language_to_intent(natural_language_request, None)
+            .await?;
 
-            // Store the intent in the Intent Graph for later reference
-            {
-                let mut ig = self.intent_graph.lock().map_err(|e| {
-                    RuntimeError::Generic(format!("Failed to lock intent graph: {}", e))
-                })?;
-                let storable_intent = crate::types::StorableIntent {
-                    intent_id: intent.intent_id.clone(),
-                    name: intent.name.clone(),
-                    original_request: intent.original_request.clone(),
-                    rtfs_intent_source: "".to_string(),
-                    goal: intent.goal.clone(),
-                    constraints: intent
-                        .constraints
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.to_string()))
-                        .collect(),
-                    preferences: intent
-                        .preferences
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.to_string()))
-                        .collect(),
-                    success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
-                    parent_intent: None,
-                    child_intents: vec![],
-                    triggered_by: crate::types::TriggerSource::HumanRequest,
-                    generation_context: crate::types::GenerationContext {
-                        arbiter_version: "delegating-1.0".to_string(),
-                        generation_timestamp: intent.created_at,
-                        input_context: std::collections::HashMap::new(),
-                        reasoning_trace: None,
-                    },
-                    status: intent.status.clone(),
-                    priority: 0,
-                    created_at: intent.created_at,
-                    updated_at: intent.updated_at,
-                    metadata: intent
-                        .metadata
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.to_string()))
-                        .collect(),
-                };
-                ig.store_intent(storable_intent)?;
-            }
+        // Store the intent in the Intent Graph for later reference
+        {
+            let mut ig = self.intent_graph.lock().map_err(|e| {
+                RuntimeError::Generic(format!("Failed to lock intent graph: {}", e))
+            })?;
+            let storable_intent = crate::types::StorableIntent {
+                intent_id: intent.intent_id.clone(),
+                name: intent.name.clone(),
+                original_request: intent.original_request.clone(),
+                rtfs_intent_source: "".to_string(),
+                goal: intent.goal.clone(),
+                constraints: intent
+                    .constraints
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+                preferences: intent
+                    .preferences
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+                success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
+                parent_intent: None,
+                child_intents: vec![],
+                triggered_by: crate::types::TriggerSource::HumanRequest,
+                generation_context: crate::types::GenerationContext {
+                    arbiter_version: "delegating-1.0".to_string(),
+                    generation_timestamp: intent.created_at,
+                    input_context: std::collections::HashMap::new(),
+                    reasoning_trace: None,
+                },
+                status: intent.status.clone(),
+                priority: 0,
+                created_at: intent.created_at,
+                updated_at: intent.updated_at,
+                metadata: intent
+                    .metadata
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+            };
+            ig.store_intent(storable_intent)?;
+        }
 
-            let plan = da.intent_to_plan(&intent).await?;
-            self.emit_debug(|| format!(
-                "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
-                plan.plan_id, intent.intent_id, current_ts()
-            ));
-            plan
-        } else {
-            let plan = self
-                .arbiter
-                .process_natural_language(natural_language_request, None)
-                .await?;
-            self.emit_debug(|| {
-                format!(
-                    "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"ts\":{}}}",
-                    plan.plan_id,
-                    current_ts()
-                )
-            });
-            plan
-        };
+        let proposed_plan = self.arbiter.intent_to_plan(&intent).await?;
+        self.emit_debug(|| format!(
+            "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
+            proposed_plan.plan_id, intent.intent_id, current_ts()
+        ));
 
         // 1.5 Preflight capability validation (M3)
         self.emit_debug(|| {
@@ -961,38 +914,37 @@ impl CCOS {
         ));
 
         // Delegation completion feedback (M4 extension)
-        if self.delegating_arbiter.is_some() {
-            use rtfs::runtime::values::Value;
-            // Heuristic: search recent intents matching words from request
-            if let Ok(graph) = self.intent_graph.lock() {
-                let recent = graph.find_relevant_intents(natural_language_request);
-                if let Some(stored) = recent.last() {
-                    // Stored intent metadata is HashMap<String,String>; check delegation key presence
-                    if stored.metadata.get("delegation.selected_agent").is_some() {
-                        let agent_id = stored
-                            .metadata
-                            .get("delegation.selected_agent")
-                            .cloned()
-                            .unwrap_or_default();
-                        // Record completed event
-                        if let Ok(mut chain) = self.causal_chain.lock() {
-                            let mut meta = std::collections::HashMap::new();
-                            meta.insert(
-                                "selected_agent".to_string(),
-                                Value::String(agent_id.clone()),
-                            );
-                            meta.insert("success".to_string(), Value::Boolean(result.success));
-                            let _ =
-                                chain.record_delegation_event(&stored.intent_id, "completed", meta);
-                        }
-                        // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
-                        // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
-                        // if result.success {
-                        //     // Update agent capability success metrics in marketplace
-                        // } else {
-                        //     // Update agent capability failure metrics in marketplace
-                        // }
+        use rtfs::runtime::values::Value;
+        // Heuristic: search recent intents matching words from request
+        if let Ok(graph) = self.intent_graph.lock() {
+            let recent = graph.find_relevant_intents(natural_language_request);
+            if let Some(stored) = recent.last() {
+                // Stored intent metadata is HashMap<String,String>; check delegation key presence
+                if stored.metadata.get("delegation.selected_agent").is_some() {
+                    let agent_id = stored
+                        .metadata
+                        .get("delegation.selected_agent")
+                        .cloned()
+                        .unwrap_or_default();
+                    // Record completed event
+                    if let Ok(mut chain) = self.causal_chain.lock() {
+                        let mut meta = std::collections::HashMap::new();
+                        meta.insert(
+                            "selected_agent".to_string(),
+                            Value::String(agent_id.clone()),
+                        );
+                        meta.insert("success".to_string(), Value::Boolean(result.success));
+                        let _ =
+                            chain.record_delegation_event(&stored.intent_id, "completed", meta);
                     }
+                    // Feedback update (rolling average) via registry
+                    // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
+                    // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
+                    // if result.success {
+                    //     // Update agent capability success metrics in marketplace
+                    // } else {
+                    //     // Update agent capability failure metrics in marketplace
+                    // }
                 }
             }
         }
@@ -1024,71 +976,55 @@ impl CCOS {
             )
         });
 
-        // Plan generation (same logic as in process_request; duplication kept minimal for clarity)
-        let proposed_plan = if let Some(da) = &self.delegating_arbiter {
-            use crate::arbiter::ArbiterEngine;
-            let intent = da
-                .natural_language_to_intent(natural_language_request, None)
-                .await?;
-            if let Ok(mut ig) = self.intent_graph.lock() {
-                let storable_intent = crate::types::StorableIntent {
-                    intent_id: intent.intent_id.clone(),
-                    name: intent.name.clone(),
-                    original_request: intent.original_request.clone(),
-                    rtfs_intent_source: "".to_string(),
-                    goal: intent.goal.clone(),
-                    constraints: intent
-                        .constraints
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.to_string()))
-                        .collect(),
-                    preferences: intent
-                        .preferences
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.to_string()))
-                        .collect(),
-                    success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
-                    parent_intent: None,
-                    child_intents: vec![],
-                    triggered_by: crate::types::TriggerSource::HumanRequest,
-                    generation_context: crate::types::GenerationContext {
-                        arbiter_version: "delegating-1.0".to_string(),
-                        generation_timestamp: intent.created_at,
-                        input_context: std::collections::HashMap::new(),
-                        reasoning_trace: None,
-                    },
-                    status: intent.status.clone(),
-                    priority: 0,
-                    created_at: intent.created_at,
-                    updated_at: intent.updated_at,
-                    metadata: intent
-                        .metadata
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.to_string()))
-                        .collect(),
-                };
-                ig.store_intent(storable_intent)?;
-            }
-            let plan = da.intent_to_plan(&intent).await?;
-            self.emit_debug(|| format!(
-                "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
-                plan.plan_id, intent.intent_id, current_ts()
-            ));
-            plan
-        } else {
-            let plan = self
-                .arbiter
-                .process_natural_language(natural_language_request, None)
-                .await?;
-            self.emit_debug(|| {
-                format!(
-                    "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"ts\":{}}}",
-                    plan.plan_id,
-                    current_ts()
-                )
-            });
-            plan
-        };
+        // Plan generation - using delegating arbiter directly
+        use crate::arbiter::ArbiterEngine;
+        let intent = self.arbiter
+            .natural_language_to_intent(natural_language_request, None)
+            .await?;
+        if let Ok(mut ig) = self.intent_graph.lock() {
+            let storable_intent = crate::types::StorableIntent {
+                intent_id: intent.intent_id.clone(),
+                name: intent.name.clone(),
+                original_request: intent.original_request.clone(),
+                rtfs_intent_source: "".to_string(),
+                goal: intent.goal.clone(),
+                constraints: intent
+                    .constraints
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+                preferences: intent
+                    .preferences
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+                success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
+                parent_intent: None,
+                child_intents: vec![],
+                triggered_by: crate::types::TriggerSource::HumanRequest,
+                generation_context: crate::types::GenerationContext {
+                    arbiter_version: "delegating-1.0".to_string(),
+                    generation_timestamp: intent.created_at,
+                    input_context: std::collections::HashMap::new(),
+                    reasoning_trace: None,
+                },
+                status: intent.status.clone(),
+                priority: 0,
+                created_at: intent.created_at,
+                updated_at: intent.updated_at,
+                metadata: intent
+                    .metadata
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+            };
+            ig.store_intent(storable_intent)?;
+        }
+        let proposed_plan = self.arbiter.intent_to_plan(&intent).await?;
+        self.emit_debug(|| format!(
+            "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
+            proposed_plan.plan_id, intent.intent_id, current_ts()
+        ));
 
         self.emit_debug(|| {
             format!(
@@ -1118,35 +1054,33 @@ impl CCOS {
         ));
 
         // (Delegation completion feedback duplicated from process_request; refactor later if needed.)
-        if self.delegating_arbiter.is_some() {
-            use rtfs::runtime::values::Value;
-            if let Ok(graph) = self.intent_graph.lock() {
-                let recent = graph.find_relevant_intents(natural_language_request);
-                if let Some(stored) = recent.last() {
-                    if stored.metadata.get("delegation.selected_agent").is_some() {
-                        let agent_id = stored
-                            .metadata
-                            .get("delegation.selected_agent")
-                            .cloned()
-                            .unwrap_or_default();
-                        if let Ok(mut chain) = self.causal_chain.lock() {
-                            let mut meta = std::collections::HashMap::new();
-                            meta.insert(
-                                "selected_agent".to_string(),
-                                Value::String(agent_id.clone()),
-                            );
-                            meta.insert("success".to_string(), Value::Boolean(result.success));
-                            let _ =
-                                chain.record_delegation_event(&stored.intent_id, "completed", meta);
-                        }
-                        // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
-                        // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
-                        // if result.success {
-                        //     // Update agent capability success metrics in marketplace
-                        // } else {
-                        //     // Update agent capability failure metrics in marketplace
-                        // }
+        use rtfs::runtime::values::Value;
+        if let Ok(graph) = self.intent_graph.lock() {
+            let recent = graph.find_relevant_intents(natural_language_request);
+            if let Some(stored) = recent.last() {
+                if stored.metadata.get("delegation.selected_agent").is_some() {
+                    let agent_id = stored
+                        .metadata
+                        .get("delegation.selected_agent")
+                        .cloned()
+                        .unwrap_or_default();
+                    if let Ok(mut chain) = self.causal_chain.lock() {
+                        let mut meta = std::collections::HashMap::new();
+                        meta.insert(
+                            "selected_agent".to_string(),
+                            Value::String(agent_id.clone()),
+                        );
+                        meta.insert("success".to_string(), Value::Boolean(result.success));
+                        let _ =
+                            chain.record_delegation_event(&stored.intent_id, "completed", meta);
                     }
+                    // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
+                    // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
+                    // if result.success {
+                    //     // Update agent capability success metrics in marketplace
+                    // } else {
+                    //     // Update agent capability failure metrics in marketplace
+                    // }
                 }
             }
         }
@@ -1171,69 +1105,62 @@ impl CCOS {
             )
         });
         // 1. Arbiter: Generate a plan from the natural language request.
-        let proposed_plan = if let Some(da) = &self.delegating_arbiter {
-            // Use delegating arbiter to produce a plan via its engine API
-            use crate::arbiter::ArbiterEngine;
-            let intent = da
-                .natural_language_to_intent(natural_language_request, arbiter_context.cloned())
-                .await?;
+        // Use delegating arbiter to produce a plan via its engine API
+        use crate::arbiter::ArbiterEngine;
+        let intent = self.arbiter
+            .natural_language_to_intent(natural_language_request, arbiter_context.cloned())
+            .await?;
 
-            // Store the intent in the Intent Graph for later reference
-            {
-                let mut ig = self.intent_graph.lock().map_err(|e| {
-                    RuntimeError::Generic(format!("Failed to lock intent graph: {}", e))
-                })?;
-                let storable_intent = crate::types::StorableIntent {
-                    intent_id: intent.intent_id.clone(),
-                    name: intent.name.clone(),
-                    original_request: intent.original_request.clone(),
-                    rtfs_intent_source: "".to_string(),
-                    goal: intent.goal.clone(),
-                    constraints: intent
-                        .constraints
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.to_string()))
+        // Store the intent in the Intent Graph for later reference
+        {
+            let mut ig = self.intent_graph.lock().map_err(|e| {
+                RuntimeError::Generic(format!("Failed to lock intent graph: {}", e))
+            })?;
+            let storable_intent = crate::types::StorableIntent {
+                intent_id: intent.intent_id.clone(),
+                name: intent.name.clone(),
+                original_request: intent.original_request.clone(),
+                rtfs_intent_source: "".to_string(),
+                goal: intent.goal.clone(),
+                constraints: intent
+                    .constraints
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+                preferences: intent
+                    .preferences
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+                success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
+                parent_intent: None,
+                child_intents: vec![],
+                triggered_by: crate::types::TriggerSource::HumanRequest,
+                generation_context: crate::types::GenerationContext {
+                    arbiter_version: "delegating-1.0".to_string(),
+                    generation_timestamp: intent.created_at,
+                    input_context: arbiter_context
+                        .cloned()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(k, v)| (k, v.to_string()))
                         .collect(),
-                    preferences: intent
-                        .preferences
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.to_string()))
-                        .collect(),
-                    success_criteria: intent.success_criteria.as_ref().map(|v| v.to_string()),
-                    parent_intent: None,
-                    child_intents: vec![],
-                    triggered_by: crate::types::TriggerSource::HumanRequest,
-                    generation_context: crate::types::GenerationContext {
-                        arbiter_version: "delegating-1.0".to_string(),
-                        generation_timestamp: intent.created_at,
-                        input_context: arbiter_context
-                            .cloned()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|(k, v)| (k, v.to_string()))
-                            .collect(),
-                        reasoning_trace: None,
-                    },
-                    status: intent.status.clone(),
-                    priority: 0,
-                    created_at: intent.created_at,
-                    updated_at: intent.updated_at,
-                    metadata: intent
-                        .metadata
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.to_string()))
-                        .collect(),
-                };
-                ig.store_intent(storable_intent)?;
-            }
+                    reasoning_trace: None,
+                },
+                status: intent.status.clone(),
+                priority: 0,
+                created_at: intent.created_at,
+                updated_at: intent.updated_at,
+                metadata: intent
+                    .metadata
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_string()))
+                    .collect(),
+            };
+            ig.store_intent(storable_intent)?;
+        }
 
-            da.intent_to_plan(&intent).await?
-        } else {
-            return Err(RuntimeError::Generic(
-                "No delegating arbiter configured - cannot process natural language requests"
-                    .to_string(),
-            ));
-        };
+        let proposed_plan = self.arbiter.intent_to_plan(&intent).await?;
 
         // 1.5 Preflight capability validation (M3)
         self.emit_debug(|| {
@@ -1264,38 +1191,36 @@ impl CCOS {
         ));
 
         // Delegation completion feedback (M4 extension)
-        if self.delegating_arbiter.is_some() {
-            use rtfs::runtime::values::Value;
-            // Heuristic: search recent intents matching words from request
-            if let Ok(graph) = self.intent_graph.lock() {
-                let recent = graph.find_relevant_intents(natural_language_request);
-                if let Some(stored) = recent.last() {
-                    // Stored intent metadata is HashMap<String,String>; check delegation key presence
-                    if stored.metadata.get("delegation.selected_agent").is_some() {
-                        let agent_id = stored
-                            .metadata
-                            .get("delegation.selected_agent")
-                            .cloned()
-                            .unwrap_or_default();
-                        // Record completed event
-                        if let Ok(mut chain) = self.causal_chain.lock() {
-                            let mut meta = std::collections::HashMap::new();
-                            meta.insert("agent_id".to_string(), Value::String(agent_id.clone()));
-                            meta.insert("success".to_string(), Value::Boolean(result.success));
-                            let _ = chain.record_delegation_event(
-                                &stored.intent_id,
-                                "delegation.agent_feedback",
-                                meta,
-                            );
-                        }
-                        // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
-                        // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
-                        // if result.success {
-                        //     // Update agent capability success metrics in marketplace
-                        // } else {
-                        //     // Update agent capability failure metrics in marketplace
-                        // }
+        use rtfs::runtime::values::Value;
+        // Heuristic: search recent intents matching words from request
+        if let Ok(graph) = self.intent_graph.lock() {
+            let recent = graph.find_relevant_intents(natural_language_request);
+            if let Some(stored) = recent.last() {
+                // Stored intent metadata is HashMap<String,String>; check delegation key presence
+                if stored.metadata.get("delegation.selected_agent").is_some() {
+                    let agent_id = stored
+                        .metadata
+                        .get("delegation.selected_agent")
+                        .cloned()
+                        .unwrap_or_default();
+                    // Record completed event
+                    if let Ok(mut chain) = self.causal_chain.lock() {
+                        let mut meta = std::collections::HashMap::new();
+                        meta.insert("agent_id".to_string(), Value::String(agent_id.clone()));
+                        meta.insert("success".to_string(), Value::Boolean(result.success));
+                        let _ = chain.record_delegation_event(
+                            &stored.intent_id,
+                            "delegation.agent_feedback",
+                            meta,
+                        );
                     }
+                    // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
+                    // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
+                    // if result.success {
+                    //     // Update agent capability success metrics in marketplace
+                    // } else {
+                    //     // Update agent capability failure metrics in marketplace
+                    // }
                 }
             }
         }
@@ -1332,7 +1257,8 @@ impl CCOS {
     // Use CapabilityMarketplace.get_capability() with :kind :agent filter instead
 
     pub fn get_delegating_arbiter(&self) -> Option<Arc<DelegatingArbiter>> {
-        self.delegating_arbiter.as_ref().map(Arc::clone)
+        // The arbiter is now always a delegating arbiter
+        Some(Arc::clone(&self.arbiter))
     }
 
     pub fn get_orchestrator(&self) -> Arc<Orchestrator> {
