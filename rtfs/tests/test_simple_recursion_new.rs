@@ -25,6 +25,7 @@ fn test_simple_mutual_recursion() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
     let outcome = evaluator
         .evaluate(&parsed)
@@ -65,6 +66,7 @@ fn test_simple_factorial() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
     let outcome = evaluator
         .evaluate(&parsed)

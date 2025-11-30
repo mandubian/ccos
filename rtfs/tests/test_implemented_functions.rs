@@ -17,6 +17,7 @@ fn test_factorial() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
 
     // Test factorial of 0
@@ -84,6 +85,7 @@ fn test_length_value() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
 
     // Test length of empty vector
@@ -162,6 +164,7 @@ fn test_json_functions() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
 
     // Test parse-json with simple object
@@ -286,6 +289,7 @@ fn test_map_filter_functions() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
 
     // Test map function
@@ -352,6 +356,7 @@ fn test_reduce_function() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
 
     // Test reduce with initial value

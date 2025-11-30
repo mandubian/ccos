@@ -9,6 +9,7 @@ use super::values::{BuiltinFunctionWithContext, Function, Value};
 use crate::ast::{Expression, Keyword, MapKey};
 // CCOS dependencies removed - using RTFS-local types instead
 // Note: IsolationLevel is used via fully qualified path: crate::runtime::security::IsolationLevel
+use crate::compiler::expander::MacroExpander;
 use crate::ir::converter::IrConverter;
 use crate::ir::core::{IrNode, IrPattern};
 use crate::runtime::host_interface::HostInterface;
@@ -27,6 +28,8 @@ pub struct IrStrategy {
     module_registry: Arc<ModuleRegistry>,
     // Persistent environment for REPL-like usage
     persistent_env: Option<IrEnvironment>,
+    // Macro expander for compile-time macro expansion
+    macro_expander: MacroExpander,
 }
 
 impl IrStrategy {
@@ -44,6 +47,7 @@ impl IrStrategy {
             runtime: IrRuntime::new(host, security_context.clone()),
             module_registry,
             persistent_env: None,
+            macro_expander: MacroExpander::default(),
         }
     }
 
@@ -66,9 +70,13 @@ impl IrStrategy {
 
 impl RuntimeStrategy for IrStrategy {
     fn run(&mut self, program: &Expression) -> Result<ExecutionOutcome, RuntimeError> {
+        // Expand macros before IR conversion
+        let expanded_program = self.macro_expander.expand(program, 0)
+            .map_err(|e| RuntimeError::Generic(format!("Macro expansion error: {}", e)))?;
+
         let mut converter = IrConverter::with_module_registry(&self.module_registry);
         let ir_node = converter
-            .convert_expression(program.clone())
+            .convert_expression(expanded_program)
             .map_err(|e| RuntimeError::Generic(format!("IR conversion error: {:?}", e)))?;
 
         // Create a program node from the single expression
@@ -94,6 +102,10 @@ impl RuntimeStrategy for IrStrategy {
 
     fn clone_box(&self) -> Box<dyn RuntimeStrategy> {
         Box::new(self.clone())
+    }
+
+    fn set_macro_expander(&mut self, expander: MacroExpander) {
+        self.macro_expander = expander;
     }
 }
 

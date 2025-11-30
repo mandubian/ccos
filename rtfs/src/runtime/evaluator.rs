@@ -22,6 +22,7 @@ use crate::runtime::values::{Arity, BuiltinFunctionWithContext, Function, Value}
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
+use crate::compiler::expander::MacroExpander;
 type SpecialFormHandler =
     fn(&Evaluator, &[Expression], &mut Environment) -> Result<ExecutionOutcome, RuntimeError>;
 
@@ -41,6 +42,8 @@ pub struct Evaluator {
     pub type_validator: Arc<TypeValidator>,
     /// Type checking configuration for optimization
     pub type_config: TypeCheckingConfig,
+    /// Macro expander for compile-time macro expansion
+    macro_expander: RefCell<MacroExpander>,
 }
 
 // Helper function to check if two values are in equivalent
@@ -84,11 +87,14 @@ impl Evaluator {
         special_forms
     }
 
-    /// Create a new evaluator with secure environment and default security context
+    /// Create a new evaluator with secure environment and default security context.
+    /// MacroExpander must be provided at construction to ensure a shared,
+    /// canonical macro registry is used by the evaluator.
     pub fn new(
         module_registry: Arc<ModuleRegistry>,
         security_context: RuntimeContext,
         host: Arc<dyn HostInterface>,
+        macro_expander: MacroExpander,
     ) -> Self {
         let env = crate::runtime::stdlib::StandardLibrary::create_global_environment();
         Evaluator {
@@ -101,7 +107,15 @@ impl Evaluator {
             special_forms: Self::default_special_forms(),
             type_validator: Arc::new(TypeValidator::new()),
             type_config: TypeCheckingConfig::default(),
+            macro_expander: RefCell::new(macro_expander),
         }
+    }
+
+    /// Replace the internal MacroExpander with the provided one. This allows
+    /// the compiler driver to inject a shared expander so macro definitions
+    /// are consistent across compilation and runtime paths.
+    pub fn set_macro_expander(&mut self, expander: MacroExpander) {
+        *self.macro_expander.borrow_mut() = expander;
     }
 
     /// Create a new evaluator with task context and security
@@ -110,8 +124,9 @@ impl Evaluator {
     pub fn new_with_defaults(
         module_registry: Arc<ModuleRegistry>,
         host: Arc<dyn HostInterface>,
+        macro_expander: MacroExpander,
     ) -> Self {
-        Self::new(module_registry, RuntimeContext::pure(), host)
+        Self::new(module_registry, RuntimeContext::pure(), host, macro_expander)
     }
 
     /// Configure type checking behavior
@@ -134,8 +149,9 @@ impl Evaluator {
         module_registry: Arc<ModuleRegistry>,
         security_context: RuntimeContext,
         host: Arc<dyn HostInterface>,
+        macro_expander: MacroExpander,
     ) -> Self {
-        let mut evaluator = Self::new(module_registry, security_context, host);
+        let mut evaluator = Self::new(module_registry, security_context, host, macro_expander);
         evaluator.type_config = TypeCheckingConfig {
             skip_compile_time_verified: true,
             enforce_capability_boundaries: true,
@@ -150,8 +166,9 @@ impl Evaluator {
         module_registry: Arc<ModuleRegistry>,
         security_context: RuntimeContext,
         host: Arc<dyn HostInterface>,
+        macro_expander: MacroExpander,
     ) -> Self {
-        let mut evaluator = Self::new(module_registry, security_context, host);
+        let mut evaluator = Self::new(module_registry, security_context, host, macro_expander);
         evaluator.type_config = TypeCheckingConfig {
             skip_compile_time_verified: false,
             enforce_capability_boundaries: true,
@@ -506,11 +523,17 @@ impl Evaluator {
             )));
         }
 
+        // Expand macros before evaluation
+        let expanded_expr = match self.macro_expander.borrow_mut().expand(expr, 0) {
+            Ok(expanded) => expanded,
+            Err(e) => return Err(RuntimeError::Generic(format!("Macro expansion error: {}", e))),
+        };
+
         // Create a new evaluator with incremented recursion depth for recursive calls
         let mut deeper_evaluator = self.clone();
         deeper_evaluator.recursion_depth += 1;
 
-        match expr {
+        match &expanded_expr {
             Expression::Literal(lit) => Ok(ExecutionOutcome::Complete(self.eval_literal(lit)?)),
             Expression::Symbol(sym) => {
                 // First try environment lookup (local bindings, set!, let, etc.)
@@ -563,6 +586,15 @@ impl Evaluator {
                         return Ok(ExecutionOutcome::RequiresHost(host_call))
                     }
                 }
+            }
+            // Macro-related expressions should have been expanded before evaluation
+            Expression::Quasiquote(_) |
+            Expression::Unquote(_) |
+            Expression::UnquoteSplicing(_) |
+            Expression::Defmacro(_) => {
+                Err(RuntimeError::InternalError(
+                    "Macro-related expressions should have been expanded before evaluation".to_string(),
+                ))
             }
             Expression::Vector(exprs) => {
                 let mut values_vec: Vec<Value> = Vec::new();
@@ -2208,7 +2240,11 @@ impl Evaluator {
             | Expression::List(_)
             | Expression::ResourceRef(_)
             | Expression::Defstruct(_)
-            | Expression::For(_) => false,
+            | Expression::For(_)
+            | Expression::Quasiquote(_)
+            | Expression::Unquote(_)
+            | Expression::UnquoteSplicing(_)
+            | Expression::Defmacro(_) => false,
             Expression::Vector(exprs) => {
                 // Check if any expression in the vector references the symbols
                 exprs
@@ -3729,6 +3765,7 @@ impl Evaluator {
             special_forms: Self::default_special_forms(),
             type_validator: self.type_validator.clone(),
             type_config: self.type_config.clone(),
+            macro_expander: RefCell::new(MacroExpander::default()),
         }
     }
 
@@ -3748,6 +3785,7 @@ impl Evaluator {
             special_forms: Self::default_special_forms(),
             type_validator: Arc::new(TypeValidator::new()),
             type_config: TypeCheckingConfig::default(),
+            macro_expander: RefCell::new(MacroExpander::default()),
         }
     }
 }
@@ -3762,6 +3800,6 @@ impl Default for Evaluator {
         // CCOS dependencies removed - using pure_host instead
         let host = crate::runtime::pure_host::create_pure_host();
 
-        Self::new(module_registry, security_context, host)
+        Self::new(module_registry, security_context, host, MacroExpander::default())
     }
 }

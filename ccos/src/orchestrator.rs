@@ -723,7 +723,12 @@ impl Orchestrator {
         );
         let module_registry = std::sync::Arc::new(ModuleRegistry::new());
         let host_iface: Arc<dyn HostInterface> = host.clone();
-        let mut evaluator = Evaluator::new(module_registry, context.clone(), host_iface);
+        let mut evaluator = Evaluator::new(
+            module_registry.clone(),
+            context.clone(),
+            host_iface.clone(),
+            rtfs::compiler::expander::MacroExpander::default(),
+        );
         // Load CCOS prelude (effectful helpers) into the evaluator's environment
         crate::prelude::load_prelude(&mut evaluator.env);
 
@@ -766,7 +771,12 @@ impl Orchestrator {
             ))),
         };
 
-        host.clear_execution_context();
+        let mut evaluator = Evaluator::new(
+            module_registry.clone(),
+            context.clone(),
+            host_iface.clone(),
+            rtfs::compiler::expander::MacroExpander::default(),
+        );
 
         // --- 4. Log Final Plan Status ---
         // If the evaluator yielded RequiresHost, we checkpoint and emit a PlanPaused
@@ -1078,8 +1088,12 @@ impl Orchestrator {
                 let module_registry = ModuleRegistry::new();
                 let security_context = RuntimeContext::pure();
                 let host = create_pure_host();
-                let evaluator =
-                    Evaluator::new(std::sync::Arc::new(module_registry), security_context, host);
+                let evaluator = Evaluator::new(
+                    std::sync::Arc::new(module_registry),
+                    security_context,
+                    host,
+                    rtfs::compiler::expander::MacroExpander::default(),
+                );
 
                 // Try to evaluate the expression
                 match evaluator.evaluate(&expr) {
@@ -1476,7 +1490,12 @@ impl Orchestrator {
         host.set_execution_context(plan_id.clone(), plan.intent_ids.clone(), "".to_string());
         let module_registry = std::sync::Arc::new(ModuleRegistry::new());
         let host_iface: Arc<dyn HostInterface> = host.clone();
-        let mut evaluator = Evaluator::new(module_registry, context.clone(), host_iface);
+        let mut evaluator = Evaluator::new(
+            module_registry,
+            context.clone(),
+            host_iface,
+            rtfs::compiler::expander::MacroExpander::default(),
+        );
         // Load CCOS prelude (effectful helpers) into the evaluator's environment
         crate::prelude::load_prelude(&mut evaluator.env);
 

@@ -88,11 +88,12 @@ impl RtfsRepl {
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = create_pure_host();
 
-        Self {
+                Self {
             runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
                 Arc::clone(&module_registry),
                 security_context,
                 host,
+                crate::compiler::expander::MacroExpander::default(),
             )))),
             module_registry,
             context: ReplContext::default(),
@@ -112,6 +113,7 @@ impl RtfsRepl {
                     Arc::clone(&module_registry),
                     security_context,
                     host,
+                    crate::compiler::expander::MacroExpander::default(),
                 )))
             }
             RuntimeStrategyValue::Ir => Box::new(crate::runtime::ir_runtime::IrStrategy::new(
@@ -228,6 +230,7 @@ impl RtfsRepl {
                     Arc::clone(&self.module_registry),
                     security_context,
                     host.clone(),
+                    crate::compiler::expander::MacroExpander::default(),
                 ))));
                 println!("🔄 Switched to AST runtime");
             }
@@ -508,6 +511,7 @@ impl RtfsTestFramework {
                 Arc::clone(&module_registry),
                 security_context,
                 host.clone(),
+                crate::compiler::expander::MacroExpander::default(),
             )))),
             module_registry,
         }
