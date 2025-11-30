@@ -2776,19 +2776,10 @@ impl LlmProvider for StubLlmProvider {
   :success-criteria (and (streaming-active? rt) (< latency 100)))"#
                     .to_string())
             } else {
-                // Default fallback
-                Ok(r#"(intent "generic_task"
-  :goal "Complete the requested task efficiently"
-  :constraints {
-    :quality :high
-    :time (< duration 3600)
-  }
-  :preferences {
-    :method :automated
-    :priority :normal
-  }
-  :success-criteria (and (task-completed? task) (quality-verified? task)))"#
-                    .to_string())
+                Err(RuntimeError::Generic(
+                    "Stub LLM provider fallback triggered; configure a real provider or supply explicit stub hints"
+                        .to_string(),
+                ))
             }
         }
     }

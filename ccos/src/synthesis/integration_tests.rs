@@ -3,7 +3,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::capability_marketplace::types::{CapabilityManifest, LocalCapability, ProviderType};
-    use crate::synthesis::schema_builder::extract_param_schema;
+    use crate::synthesis::dialogue::schema_builder::extract_param_schema;
     use crate::synthesis::{synthesize_capabilities_with_marketplace, InteractionTurn};
 
     fn make_turn(i: usize, prompt: &str, ans: Option<&str>) -> InteractionTurn {
@@ -49,6 +49,8 @@ mod tests {
             effects: vec![],
             metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         let result = synthesize_capabilities_with_marketplace(&convo, &[manifest.clone()]);

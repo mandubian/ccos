@@ -237,8 +237,14 @@ impl CanonicalCapabilitySchema {
         // Validate :input-schema and :output-schema if present (should be maps)
         for schema_field in &[":input-schema", ":output-schema"] {
             if let Some(schema_val) = cap_map.get(&MapKey::String(schema_field.to_string())) {
-                if !matches!(schema_val, Value::Map(_)) {
-                    return Err(format!("Capability {} must be a map", schema_field));
+                if !matches!(
+                    schema_val,
+                    Value::Map(_) | Value::Vector(_) | Value::List(_) | Value::String(_)
+                ) {
+                    return Err(format!(
+                        "Capability {} must be a map, vector, list, or string type expression",
+                        schema_field
+                    ));
                 }
             }
         }
@@ -338,6 +344,9 @@ mod tests {
 
     #[test]
     fn test_canonical_capability_schema_validation() {
+        use rtfs::ast::MapKey;
+        use rtfs::runtime::values::Value;
+        
         let mut cap_map = HashMap::new();
         cap_map.insert(
             MapKey::String(":id".to_string()),
@@ -355,7 +364,15 @@ mod tests {
             MapKey::String(":description".to_string()),
             Value::String("A test capability".to_string()),
         );
+        cap_map.insert(
+            MapKey::String(":language".to_string()),
+            Value::String("rust".to_string()),
+        );
 
-        assert!(CanonicalCapabilitySchema::validate(&cap_map).is_ok());
+        let result = CanonicalCapabilitySchema::validate(&cap_map);
+        if let Err(e) = &result {
+            eprintln!("Validation error: {}", e);
+        }
+        assert!(result.is_ok());
     }
 }

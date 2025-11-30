@@ -5,14 +5,11 @@ use super::executors::{
 };
 use super::resource_monitor::ResourceMonitor;
 use super::types::*;
-// Temporarily disabled to fix resource monitoring tests
-// use super::network_discovery::{NetworkDiscoveryProvider, NetworkDiscoveryBuilder};
-// use super::mcp_discovery::{MCPDiscoveryProvider, MCPDiscoveryBuilder, MCPServerConfig};
-// use super::a2a_discovery::{A2ADiscoveryProvider, A2ADiscoveryBuilder, A2AAgentConfig};
+use super::versioning::{compare_versions, detect_breaking_changes, VersionComparison};
 use crate::catalog::{CatalogService, CatalogSource};
+use crate::utils::value_conversion;
 use rtfs::ast::{MapKey, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-// RuntimeContext no longer needed in missing-capability path
 use super::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use crate::streaming::{
     McpStreamingProvider, StreamConfig, StreamHandle, StreamType, StreamingProvider,
@@ -28,6 +25,19 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Result of updating a capability
+#[derive(Debug, Clone)]
+pub struct UpdateResult {
+    /// Whether the capability was updated (false if it was newly registered)
+    pub updated: bool,
+    /// Type of version change detected
+    pub version_comparison: VersionComparison,
+    /// List of breaking changes detected (empty if none)
+    pub breaking_changes: Vec<String>,
+    /// Previous version (None if newly registered)
+    pub previous_version: Option<String>,
+}
 
 /// Serializable representation of ProviderType (subset of variants without closures)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +145,7 @@ impl SerializableProvider {
                 server_url,
                 tool_name,
                 timeout_ms,
+                auth_token: None,
             }),
             SerializableProvider::A2a {
                 agent_id,
@@ -244,26 +255,28 @@ impl From<SerializableManifest> for CapabilityManifest {
             effects: s.effects,
             metadata: s.metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         }
     }
 }
 
 impl CapabilityMarketplace {
     pub fn new(
-        capability_registry: Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
+        capability_registry: Arc<RwLock<crate::capabilities::registry::CapabilityRegistry>>,
     ) -> Self {
         Self::with_causal_chain(capability_registry, None)
     }
 
     pub fn with_causal_chain(
-        capability_registry: Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
+        capability_registry: Arc<RwLock<crate::capabilities::registry::CapabilityRegistry>>,
         causal_chain: Option<Arc<std::sync::Mutex<crate::causal_chain::CausalChain>>>,
     ) -> Self {
         Self::with_causal_chain_and_debug_callback(capability_registry, causal_chain, None)
     }
 
     pub fn with_causal_chain_and_debug_callback(
-        capability_registry: Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
+        capability_registry: Arc<RwLock<crate::capabilities::registry::CapabilityRegistry>>,
         causal_chain: Option<Arc<std::sync::Mutex<crate::causal_chain::CausalChain>>>,
         debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
     ) -> Self {
@@ -283,7 +296,9 @@ impl CapabilityMarketplace {
         };
         marketplace.executor_registry.insert(
             TypeId::of::<MCPCapability>(),
-            ExecutorVariant::MCP(MCPExecutor),
+            ExecutorVariant::MCP(MCPExecutor {
+                session_pool: marketplace.session_pool.clone(),
+            }),
         );
         marketplace.executor_registry.insert(
             TypeId::of::<A2ACapability>(),
@@ -356,7 +371,7 @@ impl CapabilityMarketplace {
 
     /// Create marketplace with resource monitoring enabled
     pub fn with_resource_monitoring(
-        capability_registry: Arc<RwLock<rtfs::runtime::capabilities::registry::CapabilityRegistry>>,
+        capability_registry: Arc<RwLock<crate::capabilities::registry::CapabilityRegistry>>,
         causal_chain: Option<Arc<std::sync::Mutex<crate::causal_chain::CausalChain>>>,
         monitoring_config: ResourceMonitoringConfig,
     ) -> Self {
@@ -441,6 +456,26 @@ impl CapabilityMarketplace {
         // Register default capabilities first
         crate::capabilities::register_default_capabilities(self).await?;
 
+        // Load previously discovered capabilities from RTFS files
+        // This enables offline operation without re-querying MCP servers
+        match self.load_discovered_capabilities::<std::path::PathBuf>(None).await {
+            Ok(count) => {
+                if count > 0 {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!("Loaded {} previously discovered capabilities from RTFS files", count));
+                    } else {
+                        println!("📦 Loaded {} previously discovered capabilities", count);
+                    }
+                }
+            }
+            Err(e) => {
+                // Non-fatal: log and continue
+                if let Some(cb) = &self.debug_callback {
+                    cb(format!("Note: Could not load discovered capabilities: {}", e));
+                }
+            }
+        }
+
         // Load built-in capabilities from the capability registry
         // Note: RTFS stub registry doesn't have list_capabilities, so we skip this
         // CCOS capabilities are registered through register_default_capabilities instead
@@ -475,6 +510,8 @@ impl CapabilityMarketplace {
                 effects: vec![],
                 metadata: HashMap::new(),
                 agent_metadata: None,
+                domains: Vec::new(),
+                categories: Vec::new(),
             };
 
             let mut caps = self.capabilities.write().await;
@@ -523,6 +560,7 @@ impl CapabilityMarketplace {
         self.discovery_agents.push(Box::new(provider));
         Ok(())
     }
+    */
 
     /// Add an MCP discovery provider
     pub fn add_mcp_discovery(&mut self, config: MCPServerConfig) -> RuntimeResult<()> {
@@ -531,13 +569,16 @@ impl CapabilityMarketplace {
         Ok(())
     }
 
+    /*
     /// Add an MCP discovery provider using the builder pattern
     pub fn add_mcp_discovery_builder(&mut self, builder: MCPDiscoveryBuilder) -> RuntimeResult<()> {
         let provider = builder.build()?;
         self.discovery_agents.push(Box::new(provider));
         Ok(())
     }
+    */
 
+    /*
     /// Add an A2A discovery provider
     pub fn add_a2a_discovery(&mut self, config: A2AAgentConfig) -> RuntimeResult<()> {
         let provider = A2ADiscoveryProvider::new(config)?;
@@ -551,6 +592,7 @@ impl CapabilityMarketplace {
         self.discovery_agents.push(Box::new(provider));
         Ok(())
     }
+    */
 
     /// Discover capabilities from all configured network sources
     pub async fn discover_from_network(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
@@ -560,7 +602,10 @@ impl CapabilityMarketplace {
             if agent.name() == "NetworkDiscovery" {
                 match agent.discover().await {
                     Ok(capabilities) => {
-                        eprintln!("Discovered {} capabilities from network source", capabilities.len());
+                        eprintln!(
+                            "Discovered {} capabilities from network source",
+                            capabilities.len()
+                        );
                         all_capabilities.extend(capabilities);
                     }
                     Err(e) => {
@@ -574,6 +619,7 @@ impl CapabilityMarketplace {
         Ok(all_capabilities)
     }
 
+    /*
     /// Perform health checks on all network discovery providers
     pub async fn check_network_health(&self) -> RuntimeResult<HashMap<String, bool>> {
         let mut health_status = HashMap::new();
@@ -679,6 +725,8 @@ impl CapabilityMarketplace {
             effects: normalized_effects,
             metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -715,6 +763,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
 
         let catalog_manifest = manifest.clone();
@@ -774,6 +824,124 @@ impl CapabilityMarketplace {
         }
 
         Ok(())
+    }
+
+    /// Update a capability with version tracking and breaking change detection
+    ///
+    /// This method:
+    /// - Compares versions using semantic versioning
+    /// - Detects breaking changes
+    /// - Tracks version history
+    /// - Updates last_updated timestamp
+    /// - Emits audit events for version updates
+    pub async fn update_capability(
+        &self,
+        new_manifest: CapabilityManifest,
+        force: bool,
+    ) -> RuntimeResult<UpdateResult> {
+        let id = new_manifest.id.clone();
+        let mut caps = self.capabilities.write().await;
+
+        let existing = caps.get(&id).cloned();
+
+        match existing {
+            Some(existing_manifest) => {
+                // Compare versions
+                let version_comparison = match compare_versions(&existing_manifest.version, &new_manifest.version) {
+                    Ok(comp) => comp,
+                    Err(e) => {
+                        // If version parsing fails, treat as equal and log warning
+                        if let Some(cb) = &self.debug_callback {
+                            cb(format!(
+                                "Warning: Failed to parse versions for {}: {}. Treating as update.",
+                                id, e
+                            ));
+                        }
+                        VersionComparison::Equal
+                    }
+                };
+
+                // Detect breaking changes
+                let breaking_changes = detect_breaking_changes(&existing_manifest, &new_manifest)
+                    .unwrap_or_default();
+
+                // Check if update should be allowed
+                let is_breaking = !breaking_changes.is_empty()
+                    || matches!(version_comparison, VersionComparison::MajorUpdate);
+
+                if is_breaking && !force {
+                    return Err(RuntimeError::Generic(format!(
+                        "Breaking changes detected for capability '{}': {:?}. Use force=true to update anyway.",
+                        id, breaking_changes
+                    )));
+                }
+
+                // Prepare updated manifest with version metadata
+                let previous_version = existing_manifest.version.clone();
+                let mut updated_manifest = new_manifest;
+                updated_manifest = updated_manifest
+                    .with_previous_version(previous_version.clone())
+                    .add_to_version_history(previous_version.clone())
+                    .set_last_updated();
+
+                // Update the capability
+                caps.insert(id.clone(), updated_manifest.clone());
+
+                // Prepare audit event data
+                let mut audit_data = HashMap::new();
+                audit_data.insert("old_version".to_string(), previous_version.clone());
+                audit_data.insert("new_version".to_string(), updated_manifest.version.clone());
+                audit_data.insert(
+                    "version_comparison".to_string(),
+                    format!("{:?}", version_comparison),
+                );
+                audit_data.insert(
+                    "breaking_changes_count".to_string(),
+                    breaking_changes.len().to_string(),
+                );
+                if !breaking_changes.is_empty() {
+                    audit_data.insert(
+                        "breaking_changes".to_string(),
+                        serde_json::to_string(&breaking_changes).unwrap_or_default(),
+                    );
+                }
+
+                // Emit audit event
+                self.emit_capability_audit_event("capability_updated", &id, Some(audit_data))
+                    .await?;
+
+                // Refresh catalog
+                drop(caps);
+                self.refresh_catalog_index().await;
+
+                Ok(UpdateResult {
+                    updated: true,
+                    version_comparison,
+                    breaking_changes,
+                    previous_version: Some(previous_version),
+                })
+            }
+            None => {
+                // Capability doesn't exist, register it as new
+                let mut new_manifest = new_manifest.set_last_updated();
+                caps.insert(id.clone(), new_manifest.clone());
+                drop(caps);
+
+                // Register in catalog
+                self.index_capability_in_catalog(&new_manifest).await;
+
+                // Emit audit event
+                self.emit_capability_audit_event("capability_registered", &id, None)
+                    .await?;
+
+                Ok(UpdateResult {
+                    updated: false, // Was registered, not updated
+                    version_comparison: VersionComparison::Equal,
+                    breaking_changes: Vec::new(),
+                    previous_version: None,
+                })
+            }
+        }
     }
 
     /// Emit audit event to Causal Chain
@@ -889,6 +1057,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -931,6 +1101,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata, // Provider-specific metadata (generic)
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -971,6 +1143,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1013,6 +1187,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1046,6 +1222,7 @@ impl CapabilityMarketplace {
                 server_url,
                 tool_name,
                 timeout_ms,
+                auth_token: None,
             }),
             version: "1.0.0".to_string(),
             input_schema: None,
@@ -1056,6 +1233,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1091,6 +1270,7 @@ impl CapabilityMarketplace {
                 server_url,
                 tool_name,
                 timeout_ms,
+                auth_token: None,
             }),
             version: "1.0.0".to_string(),
             input_schema,
@@ -1101,6 +1281,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1146,6 +1328,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1193,6 +1377,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1234,6 +1420,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1277,6 +1465,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1320,6 +1510,8 @@ impl CapabilityMarketplace {
             effects: vec![],
             metadata: HashMap::new(),
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1523,9 +1715,32 @@ impl CapabilityMarketplace {
         let manifest = if let Some(m) = manifest_opt {
             m
         } else {
-            // If capability not registered locally, surface a clear error
-            // Note: RTFS stub registry doesn't support enqueue_missing_capability
-            // TODO: Implement missing capability resolution at CCOS level
+            // If capability not registered locally, try to trigger missing capability resolution
+            // via the registry (which holds the resolver)
+            {
+                let registry = self.capability_registry.read().await;
+                if let Some(resolver) = registry.get_missing_capability_resolver() {
+                    let mut context = std::collections::HashMap::new();
+                    context.insert("source".to_string(), "marketplace_miss".to_string());
+
+                    // Extract args for context if possible (best effort)
+                    let args = match inputs {
+                        Value::Vector(v) => v.clone(),
+                        Value::List(l) => l.clone(),
+                        _ => vec![],
+                    };
+
+                    if let Err(e) =
+                        resolver.handle_missing_capability(id.to_string(), args, context)
+                    {
+                        eprintln!(
+                            "Warning: Failed to queue missing capability '{}': {}",
+                            id, e
+                        );
+                    }
+                }
+            }
+
             return Err(RuntimeError::UnknownCapability(id.to_string()));
         };
 
@@ -1861,35 +2076,12 @@ impl CapabilityMarketplace {
         Ok(Value::Map(map))
     }
 
+    /// Convert JSON to RTFS Value (public API wrapper for backward compatibility)
+    /// 
+    /// This delegates to the shared utility in `ccos::utils::value_conversion`.
+    /// Prefer using `ccos::utils::value_conversion::json_to_rtfs_value` directly in new code.
     pub fn json_to_rtfs_value(json: &serde_json::Value) -> RuntimeResult<Value> {
-        match json {
-            serde_json::Value::String(s) => Ok(Value::String(s.clone())),
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    Ok(Value::Integer(i))
-                } else if let Some(f) = n.as_f64() {
-                    Ok(Value::Float(f))
-                } else {
-                    Err(RuntimeError::Generic("Invalid number format".to_string()))
-                }
-            }
-            serde_json::Value::Bool(b) => Ok(Value::Boolean(*b)),
-            serde_json::Value::Array(arr) => {
-                let values: Result<Vec<Value>, RuntimeError> =
-                    arr.iter().map(Self::json_to_rtfs_value).collect();
-                Ok(Value::Vector(values?))
-            }
-            serde_json::Value::Object(obj) => {
-                let mut map = HashMap::new();
-                for (key, value) in obj {
-                    let rtfs_key = MapKey::String(key.clone());
-                    let rtfs_value = Self::json_to_rtfs_value(value)?;
-                    map.insert(rtfs_key, rtfs_value);
-                }
-                Ok(Value::Map(map))
-            }
-            serde_json::Value::Null => Ok(Value::Nil),
-        }
+        value_conversion::json_to_rtfs_value(json)
     }
 
     /// Return a sanitized snapshot of registered capabilities for observability purposes.
@@ -2152,6 +2344,81 @@ impl CapabilityMarketplace {
         Ok(written)
     }
 
+    /// Export capabilities to a single RTFS module file.
+    /// This writes multiple `(capability ...)` expressions into one file.
+    pub async fn export_capabilities_to_rtfs_module_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> RuntimeResult<usize> {
+        let caps = self.capabilities.read().await;
+        let mut written = 0usize;
+        let mut rtfs_content = String::new();
+
+        rtfs_content.push_str(";; CCOS Capability Module Export\n");
+        rtfs_content.push_str(&format!(";; Generated at: {}\n\n", chrono::Utc::now()));
+        rtfs_content.push_str("(do\n");
+
+        for cap in caps.values() {
+            // Convert to SerializableManifest first to filter out non-serializable ones
+            let serializable = match Option::<SerializableManifest>::from(cap) {
+                Some(s) => s,
+                None => {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Skipping non-serializable provider for capability {}",
+                            cap.id
+                        ));
+                    }
+                    continue;
+                }
+            };
+
+            // Re-convert to manifest to ensure it matches what we want to serialize
+            // (SerializableManifest is an intermediate step that ensures provider is compatible)
+            let manifest: CapabilityManifest = serializable.into();
+
+            // Try to find the implementation code or generate a default one
+            let implementation_code = manifest
+                .metadata
+                .get("rtfs_implementation")
+                .cloned()
+                .or_else(|| {
+                    // Try to reconstruct implementation from provider metadata
+                    match &manifest.provider {
+                        crate::capability_marketplace::types::ProviderType::Http(http) => Some(format!(
+                            "(fn [input] (call :http.request :method \"POST\" :url \"{}\" :body input))",
+                            http.base_url
+                        )),
+                        crate::capability_marketplace::types::ProviderType::MCP(mcp) => Some(format!(
+                            "(fn [input] (call :ccos.capabilities.mcp.call :server-url \"{}\" :tool-name \"{}\" :input input))",
+                            mcp.server_url, mcp.tool_name
+                        )),
+                        _ => None,
+                    }
+                })
+                .unwrap_or_else(|| {
+                    // Fallback stub
+                    "(fn [input] (error \"Implementation not available in export\"))".to_string()
+                });
+
+            let cap_rtfs = crate::synthesis::missing_capability_resolver::MissingCapabilityResolver::manifest_to_rtfs(
+                &manifest,
+                &implementation_code,
+            );
+
+            rtfs_content.push_str(&cap_rtfs);
+            rtfs_content.push_str("\n\n");
+            written += 1;
+        }
+
+        rtfs_content.push_str(")\n"); // Close the (do ...) block
+
+        std::fs::write(&path, rtfs_content)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write RTFS module export file: {}", e)))?;
+
+        Ok(written)
+    }
+
     /// Export serializable capabilities to a JSON file.
     /// Skips non-serializable providers (Local, Stream, Registry, Plugin).
     pub async fn export_capabilities_to_file<P: AsRef<Path>>(
@@ -2198,6 +2465,195 @@ impl CapabilityMarketplace {
         Ok(loaded)
     }
 
+    /// Load all discovered capabilities from the standard discovered capabilities directory.
+    /// This scans `capabilities/discovered/` recursively for `.rtfs` files and loads them.
+    /// 
+    /// The directory structure is expected to be:
+    /// ```text
+    /// capabilities/discovered/
+    /// ├── mcp/
+    /// │   ├── github/
+    /// │   │   └── capabilities.rtfs
+    /// │   └── slack/
+    /// │       └── capabilities.rtfs
+    /// └── other/
+    ///     └── capabilities.rtfs
+    /// ```
+    /// 
+    /// # Arguments
+    /// * `base_dir` - Optional base directory. Defaults to "capabilities/discovered" or
+    ///   the value of CCOS_CAPABILITY_STORAGE environment variable.
+    /// 
+    /// # Returns
+    /// The number of capabilities loaded.
+    pub async fn load_discovered_capabilities<P: AsRef<Path>>(
+        &self,
+        base_dir: Option<P>,
+    ) -> RuntimeResult<usize> {
+        let dir = base_dir
+            .map(|p| p.as_ref().to_path_buf())
+            .unwrap_or_else(|| {
+                std::env::var("CCOS_CAPABILITY_STORAGE")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::path::PathBuf::from("../capabilities/discovered"))
+            });
+
+        if !dir.exists() {
+            if let Some(cb) = &self.debug_callback {
+                cb(format!("Discovered capabilities directory does not exist: {}", dir.display()));
+            }
+            return Ok(0);
+        }
+
+        self.import_capabilities_from_rtfs_dir_recursive(&dir).await
+    }
+
+    /// Recursively import capabilities from RTFS files in a directory and its subdirectories.
+    /// 
+    /// This method walks the directory tree and loads all `.rtfs` files it finds.
+    pub async fn import_capabilities_from_rtfs_dir_recursive<P: AsRef<Path>>(
+        &self,
+        dir: P,
+    ) -> RuntimeResult<usize> {
+        let dir_path = dir.as_ref();
+
+        if !dir_path.exists() {
+            return Err(RuntimeError::Generic(format!(
+                "Directory does not exist: {}",
+                dir_path.display()
+            )));
+        }
+
+        let mut total_loaded = 0usize;
+        let mut dirs_to_process = vec![dir_path.to_path_buf()];
+
+        while let Some(current_dir) = dirs_to_process.pop() {
+            let entries = match std::fs::read_dir(&current_dir) {
+                Ok(e) => e,
+                Err(e) => {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Failed to read directory {}: {}",
+                            current_dir.display(),
+                            e
+                        ));
+                    }
+                    continue;
+                }
+            };
+
+            for entry in entries {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) => {
+                        if let Some(cb) = &self.debug_callback {
+                            cb(format!(
+                                "Failed to read entry in {}: {}",
+                                current_dir.display(),
+                                e
+                            ));
+                        }
+                        continue;
+                    }
+                };
+
+                let path = entry.path();
+                
+                // If it's a directory, add it to the queue for processing
+                if path.is_dir() {
+                    dirs_to_process.push(path);
+                    continue;
+                }
+
+                // Skip non-rtfs files
+                if path.extension().and_then(|s| s.to_str()).map_or(true, |ext| ext != "rtfs") {
+                    continue;
+                }
+
+                // Load the RTFS file
+                match self.import_single_rtfs_file(&path).await {
+                    Ok(count) => {
+                        total_loaded += count;
+                        if let Some(cb) = &self.debug_callback {
+                            cb(format!("Loaded {} capabilities from {}", count, path.display()));
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(cb) = &self.debug_callback {
+                            cb(format!("Failed to load {}: {}", path.display(), e));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(total_loaded)
+    }
+
+    /// Import capabilities from a single RTFS file.
+    async fn import_single_rtfs_file<P: AsRef<Path>>(&self, path: P) -> RuntimeResult<usize> {
+        let path = path.as_ref();
+        
+        let path_str = path.to_str().ok_or_else(|| {
+            RuntimeError::Generic(format!(
+                "Non-UTF8 path: {}",
+                path.display()
+            ))
+        })?;
+
+        let parser = MCPDiscoveryProvider::new(MCPServerConfig::default()).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to initialize RTFS parser: {}",
+                e
+            ))
+        })?;
+
+        let module = parser.load_rtfs_capabilities(path_str)?;
+        let mut loaded = 0usize;
+
+        for cap_def in module.capabilities {
+            match parser.rtfs_to_capability_manifest(&cap_def) {
+                Ok(manifest) => {
+                    // Use update_capability for proper version tracking
+                    match self.update_capability(manifest, false).await {
+                        Ok(result) => {
+                            if result.updated {
+                                if let Some(cb) = &self.debug_callback {
+                                    cb(format!(
+                                        "Updated capability: {} (version comparison: {:?})",
+                                        result.previous_version.as_ref().unwrap_or(&"unknown".to_string()),
+                                        result.version_comparison
+                                    ));
+                                }
+                            }
+                            loaded += 1;
+                        }
+                        Err(e) => {
+                            // If update fails due to breaking changes, log and skip
+                            if let Some(cb) = &self.debug_callback {
+                                cb(format!(
+                                    "Skipping capability update due to breaking changes: {}",
+                                    e
+                                ));
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Failed to convert RTFS capability in {}: {}",
+                            path.display(),
+                            err
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(loaded)
+    }
+
     /// Import capabilities exported as RTFS files (one .rtfs per capability) from a directory.
     /// Only supports provider types that are expressible in the exported RTFS (http, mcp, a2a, remote_rtfs).
     pub async fn import_capabilities_from_rtfs_dir<P: AsRef<Path>>(
@@ -2205,7 +2661,6 @@ impl CapabilityMarketplace {
         dir: P,
     ) -> RuntimeResult<usize> {
         let dir_path = dir.as_ref();
-        let mut loaded = 0usize;
 
         let entries = std::fs::read_dir(dir_path).map_err(|e| {
             RuntimeError::Generic(format!(
@@ -2215,62 +2670,24 @@ impl CapabilityMarketplace {
             ))
         })?;
 
+        let parser = MCPDiscoveryProvider::new(MCPServerConfig::default()).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to initialize RTFS parser for {}: {}",
+                dir_path.display(),
+                e
+            ))
+        })?;
+
+        let mut loaded = 0usize;
+
         for entry in entries {
             let entry = match entry {
                 Ok(e) => e,
-                Err(_) => continue,
-            };
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                if ext != "rtfs" {
-                    continue;
-                }
-            } else {
-                continue;
-            }
-
-            // First try: use MCPDiscoveryProvider parsing helpers (robust path)
-            let parser_res = MCPDiscoveryProvider::new(MCPServerConfig::default());
-            if let Ok(parser) = parser_res {
-                match parser.load_rtfs_capabilities(path.to_str().unwrap_or_default()) {
-                    Ok(module) => {
-                        for cap_def in module.capabilities {
-                            match parser.rtfs_to_capability_manifest(&cap_def) {
-                                Ok(manifest) => {
-                                    let mut caps = self.capabilities.write().await;
-                                    caps.insert(manifest.id.clone(), manifest);
-                                    loaded += 1;
-                                }
-                                Err(e) => {
-                                    if let Some(cb) = &self.debug_callback {
-                                        cb(format!(
-                                            "Failed to convert RTFS capability in {}: {}",
-                                            path.display(),
-                                            e
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                    Err(_) => {
-                        // fall through to heuristic parser below
-                    }
-                }
-            }
-
-            // Fallback: heuristic parsing (legacy behavior)
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
                 Err(e) => {
                     if let Some(cb) = &self.debug_callback {
                         cb(format!(
-                            "Failed to read RTFS file {}: {}",
-                            path.display(),
+                            "Failed to read entry in {}: {}",
+                            dir_path.display(),
                             e
                         ));
                     }
@@ -2278,388 +2695,62 @@ impl CapabilityMarketplace {
                 }
             };
 
-            // --- existing heuristic parsing logic ---
-            // Helper closures for simple RTFS-extracted fields
-            let extract_quoted = |key: &str, src: &str| -> Option<String> {
-                if let Some(pos) = src.find(key) {
-                    let after = &src[pos + key.len()..];
-                    if let Some(q1) = after.find('"') {
-                        let rest = &after[q1 + 1..];
-                        if let Some(q2) = rest.find('"') {
-                            return Some(rest[..q2].to_string());
-                        }
-                    }
-                }
-                None
-            };
-
-            let extract_keyword = |key: &str, src: &str| -> Option<String> {
-                if let Some(pos) = src.find(key) {
-                    let after = &src[pos + key.len()..];
-                    // Split on whitespace/newline and take first token
-                    let tok = after
-                        .split_whitespace()
-                        .next()
-                        .map(|s| s.trim().to_string());
-                    tok
-                } else {
-                    None
-                }
-            };
-
-            let extract_provider_meta = |src: &str| -> HashMap<String, String> {
-                let mut map = HashMap::new();
-                if let Some(pos) = src.find(":provider-meta") {
-                    if let Some(brace_start) = src[pos..].find('{') {
-                        let abs_start = pos + brace_start;
-                        let mut depth = 0isize;
-                        let mut end = None;
-                        for (i, ch) in src[abs_start..].chars().enumerate() {
-                            match ch {
-                                '{' => depth += 1,
-                                '}' => {
-                                    depth -= 1;
-                                    if depth == 0 {
-                                        end = Some(abs_start + i + 1);
-                                        break;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        if let Some(abs_end) = end {
-                            let block = &src[abs_start + 1..abs_end - 1];
-                            let mut chars = block.chars().peekable();
-                            while let Some(ch) = chars.next() {
-                                if ch == ':' {
-                                    let mut key = String::new();
-                                    while let Some(&c) = chars.peek() {
-                                        if c.is_whitespace() || c == ':' || c == '{' || c == '}' {
-                                            break;
-                                        }
-                                        key.push(c);
-                                        chars.next();
-                                    }
-                                    if key.is_empty() {
-                                        continue;
-                                    }
-                                    while let Some(&c) = chars.peek() {
-                                        if c.is_whitespace() {
-                                            chars.next();
-                                        } else {
-                                            break;
-                                        }
-                                    }
-                                    let mut value = String::new();
-                                    if let Some(&next_ch) = chars.peek() {
-                                        if next_ch == '"' {
-                                            chars.next();
-                                            while let Some(c) = chars.next() {
-                                                if c == '"' {
-                                                    break;
-                                                }
-                                                value.push(c);
-                                            }
-                                        } else {
-                                            while let Some(&c) = chars.peek() {
-                                                if c.is_whitespace() || c == ':' || c == '}' {
-                                                    break;
-                                                }
-                                                value.push(c);
-                                                chars.next();
-                                            }
-                                        }
-                                    }
-                                    if !key.is_empty() {
-                                        map.insert(key.replace('-', "_"), value);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                map
-            };
-
-            let extract_metadata = |src: &str| -> HashMap<String, String> {
-                let mut map = HashMap::new();
-                if let Some(pos) = src.find(":metadata") {
-                    if let Some(brace_start) = src[pos..].find('{') {
-                        let abs_start = pos + brace_start;
-                        let mut depth = 0isize;
-                        let mut end = None;
-                        for (i, ch) in src[abs_start..].chars().enumerate() {
-                            match ch {
-                                '{' => depth += 1,
-                                '}' => {
-                                    depth -= 1;
-                                    if depth == 0 {
-                                        end = Some(abs_start + i + 1);
-                                        break;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        if let Some(abs_end) = end {
-                            let block = &src[abs_start + 1..abs_end - 1];
-                            let mut chars = block.chars().peekable();
-                            while let Some(ch) = chars.next() {
-                                if ch == ':' {
-                                    let mut key = String::new();
-                                    while let Some(&c) = chars.peek() {
-                                        if c.is_whitespace() || c == ':' || c == '{' || c == '}' {
-                                            break;
-                                        }
-                                        key.push(c);
-                                        chars.next();
-                                    }
-                                    if key.is_empty() {
-                                        continue;
-                                    }
-                                    while let Some(&c) = chars.peek() {
-                                        if c.is_whitespace() {
-                                            chars.next();
-                                        } else {
-                                            break;
-                                        }
-                                    }
-                                    if let Some(&next_ch) = chars.peek() {
-                                        if next_ch == '"' {
-                                            chars.next();
-                                            let mut value = String::new();
-                                            while let Some(c) = chars.next() {
-                                                if c == '"' {
-                                                    break;
-                                                }
-                                                value.push(c);
-                                            }
-                                            map.insert(key.replace('-', "_"), value);
-                                        } else if next_ch == '{' {
-                                            // Skip nested map
-                                            let mut nested_depth = 0isize;
-                                            while let Some(c) = chars.next() {
-                                                match c {
-                                                    '{' => nested_depth += 1,
-                                                    '}' => {
-                                                        nested_depth -= 1;
-                                                        if nested_depth == 0 {
-                                                            break;
-                                                        }
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
-                                        } else {
-                                            let mut value = String::new();
-                                            while let Some(&c) = chars.peek() {
-                                                if c.is_whitespace() || c == ':' || c == '}' {
-                                                    break;
-                                                }
-                                                value.push(c);
-                                                chars.next();
-                                            }
-                                            if !value.is_empty() {
-                                                map.insert(key.replace('-', "_"), value);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                map
-            };
-
-            // Extract basic fields
-            let id = extract_quoted(":id", &content).or_else(|| {
-                // fallback to filename-based id
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_string())
-            });
-            let name = extract_quoted(":name", &content).unwrap_or_else(|| "".to_string());
-            let description =
-                extract_quoted(":description", &content).unwrap_or_else(|| "".to_string());
-            let version =
-                extract_quoted(":version", &content).unwrap_or_else(|| "1.0.0".to_string());
-
-            if id.is_none() {
-                if let Some(cb) = &self.debug_callback {
-                    cb(format!("Skipping RTFS file without id: {}", path.display()));
-                }
+            let path = entry.path();
+            if !path.is_file() {
                 continue;
             }
-
-            let id = id.unwrap();
-
-            // provider label e.g. :provider :http
-            let provider_token = extract_keyword(":provider", &content).unwrap_or_default();
-
-            let provider_meta = extract_provider_meta(&content);
-            let mut metadata_map = extract_metadata(&content);
-
-            // parse schemas
-            let input_schema_opt = if let Some(s) = extract_keyword(":input-schema", &content) {
-                let s_trim = s.trim();
-                if s_trim == "nil" || s_trim == ":any" || s_trim == "nil," {
-                    None
-                } else {
-                    // If the schema token is complex (starts with '[' or '('), we try to extract whole bracketed expr from content
-                    // Simple heuristic: find the substring ":input-schema" and take remainder of that line
-                    if let Some(pos) = content.find(":input-schema") {
-                        if let Some(line_end) = content[pos..].find('\n') {
-                            let line = content[pos..pos + line_end].to_string();
-                            // remove key
-                            if let Some(idx) = line.find(":input-schema") {
-                                let remainder = line[idx + ":input-schema".len()..].trim();
-                                let expr =
-                                    remainder.trim().trim_end_matches(',').trim().to_string();
-                                match TypeExpr::from_str(&expr) {
-                                    Ok(texpr) => Some(texpr),
-                                    Err(_) => None,
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
-            let output_schema_opt = if let Some(s) = extract_keyword(":output-schema", &content) {
-                let s_trim = s.trim();
-                if s_trim == "nil" || s_trim == ":any" || s_trim == "nil," {
-                    None
-                } else {
-                    if let Some(pos) = content.find(":output-schema") {
-                        if let Some(line_end) = content[pos..].find('\n') {
-                            let line = content[pos..pos + line_end].to_string();
-                            if let Some(idx) = line.find(":output-schema") {
-                                let remainder = line[idx + ":output-schema".len()..].trim();
-                                let expr =
-                                    remainder.trim().trim_end_matches(',').trim().to_string();
-                                match TypeExpr::from_str(&expr) {
-                                    Ok(texpr) => Some(texpr),
-                                    Err(_) => None,
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
-            // Build provider
-            let provider = if provider_token.contains(":http") || provider_token == ":http" {
-                let base_url = provider_meta.get("base_url").cloned().unwrap_or_default();
-                let timeout_ms = provider_meta
-                    .get("timeout_ms")
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(30000);
-                ProviderType::Http(HttpCapability {
-                    base_url,
-                    auth_token: None,
-                    timeout_ms,
-                })
-            } else if provider_token.contains(":mcp") || provider_token == ":mcp" {
-                let server_url = provider_meta.get("server_url").cloned().unwrap_or_default();
-                let tool_name = provider_meta.get("tool_name").cloned().unwrap_or_default();
-                let timeout_ms = provider_meta
-                    .get("timeout_ms")
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(5000);
-                ProviderType::MCP(MCPCapability {
-                    server_url,
-                    tool_name,
-                    timeout_ms,
-                })
-            } else if provider_token.contains(":a2a") || provider_token == ":a2a" {
-                let agent_id = provider_meta.get("agent_id").cloned().unwrap_or_default();
-                let endpoint = provider_meta.get("endpoint").cloned().unwrap_or_default();
-                let protocol = provider_meta.get("protocol").cloned().unwrap_or_default();
-                let timeout_ms = provider_meta
-                    .get("timeout_ms")
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(5000);
-                ProviderType::A2A(A2ACapability {
-                    agent_id,
-                    endpoint,
-                    protocol,
-                    timeout_ms,
-                })
-            } else if provider_token.contains(":remote_rtfs") || provider_token == ":remote_rtfs" {
-                let endpoint = provider_meta.get("endpoint").cloned().unwrap_or_default();
-                let timeout_ms = provider_meta
-                    .get("timeout_ms")
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(5000);
-                ProviderType::RemoteRTFS(RemoteRTFSCapability {
-                    endpoint,
-                    timeout_ms,
-                    auth_token: None,
-                })
-            } else {
-                // Unsupported provider for import
-                if let Some(cb) = &self.debug_callback {
-                    cb(format!(
-                        "Skipping RTFS import for unsupported provider in {}",
-                        id
-                    ));
-                }
-                continue;
-            };
-
-            if let ProviderType::MCP(m) = &provider {
-                metadata_map
-                    .entry("mcp_server_url".to_string())
-                    .or_insert_with(|| m.server_url.clone());
-                metadata_map
-                    .entry("mcp_tool_name".to_string())
-                    .or_insert_with(|| m.tool_name.clone());
-                if let Some(req) = provider_meta.get("requires_session").cloned() {
-                    metadata_map
-                        .entry("mcp_requires_session".to_string())
-                        .or_insert(req);
-                }
-            }
-
-            let manifest = CapabilityManifest {
-                id: id.clone(),
-                name: name.clone(),
-                description: description.clone(),
-                provider,
-                version: version.clone(),
-                input_schema: input_schema_opt,
-                output_schema: output_schema_opt,
-                attestation: None,
-                provenance: None,
-                permissions: vec![],
-                effects: vec![],
-                metadata: metadata_map,
-                agent_metadata: None,
-            };
-
-            // Register
+            if path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map_or(true, |ext| ext != "rtfs")
             {
-                let mut caps = self.capabilities.write().await;
-                caps.insert(id.clone(), manifest);
+                continue;
             }
-            loaded += 1;
+
+            let path_str = match path.to_str() {
+                Some(s) => s,
+                None => {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Skipping RTFS entry with non-UTF8 path {}",
+                            path.display()
+                        ));
+                    }
+                    continue;
+                }
+            };
+
+            match parser.load_rtfs_capabilities(path_str) {
+                Ok(module) => {
+                    for cap_def in module.capabilities {
+                        match parser.rtfs_to_capability_manifest(&cap_def) {
+                            Ok(manifest) => {
+                                let mut caps = self.capabilities.write().await;
+                                caps.insert(manifest.id.clone(), manifest);
+                                loaded += 1;
+                            }
+                            Err(err) => {
+                                if let Some(cb) = &self.debug_callback {
+                                    cb(format!(
+                                        "Failed to convert RTFS capability in {}: {}",
+                                        path.display(),
+                                        err
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Failed to parse RTFS file {}: {}",
+                            path.display(),
+                            err
+                        ));
+                    }
+                }
+            }
         }
 
         Ok(loaded)

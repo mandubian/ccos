@@ -98,7 +98,7 @@ Special forms are built-in constructs that cannot be implemented as functions:
 (fn [x] (* x x))
 
 ;; Variadic functions
-(defn sum [args]
+(defn sum [& args]
   (reduce + 0 args))
 ```
 
@@ -163,7 +163,7 @@ RTFS includes a structural type system:
 [:union :int :string]  ; either int or string
 
 ;; Refined types
-[:refined :int (> 0) (< 100)] ; int between 1 and 99
+[:and :int [:> 0] [:< 100]] ; int between 1 and 99
 
 ;; Optional types
 :string? ; equivalent to [:union :string :nil]
@@ -171,18 +171,20 @@ RTFS includes a structural type system:
 
 ## Macros and Metaprogramming
 
-Macros enable compile-time code transformation:
+**Note**: The macro system (`defmacro`, quasiquote syntax) is a **design target** and is **not currently implemented** in RTFS 2.0. The following syntax represents the planned macro system:
 
 ```clojure
-;; Define a macro
+;; Planned macro definition (not yet implemented)
 (defmacro when [condition & body]
   `(if ~condition (do ~@body)))
 
-;; Use the macro
+;; Planned macro usage (not yet implemented)
 (when (> x 0)
   (call :ccos.io/println "positive")
   (* x 2))
 ```
+
+Currently, RTFS code must use explicit control flow constructs like `if` and `do` instead of macros.
 
 ## Host Integration
 

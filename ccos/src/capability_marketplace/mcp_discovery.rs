@@ -1,9 +1,11 @@
 use crate::capability_marketplace::types::CapabilityDiscovery;
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
+use crate::synthesis::mcp_introspector::MCPIntrospector;
+use crate::mcp::types::DiscoveredMCPTool;
 use async_trait::async_trait;
 use chrono::Utc;
 use rtfs::ast::{
-    Expression, Keyword, Literal, MapKey, MapTypeEntry, PrimitiveType, Symbol, TypeExpr,
+    Expression, Keyword, Literal, MapKey, MapTypeEntry, PrimitiveType, Symbol, TopLevel, TypeExpr,
 };
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -72,8 +74,8 @@ pub struct MCPResourcesResponse {
 #[derive(Debug, Clone)]
 pub struct RTFSCapabilityDefinition {
     pub capability: Expression,
-    pub input_schema: Option<Expression>,
-    pub output_schema: Option<Expression>,
+    pub input_schema: Option<TypeExpr>,
+    pub output_schema: Option<TypeExpr>,
 }
 
 /// Simplified serializable version for backwards compatibility (if needed)
@@ -94,9 +96,13 @@ pub struct RTFSModuleDefinition {
 }
 
 /// MCP Discovery Provider for discovering MCP servers and their tools
+/// 
+/// This is a thin adapter implementing the `CapabilityDiscovery` trait
+/// that delegates to the unified `MCPDiscoveryService` for all discovery operations.
 pub struct MCPDiscoveryProvider {
     config: MCPServerConfig,
-    client: reqwest::Client,
+    /// Unified discovery service - always used for discovery
+    discovery_service: std::sync::Arc<crate::mcp::core::MCPDiscoveryService>,
 }
 
 impl MCPDiscoveryProvider {
@@ -242,147 +248,75 @@ impl MCPDiscoveryProvider {
     }
 
     /// Create a new MCP discovery provider
+    /// 
+    /// Internally creates an `MCPDiscoveryService` for all discovery operations.
     pub fn new(config: MCPServerConfig) -> RuntimeResult<Self> {
-        let mut client_builder =
-            reqwest::Client::builder().timeout(Duration::from_secs(config.timeout_seconds));
+        // Build auth headers if token provided
+        let auth_headers = config.auth_token.as_ref().map(|token| {
+            let mut headers = HashMap::new();
+            headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+            headers
+        });
 
-        // Add MCP-specific headers
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::USER_AGENT,
-            reqwest::header::HeaderValue::from_static("CCOS-MCP-Discovery/1.0"),
-        );
-        headers.insert(
-            reqwest::header::ACCEPT,
-            reqwest::header::HeaderValue::from_static("application/json"),
-        );
-        headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            reqwest::header::HeaderValue::from_static("application/json"),
+        // Create the unified discovery service
+        let discovery_service = std::sync::Arc::new(
+            crate::mcp::core::MCPDiscoveryService::with_auth_headers(auth_headers)
         );
 
-        client_builder = client_builder.default_headers(headers);
+        Ok(Self {
+            config,
+            discovery_service,
+        })
+    }
 
-        let client = client_builder.build().map_err(|e| {
-            RuntimeError::Generic(format!("Failed to create MCP HTTP client: {}", e))
-        })?;
-
-        Ok(Self { config, client })
+    /// Create a new MCP discovery provider with an existing discovery service
+    /// 
+    /// Useful when you want to share a discovery service across multiple providers.
+    pub fn with_discovery_service(
+        config: MCPServerConfig,
+        discovery_service: std::sync::Arc<crate::mcp::core::MCPDiscoveryService>,
+    ) -> Self {
+        Self {
+            config,
+            discovery_service,
+        }
     }
 
     /// Discover tools from the MCP server
+    /// 
+    /// This method delegates to the unified `MCPDiscoveryService` for all discovery.
     pub async fn discover_tools(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
-        let tools_url = format!("{}/tools", self.config.endpoint);
+        let options = crate::mcp::types::DiscoveryOptions {
+            introspect_output_schemas: false, // Can be made configurable
+            use_cache: true,
+            register_in_marketplace: false,
+            export_to_rtfs: false,
+            export_directory: None,
+            auth_headers: self.build_auth_headers(),
+            ..Default::default()
+        };
 
-        let mut request_builder = self.client.get(&tools_url);
+        let discovered_tools = self.discovery_service.discover_tools(&self.config, &options).await?;
 
-        // Add authentication if provided
-        if let Some(token) = &self.config.auth_token {
-            request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
-        }
-
-        let request = request_builder.build().map_err(|e| {
-            RuntimeError::Generic(format!("Failed to build MCP tools request: {}", e))
-        })?;
-
-        // Execute request with timeout
-        let response = timeout(
-            Duration::from_secs(self.config.timeout_seconds),
-            self.client.execute(request),
-        )
-        .await
-        .map_err(|_| RuntimeError::Generic("MCP tools request timeout".to_string()))?
-        .map_err(|e| RuntimeError::Generic(format!("MCP tools request failed: {}", e)))?;
-
-        // Check status code
-        if !response.status().is_success() {
-            return Err(RuntimeError::Generic(format!(
-                "MCP tools HTTP error: {} - {}",
-                response.status(),
-                response.text().await.unwrap_or_default()
-            )));
-        }
-
-        // Parse response
-        let response_text = response.text().await.map_err(|e| {
-            RuntimeError::Generic(format!("Failed to read MCP tools response: {}", e))
-        })?;
-
-        let tools_response: MCPToolsResponse =
-            serde_json::from_str(&response_text).map_err(|e| {
-                RuntimeError::Generic(format!("Failed to parse MCP tools response: {}", e))
-            })?;
-
-        if let Some(error) = tools_response.error {
-            return Err(RuntimeError::Generic(format!(
-                "MCP server error: {}",
-                error
-            )));
-        }
-
-        // Convert MCP tools to capability manifests
+        // Convert to manifests
         let mut capabilities = Vec::new();
-        for tool in tools_response.tools {
-            let capability = self.convert_tool_to_capability(tool);
-            capabilities.push(capability);
+        for tool in discovered_tools {
+            let manifest = self.discovery_service.tool_to_manifest(&tool, &self.config);
+            capabilities.push(manifest);
         }
 
         Ok(capabilities)
     }
 
     /// Discover resources from the MCP server
+    /// 
+    /// This method delegates to the unified `MCPDiscoveryService` for resource discovery.
     pub async fn discover_resources(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
-        let resources_url = format!("{}/resources", self.config.endpoint);
-
-        let mut request_builder = self.client.get(&resources_url);
-
-        // Add authentication if provided
-        if let Some(token) = &self.config.auth_token {
-            request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
-        }
-
-        let request = request_builder.build().map_err(|e| {
-            RuntimeError::Generic(format!("Failed to build MCP resources request: {}", e))
-        })?;
-
-        // Execute request with timeout
-        let response = timeout(
-            Duration::from_secs(self.config.timeout_seconds),
-            self.client.execute(request),
-        )
-        .await
-        .map_err(|_| RuntimeError::Generic("MCP resources request timeout".to_string()))?
-        .map_err(|e| RuntimeError::Generic(format!("MCP resources request failed: {}", e)))?;
-
-        // Check status code
-        if !response.status().is_success() {
-            return Err(RuntimeError::Generic(format!(
-                "MCP resources HTTP error: {} - {}",
-                response.status(),
-                response.text().await.unwrap_or_default()
-            )));
-        }
-
-        // Parse response
-        let response_text = response.text().await.map_err(|e| {
-            RuntimeError::Generic(format!("Failed to read MCP resources response: {}", e))
-        })?;
-
-        let resources_response: MCPResourcesResponse = serde_json::from_str(&response_text)
-            .map_err(|e| {
-                RuntimeError::Generic(format!("Failed to parse MCP resources response: {}", e))
-            })?;
-
-        if let Some(error) = resources_response.error {
-            return Err(RuntimeError::Generic(format!(
-                "MCP server error: {}",
-                error
-            )));
-        }
+        let resources = self.discovery_service.discover_resources(&self.config).await?;
 
         // Convert MCP resources to capability manifests
         let mut capabilities = Vec::new();
-        for resource in resources_response.resources {
+        for resource in resources {
             if let Ok(capability) = self.convert_resource_to_capability(resource) {
                 capabilities.push(capability);
             }
@@ -391,11 +325,68 @@ impl MCPDiscoveryProvider {
         Ok(capabilities)
     }
 
+    /// Patch input schema for list_issues to fix known API inconsistencies
+    fn patch_list_issues_schema(&self, mut input_schema: Option<TypeExpr>) -> Option<TypeExpr> {
+        if let Some(TypeExpr::Map {
+            entries,
+            wildcard: _,
+        }) = &mut input_schema
+        {
+            for entry in entries {
+                let key = entry.key.0.as_str();
+                match key {
+                    "state" => {
+                        // Force state to be Optional(Enum(OPEN, CLOSED))
+                        // Discard whatever was there if it was wrong (e.g. containing ALL)
+                        entry.value_type =
+                            Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
+                                Literal::String("OPEN".to_string()),
+                                Literal::String("CLOSED".to_string()),
+                            ]))));
+                    }
+                    "direction" => {
+                        // Force direction to be Optional(Enum(ASC, DESC))
+                        entry.value_type =
+                            Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
+                                Literal::String("ASC".to_string()),
+                                Literal::String("DESC".to_string()),
+                            ]))));
+                    }
+                    "orderBy" => {
+                        // Force orderBy to be Optional(Enum(CREATED_AT, UPDATED_AT, COMMENTS))
+                        entry.value_type =
+                            Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
+                                Literal::String("CREATED_AT".to_string()),
+                                Literal::String("UPDATED_AT".to_string()),
+                                Literal::String("COMMENTS".to_string()),
+                            ]))));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        input_schema
+    }
+
     /// Convert an MCP tool to a capability manifest
     fn convert_tool_to_capability(&self, tool: MCPTool) -> CapabilityManifest {
         let capability_id = format!("mcp.{}.{}", self.config.name, tool.name);
         let effects = self.derive_tool_effects(&tool);
         let serialized_effects = Self::serialize_effects(&effects);
+
+        let mut input_schema = tool
+            .input_schema
+            .as_ref()
+            .and_then(|schema| MCPIntrospector::type_expr_from_json_schema(schema).ok());
+
+        if tool.name == "list_issues" {
+            input_schema = self.patch_list_issues_schema(input_schema);
+        }
+
+        let output_schema = tool
+            .output_schema
+            .as_ref()
+            .and_then(|schema| MCPIntrospector::type_expr_from_json_schema(schema).ok());
 
         CapabilityManifest {
             id: capability_id.clone(),
@@ -407,10 +398,11 @@ impl MCPDiscoveryProvider {
                 server_url: self.config.endpoint.clone(),
                 tool_name: tool.name.clone(),
                 timeout_ms: self.config.timeout_seconds * 1000,
+                auth_token: self.config.auth_token.clone(),
             }),
             version: "1.0.0".to_string(),
-            input_schema: None,  // TODO: Convert JSON schema to TypeExpr
-            output_schema: None, // TODO: Convert JSON schema to TypeExpr
+            input_schema,
+            output_schema,
             attestation: None,
             provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
                 source: "mcp_discovery".to_string(),
@@ -443,6 +435,90 @@ impl MCPDiscoveryProvider {
                 metadata
             },
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
+        }
+    }
+
+    async fn convert_tool_to_capability_with_introspection(
+        &self,
+        tool: MCPTool,
+    ) -> RuntimeResult<CapabilityManifest> {
+        let mut manifest = self.convert_tool_to_capability(tool.clone());
+        if let Some(headers) = self.build_auth_headers() {
+            if let Ok((schema_opt, sample_opt)) = self
+                .introspect_output_schema_for_tool(&tool, manifest.input_schema.clone(), &headers)
+                .await
+            {
+                if let Some(schema) = schema_opt {
+                    manifest.output_schema = Some(schema);
+                }
+                if let Some(sample) = sample_opt {
+                    manifest
+                        .metadata
+                        .insert("output_snippet".to_string(), sample);
+                }
+            }
+        }
+        Ok(manifest)
+    }
+
+    fn build_auth_headers(&self) -> Option<HashMap<String, String>> {
+        self.config.auth_token.as_ref().map(|token| {
+            let mut headers = HashMap::new();
+            headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+            headers
+        })
+    }
+
+    async fn introspect_output_schema_for_tool(
+        &self,
+        tool: &MCPTool,
+        input_schema: Option<TypeExpr>,
+        auth_headers: &HashMap<String, String>,
+    ) -> RuntimeResult<(Option<TypeExpr>, Option<String>)> {
+        let discovered = self.build_discovered_tool(tool, input_schema);
+        let introspector = MCPIntrospector::new();
+        match introspector
+            .introspect_output_schema(
+                &discovered,
+                &self.config.endpoint,
+                &self.config.name,
+                Some(auth_headers.clone()),
+                None,
+            )
+            .await
+        {
+            Ok((Some(schema), maybe_sample)) => {
+                eprintln!(
+                    "✅ MCP Discovery: Inferred output schema for '{}'",
+                    tool.name
+                );
+                Ok((Some(schema), maybe_sample))
+            }
+            Ok((None, Some(sample))) => Ok((None, Some(sample))),
+            Ok((None, None)) => Ok((None, None)),
+            Err(err) => {
+                eprintln!(
+                    "⚠️ MCP Discovery: Output schema introspection failed for '{}': {}",
+                    tool.name, err
+                );
+                Ok((None, None))
+            }
+        }
+    }
+
+    fn build_discovered_tool(
+        &self,
+        tool: &MCPTool,
+        input_schema: Option<TypeExpr>,
+    ) -> DiscoveredMCPTool {
+        DiscoveredMCPTool {
+            tool_name: tool.name.clone(),
+            description: tool.description.clone(),
+            input_schema,
+            output_schema: None,
+            input_schema_json: tool.input_schema.clone(),
         }
     }
 
@@ -590,12 +666,14 @@ impl MCPDiscoveryProvider {
         let input_schema = tool
             .input_schema
             .as_ref()
-            .and_then(|schema| self.convert_json_schema_to_rtfs(schema).ok());
+            .and_then(|schema| self.convert_json_schema_to_rtfs(schema).ok())
+            .and_then(|expr| self.convert_rtfs_to_type_expr(&expr).ok());
 
         let output_schema = tool
             .output_schema
             .as_ref()
-            .and_then(|schema| self.convert_json_schema_to_rtfs(schema).ok());
+            .and_then(|schema| self.convert_json_schema_to_rtfs(schema).ok())
+            .and_then(|expr| self.convert_rtfs_to_type_expr(&expr).ok());
 
         Ok(RTFSCapabilityDefinition {
             capability,
@@ -663,7 +741,7 @@ impl MCPDiscoveryProvider {
 
             if let Some(input_schema) = &capability.input_schema {
                 rtfs_content.push_str("        :input-schema ");
-                rtfs_content.push_str(&self.expression_to_rtfs_text(input_schema, 0));
+                rtfs_content.push_str(&self.type_expr_to_rtfs_text(input_schema));
                 rtfs_content.push_str(",\n");
             } else {
                 rtfs_content.push_str("        :input-schema nil,\n");
@@ -671,7 +749,7 @@ impl MCPDiscoveryProvider {
 
             if let Some(output_schema) = &capability.output_schema {
                 rtfs_content.push_str("        :output-schema ");
-                rtfs_content.push_str(&self.expression_to_rtfs_text(output_schema, 0));
+                rtfs_content.push_str(&self.type_expr_to_rtfs_text(output_schema));
             } else {
                 rtfs_content.push_str("        :output-schema nil");
             }
@@ -691,7 +769,8 @@ impl MCPDiscoveryProvider {
         Ok(())
     }
 
-    /// Load RTFS capabilities from a file
+    /// Load RTFS capabilities from a file using the proper RTFS parser
+    /// Supports both module format and individual capability format
     pub fn load_rtfs_capabilities(&self, file_path: &str) -> RuntimeResult<RTFSModuleDefinition> {
         let rtfs_content = std::fs::read_to_string(file_path).map_err(|e| {
             RuntimeError::Generic(format!(
@@ -700,16 +779,249 @@ impl MCPDiscoveryProvider {
             ))
         })?;
 
-        // Simple RTFS parser for our generated format
-        let module = self.parse_rtfs_module(&rtfs_content).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to parse RTFS capabilities: {}", e))
+        // Use the real RTFS parser instead of string hacks
+        use rtfs::parser::parse;
+        let top_levels = parse(&rtfs_content).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to parse RTFS file '{}': {}", file_path, e))
         })?;
 
-        Ok(module)
+        // Try module format first, then individual capability format
+        match self.extract_module_from_ast(top_levels.clone()) {
+            Ok(module) => Ok(module),
+            Err(_) => {
+                // Try parsing as individual capability file
+                self.extract_module_from_individual_capability(top_levels, file_path)
+            }
+        }
     }
 
-    /// Simple parser for RTFS module format (handles our generated format)
-    fn parse_rtfs_module(&self, content: &str) -> RuntimeResult<RTFSModuleDefinition> {
+    /// Parse an individual capability file (capability "id" :name "..." format)
+    /// and wrap it in a module structure for compatibility
+    fn extract_module_from_individual_capability(
+        &self,
+        top_levels: Vec<TopLevel>,
+        file_path: &str,
+    ) -> RuntimeResult<RTFSModuleDefinition> {
+        // Individual capability files have (capability "id" ...) at top level
+        for (i, top_level) in top_levels.iter().enumerate() {
+            match top_level {
+                TopLevel::Capability(cap_def) => {
+                    // Convert CapabilityDefinition to RTFSCapabilityDefinition
+                    let mut capability_map = HashMap::new();
+
+                    // The capability ID is stored in the name field of the definition
+                    capability_map.insert(
+                        MapKey::Keyword(Keyword("id".to_string())),
+                        Expression::Literal(Literal::String(cap_def.name.0.clone())),
+                    );
+
+                    for prop in &cap_def.properties {
+                        capability_map
+                            .insert(MapKey::Keyword(prop.key.clone()), prop.value.clone());
+                    }
+
+                    // Extract input/output schemas if present
+                    let input_schema = capability_map
+                        .get(&MapKey::Keyword(Keyword("input-schema".to_string())))
+                        .and_then(|e| self.extract_type_expr(e));
+
+                    let output_schema = capability_map
+                        .get(&MapKey::Keyword(Keyword("output-schema".to_string())))
+                        .and_then(|e| self.extract_type_expr(e));
+
+                    let capability_def = RTFSCapabilityDefinition {
+                        capability: Expression::Map(capability_map),
+                        input_schema,
+                        output_schema,
+                    };
+
+                    // Wrap in a synthetic module for compatibility
+                    return Ok(RTFSModuleDefinition {
+                        module_type: "ccos.capabilities.individual:v1".to_string(),
+                        server_config: MCPServerConfig {
+                            name: "individual".to_string(),
+                            endpoint: "".to_string(),
+                            auth_token: None,
+                            timeout_seconds: 30,
+                            protocol_version: "2024-11-05".to_string(),
+                        },
+                        capabilities: vec![capability_def],
+                        generated_at: chrono::Utc::now().to_rfc3339(),
+                    });
+                }
+                TopLevel::Expression(expr) => {
+                    // Handle both List (if quoted) and FunctionCall (if unquoted)
+                    let items_opt = match expr {
+                        Expression::List(items) => Some(items.clone()),
+                        Expression::FunctionCall { callee, arguments } => {
+                            // Convert function call back to list format for parsing
+                            let mut items = Vec::with_capacity(arguments.len() + 1);
+                            items.push(*callee.clone());
+                            items.extend(arguments.clone());
+                            Some(items)
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(items) = items_opt {
+                        if let Some(Expression::Symbol(sym)) = items.first() {
+                            if sym.0 == "capability" {
+                                // This is an individual capability
+                                let capability_def = self.parse_individual_capability(&items)?;
+
+                                // Wrap in a synthetic module for compatibility
+                                return Ok(RTFSModuleDefinition {
+                                    module_type: "ccos.capabilities.individual:v1".to_string(),
+                                    server_config: MCPServerConfig {
+                                        name: "individual".to_string(),
+                                        endpoint: "".to_string(),
+                                        auth_token: None,
+                                        timeout_seconds: 30,
+                                        protocol_version: "2024-11-05".to_string(),
+                                    },
+                                    capabilities: vec![capability_def],
+                                    generated_at: chrono::Utc::now().to_rfc3339(),
+                                });
+                            } else {
+                                eprintln!(
+                                    "Found symbol '{}' instead of 'capability' at top level",
+                                    sym.0
+                                );
+                            }
+                        } else {
+                            eprintln!("Empty list at top level");
+                        }
+                    } else {
+                        eprintln!(
+                            "Top level item {} is not a List or FunctionCall: {:?}",
+                            i, expr
+                        );
+                    }
+                }
+                _ => {
+                    eprintln!(
+                        "Top level item {} is not a Capability or Expression: {:?}",
+                        i, top_level
+                    );
+                }
+            }
+        }
+
+        Err(RuntimeError::Generic(format!(
+            "File '{}' is neither a module nor an individual capability",
+            file_path
+        )))
+    }
+
+    /// Parse an individual capability from (capability "id" :key value ...) format
+    fn parse_individual_capability(
+        &self,
+        items: &[Expression],
+    ) -> RuntimeResult<RTFSCapabilityDefinition> {
+        // items: [symbol("capability"), string("id"), :key, value, ...]
+        let capability_id = if let Some(Expression::Literal(Literal::String(id))) = items.get(1) {
+            id.clone()
+        } else {
+            return Err(RuntimeError::Generic(
+                "Individual capability missing ID".to_string(),
+            ));
+        };
+
+        // Parse key-value pairs into a map
+        let mut capability_map = HashMap::new();
+        capability_map.insert(
+            MapKey::Keyword(Keyword("id".to_string())),
+            Expression::Literal(Literal::String(capability_id)),
+        );
+
+        let mut i = 2;
+        while i < items.len() {
+            if let Expression::Literal(Literal::Keyword(key)) = &items[i] {
+                if i + 1 < items.len() {
+                    capability_map.insert(MapKey::Keyword(key.clone()), items[i + 1].clone());
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+
+        // Extract input/output schemas if present
+        let input_schema = capability_map
+            .get(&MapKey::Keyword(Keyword("input-schema".to_string())))
+            .and_then(|e| self.extract_type_expr(e));
+
+        let output_schema = capability_map
+            .get(&MapKey::Keyword(Keyword("output-schema".to_string())))
+            .and_then(|e| self.extract_type_expr(e));
+
+        Ok(RTFSCapabilityDefinition {
+            capability: Expression::Map(capability_map),
+            input_schema,
+            output_schema,
+        })
+    }
+
+    /// Extract module definition from parsed RTFS AST
+    fn extract_module_from_ast(
+        &self,
+        top_levels: Vec<TopLevel>,
+    ) -> RuntimeResult<RTFSModuleDefinition> {
+        // Find the mcp-capabilities-module definition
+        // It could be in a Module definition or as an Expression with a def form
+        for top_level in top_levels {
+            match top_level {
+                TopLevel::Module(module_def) => {
+                    if module_def.name.0 == "mcp-capabilities-module" {
+                        return self.extract_module_from_module_def(&module_def);
+                    }
+                }
+                TopLevel::Expression(expr) => {
+                    // Check if it's a (def mcp-capabilities-module ...) expression
+                    if let Some(module) = self.try_extract_module_from_expr(&expr) {
+                        return Ok(module);
+                    }
+                }
+                _ => continue,
+            }
+        }
+
+        Err(RuntimeError::Generic(
+            "No 'mcp-capabilities-module' definition found in RTFS file".to_string(),
+        ))
+    }
+
+    /// Try to extract module from a ModuleDefinition
+    fn extract_module_from_module_def(
+        &self,
+        module_def: &rtfs::ast::ModuleDefinition,
+    ) -> RuntimeResult<RTFSModuleDefinition> {
+        // For now, return error as we need to implement proper module extraction
+        Err(RuntimeError::Generic(
+            "Module definition extraction not yet implemented".to_string(),
+        ))
+    }
+
+    /// Try to extract module from an expression (handles def forms)
+    fn try_extract_module_from_expr(&self, expr: &Expression) -> Option<RTFSModuleDefinition> {
+        // Check if this is a (def ...) expression
+        if let Expression::Def(def_expr) = expr {
+            if def_expr.symbol.0 == "mcp-capabilities-module" {
+                if let Ok(module) = self.extract_module_from_def_expression(&def_expr.value) {
+                    return Some(module);
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract module definition from the def body expression
+    fn extract_module_from_def_expression(
+        &self,
+        expr: &Expression,
+    ) -> RuntimeResult<RTFSModuleDefinition> {
         let mut module_type = String::new();
         let mut server_config = MCPServerConfig {
             name: String::new(),
@@ -721,81 +1033,89 @@ impl MCPDiscoveryProvider {
         let mut capabilities = Vec::new();
         let mut generated_at = String::new();
 
-        let lines = content.lines().collect::<Vec<_>>();
-        let mut i = 0;
-
-        // Skip comments and find the def statement
-        while i < lines.len() {
-            let line = lines[i].trim();
-            if line.starts_with("(def mcp-capabilities-module") {
-                break;
+        // The body should be a Map expression
+        if let Expression::Map(map) = expr {
+            // Extract module-type
+            if let Some(Expression::Literal(Literal::String(s))) =
+                map.get(&MapKey::Keyword(Keyword("module-type".to_string())))
+            {
+                module_type = s.clone();
             }
-            i += 1;
-        }
 
-        if i >= lines.len() {
-            return Err(RuntimeError::Generic(
-                "Could not find module definition".to_string(),
-            ));
-        }
-
-        // Parse the module content
-        i += 1; // Move past the def line
-
-        while i < lines.len() {
-            let line = lines[i].trim();
-
-            if line.contains(":module-type") && line.contains("\"") {
-                if let Some(start) = line.find('"') {
-                    if let Some(end) = line[start + 1..].find('"') {
-                        module_type = line[start + 1..start + 1 + end].to_string();
-                    }
-                }
-            } else if line.contains(":name") && line.contains("\"") && server_config.name.is_empty()
+            // Extract generated-at
+            if let Some(Expression::Literal(Literal::String(s))) =
+                map.get(&MapKey::Keyword(Keyword("generated-at".to_string())))
             {
-                if let Some(start) = line.find('"') {
-                    if let Some(end) = line[start + 1..].find('"') {
-                        server_config.name = line[start + 1..start + 1 + end].to_string();
-                    }
-                }
-            } else if line.contains(":endpoint")
-                && line.contains("\"")
-                && server_config.endpoint.is_empty()
+                generated_at = s.clone();
+            }
+
+            // Extract server-config
+            if let Some(Expression::Map(server_map)) =
+                map.get(&MapKey::Keyword(Keyword("server-config".to_string())))
             {
-                if let Some(start) = line.find('"') {
-                    if let Some(end) = line[start + 1..].find('"') {
-                        server_config.endpoint = line[start + 1..start + 1 + end].to_string();
-                    }
-                }
-            } else if line.contains(":timeout-seconds") {
-                if let Some(num_str) = line
-                    .split_whitespace()
-                    .find(|s| s.chars().all(char::is_numeric))
+                if let Some(Expression::Literal(Literal::String(s))) =
+                    server_map.get(&MapKey::Keyword(Keyword("name".to_string())))
                 {
-                    if let Ok(num) = num_str.parse::<u64>() {
-                        server_config.timeout_seconds = num;
-                    }
+                    server_config.name = s.clone();
                 }
-            } else if line.contains(":protocol-version") && line.contains("\"") {
-                if let Some(start) = line.find('"') {
-                    if let Some(end) = line[start + 1..].find('"') {
-                        server_config.protocol_version =
-                            line[start + 1..start + 1 + end].to_string();
-                    }
+
+                if let Some(Expression::Literal(Literal::String(s))) =
+                    server_map.get(&MapKey::Keyword(Keyword("endpoint".to_string())))
+                {
+                    server_config.endpoint = s.clone();
                 }
-            } else if line.contains(":generated-at") && line.contains("\"") {
-                if let Some(start) = line.find('"') {
-                    if let Some(end) = line[start + 1..].find('"') {
-                        generated_at = line[start + 1..start + 1 + end].to_string();
-                    }
+
+                if let Some(Expression::Literal(Literal::String(s))) =
+                    server_map.get(&MapKey::Keyword(Keyword("auth-token".to_string())))
+                {
+                    server_config.auth_token = Some(s.clone());
                 }
-            } else if line.contains(":capabilities") && line.contains('[') {
-                // Parse capabilities array
-                capabilities = self.parse_rtfs_capabilities(&lines[i..])?;
-                break;
+
+                if let Some(Expression::Literal(Literal::Integer(n))) =
+                    server_map.get(&MapKey::Keyword(Keyword("timeout-seconds".to_string())))
+                {
+                    server_config.timeout_seconds = *n as u64;
+                }
+
+                if let Some(Expression::Literal(Literal::String(s))) =
+                    server_map.get(&MapKey::Keyword(Keyword("protocol-version".to_string())))
+                {
+                    server_config.protocol_version = s.clone();
+                }
             }
 
-            i += 1;
+            // Extract capabilities array (can be List or Vector)
+            let cap_list = map
+                .get(&MapKey::Keyword(Keyword("capabilities".to_string())))
+                .and_then(|expr| match expr {
+                    Expression::List(list) => Some(list.as_slice()),
+                    Expression::Vector(vec) => Some(vec.as_slice()),
+                    _ => None,
+                });
+
+            if let Some(cap_list) = cap_list {
+                for cap_expr in cap_list {
+                    if let Expression::Map(cap_map) = cap_expr {
+                        if let Some(capability_expr) =
+                            cap_map.get(&MapKey::Keyword(Keyword("capability".to_string())))
+                        {
+                            let input_schema = cap_map
+                                .get(&MapKey::Keyword(Keyword("input-schema".to_string())))
+                                .and_then(|e| self.extract_type_expr(e));
+
+                            let output_schema = cap_map
+                                .get(&MapKey::Keyword(Keyword("output-schema".to_string())))
+                                .and_then(|e| self.extract_type_expr(e));
+
+                            capabilities.push(RTFSCapabilityDefinition {
+                                capability: capability_expr.clone(),
+                                input_schema,
+                                output_schema,
+                            });
+                        }
+                    }
+                }
+            }
         }
 
         Ok(RTFSModuleDefinition {
@@ -804,6 +1124,11 @@ impl MCPDiscoveryProvider {
             capabilities,
             generated_at,
         })
+    }
+
+    /// Helper to extract TypeExpr from an Expression (if it's a type annotation)
+    fn extract_type_expr(&self, expr: &Expression) -> Option<TypeExpr> {
+        self.convert_rtfs_to_type_expr(expr).ok()
     }
 
     /// Parse capabilities array from RTFS format
@@ -1171,6 +1496,61 @@ impl MCPDiscoveryProvider {
         }
     }
 
+    /// Convert TypeExpr to RTFS text format
+    fn type_expr_to_rtfs_text(&self, type_expr: &TypeExpr) -> String {
+        match type_expr {
+            TypeExpr::Primitive(p) => match p {
+                PrimitiveType::String => ":string".to_string(),
+                PrimitiveType::Int => ":int".to_string(),
+                PrimitiveType::Float => ":float".to_string(),
+                PrimitiveType::Bool => ":bool".to_string(),
+                PrimitiveType::Nil => ":nil".to_string(),
+                PrimitiveType::Keyword => ":keyword".to_string(),
+                PrimitiveType::Symbol => ":symbol".to_string(),
+                PrimitiveType::Custom(k) => format!(":{}", k.0),
+            },
+            TypeExpr::Any => ":any".to_string(),
+            TypeExpr::Never => ":never".to_string(),
+            TypeExpr::Vector(inner) => {
+                format!("[:vector {}]", self.type_expr_to_rtfs_text(inner))
+            }
+            TypeExpr::Map { entries, .. } => {
+                let mut map_entries = Vec::new();
+                for entry in entries {
+                    let key_str = format!(":{}", entry.key.0);
+                    let value_str = self.type_expr_to_rtfs_text(&entry.value_type);
+                    if entry.optional {
+                        // RTFS optional map entry syntax: [key type?] (e.g., [:owner :string?])
+                        map_entries.push(format!("[{} {}?]", key_str, value_str));
+                    } else {
+                        map_entries.push(format!("[{} {}]", key_str, value_str));
+                    }
+                }
+                format!("[:map {}]", map_entries.join(" "))
+            }
+            TypeExpr::Union(options) => {
+                let options_str: Vec<String> = options
+                    .iter()
+                    .map(|opt| self.type_expr_to_rtfs_text(opt))
+                    .collect();
+                format!("[:union {}]", options_str.join(" "))
+            }
+            TypeExpr::Optional(inner) => {
+                // RTFS optional syntax: T? (e.g., :string?)
+                format!("{}?", self.type_expr_to_rtfs_text(inner))
+            }
+            TypeExpr::Function { .. } => ":fn".to_string(), // Simplified representation
+            TypeExpr::Literal(l) => match l {
+                Literal::String(s) => format!("\"{}\"", s),
+                Literal::Integer(i) => i.to_string(),
+                Literal::Float(f) => f.to_string(),
+                Literal::Boolean(b) => b.to_string(),
+                _ => ":any".to_string(),
+            },
+            _ => ":any".to_string(), // Fallback for unsupported TypeExpr variants
+        }
+    }
+
     /// Convert RTFS capability definition back to CapabilityManifest
     pub fn rtfs_to_capability_manifest(
         &self,
@@ -1279,15 +1659,12 @@ impl MCPDiscoveryProvider {
         };
 
         // Convert input/output schemas
-        let input_schema = rtfs_def
-            .input_schema
-            .as_ref()
-            .and_then(|expr| self.convert_rtfs_to_type_expr(expr).ok());
+        let mut input_schema = rtfs_def.input_schema.clone();
+        let output_schema = rtfs_def.output_schema.clone();
 
-        let output_schema = rtfs_def
-            .output_schema
-            .as_ref()
-            .and_then(|expr| self.convert_rtfs_to_type_expr(expr).ok());
+        if name == "list_issues" {
+            input_schema = self.patch_list_issues_schema(input_schema);
+        }
 
         if effects.is_empty() {
             if let Some(serialized) = serialized_effects {
@@ -1319,6 +1696,8 @@ impl MCPDiscoveryProvider {
             effects,
             metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         })
     }
 
@@ -1349,6 +1728,7 @@ impl MCPDiscoveryProvider {
             server_url: server_endpoint,
             tool_name,
             timeout_ms: timeout_seconds * 1000,
+            auth_token: None,
         }))
     }
 
@@ -1390,6 +1770,7 @@ impl MCPDiscoveryProvider {
             server_url: server_endpoint,
             tool_name,
             timeout_ms: timeout_seconds * 1000,
+            auth_token: None,
         }))
     }
 
@@ -1482,19 +1863,31 @@ impl MCPDiscoveryProvider {
         }
     }
 
+    fn convert_string_to_type_expr(&self, s: &str) -> RuntimeResult<TypeExpr> {
+        if s.ends_with('?') {
+            let base = &s[..s.len() - 1];
+            let base_type = self.convert_string_to_type_expr(base)?;
+            return Ok(TypeExpr::Optional(Box::new(base_type)));
+        }
+        match s {
+            "string" => Ok(TypeExpr::Primitive(PrimitiveType::String)),
+            "integer" | "int" => Ok(TypeExpr::Primitive(PrimitiveType::Int)),
+            "number" | "float" => Ok(TypeExpr::Primitive(PrimitiveType::Float)),
+            "boolean" | "bool" => Ok(TypeExpr::Primitive(PrimitiveType::Bool)),
+            "any" => Ok(TypeExpr::Any),
+            _ => Ok(TypeExpr::Primitive(PrimitiveType::Custom(Keyword(
+                s.to_string(),
+            )))),
+        }
+    }
+
     /// Convert RTFS Expression back to TypeExpr for capability manifests
     fn convert_rtfs_to_type_expr(&self, expr: &Expression) -> RuntimeResult<TypeExpr> {
         match expr {
-            Expression::Symbol(symbol) => match symbol.0.as_str() {
-                "string" => Ok(TypeExpr::Primitive(PrimitiveType::String)),
-                "integer" => Ok(TypeExpr::Primitive(PrimitiveType::Int)),
-                "number" => Ok(TypeExpr::Primitive(PrimitiveType::Float)),
-                "boolean" => Ok(TypeExpr::Primitive(PrimitiveType::Bool)),
-                "any" => Ok(TypeExpr::Any),
-                _ => Ok(TypeExpr::Primitive(PrimitiveType::Custom(Keyword(
-                    symbol.0.clone(),
-                )))),
-            },
+            Expression::Symbol(symbol) => self.convert_string_to_type_expr(symbol.0.as_str()),
+            Expression::Literal(Literal::Keyword(k)) => {
+                self.convert_string_to_type_expr(k.0.as_str())
+            }
             Expression::Map(map) => {
                 let mut entries = Vec::new();
                 for (key, value) in map {
@@ -1513,6 +1906,58 @@ impl MCPDiscoveryProvider {
                 })
             }
             Expression::Vector(vec) => {
+                // Check for special type forms like [:enum ...] or [:optional ...]
+                if let Some(Expression::Literal(Literal::Keyword(kw))) = vec.first() {
+                    match kw.0.as_str() {
+                        "map" => {
+                            let mut entries = Vec::new();
+                            for entry_expr in vec.iter().skip(1) {
+                                if let Expression::Vector(entry_vec) = entry_expr {
+                                    if entry_vec.len() >= 2 {
+                                        if let Expression::Literal(Literal::Keyword(key_kw)) =
+                                            &entry_vec[0]
+                                        {
+                                            let value_type =
+                                                self.convert_rtfs_to_type_expr(&entry_vec[1])?;
+                                            // Treat as optional entry if the value type is optional
+                                            let is_optional =
+                                                matches!(value_type, TypeExpr::Optional(_));
+
+                                            entries.push(MapTypeEntry {
+                                                key: Keyword(key_kw.0.clone()),
+                                                value_type: Box::new(value_type),
+                                                optional: is_optional,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            return Ok(TypeExpr::Map {
+                                entries,
+                                wildcard: None,
+                            });
+                        }
+                        "enum" => {
+                            let variants = vec
+                                .iter()
+                                .skip(1)
+                                .filter_map(|e| match e {
+                                    Expression::Literal(lit) => Some(lit.clone()),
+                                    _ => None,
+                                })
+                                .collect();
+                            return Ok(TypeExpr::Enum(variants));
+                        }
+                        "optional" => {
+                            if vec.len() >= 2 {
+                                let inner_type = self.convert_rtfs_to_type_expr(&vec[1])?;
+                                return Ok(TypeExpr::Optional(Box::new(inner_type)));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
                 if vec.len() == 1 {
                     let element_type = self.convert_rtfs_to_type_expr(&vec[0])?;
                     Ok(TypeExpr::Vector(Box::new(element_type)))
@@ -1550,6 +1995,7 @@ impl MCPDiscoveryProvider {
                 server_url: self.config.endpoint.clone(),
                 tool_name: format!("resource:{}", resource_name),
                 timeout_ms: self.config.timeout_seconds * 1000,
+                auth_token: None,
             }),
             version: "1.0.0".to_string(),
             input_schema: None,
@@ -1586,20 +2032,23 @@ impl MCPDiscoveryProvider {
                 metadata
             },
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         })
     }
 
     /// Health check for the MCP server
     pub async fn health_check(&self) -> RuntimeResult<bool> {
         let health_url = format!("{}/health", self.config.endpoint);
+        let client = reqwest::Client::new();
 
-        let request = self.client.get(&health_url).build().map_err(|e| {
+        let request = client.get(&health_url).build().map_err(|e| {
             RuntimeError::Generic(format!("Failed to build MCP health check request: {}", e))
         })?;
 
         match timeout(
             Duration::from_secs(5), // Shorter timeout for health checks
-            self.client.execute(request),
+            client.execute(request),
         )
         .await
         {

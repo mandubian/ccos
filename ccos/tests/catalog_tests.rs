@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use ccos::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
 use ccos::catalog::{CatalogEntryKind, CatalogFilter, CatalogService, CatalogSource};
 use ccos::types::{Plan, PlanBody, PlanLanguage, PlanStatus};
-use rtfs::ast::{Keyword, MapKey, MapTypeEntry, PrimitiveType, TypeExpr};
+use rtfs::ast::{Keyword, MapKey, MapTypeEntry, PrimitiveType, Symbol, TypeExpr};
 use rtfs::runtime::values::Value;
 
 fn sample_manifest() -> CapabilityManifest {
@@ -15,6 +15,7 @@ fn sample_manifest() -> CapabilityManifest {
             server_url: "https://example.com/mcp".to_string(),
             tool_name: "issues".to_string(),
             timeout_ms: 30_000,
+            auth_token: None,
         }),
         "1.0.0".to_string(),
     );
@@ -133,5 +134,65 @@ fn catalog_registers_plan_and_semantic_search() {
     assert!(
         top.score > 0.0,
         "semantic score should be positive for the matching plan"
+    );
+}
+
+#[test]
+fn menu_extracts_optional_inputs_from_manifest() {
+    let mut manifest = sample_manifest();
+
+    manifest.input_schema = Some(TypeExpr::Map {
+        entries: vec![
+            MapTypeEntry {
+                key: Keyword::new("after"),
+                value_type: Box::new(TypeExpr::Optional(Box::new(TypeExpr::Primitive(
+                    PrimitiveType::String,
+                )))),
+                optional: false,
+            },
+            MapTypeEntry {
+                key: Keyword::new("owner"),
+                value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                optional: false,
+            },
+        ],
+        wildcard: None,
+    });
+
+    let entry = ccos::planner::menu::menu_entry_from_manifest(&manifest, None);
+    assert!(
+        entry.optional_inputs.contains(&"after".to_string()),
+        "expected 'after' to be optional"
+    );
+    assert!(
+        !entry.required_inputs.contains(&"after".to_string()),
+        "expected 'after' not to be required"
+    );
+}
+
+#[test]
+fn menu_extracts_optional_inputs_from_alias_symbol() {
+    let mut manifest = sample_manifest();
+
+    manifest.input_schema = Some(TypeExpr::Map {
+        entries: vec![
+            MapTypeEntry {
+                key: Keyword::new("after"),
+                value_type: Box::new(TypeExpr::Alias(Symbol("string?".to_string()))),
+                optional: false,
+            },
+            MapTypeEntry {
+                key: Keyword::new("owner"),
+                value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                optional: false,
+            },
+        ],
+        wildcard: None,
+    });
+
+    let entry = ccos::planner::menu::menu_entry_from_manifest(&manifest, None);
+    assert!(
+        entry.optional_inputs.contains(&"after".to_string()),
+        "expected 'after' to be optional via alias symbol"
     );
 }

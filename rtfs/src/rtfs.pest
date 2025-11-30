@@ -250,9 +250,8 @@ binding_pattern = _{ wildcard | symbol | map_destructuring_pattern | vector_dest
 // Added wildcard
 
 // --- Special Forms ---
-log_step_expr = { "(" ~ log_step_keyword ~ keyword? ~ expression* ~ ")" }
 
-special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | defmacro_expr | defstruct_expr | parallel_expr | with_resource_expr | try_catch_expr | match_expr | log_step_expr | discover_agents_expr | for_expr }
+special_form = _{ let_expr | if_expr | do_expr | fn_expr | def_expr | defn_expr | defmacro_expr | defstruct_expr | try_catch_expr | match_expr | for_expr }
 // Removed module_definition, import_definition, and task_definition as they are top-level, not expressions.
 
 do_keyword = @{ "do" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) }
@@ -283,11 +282,7 @@ defmacro_expr = { "(" ~ defmacro_keyword ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ 
 defstruct_expr = { "(" ~ defstruct_keyword ~ symbol ~ defstruct_field* ~ ")" }
 defstruct_field = { keyword ~ type_expr }
 
-parallel_expr    = { "(" ~ parallel_keyword ~ parallel_binding+ ~ ")" } // Use parallel_keyword
-parallel_binding = { "[" ~ symbol ~ type_annotation? ~ expression ~ "]" }
 type_annotation = { COLON ~ type_expr }
-
-with_resource_expr = { "(" ~ with_resource_keyword ~ "[" ~ symbol ~ type_expr ~ expression ~ "]" ~ expression+ ~ ")" } // Use with_resource_keyword
 
 // Define a rule for expressions that can appear in a try block's body.
 // It must not be a catch_clause or finally_clause itself.
@@ -308,9 +303,6 @@ match_expr    =  { "(" ~ match_keyword ~ expression ~ (match_clause_content)+ ~ 
 match_clause_content = { match_pattern ~ (WHEN ~ expression)? ~ expression } // pattern, optional guard, then body expressions
 WHEN = @{ "when" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Keyword for guard - now atomic
 
-// Agent discovery expression: (discover-agents criteria-map options-map?)
-discover_agents_expr = { "(" ~ discover_agents_keyword ~ expression ~ expression? ~ ")" }
-
 // (plan ...) has been removed from RTFS core grammar. Plans are CCOS objects represented
 // either as function calls (ccos/plan ...) or maps at the CCOS layer and extracted there.
 
@@ -326,14 +318,10 @@ defmacro_keyword = @{ "defmacro" }
 defstruct_keyword = @{ "defstruct" }
 // let_keyword is already defined
 // if_keyword is not needed as "if" is not ambiguous with symbols in the same way
-parallel_keyword = @{ "parallel" }
-with_resource_keyword = @{ "with-resource" }
 try_keyword = @{ "try" }
 catch_keyword = @{ "catch" }
 finally_keyword = @{ "finally" }
 match_keyword = @{ "match" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Made atomic
-log_step_keyword = @{ "log-step" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Made atomic
-discover_agents_keyword = @{ "discover-agents" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Agent discovery keyword
 
 
 // module_definition =  { "(" ~ "module" ~ namespaced_identifier ~ export_option? ~ definition* ~ ")" }

@@ -128,12 +128,11 @@ impl CCOSEnvironment {
     /// Create a new CCOS environment with the given configuration
     pub fn new(config: CCOSConfig) -> RuntimeResult<Self> {
         // Create capability registry
-        // Create RTFS stub capability registry for marketplace (RTFS/CCOS separation)
-        let rtfs_registry = Arc::new(tokio::sync::RwLock::new(
-            rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
+        let ccos_registry = Arc::new(tokio::sync::RwLock::new(
+            crate::capabilities::registry::CapabilityRegistry::new(),
         ));
         // Create capability marketplace with integrated registry
-        let marketplace = Arc::new(CapabilityMarketplace::new(rtfs_registry));
+        let marketplace = Arc::new(CapabilityMarketplace::new(ccos_registry.clone()));
 
         // Bootstrap the marketplace to register default capabilities and apply registry config
         let marketplace_for_bootstrap = marketplace.clone();
@@ -694,40 +693,15 @@ impl CCOSEnvironment {
                 // REPL execution context is managed through host's execution context
                 match item {
                     TopLevel::Expression(expr) => {
-                        // Evaluate expression
-                        last_result = evaluator.evaluate(&expr)?;
-
-                        // Special handling for function definitions to ensure they persist in the environment
-                        if let ExecutionOutcome::Complete(Value::Function(_)) = last_result {
-                            if let Expression::Defn(defn_expr) = expr {
-                                // Manually define the function in the evaluator's environment
-                                // This ensures the binding persists across evaluations
-                                let function = Value::Function(rtfs::runtime::values::Function::new_closure(
-                                    defn_expr.params.iter().map(|p| {
-                                        match &p.pattern {
-                                            rtfs::ast::Pattern::Symbol(s) => s.clone(),
-                                            _ => panic!("Expected symbol pattern in defn parameter"),
-                                        }
-                                    }).collect(),
-                                    defn_expr.params.iter().map(|p| p.pattern.clone()).collect(),
-                                    defn_expr.params.iter().map(|p| p.type_annotation.clone()).collect(),
-                                    defn_expr.variadic_param.as_ref().map(|p| {
-                                        match &p.pattern {
-                                            rtfs::ast::Pattern::Symbol(s) => s.clone(),
-                                            _ => panic!("Expected symbol pattern in defn variadic parameter"),
-                                        }
-                                    }),
-                                    defn_expr.variadic_param.as_ref().and_then(|p| p.type_annotation.clone()),
-                                    Box::new(Expression::Do(DoExpr {
-                                        expressions: defn_expr.body.clone(),
-                                    })),
-                                    Arc::new(evaluator.env.clone()),
-                                    defn_expr.delegation_hint.clone(),
-                                    defn_expr.return_type.clone(),
-                                ));
-                                evaluator.env.define(&defn_expr.name, function);
-                            }
-                        }
+                        // Evaluate expression using the evaluator's environment directly
+                        // We swap the environment out to pass it mutably, then put it back
+                        // This ensures side effects (like defn) persist in the evaluator's environment
+                        let mut env = std::mem::replace(
+                            &mut evaluator.env,
+                            rtfs::runtime::environment::Environment::new(),
+                        );
+                        last_result = evaluator.evaluate_with_env(&expr, &mut env)?;
+                        evaluator.env = env;
 
                         if let ExecutionOutcome::RequiresHost(_) = last_result {
                             return Ok(last_result);

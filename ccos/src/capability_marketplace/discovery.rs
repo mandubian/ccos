@@ -1,4 +1,5 @@
 use super::types::*;
+use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 use async_trait::async_trait;
 use chrono::Utc;
 use rtfs::runtime::error::RuntimeError;
@@ -54,6 +55,8 @@ impl StaticDiscoveryProvider {
                     effects: vec![],
                     metadata: HashMap::new(),
                     agent_metadata: None,
+                    domains: Vec::new(),
+                    categories: Vec::new(),
                 },
             ],
         }
@@ -160,6 +163,7 @@ pub struct NetworkDiscoveryAgent {
     pub(crate) auth_token: Option<String>,
     pub(crate) refresh_interval: std::time::Duration,
     pub(crate) last_discovery: std::time::Instant,
+    session_manager: Arc<MCPSessionManager>,
 }
 
 impl NetworkDiscoveryAgent {
@@ -168,12 +172,19 @@ impl NetworkDiscoveryAgent {
         auth_token: Option<String>,
         refresh_interval_secs: u64,
     ) -> Self {
+        let auth_headers = auth_token.as_ref().map(|token| {
+            let mut headers = HashMap::new();
+            headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+            headers
+        });
+
         Self {
             registry_endpoint,
             auth_token,
             refresh_interval: std::time::Duration::from_secs(refresh_interval_secs),
             last_discovery: std::time::Instant::now()
                 - std::time::Duration::from_secs(refresh_interval_secs),
+            session_manager: Arc::new(MCPSessionManager::new(auth_headers)),
         }
     }
 
@@ -239,6 +250,8 @@ impl NetworkDiscoveryAgent {
             effects,
             metadata,
             agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
         })
     }
 }
@@ -249,51 +262,53 @@ impl CapabilityDiscovery for NetworkDiscoveryAgent {
         if self.last_discovery.elapsed() < self.refresh_interval {
             return Ok(vec![]);
         }
-        let client = reqwest::Client::new();
-        let payload = serde_json::json!({
-            "method": "discover_capabilities",
-            "params": {"limit": 100, "include_attestations": true, "include_provenance": true}
-        });
-        let mut request = client
-            .post(&self.registry_endpoint)
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .timeout(std::time::Duration::from_secs(30));
-        if let Some(token) = &self.auth_token {
-            request = request.bearer_auth(token);
-        }
-        let response = request
-            .send()
+
+        let client_info = MCPServerInfo {
+            name: "ccos-network-discovery".to_string(),
+            version: "1.0.0".to_string(),
+        };
+
+        let session = self
+            .session_manager
+            .initialize_session(&self.registry_endpoint, &client_info)
             .await
-            .map_err(|e| RuntimeError::Generic(format!("Network discovery failed: {}", e)))?;
-        if !response.status().is_success() {
-            return Err(RuntimeError::Generic(format!(
-                "Registry error: {}",
-                response.status()
-            )));
-        }
-        let response_json: serde_json::Value = response.json().await.map_err(|e| {
-            RuntimeError::Generic(format!("Failed to parse discovery response: {}", e))
-        })?;
-        let capabilities = if let Some(result) = response_json.get("result") {
-            if let Some(caps) = result.get("capabilities") {
-                if let serde_json::Value::Array(caps_array) = caps {
-                    let mut manifests = Vec::new();
-                    for cap_json in caps_array {
-                        if let Ok(m) = self.parse_capability_manifest(cap_json).await {
-                            manifests.push(m);
-                        }
+            .map_err(|e| RuntimeError::Generic(format!("Failed to init session: {}", e)))?;
+
+        let response_result = self
+            .session_manager
+            .make_request(
+                &session,
+                "discover_capabilities",
+                serde_json::json!({
+                    "limit": 100,
+                    "include_attestations": true,
+                    "include_provenance": true
+                }),
+            )
+            .await
+            .map_err(|e| RuntimeError::Generic(format!("Network discovery failed: {}", e)));
+
+        // Ensure we terminate the session even if request fails
+        let _ = self.session_manager.terminate_session(&session).await;
+
+        let response = response_result?;
+
+        let capabilities = if let Some(caps) = response.get("capabilities") {
+            if let serde_json::Value::Array(caps_array) = caps {
+                let mut manifests = Vec::new();
+                for cap_json in caps_array {
+                    if let Ok(m) = self.parse_capability_manifest(cap_json).await {
+                        manifests.push(m);
                     }
-                    manifests
-                } else {
-                    vec![]
                 }
+                manifests
             } else {
                 vec![]
             }
         } else {
             vec![]
         };
+
         Ok(capabilities)
     }
 
@@ -433,6 +448,8 @@ async fn parse_capability_manifest_from_json(
         effects,
         metadata,
         agent_metadata: None,
+        domains: Vec::new(),
+        categories: Vec::new(),
     })
 }
 

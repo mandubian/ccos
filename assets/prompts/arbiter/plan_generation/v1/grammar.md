@@ -22,6 +22,11 @@
 (let [var1 expr1 var2 expr2 ...] <body>)                 ; local bindings within step
 (str <arg1> <arg2> ...)                                   ; string concatenation
 (= <arg1> <arg2>)                                         ; equality comparison
+(println <arg>)                                           ; print to output (standard library)
+(log <arg>)                                               ; log message (standard library)
+(print <arg>)                                             ; print without newline (standard library)
+(get <map> <key>)                                         ; get value from map (standard library)
+(first <list>)                                            ; get first element (standard library)
 ```
 
 ## Allowed Arguments
