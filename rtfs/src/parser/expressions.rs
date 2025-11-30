@@ -2,9 +2,8 @@ use super::common::{build_literal, build_map_key, build_symbol};
 use super::errors::{pair_to_source_span, PestParseError};
 use super::special_forms::{
     build_def_expr, build_defmacro_expr, build_defn_expr, build_defstruct_expr,
-    build_discover_agents_expr, build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
-    build_log_step_expr, build_match_expr, build_parallel_expr, build_try_catch_expr,
-    build_with_resource_expr,
+    build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
+    build_match_expr, build_try_catch_expr, build_for_expr,
 };
 use super::utils::unescape;
 use super::Rule;
@@ -635,40 +634,4 @@ fn rewrite_placeholders(expr: Expression, uses_plain_percent: bool) -> Expressio
         }
         other => other,
     }
-}
-
-pub(super) fn build_for_expr(pair: Pair<Rule>) -> Result<ForExpr, PestParseError> {
-    let parent_span = pair_to_source_span(&pair);
-    let mut pairs = pair.into_inner();
-
-    // Parse the bindings vector
-    let bindings_vec_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
-        message: "for expression missing bindings vector".to_string(),
-        span: Some(parent_span.clone()),
-    })?;
-
-    if bindings_vec_pair.as_rule() != Rule::vector {
-        return Err(PestParseError::InvalidInput {
-            message: format!(
-                "Expected vector for for bindings, found {:?}",
-                bindings_vec_pair.as_rule()
-            ),
-            span: Some(pair_to_source_span(&bindings_vec_pair)),
-        });
-    }
-
-    let bindings = bindings_vec_pair
-        .into_inner()
-        .map(build_expression)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Parse the body expression
-    let body_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
-        message: "for expression missing body".to_string(),
-        span: Some(parent_span),
-    })?;
-
-    let body = Box::new(build_expression(body_pair)?);
-
-    Ok(ForExpr { bindings, body })
 }

@@ -8,9 +8,8 @@ use std::collections::HashMap;
 // AST Node Imports - Ensure all used AST nodes are listed here
 use crate::ast::{
     CatchClause, CatchPattern, DefExpr, DefmacroExpr, DefnExpr, DefstructExpr, DefstructField,
-    DelegationHint, DoExpr, FnExpr, IfExpr, LetBinding, LetExpr, LogStepExpr, MatchClause,
-    MatchExpr, ParallelBinding, ParallelExpr, ParamDef, Pattern, TryCatchExpr, TypeExpr,
-    WithResourceExpr,
+    DelegationHint, DoExpr, FnExpr, IfExpr, LetBinding, LetExpr, MatchClause,
+    MatchExpr, ParamDef, Pattern, TryCatchExpr, TypeExpr, ForExpr,
 };
 
 // ...
@@ -1366,6 +1365,42 @@ pub(super) fn build_match_expr(match_expr_pair: Pair<Rule>) -> Result<MatchExpr,
 
 // Helper function to build MatchPattern from a Pair<Rule>
 // This function is now implemented in super::common::build_match_pattern
+
+pub(super) fn build_for_expr(pair: Pair<Rule>) -> Result<ForExpr, PestParseError> {
+    let parent_span = pair_to_source_span(&pair);
+    let mut pairs = pair.into_inner();
+
+    // Parse the bindings vector
+    let bindings_vec_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "for expression missing bindings vector".to_string(),
+        span: Some(parent_span.clone()),
+    })?;
+
+    if bindings_vec_pair.as_rule() != Rule::vector {
+        return Err(PestParseError::InvalidInput {
+            message: format!(
+                "Expected vector for for bindings, found {:?}",
+                bindings_vec_pair.as_rule()
+            ),
+            span: Some(pair_to_source_span(&bindings_vec_pair)),
+        });
+    }
+
+    let bindings = bindings_vec_pair
+        .into_inner()
+        .map(build_expression)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Parse the body expression
+    let body_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "for expression missing body".to_string(),
+        span: Some(parent_span),
+    })?;
+
+    let body = Box::new(build_expression(body_pair)?);
+
+    Ok(ForExpr { bindings, body })
+}
 
 // -----------------------------------------------------------------------------
 // Metadata helpers
