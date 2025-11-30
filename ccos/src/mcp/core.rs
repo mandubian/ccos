@@ -24,6 +24,7 @@ use crate::catalog::{CatalogService, CatalogSource};
 use crate::planner::modular_planner::types::DomainHint;
 use crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery;
 use crate::synthesis::mcp_introspector::MCPIntrospector;
+use crate::discovery::{ApprovalQueue, ApprovedDiscovery};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -38,6 +39,7 @@ pub struct MCPDiscoveryService {
     session_manager: Arc<MCPSessionManager>,
     registry_client: MCPRegistryClient,
     config_discovery: LocalConfigMcpDiscovery,
+    approval_queue: ApprovalQueue,
     introspector: MCPIntrospector,
     cache: Arc<MCPCache>,
     rate_limiter: Arc<RateLimiter>,
@@ -65,6 +67,7 @@ impl MCPDiscoveryService {
             session_manager: Arc::new(MCPSessionManager::with_client(http_client, None)),
             registry_client: MCPRegistryClient::new(),
             config_discovery: LocalConfigMcpDiscovery::new(),
+            approval_queue: ApprovalQueue::new("."),
             introspector: MCPIntrospector::new(),
             cache: Arc::new(MCPCache::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
@@ -90,6 +93,7 @@ impl MCPDiscoveryService {
             session_manager: Arc::new(MCPSessionManager::with_client(http_client, auth_headers)),
             registry_client: MCPRegistryClient::new(),
             config_discovery: LocalConfigMcpDiscovery::new(),
+            approval_queue: ApprovalQueue::new("."),
             introspector: MCPIntrospector::new(),
             cache: Arc::new(MCPCache::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
@@ -603,7 +607,7 @@ impl MCPDiscoveryService {
             DomainHint::Custom(s) => s.as_str(),
         };
 
-        let configs = self.config_discovery.get_all_server_configs();
+        let configs = self.list_known_servers();
         for config in configs {
             if config.name.contains(hint) || hint.contains(&config.name) {
                 return Some(config);
@@ -613,9 +617,27 @@ impl MCPDiscoveryService {
         None
     }
 
-    /// List all known servers
+    /// List all known servers (from config and approval queue)
     pub fn list_known_servers(&self) -> Vec<MCPServerConfig> {
-        self.config_discovery.get_all_server_configs()
+        let mut servers = self.config_discovery.get_all_server_configs();
+        
+        // Add approved servers from queue
+        if let Ok(approved) = self.approval_queue.list_approved() {
+            for server in approved {
+                // Check for duplicates (by name or endpoint)
+                if !servers.iter().any(|s| s.name == server.server_info.name || s.endpoint == server.server_info.endpoint) {
+                    servers.push(MCPServerConfig {
+                        name: server.server_info.name,
+                        endpoint: server.server_info.endpoint,
+                        auth_token: None, // Will fallback to env vars if needed
+                        timeout_seconds: 30, // Default
+                        protocol_version: "2024-11-05".to_string(), // Default
+                    });
+                }
+            }
+        }
+        
+        servers
     }
 
     // ================================
@@ -667,7 +689,7 @@ impl MCPDiscoveryService {
         let mut found_servers = Vec::new();
 
         // First, check if any known local servers might have this capability
-        let local_servers = self.config_discovery.get_all_server_configs();
+        let local_servers = self.list_known_servers();
         for server in local_servers {
             // Check if server name hints at having this capability
             let server_name_lower = server.name.to_lowercase();
@@ -827,6 +849,7 @@ impl MCPDiscoveryService {
             session_manager: Arc::clone(&self.session_manager),
             registry_client: MCPRegistryClient::new(), // Registry client is stateless
             config_discovery: LocalConfigMcpDiscovery::new(), // Config discovery is stateless
+            approval_queue: ApprovalQueue::new("."), // Approval queue is stateless (file-based)
             introspector: MCPIntrospector::new(), // Introspector is stateless
             cache: Arc::clone(&self.cache), // Share cache
             rate_limiter: Arc::clone(&self.rate_limiter), // Share rate limiter
@@ -959,7 +982,7 @@ impl MCPDiscoveryService {
         &self,
         options: &DiscoveryOptions,
     ) -> RuntimeResult<CacheWarmingStats> {
-        let servers = self.config_discovery.get_all_server_configs();
+        let servers = self.list_known_servers();
         log::info!(
             "🔥 Warming cache for {} configured server(s)...",
             servers.len()
