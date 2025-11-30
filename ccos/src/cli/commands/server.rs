@@ -71,6 +71,15 @@ pub enum ServerCommand {
         /// Select a server by name to introspect and add
         #[arg(long)]
         select_by_name: Option<String>,
+
+        /// Enable LLM-based documentation parsing as a fallback for API discovery
+        /// Uses OPENAI_API_KEY or ANTHROPIC_API_KEY environment variables
+        #[arg(long)]
+        llm: bool,
+
+        /// LLM model to use (default: gpt-4o-mini for OpenAI, claude-3-haiku-20240307 for Anthropic)
+        #[arg(long)]
+        llm_model: Option<String>,
     },
 }
 
@@ -208,10 +217,13 @@ pub async fn execute(
                 }
             }
         }
-        ServerCommand::Search { query, capability, select, select_by_name } => {
+        ServerCommand::Search { query, capability, select, select_by_name, llm, llm_model } => {
             ctx.status(&format!("Searching for servers: {}", query));
             if let Some(ref cap) = capability {
                 ctx.status(&format!("Filtering by capability: {}", cap));
+            }
+            if llm {
+                ctx.status("LLM fallback enabled for API documentation parsing");
             }
             
             let searcher = RegistrySearcher::new();
@@ -483,7 +495,20 @@ pub async fn execute(
                     } else {
                         // Regular API - try to discover OpenAPI spec and introspect
                         ctx.status(&format!("Discovering API capabilities from: {}", selected.server_info.name));
-                        let introspector = APIIntrospector::new();
+                        
+                        // Create introspector with optional LLM provider from config
+                        let mut introspector = APIIntrospector::new();
+                        if llm {
+                            match ctx.create_llm_provider(llm_model.clone()).await {
+                                Ok(provider) => {
+                                    formatter.list_item(&format!("LLM fallback enabled via arbiter configuration"));
+                                    introspector.set_llm_provider(provider);
+                                }
+                                Err(e) => {
+                                    formatter.warning(&format!("Could not enable LLM fallback: {}", e));
+                                }
+                            }
+                        }
                         
                         // Extract base URL
                         let base_url = if let Ok(parsed) = url::Url::parse(&selected.server_info.endpoint) {
