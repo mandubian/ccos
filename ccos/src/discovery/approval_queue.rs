@@ -11,6 +11,10 @@ pub struct ServerInfo {
     pub name: String,
     pub endpoint: String,
     pub description: Option<String>,
+    /// Suggested environment variable name for authentication token (e.g., "GITHUB_MCP_TOKEN")
+    /// This is just a reference - the actual token is never stored, only read from env vars at runtime
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_env_var: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -35,6 +39,7 @@ pub enum DiscoverySource {
     ApisGuru { api_name: String },
     WebSearch { url: String },
     Manual { user: String },
+    LocalOverride { path: String },
 }
 
 impl DiscoverySource {
@@ -44,6 +49,7 @@ impl DiscoverySource {
             DiscoverySource::ApisGuru { api_name } => format!("apis:{}", api_name),
             DiscoverySource::WebSearch { url } => format!("web:{}", url),
             DiscoverySource::Manual { user } => format!("manual:{}", user),
+            DiscoverySource::LocalOverride { path } => format!("override:{}", path),
         }
     }
 }
@@ -144,6 +150,21 @@ impl ApprovalQueue {
         Self {
             base_path: base_path.as_ref().to_path_buf(),
         }
+    }
+
+    /// Suggest environment variable name for MCP authentication token based on server name
+    /// 
+    /// Pattern: {NAMESPACE}_MCP_TOKEN (e.g., "github/github-mcp" -> "GITHUB_MCP_TOKEN")
+    /// For GitHub servers, also suggests legacy names: GITHUB_PAT, GITHUB_TOKEN
+    pub fn suggest_auth_env_var(server_name: &str) -> String {
+        let namespace = if let Some(slash_pos) = server_name.find('/') {
+            &server_name[..slash_pos]
+        } else {
+            server_name
+        };
+
+        let normalized = namespace.replace('-', "_").to_uppercase();
+        format!("{}_MCP_TOKEN", normalized)
     }
 
     fn pending_path(&self) -> PathBuf {

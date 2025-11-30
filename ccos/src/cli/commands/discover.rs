@@ -1,6 +1,6 @@
 use crate::cli::CliContext;
 use crate::cli::OutputFormatter;
-use crate::discovery::{ApprovalQueue, GoalDiscoveryAgent, RegistrySearcher};
+use crate::discovery::{ApprovalQueue, GoalDiscoveryAgent};
 use clap::Subcommand;
 use rtfs::runtime::error::RuntimeResult;
 
@@ -20,12 +20,6 @@ pub enum DiscoverCommand {
         /// Filter hint
         #[arg(short = 'f', long)]
         filter: Option<String>,
-    },
-
-    /// Search discovered capabilities
-    Search {
-        /// Search query
-        query: String,
     },
 
     /// List all discovered capabilities
@@ -64,32 +58,13 @@ pub async fn execute(
             }
         }
         DiscoverCommand::Server { name, filter } => {
-            ctx.status(&format!("Discovering from server: {}", name));
+            ctx.status(&format!("Discovering capabilities from server: {}", name));
             if let Some(f) = filter {
                 ctx.status(&format!("Filter: {}", f));
             }
-            formatter.warning("Server discovery not yet implemented");
+            formatter.warning("Server capability discovery not yet implemented");
+            formatter.list_item("This will connect to the server and list available tools/capabilities.");
             formatter.list_item("See: https://github.com/mandubian/ccos/issues/172");
-        }
-        DiscoverCommand::Search { query } => {
-            ctx.status(&format!("Searching registry for: {}", query));
-            let searcher = RegistrySearcher::new();
-            let results = searcher.search(&query).await?;
-
-            if results.is_empty() {
-                formatter.warning("No results found.");
-            } else {
-                formatter.section("Search Results");
-                for result in results {
-                    formatter.kv("Source", &result.source.name());
-                    formatter.kv("Server", &result.server_info.name);
-                    formatter.kv(
-                        "Description",
-                        &result.server_info.description.clone().unwrap_or_default(),
-                    );
-                    println!();
-                }
-            }
         }
         DiscoverCommand::List => {
             formatter.warning("Capability listing not yet implemented");
