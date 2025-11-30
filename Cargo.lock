@@ -389,6 +389,7 @@ dependencies = [
  "crossterm",
  "dashmap",
  "eventsource-stream",
+ "filetime",
  "flate2",
  "futures",
  "indexmap",
