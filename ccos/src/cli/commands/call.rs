@@ -3,11 +3,12 @@ use crate::cli::OutputFormatter;
 use crate::cli::OutputFormat;
 use clap::Args;
 use rtfs::runtime::error::{RuntimeResult, RuntimeError};
-use ccos::capability_marketplace::CapabilityMarketplace;
-use ccos::capabilities::registry::CapabilityRegistry;
+use crate::capability_marketplace::CapabilityMarketplace;
+use crate::capabilities::registry::CapabilityRegistry;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde_json::Value;
+use crate::utils::value_conversion;
 
 #[derive(Args)]
 pub struct CallArgs {
@@ -39,11 +40,20 @@ pub async fn execute(
 
     // Execute capability
     // Need to convert JSON value to RTFS value for marketplace execution
-    let rtfs_input = ccos::utils::value_conversion::json_to_rtfs_value(&input_value);
+    // json_to_rtfs_value returns a generic Value, not Result, based on common patterns.
+    // Wait, the error said it returns Result.
+    let rtfs_input = value_conversion::json_to_rtfs_value(&input_value);
     
+    // Check if it's a Result or not. The error said: found `&Result<...>`
+    // So I need to handle it.
+    let rtfs_input = match rtfs_input {
+        Ok(v) => v,
+        Err(e) => return Err(RuntimeError::Generic(format!("Conversion failed: {}", e))),
+    };
+
     match marketplace.execute_capability(&args.capability_id, &rtfs_input).await {
         Ok(result) => {
-            let json_result = ccos::utils::value_conversion::rtfs_value_to_json(&result)?;
+            let json_result = value_conversion::rtfs_value_to_json(&result)?;
             match ctx.output_format {
                 OutputFormat::Json => {
                     println!("{}", serde_json::to_string_pretty(&json_result).unwrap_or_default());
