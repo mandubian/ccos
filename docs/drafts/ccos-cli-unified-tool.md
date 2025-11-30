@@ -293,6 +293,112 @@ Log events for audit trail:
 3. **Phase 5**: capability_explorer becomes thin wrapper or deprecated
 4. **Future**: Other examples migrated or deprecated
 
+---
+
+## Future Vision: CCOS Control Center TUI
+
+The current `ccos explore` command provides capability exploration. The long-term vision is to evolve this into a full **CCOS Control Center** - an interactive dashboard for the entire cognitive OS lifecycle.
+
+### Evolution Roadmap
+
+#### Phase A: Capability Explorer (Current)
+- Browse/search capabilities
+- Inspect MCP servers and tools
+- Test capability calls
+- View capability metadata and schemas
+
+#### Phase B: Goal → Plan Construction
+- Natural language goal input panel
+- Real-time planner visualization
+- Watch decomposition into steps
+- Intent graph construction visualization
+- Interactive plan refinement (accept/reject/modify steps)
+- Plan saving and versioning
+
+#### Phase C: Execution Runtime Dashboard
+- Live execution monitoring panel
+- Step-by-step or continuous execution mode
+- Pause/resume/abort controls
+- Real-time causal chain visualization
+- Variable/state inspection
+- Execution timeline view
+- Error handling and recovery options
+
+#### Phase D: MicroVM/Container Deployment
+- Package plan as deployable unit
+- Configure isolation level:
+  - MicroVM (Firecracker) for maximum isolation
+  - Container (Docker/Podman) for lighter weight
+  - Native execution for development
+- Resource limits configuration (CPU, memory, network)
+- Environment variable and secret injection
+- Deploy to local or remote targets
+- Deployment history and rollback
+
+#### Phase E: Autonomous Agent Dashboard
+- Multi-agent monitoring view
+- Agent communication/delegation visualization
+- Real-time message flow between agents
+- Governance audit trail panel
+- Health/performance metrics
+- Agent lifecycle management (start/stop/restart)
+- Capability marketplace integration (agent discovery)
+
+### TUI Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ CCOS Control Center                              [Help] [Quit]  │
+├─────────────┬───────────────────────────────────────────────────┤
+│ Navigation  │  Main Panel                                       │
+│             │                                                   │
+│ ▶ Goals     │  ┌─────────────────────────────────────────────┐  │
+│   Plans     │  │ Goal: "Search GitHub for Rust MCP libs"     │  │
+│   Execution │  │                                             │  │
+│   Deploy    │  │ Plan Steps:                                 │  │
+│   Agents    │  │  1. [✓] Discover GitHub capabilities        │  │
+│   ───────── │  │  2. [▶] Call github.search_repositories     │  │
+│   Discover  │  │  3. [ ] Filter results by language          │  │
+│   Servers   │  │  4. [ ] Format output                       │  │
+│   Approvals │  │                                             │  │
+│   Config    │  └─────────────────────────────────────────────┘  │
+│             │                                                   │
+├─────────────┼───────────────────────────────────────────────────┤
+│ Status Bar  │ Step 2/4 | Runtime: 1.2s | Causal: 3 events      │
+└─────────────┴───────────────────────────────────────────────────┘
+```
+
+### Key Features
+
+1. **Keyboard-Driven Navigation**
+   - Vim-style keybindings (j/k, h/l)
+   - Quick-jump shortcuts (g+g, G, etc.)
+   - Command palette (`:` prefix)
+
+2. **Split Panes**
+   - Resizable panels
+   - Multiple views side-by-side
+   - Focus switching with Tab
+
+3. **Real-Time Updates**
+   - Streaming execution output
+   - Live causal chain updates
+   - Agent status polling
+
+4. **Persistence**
+   - Session save/restore
+   - Plan history
+   - Execution logs
+
+### Implementation Notes
+
+- Built with `ratatui` (current capability_explorer foundation)
+- Async runtime for non-blocking operations
+- WebSocket support for remote agent monitoring
+- Configuration via `agent_config.toml` TUI section
+
+---
+
 ## Related Documents
 
 - [Capability Explorer RTFS Mode](../ccos/guides/capability-explorer-rtfs-mode.md)
