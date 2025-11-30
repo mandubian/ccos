@@ -62,13 +62,14 @@ RTFS leverages Rust's ownership and borrowing system for:
 
 ```rtfs
 ;; Host-mediated parallelism for performance
-(:parallel
-  (map expensive-operation data))
+(step-parallel
+  (process-chunk data-1)
+  (process-chunk data-2))
 
-;; Structured concurrency through host
-(with-parallel [result1 (compute-a)
-                result2 (compute-b)]
-  (combine result1 result2))
+;; Structured concurrency through host (using future pattern)
+(let [future (call :ccos.async/spawn (fn [] (compute-heavy-task)))]
+  (do-other-work)
+  (call :ccos.async/await future))
 ```
 
 ### Optimized Host Operations

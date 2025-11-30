@@ -77,7 +77,12 @@ pub fn create_evaluator(security_context: RuntimeContext) -> Evaluator {
     let module_registry = create_module_registry();
     let host = create_runtime_host(security_context.clone());
 
-    Evaluator::new(module_registry, security_context, host)
+    Evaluator::new(
+        module_registry,
+        security_context,
+        host,
+        rtfs::compiler::expander::MacroExpander::default(),
+    )
 }
 
 /// Creates a complete evaluator with a shared marketplace and security context
@@ -88,7 +93,12 @@ pub fn create_evaluator_with_marketplace(
     let module_registry = create_module_registry();
     let host = create_runtime_host_with_marketplace(marketplace, security_context.clone());
 
-    Evaluator::new(module_registry, security_context, host)
+    Evaluator::new(
+        module_registry,
+        security_context,
+        host,
+        rtfs::compiler::expander::MacroExpander::default(),
+    )
 }
 
 /// Test helper: Creates an evaluator with pure security context (no capabilities allowed)

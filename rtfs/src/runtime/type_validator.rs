@@ -228,6 +228,50 @@ impl TypeValidator {
         validator
     }
 
+    /// Resolve common alias names (e.g., `Int`, `String`) to primitive types.
+    /// Accepts both capitalized and lowercase forms for convenience.
+    fn resolve_primitive_alias(alias: &crate::ast::Symbol) -> Option<TypeExpr> {
+        // Support alias-style optionals like `string?` by stripping a trailing
+        // '?' and resolving the core alias. If the core alias resolves to a
+        // primitive, return an Optional wrapping that primitive. This keeps
+        // validation semantics consistent when discovery preserves alias
+        // literals that contain the optional suffix instead of using the
+        // `TypeExpr::Optional` AST node.
+        if alias.0.ends_with('?') {
+            let core = alias.0.trim_end_matches('?');
+            if !core.is_empty() {
+                if let Some(resolved) =
+                    Self::resolve_primitive_alias(&crate::ast::Symbol(core.to_string()))
+                {
+                    return Some(TypeExpr::Optional(Box::new(resolved)));
+                }
+            }
+        }
+        match alias.0.as_str() {
+            // Capitalized
+            "Int" => Some(TypeExpr::Primitive(PrimitiveType::Int)),
+            "Float" => Some(TypeExpr::Primitive(PrimitiveType::Float)),
+            "String" => Some(TypeExpr::Primitive(PrimitiveType::String)),
+            "Bool" => Some(TypeExpr::Primitive(PrimitiveType::Bool)),
+            "Nil" => Some(TypeExpr::Primitive(PrimitiveType::Nil)),
+            "Keyword" => Some(TypeExpr::Primitive(PrimitiveType::Keyword)),
+            "Symbol" => Some(TypeExpr::Primitive(PrimitiveType::Symbol)),
+            "Any" => Some(TypeExpr::Any),
+            "Never" => Some(TypeExpr::Never),
+            // Lowercase (defensive)
+            "int" => Some(TypeExpr::Primitive(PrimitiveType::Int)),
+            "float" => Some(TypeExpr::Primitive(PrimitiveType::Float)),
+            "string" => Some(TypeExpr::Primitive(PrimitiveType::String)),
+            "bool" => Some(TypeExpr::Primitive(PrimitiveType::Bool)),
+            "nil" => Some(TypeExpr::Primitive(PrimitiveType::Nil)),
+            "keyword" => Some(TypeExpr::Primitive(PrimitiveType::Keyword)),
+            "symbol" => Some(TypeExpr::Primitive(PrimitiveType::Symbol)),
+            "any" => Some(TypeExpr::Any),
+            "never" => Some(TypeExpr::Never),
+            _ => None,
+        }
+    }
+
     /// Register built-in standard library predicates
     fn register_stdlib_predicates(&mut self) {
         // URL validation predicate
@@ -333,6 +377,14 @@ impl TypeValidator {
             (Value::Keyword(_), TypeExpr::Primitive(PrimitiveType::Keyword)) => Ok(()),
             (Value::Symbol(_), TypeExpr::Primitive(PrimitiveType::Symbol)) => Ok(()),
 
+            // Function types - bare :fn accepts any function
+            (Value::Function(_), TypeExpr::Primitive(PrimitiveType::Custom(kw))) if kw.0 == "fn" => {
+                Ok(())
+            }
+
+            // Full function type signature [:fn [...] ...] - accepts any function
+            (Value::Function(_), TypeExpr::Function { .. }) => Ok(()),
+
             // Any type accepts everything
             (_, TypeExpr::Any) => Ok(()),
 
@@ -389,14 +441,37 @@ impl TypeValidator {
         path: &str,
     ) -> ValidationResult<()> {
         match (value, rtfs_type) {
+            // Resolve common alias names to primitive types for convenience (e.g., Int)
+            (val, TypeExpr::Alias(alias_sym)) => {
+                if let Some(resolved) = Self::resolve_primitive_alias(alias_sym) {
+                    return self.validate_value_at_path(val, &resolved, path);
+                }
+                // Unknown alias → type mismatch (could be extended to support user-defined types)
+                Err(ValidationError::TypeMismatch {
+                    expected: rtfs_type.clone(),
+                    actual: value.type_name().to_string(),
+                    path: path.to_string(),
+                })
+            }
             // Primitive types
             (Value::Integer(_), TypeExpr::Primitive(PrimitiveType::Int)) => Ok(()),
             (Value::Float(_), TypeExpr::Primitive(PrimitiveType::Float)) => Ok(()),
+            // Allow integer to be used where float is expected (numeric coercion)
+            (Value::Integer(_), TypeExpr::Primitive(PrimitiveType::Float)) => Ok(()),
             (Value::String(_), TypeExpr::Primitive(PrimitiveType::String)) => Ok(()),
             (Value::Boolean(_), TypeExpr::Primitive(PrimitiveType::Bool)) => Ok(()),
             (Value::Nil, TypeExpr::Primitive(PrimitiveType::Nil)) => Ok(()),
             (Value::Keyword(_), TypeExpr::Primitive(PrimitiveType::Keyword)) => Ok(()),
             (Value::Symbol(_), TypeExpr::Primitive(PrimitiveType::Symbol)) => Ok(()),
+
+            // Function types - bare :fn accepts any function
+            (Value::Function(_), TypeExpr::Primitive(PrimitiveType::Custom(kw))) if kw.0 == "fn" => {
+                Ok(())
+            }
+
+            // Full function type signature [:fn [...] ...] - accepts any function
+            // (Structural validation of param/return types could be added here)
+            (Value::Function(_), TypeExpr::Function { .. }) => Ok(()),
 
             // Any type accepts everything
             (_, TypeExpr::Any) => Ok(()),

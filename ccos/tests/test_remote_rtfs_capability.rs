@@ -1,5 +1,5 @@
-use ccos::capabilities::{CapabilityExecutionPolicy, CapabilityProvider, CapabilityRegistry};
 use ccos::capabilities::providers::remote_rtfs_provider::{RemoteRTFSConfig, RemoteRTFSProvider};
+use ccos::capabilities::{CapabilityExecutionPolicy, CapabilityProvider, CapabilityRegistry};
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 
@@ -80,12 +80,21 @@ fn test_remote_rtfs_security_requirements() {
 #[test]
 fn test_remote_rtfs_json_conversions() {
     // Test that JSON conversions work correctly
-    let test_value = Value::Map(vec![
-        (rtfs::ast::MapKey::String("key".to_string()), Value::String("value".to_string())),
-        (rtfs::ast::MapKey::String("number".to_string()), Value::Integer(42)),
-    ].into_iter().collect());
+    let test_value = Value::Map(
+        vec![
+            (
+                rtfs::ast::MapKey::String("key".to_string()),
+                Value::String("value".to_string()),
+            ),
+            (
+                rtfs::ast::MapKey::String("number".to_string()),
+                Value::Integer(42),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
 
     // This tests the internal conversion logic
     assert!(matches!(test_value, Value::Map(_)));
 }
-

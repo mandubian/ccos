@@ -77,7 +77,7 @@ impl StorageValue {
 
 /// Trait defining the storage interface for Intent Graph persistence
 #[async_trait::async_trait]
-pub trait IntentStorage {
+pub trait IntentStorage: Send + Sync {
     /// Persist a new intent
     async fn store_intent(&mut self, intent: StorableIntent) -> Result<IntentId, StorageError>;
 

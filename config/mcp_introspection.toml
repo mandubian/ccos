@@ -1,0 +1,34 @@
+# Configuration for MCP Tool Output Schema Introspection
+#
+# This file provides safe input parameters for introspecting tool output schemas.
+# When output schema introspection is enabled, the system calls tools with minimal
+# inputs to infer the response structure. This file specifies which safe inputs
+# to use for each tool.
+#
+# Format:
+#   [tools.<tool_name>]
+#   param1 = "value1"
+#   param2 = "value2"
+#
+# Note: Rate limiting and retry policies are configured in agent_config.toml
+# under [mcp_discovery.rate_limit] and [mcp_discovery.retry_policy]
+
+# GitHub MCP Server tools
+[tools.list_issues]
+owner = "mandubian"
+repo = "ccos"
+per_page = 1  # Use minimal results for introspection
+
+[tools.list_pull_requests]
+owner = "mandubian"
+repo = "ccos"
+per_page = 1
+
+[tools.get_file_contents]
+owner = "mandubian"
+repo = "ccos"
+path = "README.md"
+
+# Add more tool configurations as needed
+# [tools.some_other_tool]
+# param = "safe_value"

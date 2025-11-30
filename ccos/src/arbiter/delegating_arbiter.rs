@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::arbiter::arbiter_config::{
-    AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig,
+    AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig, RetryConfig,
 };
 use crate::arbiter::arbiter_engine::ArbiterEngine;
 use crate::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
@@ -25,9 +25,9 @@ use crate::synthesis::{schema_builder::ParamSchema, InteractionTurn};
 use crate::types::{
     ExecutionResult, Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
 };
+use regex;
 use rtfs::runtime::error::RuntimeError;
 use rtfs::runtime::values::Value;
-use regex;
 
 use rtfs::ast::TopLevel;
 use serde_json::json;
@@ -247,8 +247,7 @@ pub struct DelegatingArbiter {
     llm_provider: Box<dyn LlmProvider>,
     capability_marketplace: Arc<CapabilityMarketplace>,
     intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
-    adaptive_threshold_calculator:
-        Option<crate::adaptive_threshold::AdaptiveThresholdCalculator>,
+    adaptive_threshold_calculator: Option<crate::adaptive_threshold::AdaptiveThresholdCalculator>,
     prompt_manager: PromptManager<FilePromptStore>,
 }
 
@@ -358,6 +357,107 @@ impl DelegatingArbiter {
     /// Get the LLM configuration used by this arbiter
     pub fn get_llm_config(&self) -> &LlmConfig {
         &self.llm_config
+    }
+
+    /// Query the LLM directly with a prompt
+    pub async fn query_llm(&self, prompt: &str) -> Result<String, RuntimeError> {
+        self.llm_provider.generate_text(prompt).await
+    }
+
+    /// Select an MCP tool and extract arguments from a natural language hint
+    /// This is a specialized method for MCP discovery that bypasses delegation analysis
+    ///
+    /// `tool_schemas` is a map from tool name to its input schema JSON (properties only)
+    pub async fn select_mcp_tool(
+        &self,
+        hint: &str,
+        available_tools: &[String],
+        tool_schemas: Option<&HashMap<String, serde_json::Value>>,
+    ) -> Result<(String, HashMap<String, Value>), RuntimeError> {
+        // Create prompt using the specialized tool_selection template
+        let tool_list = available_tools.join(", ");
+        let mut vars = HashMap::new();
+        vars.insert("hint".to_string(), hint.to_string());
+        vars.insert("tools".to_string(), tool_list);
+
+        // Build schema information string for the prompt
+        let schema_info = if let Some(schemas) = tool_schemas {
+            let mut schema_strings = Vec::new();
+            for tool_name in available_tools {
+                if let Some(schema) = schemas.get(tool_name) {
+                    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+                        let param_names: Vec<String> = properties.keys().cloned().collect();
+                        if !param_names.is_empty() {
+                            schema_strings.push(format!(
+                                "  - {}: parameters: {}",
+                                tool_name,
+                                param_names.join(", ")
+                            ));
+                        }
+                    }
+                }
+            }
+            if !schema_strings.is_empty() {
+                format!("\n\nTool Parameter Schemas:\n{}", schema_strings.join("\n"))
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+        vars.insert("schemas".to_string(), schema_info);
+
+        let prompt = self
+            .prompt_manager
+            .render("tool_selection", "v1", &vars)
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "Warning: Failed to load tool_selection prompt: {}. Using fallback.",
+                    e
+                );
+                format!(
+                    r#"Select the best tool from this list: {}
+
+For the hint: "{}"
+
+Respond with ONLY an RTFS intent expression:
+(intent "tool_name"
+  :goal "description"
+  :constraints {{
+    "param1" "value1"
+  }}
+)
+
+The tool name MUST be one of: {}"#,
+                    available_tools.join(", "),
+                    hint,
+                    available_tools.join(", ")
+                )
+            });
+
+        // Get LLM response
+        let response = self.llm_provider.generate_text(&prompt).await?;
+
+        // Debug: Log the raw LLM response
+        eprintln!("📝 Raw LLM response for tool selection:");
+        eprintln!("{}", response);
+        eprintln!("--- End Raw LLM Response ---");
+
+        // Parse the RTFS intent from response
+        let intent = self.parse_llm_intent_response(&response, hint, None)?;
+
+        // Debug: Log the parsed intent
+        eprintln!("✅ Parsed intent:");
+        eprintln!("  Name: {:?}", intent.name);
+        eprintln!("  Goal: {}", intent.goal);
+        eprintln!("  Constraints: {:?}", intent.constraints);
+
+        // Extract tool name and arguments
+        let tool_name = intent
+            .name
+            .ok_or_else(|| RuntimeError::Generic("Intent missing name field".to_string()))?;
+
+        Ok((tool_name, intent.constraints))
     }
 
     /// Find agent capabilities that match the given required capabilities
@@ -529,9 +629,51 @@ impl DelegatingArbiter {
                             intent
                         }
                         Err(json_err) => {
+                            // Generate user-friendly error message with response preview
+                            let response_preview = if response.len() > 500 {
+                                format!(
+                                    "{}...\n[truncated, total length: {} chars]",
+                                    &response[..500],
+                                    response.len()
+                                )
+                            } else {
+                                response.clone()
+                            };
+
+                            let response_lines: Vec<&str> = response.lines().collect();
+                            let line_preview = if response_lines.len() > 10 {
+                                format!(
+                                    "{}\n... [{} more lines]",
+                                    response_lines[..10].join("\n"),
+                                    response_lines.len() - 10
+                                )
+                            } else {
+                                response.clone()
+                            };
+
                             return Err(RuntimeError::Generic(format!(
-                                "Both RTFS and JSON parsing failed. RTFS error: {}; JSON error: {}",
-                                rtfs_err, json_err
+                                "❌ Failed to parse LLM response as intent (both RTFS and JSON failed)\n\n\
+                                📋 Expected format: An RTFS intent expression, like:\n\
+                                (intent \"intent_name\" :goal \"User's goal description\" :constraints {{...}} :preferences {{...}})\n\n\
+                                Or JSON format:\n\
+                                {{\"goal\": \"User's goal\", \"name\": \"intent_name\", \"constraints\": {{}}, \"preferences\": {{}}}}\n\n\
+                                📥 Received response:\n\
+                                ┌─────────────────────────────────────────────────────────\n\
+                                {}\n\
+                                └─────────────────────────────────────────────────────────\n\n\
+                                🔍 Parsing errors:\n\
+                                • RTFS: {}\n\
+                                • JSON: {}\n\n\
+                                💡 Common issues:\n\
+                                • Response is truncated or incomplete (check LLM token limits)\n\
+                                • Response contains explanatory text before/after the intent definition\n\
+                                • Missing required fields (:goal for RTFS, \"goal\" for JSON)\n\
+                                • Invalid syntax (unclosed parentheses, mismatched quotes, etc.)\n\
+                                • Response is empty or contains only whitespace\n\n\
+                                🔧 Tip: The LLM should respond ONLY with the intent definition, no prose.",
+                                line_preview,
+                                rtfs_err,
+                                json_err
                             )));
                         }
                     }
@@ -786,9 +928,26 @@ impl DelegatingArbiter {
         intent: &Intent,
         context: Option<HashMap<String, Value>>,
     ) -> Result<DelegationAnalysis, RuntimeError> {
+        // Debug: Log the intent being analyzed
+        eprintln!(
+            "DEBUG: Analyzing delegation for intent: name={:?}, goal='{}'",
+            intent.name, intent.goal
+        );
+
         let prompt = self
             .create_delegation_analysis_prompt(intent, context)
             .await?;
+
+        // Debug: Log the prompt being sent (first 500 chars)
+        let prompt_preview = if prompt.len() > 500 {
+            format!("{}...", &prompt[..500])
+        } else {
+            prompt.clone()
+        };
+        eprintln!(
+            "DEBUG: Delegation analysis prompt preview: {}",
+            prompt_preview
+        );
 
         let response = self.llm_provider.generate_text(&prompt).await?;
 
@@ -1380,7 +1539,21 @@ Plan:"#,
     ) -> Result<Intent, RuntimeError> {
         // Extract the first top-level `(intent …)` s-expression from the response
         let intent_block = extract_intent(response).ok_or_else(|| {
-            RuntimeError::Generic("Could not locate a complete (intent …) block".to_string())
+            let response_preview = if response.len() > 400 {
+                format!("{}...", &response[..400])
+            } else {
+                response.to_string()
+            };
+            RuntimeError::Generic(format!(
+                "Could not locate a complete (intent …) block in LLM response.\n\n\
+                📥 Response preview:\n\
+                ┌─────────────────────────────────────────────────────────\n\
+                {}\n\
+                └─────────────────────────────────────────────────────────\n\n\
+                💡 The response should start with (intent \"name\" :goal \"...\" ...)\n\
+                Common issues: response is truncated, contains prose before the intent, or missing opening parenthesis.",
+                response_preview
+            ))
         })?;
 
         // Sanitize regex literals for parsing
@@ -1417,10 +1590,27 @@ Plan:"#,
 
         // Parse the JSON
         let json_value: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
+            let json_preview = if json_str.len() > 400 {
+                format!(
+                    "{}...\n[truncated, total length: {} chars]",
+                    &json_str[..400],
+                    json_str.len()
+                )
+            } else {
+                json_str.clone()
+            };
             RuntimeError::Generic(format!(
-                "Failed to parse JSON intent: {}. Response: '{}'",
-                e,
-                response.chars().take(200).collect::<String>()
+                "Failed to parse JSON intent: {}\n\n\
+                📥 JSON response preview:\n\
+                ┌─────────────────────────────────────────────────────────\n\
+                {}\n\
+                └─────────────────────────────────────────────────────────\n\n\
+                💡 Common JSON issues:\n\
+                • Invalid JSON syntax (missing quotes, commas, brackets)\n\
+                • Truncated response (incomplete JSON object)\n\
+                • Missing required fields (\"goal\" is required)\n\
+                • Response contains non-JSON text before/after the JSON",
+                e, json_preview
             ))
         })?;
 
@@ -1511,19 +1701,80 @@ Plan:"#,
         &self,
         response: &str,
     ) -> Result<DelegationAnalysis, RuntimeError> {
+        // Log the raw response
+        println!("Raw delegation analysis response: {}", response);
         // Clean the response - remove any leading/trailing whitespace and extract JSON
-        let cleaned_response = self.extract_json_from_response(response);
+        let json_blobs = self.extract_all_json_from_response(response);
 
-        // Try to parse the JSON
-        let json_response: serde_json::Value =
-            serde_json::from_str(&cleaned_response).map_err(|e| {
-                // Provide more detailed error information
-                RuntimeError::Generic(format!(
-                    "Failed to parse delegation analysis JSON: {}. Response: '{}'",
-                    e,
-                    response.chars().take(200).collect::<String>()
-                ))
-            })?;
+        if json_blobs.is_empty() {
+            return Err(RuntimeError::Generic(
+                "No JSON found in delegation analysis response".to_string(),
+            ));
+        }
+
+        // Try to parse the last JSON blob
+        let last_blob = json_blobs.last().unwrap();
+        let json_response: serde_json::Value = serde_json::from_str(last_blob).map_err(|e| {
+            // Generate user-friendly error message with full response preview
+            let response_preview = if response.len() > 500 {
+                format!(
+                    "{}...\n[truncated, total length: {} chars]",
+                    &response[..500],
+                    response.len()
+                )
+            } else {
+                response.to_string()
+            };
+
+            let response_lines: Vec<&str> = response.lines().collect();
+            let line_preview = if response_lines.len() > 10 {
+                format!(
+                    "{}\n... [{} more lines]",
+                    response_lines[..10].join("\n"),
+                    response_lines.len() - 10
+                )
+            } else {
+                response.to_string()
+            };
+
+            let cleaned_preview = if last_blob.len() > 400 {
+                format!(
+                    "{}...\n[truncated, total length: {} chars]",
+                    &last_blob[..400],
+                    last_blob.len()
+                )
+            } else {
+                last_blob.clone()
+            };
+
+            RuntimeError::Generic(format!(
+                "❌ Failed to parse delegation analysis JSON\n\n\
+                    📋 Expected format: A JSON object with fields:\n\
+                    {{\n\
+                      \"should_delegate\": true/false,\n\
+                      \"reasoning\": \"explanation text\",\n\
+                      \"required_capabilities\": [\"cap1\", \"cap2\"],\n\
+                      \"delegation_confidence\": 0.0-1.0\n\
+                    }}\n\n\
+                    📥 Original LLM response:\n\
+                    ┌─────────────────────────────────────────────────────────\n\
+                    {}\n\
+                    └─────────────────────────────────────────────────────────\n\n\
+                    🔧 Extracted JSON (after cleaning):\n\
+                    ┌─────────────────────────────────────────────────────────\n\
+                    {}\n\
+                    └─────────────────────────────────────────────────────────\n\n\
+                    🔍 JSON parsing error: {}\n\n\
+                    💡 Common issues:\n\
+                    • LLM responded with prose instead of JSON\n\
+                    • Response is truncated or incomplete\n\
+                    • Missing required fields (should_delegate, reasoning, etc.)\n\
+                    • Invalid JSON syntax (unclosed brackets, missing quotes, etc.)\n\
+                    • Response is empty or contains only whitespace\n\n\
+                    🔧 Tip: The LLM should respond ONLY with valid JSON, no explanatory text.",
+                line_preview, cleaned_preview, e
+            ))
+        })?;
 
         // Validate required fields
         if !json_response.is_object() {
@@ -1582,19 +1833,35 @@ Plan:"#,
 
     /// Extract JSON from LLM response, handling common formatting issues
     fn extract_json_from_response(&self, response: &str) -> String {
-        let response = response.trim();
-
-        // Look for JSON object boundaries
-        if let Some(start) = response.find('{') {
-            if let Some(end) = response.rfind('}') {
-                if end > start {
-                    return response[start..=end].to_string();
-                }
+        // First, try to find a JSON block enclosed in ```json ... ```
+        if let Some(captures) = regex::Regex::new(r"```json\s*([\s\S]*?)\s*```")
+            .unwrap()
+            .captures(response)
+        {
+            if let Some(json_block) = captures.get(1) {
+                return json_block.as_str().to_string();
             }
         }
 
-        // If no JSON object found, return the original response
-        response.to_string()
+        // Fallback to finding the first '{' and last '}'
+        if let (Some(start), Some(end)) = (response.find('{'), response.rfind('}')) {
+            if start < end {
+                return response[start..=end].to_string();
+            }
+        }
+
+        // If no JSON block is found, return the original response
+        response.trim().to_string()
+    }
+
+    /// A more aggressive implementation that finds all JSON blobs in the response.
+    fn extract_all_json_from_response(&self, response: &str) -> Vec<String> {
+        let mut blobs = Vec::new();
+        let re = regex::Regex::new(r"\{[\s\S]*?\}").unwrap();
+        for cap in re.captures_iter(response) {
+            blobs.push(cap[0].to_string());
+        }
+        blobs
     }
 
     /// Record feedback for delegation performance
@@ -2204,9 +2471,8 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
             .intent_graph
             .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock intent graph".to_string()))?;
-        let root_id = crate::rtfs_bridge::graph_interpreter::build_graph_from_rtfs(
-            &do_block, &mut graph,
-        )?;
+        let root_id =
+            crate::rtfs_bridge::graph_interpreter::build_graph_from_rtfs(&do_block, &mut graph)?;
 
         // Debug: Show the parsed graph structure
         println!("🏗️ Parsed Graph Structure:");
@@ -2277,10 +2543,9 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
     ) -> Result<PlanGenerationResult, RuntimeError> {
         // Use LLM provider-based plan generator
         let provider_cfg = self.llm_config.to_provider_config();
-        let _provider = crate::arbiter::llm_provider::LlmProviderFactory::create_provider(
-            provider_cfg.clone(),
-        )
-        .await?;
+        let _provider =
+            crate::arbiter::llm_provider::LlmProviderFactory::create_provider(provider_cfg.clone())
+                .await?;
         let plan_gen_provider = LlmRtfsPlanGenerationProvider::new(provider_cfg);
 
         // Convert storable intent back to runtime Intent (minimal fields)
@@ -2299,13 +2564,11 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
         };
 
         // For now, we don't pass a real marketplace; provider currently doesn't use it.
-        let marketplace = Arc::new(
-            crate::capability_marketplace::CapabilityMarketplace::new(Arc::new(
-                tokio::sync::RwLock::new(
-                    rtfs::runtime::capabilities::registry::CapabilityRegistry::new(),
-                ),
+        let marketplace = Arc::new(crate::capability_marketplace::CapabilityMarketplace::new(
+            Arc::new(tokio::sync::RwLock::new(
+                crate::capabilities::registry::CapabilityRegistry::new(),
             )),
-        );
+        ));
         plan_gen_provider
             .generate_plan(&rt_intent, marketplace)
             .await
@@ -2332,7 +2595,7 @@ mod tests {
             max_tokens: Some(1000),
             temperature: Some(0.7),
             timeout_seconds: Some(30),
-            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+            retry_config: RetryConfig::default(),
             prompts: None,
         };
 
@@ -2382,7 +2645,9 @@ mod tests {
         ));
 
         // Create a minimal capability marketplace for testing
-        let registry = Arc::new(RwLock::new(rtfs::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let registry = Arc::new(RwLock::new(
+            crate::capabilities::registry::CapabilityRegistry::new(),
+        ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
         let arbiter =
@@ -2405,7 +2670,9 @@ mod tests {
         ));
 
         // Create a minimal capability marketplace for testing
-        let registry = Arc::new(RwLock::new(rtfs::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let registry = Arc::new(RwLock::new(
+            crate::capabilities::registry::CapabilityRegistry::new(),
+        ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
         let arbiter =
@@ -2440,7 +2707,9 @@ mod tests {
         ));
 
         // Create a minimal capability marketplace for testing
-        let registry = Arc::new(RwLock::new(rtfs::runtime::capabilities::registry::CapabilityRegistry::new()));
+        let registry = Arc::new(RwLock::new(
+            crate::capabilities::registry::CapabilityRegistry::new(),
+        ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
         let arbiter =

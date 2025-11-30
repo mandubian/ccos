@@ -1,8 +1,8 @@
 use rtfs::ast::MapKey;
 use rtfs::parser::parse_expression;
-use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::runtime::evaluator::Evaluator;
 use rtfs::runtime::module_runtime::ModuleRegistry;
+use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::runtime::stdlib::StandardLibrary;
 use rtfs::runtime::values::Value;
 use std::sync::Arc;
@@ -17,6 +17,7 @@ fn test_factorial() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
 
     // Test factorial of 0
@@ -84,6 +85,7 @@ fn test_length_value() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
 
     // Test length of empty vector
@@ -152,7 +154,6 @@ fn test_length_value() {
     assert!(result.is_err());
 }
 
-
 #[test]
 fn test_json_functions() {
     let mut env = StandardLibrary::create_global_environment();
@@ -163,6 +164,7 @@ fn test_json_functions() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
 
     // Test parse-json with simple object
@@ -277,8 +279,6 @@ fn test_json_functions() {
     assert!(result.is_err());
 }
 
-
-
 #[test]
 fn test_map_filter_functions() {
     let env = StandardLibrary::create_global_environment();
@@ -289,6 +289,7 @@ fn test_map_filter_functions() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
 
     // Test map function
@@ -355,6 +356,7 @@ fn test_reduce_function() {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
 
     // Test reduce with initial value

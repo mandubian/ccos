@@ -117,6 +117,7 @@ RTFS (Reason about The Fucking Spec) is a homoiconic (like Lisp or Clojure), pur
 - **Effects Externalization**: Pure computation yields to host boundaries for all external operations, enabling governance and audit of every side effect
 - **Capability-Based Runtime**: Reentrant execution model where capabilities (APIs, I/O, external services) are invoked through the host, maintaining security and determinism
 - **Streaming Integration**: Continuation-chain processing for MCP streams with backpressure control, enabling reactive data processing while maintaining purity
+- **Macros & Expansion**: RTFS supports hygienic-like macros via `defmacro` and quasiquote/unquote/unquote-splicing forms. Macro expansion is intentionally decoupled from parsing and happens as a preprocessing pass (or at evaluation time). The compiler exposes a helper that expands all top-level items and returns the expander instance; runtimes can accept this shared MacroExpander so macro definitions persist across compiler and runtime phases. This is useful for REPLs, the compiler driver, and long-running runtimes that must share macro registry state.
 
 ## How I Learn: The Reflective Loop
 
@@ -144,6 +145,7 @@ To understand my world, you can explore its design and implementation:
         *   [Plans & Orchestration](./docs/ccos/specs/002-plans-and-orchestration.md)
         *   [Causal Chain](./docs/ccos/specs/003-causal-chain.md)
         *   [Capabilities & Marketplace](./docs/ccos/specs/004-capabilities-and-marketplace.md)
+        *   [Modular Planner Architecture](./docs/ccos/specs/025-modular-planner-architecture.md)
 
 2.  **Understand My Language (RTFS)**:
     *   RTFS 2.0 Spec Hub: `docs/rtfs-2.0/specs/`

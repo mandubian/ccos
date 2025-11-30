@@ -211,7 +211,13 @@ pub struct PerformanceMetrics {
 impl FirecrackerVM {
     pub fn new(config: FirecrackerConfig) -> Self {
         // CCOS dependency: Uuid::new_v4()
-        let id = format!("vm-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let id = format!(
+            "vm-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
         let socket_path = PathBuf::from(format!("/tmp/firecracker-{}.sock", id));
 
         Self {

@@ -46,7 +46,10 @@ fn file_io_capabilities_roundtrip() {
         )
         .expect("write-file");
     assert_eq!(write_result, Value::Boolean(true));
-    assert_eq!(std::fs::read_to_string(&file_path).expect("read"), "updated");
+    assert_eq!(
+        std::fs::read_to_string(&file_path).expect("read"),
+        "updated"
+    );
 
     let delete_result = registry
         .execute_capability_with_microvm(

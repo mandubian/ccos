@@ -4,7 +4,8 @@
 //! Manages MCP session lifecycle: initialize, execute tools/call, terminate.
 
 use super::session_pool::{SessionHandler, SessionId};
-use rtfs::ast::{Keyword, MapKey};
+use crate::utils::value_conversion;
+use rtfs::ast::MapKey;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
@@ -42,6 +43,12 @@ impl MCPSessionHandler {
 
     /// Get auth token from environment variable specified in metadata
     fn get_auth_token(&self, metadata: &HashMap<String, String>) -> Option<String> {
+        // Check for explicit token in metadata first (passed from executor)
+        if let Some(token) = metadata.get("mcp_auth_token") {
+            return Some(token.clone());
+        }
+
+        // Fallback to env var lookup
         let env_var = metadata.get("mcp_auth_env_var")?;
         std::env::var(env_var).ok()
     }
@@ -179,17 +186,33 @@ impl MCPSessionHandler {
                             MapKey::String(s) => s.clone(),
                             MapKey::Integer(i) => i.to_string(),
                         };
-                        json_map.insert(key_str, rtfs_value_to_json(value));
+
+                        // Convert value to JSON
+                        let json_val = value_conversion::rtfs_value_to_json(value)
+                            .unwrap_or_else(|_| serde_json::Value::Null);
+
+                        // Filter out null values for MCP arguments
+                        // This handles cases where optional parameters are passed as nil (null)
+                        // but the MCP server expects them to be omitted if not present.
+                        if !json_val.is_null() {
+                            json_map.insert(key_str, json_val);
+                        }
                     }
                     serde_json::Value::Object(json_map)
                 }
-                _ => rtfs_value_to_json(&args[0]),
+                _ => value_conversion::rtfs_value_to_json(&args[0])
+                    .unwrap_or_else(|_| serde_json::Value::Null),
             }
         } else {
             return Err(RuntimeError::Generic(
                 "MCP tool call expects a single map argument".to_string(),
             ));
         };
+
+        eprintln!(
+            "📝 MCP Arguments: {}",
+            serde_json::to_string_pretty(&mcp_args).unwrap_or_default()
+        );
 
         // Build MCP JSON-RPC request
         let mcp_request = serde_json::json!({
@@ -262,8 +285,49 @@ impl MCPSessionHandler {
 
         // Extract result from JSON-RPC response
         if let Some(result) = json.get("result") {
-            // Convert JSON to RTFS Value
-            Ok(json_to_rtfs_value(result))
+            // Debug: Log the keys of the result for troubleshooting
+            if let Some(content) = result.get("content") {
+                if let Some(arr) = content.as_array() {
+                    for (i, item) in arr.iter().enumerate() {
+                        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                            let preview = if text.len() > 100 { &text[..100] } else { text };
+                            eprintln!(
+                                "📦 MCP result content[{}]: type={}, text (preview)='{}...'",
+                                i,
+                                item.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
+                                preview
+                            );
+                            // Try to parse JSON to see structure
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
+                                if let Some(obj) = parsed.as_object() {
+                                    eprintln!(
+                                        "   ↳ Parsed JSON keys: {:?}",
+                                        obj.keys().collect::<Vec<_>>()
+                                    );
+                                } else if parsed.is_array() {
+                                    eprintln!(
+                                        "   ↳ Parsed JSON is an Array of len {}",
+                                        parsed.as_array().unwrap().len()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // MCP protocol returns results in a "content" array with text blocks.
+            // We should return the raw result structure so downstream adapters can handle it
+            // instead of trying to be too smart and unwrapping it automatically.
+            // The adapter `adapters.mcp.parse-json-from-text-content` expects the raw structure
+            // with a "content" array containing text blocks.
+
+            // Fallback: Check for structuredContent field (if MCP server provides it)
+            // Note: The MCP spec allows structuredContent, but most tools return content array.
+            // We preserve the original structure unless structuredContent is explicitly present.
+
+            // Default: Convert JSON to RTFS Value as-is, preserving 'content' or 'structuredContent' keys
+            value_conversion::json_to_rtfs_value(result)
         } else if let Some(error) = json.get("error") {
             Err(RuntimeError::Generic(format!("MCP error: {}", error)))
         } else {
@@ -290,8 +354,28 @@ impl SessionHandler for MCPSessionHandler {
         capability_id: &str,
         metadata: &HashMap<String, String>,
     ) -> RuntimeResult<SessionId> {
-        // Get server URL and auth token from metadata
-        let server_url = self.get_server_url(metadata)?;
+        // eprintln!("[MCPSessionHandler] initialize_session for {}: metadata keys={:?}", capability_id, metadata.keys());
+
+        // Extract server URL from metadata
+        let server_url = metadata
+            .get("server_url")
+            .or_else(|| metadata.get("url"))
+            .or_else(|| metadata.get("mcp_server_url")); // Added fallback to mcp_server_url
+
+        let server_url = match server_url {
+            Some(url) => {
+                // eprintln!("[MCPSessionHandler] Found server_url: {}", url);
+                url.clone()
+            }
+            None => {
+                // eprintln!("[MCPSessionHandler] Missing server_url in metadata: {:?}", metadata);
+                return Err(RuntimeError::Generic(
+                    "Missing server_url in metadata".to_string(),
+                ));
+            }
+        };
+
+        // Get auth token from environment variable specified in metadata
         let auth_token = self.get_auth_token(metadata);
 
         // Initialize MCP session
@@ -380,80 +464,6 @@ impl SessionHandler for MCPSessionHandler {
 
         // Create new session
         self.initialize_session(capability_id, metadata)
-    }
-}
-
-/// Helper: Convert RTFS Value to serde_json::Value
-fn rtfs_value_to_json(value: &Value) -> serde_json::Value {
-    match value {
-        Value::Nil => serde_json::Value::Null,
-        Value::Boolean(b) => serde_json::Value::Bool(*b),
-        Value::Integer(i) => serde_json::json!(i),
-        Value::Float(f) => serde_json::json!(f),
-        Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Keyword(k) => {
-            // Strip leading colon for JSON
-            let s = &k.0;
-            serde_json::Value::String(if s.starts_with(':') {
-                s[1..].to_string()
-            } else {
-                s.clone()
-            })
-        }
-        Value::Symbol(s) => serde_json::Value::String(s.0.clone()),
-        Value::Vector(v) => serde_json::Value::Array(v.iter().map(rtfs_value_to_json).collect()),
-        Value::Map(m) => {
-            let mut obj = serde_json::Map::new();
-            for (key, val) in m.iter() {
-                let key_str = match key {
-                    MapKey::Keyword(k) => {
-                        let s = &k.0;
-                        if s.starts_with(':') {
-                            s[1..].to_string()
-                        } else {
-                            s.clone()
-                        }
-                    }
-                    MapKey::String(s) => s.clone(),
-                    MapKey::Integer(i) => i.to_string(),
-                };
-                obj.insert(key_str, rtfs_value_to_json(val));
-            }
-            serde_json::Value::Object(obj)
-        }
-        _ => serde_json::Value::String(format!("{:?}", value)),
-    }
-}
-
-/// Helper: Convert serde_json::Value to RTFS Value
-fn json_to_rtfs_value(json: &serde_json::Value) -> Value {
-    match json {
-        serde_json::Value::Null => Value::Nil,
-        serde_json::Value::Bool(b) => Value::Boolean(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Integer(i)
-            } else if let Some(f) = n.as_f64() {
-                Value::Float(f)
-            } else {
-                Value::String(n.to_string())
-            }
-        }
-        serde_json::Value::String(s) => Value::String(s.clone()),
-        serde_json::Value::Array(arr) => {
-            Value::Vector(arr.iter().map(json_to_rtfs_value).collect())
-        }
-        serde_json::Value::Object(obj) => {
-            let mut map = HashMap::new();
-            for (k, v) in obj.iter() {
-                // Use keyword for object keys
-                map.insert(
-                    MapKey::Keyword(Keyword(format!(":{}", k))),
-                    json_to_rtfs_value(v),
-                );
-            }
-            Value::Map(map)
-        }
     }
 }
 

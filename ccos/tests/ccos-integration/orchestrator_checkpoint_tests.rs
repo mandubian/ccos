@@ -38,8 +38,12 @@ fn test_checkpoint_and_resume_helpers() {
         runtime_context.clone(),
     ));
     let module_registry = std::sync::Arc::new(ModuleRegistry::new());
-    let evaluator =
-        rtfs::runtime::evaluator::Evaluator::new(module_registry, runtime_context, host);
+    let evaluator = rtfs::runtime::evaluator::Evaluator::new(
+        module_registry,
+        runtime_context,
+        host,
+        rtfs::compiler::expander::MacroExpander::default(),
+    );
 
     // Initialize context for checkpoint
     {

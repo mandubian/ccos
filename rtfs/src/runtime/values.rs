@@ -268,31 +268,43 @@ impl Function {
     pub fn new_closure(
         params: Vec<Symbol>,
         param_patterns: Vec<crate::ast::Pattern>,
+        param_type_annotations: Vec<Option<crate::ast::TypeExpr>>,
         variadic_param: Option<Symbol>,
+        variadic_param_type: Option<crate::ast::TypeExpr>,
         body: Box<Expression>,
         env: Arc<Environment>,
         delegation_hint: Option<crate::ast::DelegationHint>,
+        return_type: Option<crate::ast::TypeExpr>,
     ) -> Function {
         Function::Closure(Arc::new(Closure {
             params,
             param_patterns,
+            param_type_annotations,
             variadic_param,
+            variadic_param_type,
             body,
             env,
             delegation_hint,
+            return_type,
         }))
     }
 
     pub fn new_ir_lambda(
         params: Vec<IrNode>,
+        param_type_annotations: Vec<Option<crate::ir::core::IrType>>,
         variadic_param: Option<Box<IrNode>>,
+        variadic_param_type: Option<crate::ir::core::IrType>,
         body: Vec<IrNode>,
+        return_type: Option<crate::ir::core::IrType>,
         closure_env: Box<IrEnvironment>,
     ) -> Function {
         Function::Ir(Arc::new(IrLambda {
             params,
+            param_type_annotations,
             variadic_param,
+            variadic_param_type,
             body,
+            return_type,
             closure_env,
         }))
     }
@@ -374,18 +386,27 @@ pub struct Closure {
     pub params: Vec<Symbol>,
     // Full parameter patterns to support destructuring during invocation
     pub param_patterns: Vec<crate::ast::Pattern>,
+    // Optional type annotations for each parameter (aligned with param_patterns)
+    pub param_type_annotations: Vec<Option<crate::ast::TypeExpr>>,
     // Variadic parameter symbol for functions like [& rest]
     pub variadic_param: Option<Symbol>,
+    // Optional type annotation for the variadic parameter
+    pub variadic_param_type: Option<crate::ast::TypeExpr>,
     pub body: Box<Expression>,
     pub env: Arc<Environment>,
     pub delegation_hint: Option<crate::ast::DelegationHint>,
+    // Optional return type annotation for the function
+    pub return_type: Option<crate::ast::TypeExpr>,
 }
 
 #[derive(Clone, Debug)]
 pub struct IrLambda {
     pub params: Vec<IrNode>,
+    pub param_type_annotations: Vec<Option<crate::ir::core::IrType>>,
     pub variadic_param: Option<Box<IrNode>>,
+    pub variadic_param_type: Option<crate::ir::core::IrType>,
     pub body: Vec<IrNode>,
+    pub return_type: Option<crate::ir::core::IrType>,
     pub closure_env: Box<IrEnvironment>,
 }
 
@@ -439,21 +460,9 @@ impl From<Expression> for Value {
                 // For now, return a placeholder for defn expressions
                 Value::String(format!("#<defn: {}>", defn_expr.name.0))
             }
-            Expression::DiscoverAgents(_) => {
-                // For now, return a placeholder for discover-agents expressions
-                Value::String("#<discover-agents>".to_string())
-            }
             Expression::TryCatch(_) => {
                 // For now, return a placeholder for try-catch expressions
                 Value::String("#<try-catch>".to_string())
-            }
-            Expression::Parallel(_) => {
-                // For now, return a placeholder for parallel expressions
-                Value::String("#<parallel>".to_string())
-            }
-            Expression::WithResource(with_expr) => {
-                // For now, return a placeholder for with-resource expressions
-                Value::String(format!("#<with-resource: {}>", with_expr.resource_symbol.0))
             }
             Expression::Match(_) => {
                 // For now, return a placeholder for match expressions
@@ -462,11 +471,6 @@ impl From<Expression> for Value {
             Expression::ResourceRef(resource_name) => {
                 // Return the resource name as a string
                 Value::String(resource_name)
-            }
-
-            Expression::LogStep(_log_expr) => {
-                // For now, return a placeholder for log step expressions
-                Value::String("#<log-step>".to_string())
             }
             Expression::Defstruct(_defstruct_expr) => {
                 // For now, return a placeholder for defstruct expressions
@@ -490,6 +494,13 @@ impl From<Expression> for Value {
                     result_map.insert(key, Value::String(value_str));
                 }
                 Value::Map(result_map)
+            }
+            // Macro-related expressions should have been expanded before evaluation
+            Expression::Quasiquote(_) |
+            Expression::Unquote(_) |
+            Expression::UnquoteSplicing(_) |
+            Expression::Defmacro(_) => {
+                Value::String("#<macro-expression>".to_string())
             }
         }
     }

@@ -1,9 +1,10 @@
 use super::common::{build_literal, build_map_key, build_symbol};
 use super::errors::{pair_to_source_span, PestParseError};
 use super::special_forms::{
-    build_def_expr, build_defn_expr, build_defstruct_expr, build_discover_agents_expr,
-    build_do_expr, build_fn_expr, build_if_expr, build_let_expr, build_log_step_expr,
-    build_match_expr, build_parallel_expr, build_try_catch_expr, build_with_resource_expr,
+    build_def_expr, build_defmacro_expr, build_defn_expr, build_defstruct_expr,
+    build_discover_agents_expr, build_do_expr, build_fn_expr, build_if_expr, build_let_expr,
+    build_log_step_expr, build_match_expr, build_parallel_expr, build_try_catch_expr,
+    build_with_resource_expr,
 };
 use super::utils::unescape;
 use super::Rule;
@@ -77,6 +78,24 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
             let atom_symbol = Expression::Symbol(Symbol(atom_name.to_string()));
             Ok(Expression::Deref(Box::new(atom_symbol)))
         }
+        Rule::quasiquote => {
+            let mut inner = pair.into_inner();
+            let expr_pair = inner.next().unwrap();
+            let expr = build_expression(expr_pair)?;
+            Ok(Expression::Quasiquote(Box::new(expr)))
+        }
+        Rule::unquote => {
+            let mut inner = pair.into_inner();
+            let expr_pair = inner.next().unwrap();
+            let expr = build_expression(expr_pair)?;
+            Ok(Expression::Unquote(Box::new(expr)))
+        }
+        Rule::unquote_splicing => {
+            let mut inner = pair.into_inner();
+            let expr_pair = inner.next().unwrap();
+            let expr = build_expression(expr_pair)?;
+            Ok(Expression::UnquoteSplicing(Box::new(expr)))
+        }
 
         Rule::vector => Ok(Expression::Vector(
             pair.into_inner()
@@ -104,13 +123,10 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
         Rule::fn_expr => Ok(Expression::Fn(build_fn_expr(pair)?)),
         Rule::def_expr => Ok(Expression::Def(Box::new(build_def_expr(pair)?))),
         Rule::defn_expr => Ok(Expression::Defn(Box::new(build_defn_expr(pair)?))),
+        Rule::defmacro_expr => Ok(Expression::Defmacro(Box::new(build_defmacro_expr(pair)?))),
         Rule::defstruct_expr => Ok(Expression::Defstruct(Box::new(build_defstruct_expr(pair)?))),
-        Rule::parallel_expr => Ok(Expression::Parallel(build_parallel_expr(pair)?)),
-        Rule::with_resource_expr => Ok(Expression::WithResource(build_with_resource_expr(pair)?)),
         Rule::try_catch_expr => Ok(Expression::TryCatch(build_try_catch_expr(pair)?)),
         Rule::match_expr => Ok(Expression::Match(build_match_expr(pair)?)),
-        Rule::log_step_expr => Ok(Expression::LogStep(Box::new(build_log_step_expr(pair)?))),
-        Rule::discover_agents_expr => Ok(Expression::DiscoverAgents(build_discover_agents_expr(pair)?)),
         Rule::for_expr => Ok(Expression::For(Box::new(build_for_expr(pair)?))),
         // Plan is not a core special form; handled as FunctionCall/Map at CCOS layer
         Rule::list => {
@@ -132,7 +148,7 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
                     let symbol_name = &symbol.0;
                     // Check if this looks like an invalid special form
                     match symbol_name.as_str() {
-                        "fn" | "if" | "def" | "let" | "do" | "defn" | "defstruct" | "parallel" | "with-resource" | "try" | "match" | "log-step" | "discover-agents" | "for" => {
+                        "fn" | "if" | "def" | "let" | "do" | "defn" | "defstruct" | "try" | "match" | "for" => {
                             // This looks like a special form but was parsed as a list
                             // Check if it has the required arguments for the special form
                             let remaining_args = &inner_pairs[1..];
@@ -466,6 +482,11 @@ fn scan_for_placeholders(expr: &Expression, max_index: &mut usize, uses_plain_pe
                 scan_for_placeholders(e, max_index, uses_plain_percent);
             }
         }
+        Expression::Defmacro(defmacro_expr) => {
+            for e in &defmacro_expr.body {
+                scan_for_placeholders(e, max_index, uses_plain_percent);
+            }
+        }
         Expression::TryCatch(tc) => {
             for e in &tc.try_body {
                 scan_for_placeholders(e, max_index, uses_plain_percent);
@@ -476,17 +497,6 @@ fn scan_for_placeholders(expr: &Expression, max_index: &mut usize, uses_plain_pe
                 }
             }
         }
-        Expression::Parallel(p) => {
-            for b in &p.bindings {
-                scan_for_placeholders(&b.expression, max_index, uses_plain_percent);
-            }
-        }
-        Expression::WithResource(w) => {
-            scan_for_placeholders(&w.resource_init, max_index, uses_plain_percent);
-            for e in &w.body {
-                scan_for_placeholders(e, max_index, uses_plain_percent);
-            }
-        }
         Expression::Match(mexpr) => {
             scan_for_placeholders(&mexpr.expression, max_index, uses_plain_percent);
             for c in &mexpr.clauses {
@@ -494,11 +504,6 @@ fn scan_for_placeholders(expr: &Expression, max_index: &mut usize, uses_plain_pe
                     scan_for_placeholders(g, max_index, uses_plain_percent);
                 }
                 scan_for_placeholders(&c.body, max_index, uses_plain_percent);
-            }
-        }
-        Expression::LogStep(log) => {
-            for v in &log.values {
-                scan_for_placeholders(v, max_index, uses_plain_percent);
             }
         }
         _ => {}
@@ -582,6 +587,14 @@ fn rewrite_placeholders(expr: Expression, uses_plain_percent: bool) -> Expressio
                 .collect();
             Expression::Defn(dn)
         }
+        Expression::Defmacro(mut dm) => {
+            dm.body = dm
+                .body
+                .into_iter()
+                .map(|e| rewrite_placeholders(e, uses_plain_percent))
+                .collect();
+            Expression::Defmacro(dm)
+        }
         Expression::TryCatch(mut tc) => {
             tc.try_body = tc
                 .try_body
@@ -598,22 +611,6 @@ fn rewrite_placeholders(expr: Expression, uses_plain_percent: bool) -> Expressio
             }
             Expression::TryCatch(tc)
         }
-        Expression::Parallel(mut p) => {
-            for b in &mut p.bindings {
-                let new_e = rewrite_placeholders(*b.expression.clone(), uses_plain_percent);
-                b.expression = Box::new(new_e);
-            }
-            Expression::Parallel(p)
-        }
-        Expression::WithResource(mut w) => {
-            w.resource_init = Box::new(rewrite_placeholders(*w.resource_init, uses_plain_percent));
-            w.body = w
-                .body
-                .into_iter()
-                .map(|e| rewrite_placeholders(e, uses_plain_percent))
-                .collect();
-            Expression::WithResource(w)
-        }
         Expression::Match(mut me) => {
             me.expression = Box::new(rewrite_placeholders(*me.expression, uses_plain_percent));
             for c in &mut me.clauses {
@@ -623,14 +620,6 @@ fn rewrite_placeholders(expr: Expression, uses_plain_percent: bool) -> Expressio
                 }
             }
             Expression::Match(me)
-        }
-        Expression::LogStep(mut lg) => {
-            lg.values = lg
-                .values
-                .into_iter()
-                .map(|e| rewrite_placeholders(e, uses_plain_percent))
-                .collect();
-            Expression::LogStep(lg)
         }
         Expression::For(mut fe) => {
             fe.bindings = fe
@@ -651,12 +640,6 @@ fn rewrite_placeholders(expr: Expression, uses_plain_percent: bool) -> Expressio
 pub(super) fn build_for_expr(pair: Pair<Rule>) -> Result<ForExpr, PestParseError> {
     let parent_span = pair_to_source_span(&pair);
     let mut pairs = pair.into_inner();
-
-    // Skip the 'for' keyword
-    let _for_keyword = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
-        message: "for expression missing keyword".to_string(),
-        span: Some(parent_span.clone()),
-    })?;
 
     // Parse the bindings vector
     let bindings_vec_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {

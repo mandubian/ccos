@@ -133,7 +133,10 @@ impl SecurityAuthorizer {
 
         // Analyze the program to determine additional permissions needed
         match program {
-            crate::runtime::microvm::core::Program::ExternalProgram { path: _path, args: _args } => {
+            crate::runtime::microvm::core::Program::ExternalProgram {
+                path: _path,
+                args: _args,
+            } => {
                 // External programs require special permission
                 if !runtime_context.is_capability_allowed("external_program") {
                     return Err(RuntimeError::SecurityViolation {
@@ -570,23 +573,23 @@ fn normalize_effect_label(effect: &str) -> String {
 pub fn default_effects_for_capability(capability_id: &str) -> &'static [&'static str] {
     match capability_id {
         // File system related capabilities
-    "ccos.io.file-exists"
-    | "ccos.io.read-file"
-    | "ccos.io.write-file"
-    | "ccos.io.delete-file"
-    | "ccos.io.open-file"
-    | "ccos.io.read-line"
-    | "ccos.io.write-line"
-    | "ccos.io.close-file" => &[":filesystem"],
+        "ccos.io.file-exists"
+        | "ccos.io.read-file"
+        | "ccos.io.write-file"
+        | "ccos.io.delete-file"
+        | "ccos.io.open-file"
+        | "ccos.io.read-line"
+        | "ccos.io.write-line"
+        | "ccos.io.close-file" => &[":filesystem"],
         // Logging and data utilities are treated as compute
         "ccos.io.log"
         | "ccos.io.print"
         | "ccos.io.println"
         | "ccos.data.parse-json"
-    | "ccos.data.serialize-json"
-    | "ccos.json.parse"
-    | "ccos.json.stringify"
-    | "ccos.json.stringify-pretty"
+        | "ccos.data.serialize-json"
+        | "ccos.json.parse"
+        | "ccos.json.stringify"
+        | "ccos.json.stringify-pretty"
         | "ccos.math.add"
         | "ccos.echo" => &[":compute"],
         // User interaction (stdin/stdout)

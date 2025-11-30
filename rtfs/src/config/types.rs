@@ -46,6 +46,15 @@ pub struct AgentConfig {
     /// Optional catalog of LLM model profiles for interactive selection
     #[serde(default)]
     pub llm_profiles: Option<LlmProfilesConfig>,
+    /// Discovery engine configuration
+    #[serde(default)]
+    pub discovery: DiscoveryConfig,
+    /// Catalog configuration (plan/capability reuse thresholds)
+    #[serde(default)]
+    pub catalog: CatalogConfig,
+    /// Missing capability resolution configuration
+    #[serde(default)]
+    pub missing_capabilities: MissingCapabilityRuntimeConfig,
 }
 
 /// A named LLM model profile that can be selected at runtime
@@ -118,6 +127,132 @@ pub struct LlmModelSpec {
     pub notes: Option<String>,
 }
 
+/// Discovery engine configuration persisted in agent config
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DiscoveryConfig {
+    /// Minimum semantic match score threshold (0.0 to 1.0)
+    #[serde(default = "default_discovery_match_threshold")]
+    pub match_threshold: f64,
+    /// Enable embedding-based matching (more accurate but requires API)
+    #[serde(default = "default_discovery_use_embeddings")]
+    pub use_embeddings: bool,
+    /// Preferred remote embedding model (e.g., OpenRouter)
+    #[serde(default)]
+    pub embedding_model: Option<String>,
+    /// Preferred local embedding model (e.g., Ollama)
+    #[serde(default)]
+    pub local_embedding_model: Option<String>,
+    /// Minimum score required for action verb match (0.0 to 1.0)
+    #[serde(default = "default_discovery_action_verb_threshold")]
+    pub action_verb_threshold: f64,
+    /// Weight for action verbs in matching (higher = more important)
+    #[serde(default = "default_discovery_action_verb_weight")]
+    pub action_verb_weight: f64,
+    /// Weight for capability class matching (0.0 to 1.0)
+    #[serde(default = "default_discovery_capability_class_weight")]
+    pub capability_class_weight: f64,
+}
+
+impl Default for DiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            match_threshold: default_discovery_match_threshold(),
+            use_embeddings: default_discovery_use_embeddings(),
+            embedding_model: None,
+            local_embedding_model: None,
+            action_verb_threshold: default_discovery_action_verb_threshold(),
+            action_verb_weight: default_discovery_action_verb_weight(),
+            capability_class_weight: default_discovery_capability_class_weight(),
+        }
+    }
+}
+
+fn default_discovery_match_threshold() -> f64 {
+    0.65
+}
+
+fn default_discovery_use_embeddings() -> bool {
+    false
+}
+
+fn default_discovery_action_verb_threshold() -> f64 {
+    0.7
+}
+
+fn default_discovery_action_verb_weight() -> f64 {
+    0.4
+}
+
+fn default_discovery_capability_class_weight() -> f64 {
+    0.3
+}
+
+/// Catalog configuration stored in agent config
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CatalogConfig {
+    #[serde(default = "default_catalog_plan_min_score")]
+    pub plan_min_score: f32,
+    #[serde(default = "default_catalog_keyword_min_score")]
+    pub keyword_min_score: f32,
+}
+
+impl Default for CatalogConfig {
+    fn default() -> Self {
+        Self {
+            plan_min_score: default_catalog_plan_min_score(),
+            keyword_min_score: default_catalog_keyword_min_score(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct MissingCapabilityToolSelectorRuntimeConfig {
+    /// Enable or disable the LLM-based tool selector
+    pub enabled: Option<bool>,
+    /// Override prompt ID used for selection
+    pub prompt_id: Option<String>,
+    /// Override prompt version used for selection
+    pub prompt_version: Option<String>,
+    /// Limit number of tools provided to the selector
+    pub max_tools: Option<u32>,
+    /// Limit candidate description length
+    pub max_description_chars: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct MissingCapabilityRuntimeConfig {
+    /// Enable or disable missing capability runtime detection
+    pub enabled: Option<bool>,
+    /// Allow runtime detection of missing capabilities
+    #[serde(rename = "runtime_detection")]
+    pub runtime_detection: Option<bool>,
+    /// Automatically attempt resolution when a capability is missing
+    pub auto_resolution: Option<bool>,
+    /// Permit the resolver to call the LLM synthesis pipeline
+    pub llm_synthesis: Option<bool>,
+    /// Allow discovery fallback to web search
+    pub web_search: Option<bool>,
+    /// Require human approval before registering synthesized capabilities
+    pub human_approval_required: Option<bool>,
+    /// Emit verbose resolver logs
+    pub verbose_logging: Option<bool>,
+    /// Maximum resolution attempts before giving up
+    pub max_attempts: Option<u32>,
+    /// Enable output schema introspection (requires auth)
+    pub output_schema_introspection: Option<bool>,
+    /// Tool selector configuration (LLM-assisted matching)
+    #[serde(default)]
+    pub tool_selector: MissingCapabilityToolSelectorRuntimeConfig,
+}
+
+fn default_catalog_plan_min_score() -> f32 {
+    0.65
+}
+
+fn default_catalog_keyword_min_score() -> f32 {
+    1.0
+}
+
 /// Orchestrator configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OrchestratorConfig {
@@ -182,10 +317,12 @@ pub struct EgressConfig {
     /// Egress method (proxy, direct, none)
     pub via: String,
     /// Allowed domains
+    #[serde(default)]
     pub allow_domains: Vec<String>,
     /// Whether mTLS is enabled
     pub mtls: bool,
     /// TLS certificate pins
+    #[serde(default)]
     pub tls_pins: Vec<String>,
 }
 
@@ -493,6 +630,9 @@ impl Default for AgentConfig {
             delegation: DelegationConfig::default(),
             features: vec![],
             llm_profiles: None,
+            discovery: DiscoveryConfig::default(),
+            catalog: CatalogConfig::default(),
+            missing_capabilities: MissingCapabilityRuntimeConfig::default(),
         }
     }
 }
@@ -775,7 +915,7 @@ impl DelegationConfig {
         // Implementation requires CCOS integration
         todo!("CCOS integration required for to_arbiter_config")
     }
-    
+
     #[cfg(not(feature = "ccos-integration"))]
     #[cfg(test)]
     pub fn to_arbiter_config(&self) -> DelegationConfigStub {
@@ -785,15 +925,18 @@ impl DelegationConfig {
             threshold: self.threshold.unwrap_or(0.65),
             max_candidates: self.max_candidates.unwrap_or(3) as usize,
             min_skill_hits: self.min_skill_hits,
-            agent_registry: self.agent_registry.clone().unwrap_or_else(|| AgentRegistryConfig {
-                registry_type: RegistryType::InMemory,
-                database_url: None,
-                agents: vec![],
-            }),
+            agent_registry: self
+                .agent_registry
+                .clone()
+                .unwrap_or_else(|| AgentRegistryConfig {
+                    registry_type: RegistryType::InMemory,
+                    database_url: None,
+                    agents: vec![],
+                }),
             adaptive_threshold: self.adaptive_threshold.clone(),
         }
     }
-    
+
     #[cfg(not(feature = "ccos-integration"))]
     #[cfg(not(test))]
     pub fn to_arbiter_config(&self) -> () {

@@ -167,7 +167,7 @@ impl<'a> IrConverter<'a> {
     fn add_builtin_functions(&mut self) {
         // Helper: Number type = Int | Float
         let number_type = IrType::Union(vec![IrType::Int, IrType::Float]);
-        
+
         let builtins = [
             // Arithmetic operators - accept Number, return Number
             // Runtime promotes Int to Float when mixed
@@ -1031,12 +1031,6 @@ impl<'a> IrConverter<'a> {
             Expression::Map(map) => self.convert_map(map),
             Expression::List(exprs) => self.convert_list_as_application(exprs),
             Expression::TryCatch(try_expr) => self.convert_try_catch(try_expr),
-            Expression::Parallel(parallel_expr) => self.convert_parallel(parallel_expr),
-            Expression::WithResource(with_expr) => self.convert_with_resource(with_expr),
-            Expression::LogStep(log_expr) => self.convert_log_step(*log_expr),
-            Expression::DiscoverAgents(discover_expr) => {
-                self.convert_discover_agents(discover_expr)
-            }
             Expression::Def(def_expr) => self.convert_def(*def_expr),
             Expression::Defn(defn_expr) => self.convert_defn(*defn_expr),
             Expression::Defstruct(defstruct_expr) => self.convert_defstruct(*defstruct_expr),
@@ -1080,7 +1074,16 @@ impl<'a> IrConverter<'a> {
                     ir_type: IrType::String,
                     source_location: None,
                 })
-            } // Plan is not a core RTFS expression; handled in CCOS layer
+            }
+            // Macro-related expressions should have been expanded away before IR conversion
+            Expression::Quasiquote(_) |
+            Expression::Unquote(_) |
+            Expression::UnquoteSplicing(_) |
+            Expression::Defmacro(_) => {
+                Err(IrConversionError::InternalError {
+                    message: "Macro-related expressions should have been expanded before IR conversion".to_string(),
+                })
+            }
         }
     }
 
@@ -1868,23 +1871,66 @@ impl<'a> IrConverter<'a> {
                             }
                         }
                     }
-                    let variadic_param = None; // TODO: handle variadic
+                    // Handle variadic parameter if present (only simple symbol pattern is supported)
+                    let variadic_param = if let Some(variadic_param_def) = fn_expr.variadic_param {
+                        if let Pattern::Symbol(s) = variadic_param_def.pattern {
+                            let var_param_id = self.next_id();
+                            let var_param_type = self.convert_type_annotation_option(
+                                variadic_param_def.type_annotation.clone(),
+                            )?;
+
+                            // Define the variadic binding in current scope
+                            let binding_info = BindingInfo {
+                                name: s.0.clone(),
+                                binding_id: var_param_id,
+                                ir_type: var_param_type.clone().unwrap_or(IrType::Any),
+                                kind: BindingKind::Parameter,
+                            };
+                            self.define_binding(s.0.clone(), binding_info);
+
+                            Some(Box::new(IrNode::Param {
+                                id: var_param_id,
+                                binding: Box::new(IrNode::VariableBinding {
+                                    id: var_param_id,
+                                    name: s.0,
+                                    ir_type: var_param_type.clone().unwrap_or(IrType::Any),
+                                    source_location: None,
+                                }),
+                                type_annotation: var_param_type.clone(),
+                                ir_type: var_param_type.clone().unwrap_or(IrType::Any),
+                                source_location: None,
+                            }))
+                        } else {
+                            None // Destructuring for variadic params not supported yet
+                        }
+                    } else {
+                        None
+                    };
                     let mut body = Vec::new();
                     // Insert param destructuring before body
                     body.extend(param_destructure_prologue.into_iter());
                     for expr in fn_expr.body {
                         body.push(self.convert_expression(expr)?);
                     }
-                    let return_type = body
-                        .last()
-                        .and_then(|n| n.ir_type())
-                        .cloned()
-                        .unwrap_or(IrType::Any);
+                    // Determine return type: prefer explicit annotation if provided, otherwise infer from last body expr
+                    let return_type = if let Some(ret_annot) = fn_expr.return_type {
+                        self.convert_type_annotation(ret_annot)?
+                    } else {
+                        body.last()
+                            .and_then(|n| n.ir_type())
+                            .cloned()
+                            .unwrap_or(IrType::Any)
+                    };
                     let param_types: Vec<IrType> =
                         params.iter().filter_map(|p| p.ir_type()).cloned().collect();
+                    // Variadic param type annotation (if present)
+                    let variadic_param_type = variadic_param
+                        .as_ref()
+                        .and_then(|p| p.ir_type().cloned())
+                        .map(|t| Box::new(t));
                     let function_type = IrType::Function {
                         param_types,
-                        variadic_param_type: None,
+                        variadic_param_type,
                         return_type: Box::new(return_type),
                     };
                     IrNode::Lambda {
@@ -2223,10 +2269,10 @@ impl<'a> IrConverter<'a> {
             };
             elements.push(element?);
         }
-        
+
         // Infer element type from actual elements (least upper bound)
         let element_type = infer_vector_element_type(&elements);
-        
+
         Ok(IrNode::Vector {
             id,
             elements,
@@ -2392,102 +2438,6 @@ impl<'a> IrConverter<'a> {
             catch_clauses,
             finally_body,
             ir_type: IrType::Any,
-            source_location: None,
-        })
-    }
-
-    fn convert_parallel(&mut self, parallel_expr: ParallelExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let mut bindings = Vec::new();
-        for binding in parallel_expr.bindings {
-            let init_expr = self.convert_expression(*binding.expression)?;
-            let binding_node = IrNode::VariableBinding {
-                id: self.next_id(),
-                name: binding.symbol.0,
-                ir_type: init_expr.ir_type().cloned().unwrap_or(IrType::Any),
-                source_location: None,
-            };
-            bindings.push(IrParallelBinding {
-                binding: binding_node,
-                init_expr,
-            });
-        }
-        Ok(IrNode::Parallel {
-            id,
-            bindings,
-            ir_type: IrType::Vector(Box::new(IrType::Any)),
-            source_location: None,
-        })
-    }
-
-    fn convert_with_resource(&mut self, with_expr: WithResourceExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let resource_id = self.next_id();
-        let resource_name = with_expr.resource_symbol.0;
-        let init_expr = Box::new(self.convert_expression(*with_expr.resource_init)?);
-
-        self.enter_scope();
-        let binding_info = BindingInfo {
-            name: resource_name.clone(),
-            binding_id: resource_id,
-            ir_type: IrType::Any, // Type of resource is not known at this stage
-            kind: BindingKind::Resource,
-        };
-        self.define_binding(resource_name.clone(), binding_info);
-
-        let body_expressions = with_expr
-            .body
-            .into_iter()
-            .map(|e| self.convert_expression(e))
-            .collect::<Result<_, _>>()?;
-
-        self.exit_scope();
-
-        let binding_node = IrNode::VariableBinding {
-            id: resource_id,
-            name: resource_name,
-            ir_type: self.convert_type_annotation(with_expr.resource_type)?,
-            source_location: None,
-        };
-
-        Ok(IrNode::WithResource {
-            id,
-            binding: Box::new(binding_node),
-            init_expr,
-            body: body_expressions,
-            ir_type: IrType::Any,
-            source_location: None,
-        })
-    }
-
-    fn convert_log_step(&mut self, log_expr: LogStepExpr) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let values = log_expr
-            .values
-            .into_iter()
-            .map(|e| self.convert_expression(e))
-            .collect::<Result<_, _>>()?;
-        Ok(IrNode::LogStep {
-            id,
-            values,
-            level: log_expr.level.unwrap_or(Keyword("info".to_string())),
-            location: log_expr.location,
-            ir_type: IrType::Nil,
-            source_location: None,
-        })
-    }
-
-    fn convert_discover_agents(
-        &mut self,
-        discover_expr: DiscoverAgentsExpr,
-    ) -> IrConversionResult<IrNode> {
-        let id = self.next_id();
-        let criteria = Box::new(self.convert_expression(*discover_expr.criteria)?);
-        // TODO: Handle options
-        Ok(IrNode::DiscoverAgents {
-            id,
-            criteria,
-            ir_type: IrType::Vector(Box::new(IrType::Any)),
             source_location: None,
         })
     }
@@ -2911,23 +2861,6 @@ impl<'a> IrConverter<'a> {
                     }
                 }
             }
-            IrNode::WithResource {
-                binding,
-                init_expr,
-                body,
-                ..
-            } => {
-                self.collect_variable_references(binding, captured_names);
-                self.collect_variable_references(init_expr, captured_names);
-                for expr in body {
-                    self.collect_variable_references(expr, captured_names);
-                }
-            }
-            IrNode::LogStep { values, .. } => {
-                for value in values {
-                    self.collect_variable_references(value, captured_names);
-                }
-            }
             IrNode::Step { params, body, .. } => {
                 if let Some(p) = params {
                     self.collect_variable_references(p, captured_names);
@@ -2935,9 +2868,6 @@ impl<'a> IrConverter<'a> {
                 for expr in body {
                     self.collect_variable_references(expr, captured_names);
                 }
-            }
-            IrNode::DiscoverAgents { criteria, .. } => {
-                self.collect_variable_references(criteria, captured_names);
             }
             IrNode::VariableDef { init_expr, .. } => {
                 self.collect_variable_references(init_expr, captured_names);
@@ -2962,6 +2892,31 @@ impl<'a> IrConverter<'a> {
             IrNode::Destructure { value, .. } => {
                 self.collect_variable_references(value, captured_names);
             }
+            IrNode::Parallel { bindings, .. } => {
+                for binding in bindings {
+                    self.collect_variable_references(&binding.init_expr, captured_names);
+                }
+            }
+            IrNode::WithResource {
+                binding,
+                init_expr,
+                body,
+                ..
+            } => {
+                self.collect_variable_references(binding, captured_names);
+                self.collect_variable_references(init_expr, captured_names);
+                for expr in body {
+                    self.collect_variable_references(expr, captured_names);
+                }
+            }
+            IrNode::LogStep { values, .. } => {
+                for value in values {
+                    self.collect_variable_references(value, captured_names);
+                }
+            }
+            IrNode::DiscoverAgents { criteria, .. } => {
+                self.collect_variable_references(criteria, captured_names);
+            }
             // These nodes don't contain variable references
             IrNode::Literal { .. }
             | IrNode::VariableBinding { .. }
@@ -2969,7 +2924,6 @@ impl<'a> IrConverter<'a> {
             | IrNode::QualifiedSymbolRef { .. }
             | IrNode::Param { .. }
             | IrNode::Match { .. }
-            | IrNode::Parallel { .. }
             | IrNode::Module { .. }
             | IrNode::Import { .. }
             | IrNode::Program { .. } => {
@@ -3228,7 +3182,7 @@ impl<'a> IrConverter<'a> {
 ///
 /// # Examples
 ///
-/// ```
+/// ```text
 /// [1 2 3]           → Vector(Int)
 /// [1 2.5 3]         → Vector(Number)  where Number = Int | Float
 /// [1 "text" true]   → Vector(Int | String | Bool)
@@ -3238,43 +3192,45 @@ fn infer_vector_element_type(elements: &[IrNode]) -> IrType {
     if elements.is_empty() {
         return IrType::Any; // Empty vector: Vector<Any>
     }
-    
+
     // Collect all element types
     let mut element_types: Vec<IrType> = elements
         .iter()
         .filter_map(|node| node.ir_type().cloned())
         .collect();
-    
+
     if element_types.is_empty() {
         return IrType::Any;
     }
-    
+
     // Remove duplicates and compute join
     element_types.sort_by_key(|t| format!("{:?}", t));
     element_types.dedup();
-    
+
     // Case 1: All elements have the same type → homogeneous vector
     if element_types.len() == 1 {
         return element_types[0].clone();
     }
-    
+
     // Case 2: Mixed Int and Float → Number (Int | Float)
     // This is a special case for the numeric tower
     let has_int = element_types.iter().any(|t| matches!(t, IrType::Int));
     let has_float = element_types.iter().any(|t| matches!(t, IrType::Float));
-    let only_numeric = element_types.iter().all(|t| matches!(t, IrType::Int | IrType::Float));
-    
+    let only_numeric = element_types
+        .iter()
+        .all(|t| matches!(t, IrType::Int | IrType::Float));
+
     if only_numeric && (has_int || has_float) {
         // Return Number = Int | Float (normalized union)
         return IrType::Union(vec![IrType::Int, IrType::Float]);
     }
-    
+
     // Case 3: Multiple different types → create union (up to 5 types)
     // Beyond 5 types, we consider it too heterogeneous and use Any
     if element_types.len() <= 5 {
         return IrType::Union(element_types);
     }
-    
+
     // Case 4: Too many different types (> 5) → Any
     IrType::Any
 }

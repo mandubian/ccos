@@ -1,5 +1,5 @@
-use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::runtime::module_runtime::ModuleRegistry;
+use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::*;
 use std::sync::Arc;
 
@@ -18,6 +18,7 @@ fn test_parse_and_execute(code: &str, test_name: &str) -> (bool, String) {
         module_registry,
         rtfs::runtime::security::RuntimeContext::pure(),
         host,
+        rtfs::compiler::expander::MacroExpander::default(),
     );
     let ast_result = match evaluator.evaluate(&parsed) {
         Ok(value) => {

@@ -4,11 +4,11 @@
 
 use crate::ir::converter::IrConverter;
 use crate::parser::parse_expression;
+use crate::runtime::pure_host::create_pure_host;
 use crate::runtime::{
     IrRuntime, IrWithFallbackStrategy, Runtime, RuntimeStrategy, RuntimeStrategyValue,
     TreeWalkingStrategy,
 };
-use crate::runtime::pure_host::create_pure_host;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -88,11 +88,12 @@ impl RtfsRepl {
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = create_pure_host();
 
-        Self {
+                Self {
             runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
                 Arc::clone(&module_registry),
                 security_context,
                 host,
+                crate::compiler::expander::MacroExpander::default(),
             )))),
             module_registry,
             context: ReplContext::default(),
@@ -112,6 +113,7 @@ impl RtfsRepl {
                     Arc::clone(&module_registry),
                     security_context,
                     host,
+                    crate::compiler::expander::MacroExpander::default(),
                 )))
             }
             RuntimeStrategyValue::Ir => Box::new(crate::runtime::ir_runtime::IrStrategy::new(
@@ -228,6 +230,7 @@ impl RtfsRepl {
                     Arc::clone(&self.module_registry),
                     security_context,
                     host.clone(),
+                    crate::compiler::expander::MacroExpander::default(),
                 ))));
                 println!("🔄 Switched to AST runtime");
             }
@@ -240,9 +243,9 @@ impl RtfsRepl {
             }
             ":runtime-fallback" => {
                 self.context.runtime_strategy = RuntimeStrategyValue::IrWithFallback;
-                self.runtime = Runtime::new(Box::new(IrWithFallbackStrategy::new(
-                    Arc::clone(&self.module_registry),
-                )));
+                self.runtime = Runtime::new(Box::new(IrWithFallbackStrategy::new(Arc::clone(
+                    &self.module_registry,
+                ))));
                 println!("🔄 Switched to IR with AST fallback runtime");
             }
             ":test" => {
@@ -508,6 +511,7 @@ impl RtfsTestFramework {
                 Arc::clone(&module_registry),
                 security_context,
                 host.clone(),
+                crate::compiler::expander::MacroExpander::default(),
             )))),
             module_registry,
         }

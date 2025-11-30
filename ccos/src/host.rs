@@ -297,8 +297,15 @@ impl HostInterface for RuntimeHost {
         }
         let capability_args = Value::Map(call_map);
 
+        // 2. Check execution mode and security level for dry-run simulation
+        let execution_mode = self.get_execution_mode();
+        let security_level = self.detect_security_level(name);
+        let security_level_clone = security_level.clone();
+        let should_simulate = execution_mode == "dry-run"
+            && (security_level == "high" || security_level == "critical");
+
         // 2. Create and log the CapabilityCall action
-        let action = Action::new(
+        let mut action = Action::new(
             ActionType::CapabilityCall,
             context.plan_id.clone(),
             context.intent_ids.first().cloned().unwrap_or_default(),
@@ -307,12 +314,54 @@ impl HostInterface for RuntimeHost {
         .with_name(name)
         .with_arguments(&args);
 
+        // Add execution mode metadata to action
+        if should_simulate {
+            action
+                .metadata
+                .insert("dry_run".to_string(), Value::Boolean(true));
+            action
+                .metadata
+                .insert("simulated".to_string(), Value::Boolean(true));
+            action.metadata.insert(
+                "security_level".to_string(),
+                Value::String(security_level_clone.clone()),
+            );
+        }
+
         let _action_id = self.get_causal_chain()?.append(&action)?;
 
-        // 3. Execute the capability via the marketplace without blocking current runtime
+        // 3. If dry-run and critical, simulate the result instead of executing
+        if should_simulate {
+            let simulated_result = self.generate_simulated_result(name, args)?;
+
+            // Log the simulated result
+            let execution_result = ExecutionResult {
+                success: true,
+                value: simulated_result.clone(),
+                metadata: {
+                    let mut meta = std::collections::HashMap::new();
+                    meta.insert("dry_run".to_string(), Value::Boolean(true));
+                    meta.insert("simulated".to_string(), Value::Boolean(true));
+                    meta.insert(
+                        "security_level".to_string(),
+                        Value::String(security_level_clone),
+                    );
+                    meta
+                },
+            };
+
+            self.get_causal_chain()?
+                .record_result(action, execution_result)?;
+
+            return Ok(simulated_result);
+        }
+
+        // 4. Execute the capability via the marketplace without blocking current runtime
         let name_owned = name.to_string();
         let args_owned: Vec<Value> = args.to_vec();
         let marketplace = self.capability_marketplace.clone();
+        let runtime_handle = tokio::runtime::Handle::try_current().ok();
+
         let result = std::thread::spawn(move || {
             let fut = async move {
                 let args_value = Value::List(args_owned);
@@ -320,14 +369,19 @@ impl HostInterface for RuntimeHost {
                     .execute_capability(&name_owned, &args_value)
                     .await
             };
-            futures::executor::block_on(fut)
+
+            if let Some(handle) = runtime_handle {
+                handle.block_on(fut)
+            } else {
+                futures::executor::block_on(fut)
+            }
         })
         .join()
         .map_err(|_| {
             RuntimeError::Generic("Thread join error during capability execution".to_string())
         })?;
 
-        // 4. Log the result to the Causal Chain
+        // 5. Log the result to the Causal Chain
         let execution_result = match &result {
             Ok(value) => ExecutionResult {
                 success: true,
@@ -440,6 +494,122 @@ impl HostInterface for RuntimeHost {
             // Parent action ID
             "parent-action-id" => Some(Value::String(ctx.parent_action_id.clone())),
             _ => None,
+        }
+    }
+}
+
+impl RuntimeHost {
+    /// Get execution mode from RuntimeContext cross_plan_params
+    pub fn get_execution_mode(&self) -> String {
+        // Check cross_plan_params for execution_mode
+        // This is set by Orchestrator based on Governance Kernel detection
+        if let Some(Value::String(mode)) = self
+            .security_context
+            .cross_plan_params
+            .get("execution_mode")
+        {
+            return mode.clone();
+        }
+        // Default: full execution
+        "full".to_string()
+    }
+
+    /// Detect security level for a capability based on ID patterns
+    /// Returns: "low", "medium", "high", or "critical"
+    /// This mirrors the logic in Governance Kernel for consistency
+    pub fn detect_security_level(&self, capability_id: &str) -> String {
+        let id_lower = capability_id.to_lowercase();
+
+        // Critical operations: payments, billing, charges, transfers
+        if id_lower.contains("payment")
+            || id_lower.contains("billing")
+            || id_lower.contains("charge")
+            || id_lower.contains("transfer")
+            || id_lower.contains("refund")
+        {
+            return "critical".to_string();
+        }
+
+        // Critical operations: deletions, removals, destructive operations
+        if id_lower.contains("delete")
+            || id_lower.contains("remove")
+            || id_lower.contains("destroy")
+            || id_lower.contains("drop")
+            || id_lower.contains("truncate")
+        {
+            return "critical".to_string();
+        }
+
+        // High-risk operations: system-level changes
+        if id_lower.contains("exec")
+            || id_lower.contains("shell")
+            || id_lower.contains("system")
+            || id_lower.contains("admin")
+            || id_lower.contains("root")
+        {
+            return "high".to_string();
+        }
+
+        // Moderate operations: writes, creates, updates
+        if id_lower.contains("write")
+            || id_lower.contains("create")
+            || id_lower.contains("update")
+            || id_lower.contains("modify")
+            || id_lower.contains("edit")
+        {
+            return "medium".to_string();
+        }
+
+        // Default: read operations are safe
+        "low".to_string()
+    }
+
+    /// Generate a simulated result for a capability in dry-run mode
+    /// Returns a mock value based on the capability's expected output schema
+    pub fn generate_simulated_result(
+        &self,
+        capability_id: &str,
+        _args: &[Value],
+    ) -> RuntimeResult<Value> {
+        // For now, return a simple mock result
+        // TODO: In the future, this could:
+        // 1. Look up capability manifest to get output schema
+        // 2. Generate a value matching that schema
+        // 3. Include realistic mock data based on capability type
+
+        let id_lower = capability_id.to_lowercase();
+
+        // Generate appropriate mock based on capability type
+        if id_lower.contains("list") || id_lower.contains("get") || id_lower.contains("fetch") {
+            // Read operations: return empty list or empty map
+            Ok(Value::List(vec![]))
+        } else if id_lower.contains("create") || id_lower.contains("write") {
+            // Write operations: return success indicator
+            let mut map = std::collections::HashMap::new();
+            map.insert(MapKey::String("success".to_string()), Value::Boolean(true));
+            map.insert(
+                MapKey::String("id".to_string()),
+                Value::String("simulated-id".to_string()),
+            );
+            Ok(Value::Map(map))
+        } else if id_lower.contains("delete") || id_lower.contains("remove") {
+            // Delete operations: return success
+            Ok(Value::Boolean(true))
+        } else if id_lower.contains("payment") || id_lower.contains("charge") {
+            // Payment operations: return transaction ID
+            let mut map = std::collections::HashMap::new();
+            map.insert(
+                MapKey::String("transaction_id".to_string()),
+                Value::String("simulated-txn-12345".to_string()),
+            );
+            map.insert(
+                MapKey::String("status".to_string()),
+                Value::String("simulated".to_string()),
+            );
+            Ok(Value::Map(map))
+        } else {
+            // Default: return nil
+            Ok(Value::Nil)
         }
     }
 }

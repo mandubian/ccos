@@ -1,0 +1,125 @@
+(plan
+  :name "smart-assistant-cognitive-flow"
+  :description "Meta-plan for the AI planner. Given a human goal, this plan orchestrates planner.* capabilities to generate, refine, and materialize an executable plan, while exposing its reasoning back to the human."
+  :version "1.0"
+
+  ;; --- INPUT & OUTPUT (FOR THE AI) ---
+  :input-schema {:goal :string
+                 :max_refinement_cycles :integer}
+  :output-schema {:result :any
+                   :final_plan :any
+                   :coverage :any
+                   :requirements :vector
+                   :trace :vector}
+
+  ;; --- STEPS ---
+
+  (step
+    :id "extract_goal_signals"
+    :description "Extract GoalSignals and initial MustCallCapability requirements from the human goal."
+    :capability "planner.extract_goal_signals"
+    :input {:goal (:goal context)}
+    :output {:goal_signals "goal_signals"})
+
+  (step
+    :id "build_initial_menu"
+    :description "Build the initial capability menu (including synthetic scaffolds) from GoalSignals."
+    :capability "planner.build_capability_menu"
+    :input {:goal_signals (:goal_signals (step "extract_goal_signals"))}
+    :output {:menu "capability_menu"})
+
+  (step
+    :id "initial_plan_synthesis"
+    :description "Ask the LLM (via planner.synthesize_plan_steps) to propose an initial plan given the current menu."
+    :capability "planner.synthesize_plan_steps"
+    :input {:goal_signals (:goal_signals (step "extract_goal_signals"))
+            :menu (:menu (step "build_initial_menu"))}
+    :output {:plan "initial_plan"})
+
+  (step
+    :id "refinement_loop"
+    :description "Iteratively validate coverage, resolve capability gaps, and refine the plan until it is executable or we reach limits."
+    :capability "ccos.control.loop"
+    :input {
+      :initial_state {
+        :plan_to_refine (:plan (step "initial_plan_synthesis"))
+        :goal_signals (:goal_signals (step "extract_goal_signals"))
+        :cycle 0
+        :max_cycles (:max_refinement_cycles context)
+        :trace ["Initial plan synthesized from goal."]
+        :last_coverage nil
+        :last_requirements []
+      }
+      :loop_body (fn [state]
+        (let [
+          ;; --- 1. Validate plan & compute coverage ---
+          validation (call "planner.validate_plan" {:plan (:plan_to_refine state)
+                                                    :goal_signals (:goal_signals state)})
+          coverage (:coverage validation)
+          requirements (:requirements coverage)
+          refinement_needed (:needs_refinement coverage)
+          current_trace (:trace state)
+
+          ;; --- Loop Termination Condition ---
+          stop_loop (or (not refinement_needed)
+                        (>= (:cycle state) (:max_cycles state)))
+        ]
+        (if stop_loop
+          ;; --- EXIT LOOP: Plan considered final for now ---
+          (merge state
+                 {:stop true
+                  :final_plan (:plan_to_refine state)
+                  :last_coverage coverage
+                  :last_requirements requirements
+                  :trace (conj current_trace "Refinement complete or limits reached.")})
+
+          ;; --- CONTINUE LOOP: Resolve gaps and refine ---
+          (let [
+            ;; --- 2. Resolve capability gaps ---
+            resolution (call "planner.resolve_capability_gaps" {:coverage coverage
+                                                                 :goal_signals (:goal_signals state)})
+            updated_goal_signals (:goal_signals resolution)
+            updated_menu_result (call "planner.build_capability_menu" {:goal_signals updated_goal_signals})
+            updated_menu (:menu updated_menu_result)
+
+            ;; --- 3. Ask LLM to refine plan given new menu and diagnostics ---
+            refined_plan_result (call "planner.synthesize_plan_steps" {:goal_signals updated_goal_signals
+                                                                         :menu updated_menu
+                                                                         :previous_plan (:plan_to_refine state)
+                                                                         :previous_coverage coverage
+                                                                         :resolution_summary (:summary resolution)})
+            next_plan (:plan refined_plan_result)
+            refinement_log (:log refined_plan_result)
+          ]
+          ;; --- Update state for next iteration ---
+          {
+            :plan_to_refine next_plan
+            :goal_signals updated_goal_signals
+            :cycle (+ (:cycle state) 1)
+            :max_cycles (:max_cycles state)
+            :last_coverage coverage
+            :last_requirements requirements
+            :trace (conj current_trace refinement_log)
+            :stop false
+          }
+        ))))
+    }
+    :output {:loop_result "refinement_result"})
+
+  (step
+    :id "execute_final_plan"
+    :description "Execute the fully resolved and refined plan (if governance and quotas allow)."
+    :capability "ccos.arbiter.execute_plan"
+    :input {:plan (:final_plan (:loop_result (step "refinement_loop")))}
+    :output {:result "execution_result"})
+
+  (step
+    :id "final_output"
+    :description "Return result, final plan, coverage, and planner trace for the human and future LLM calls."
+    :capability "core.data.create_map"
+    :input {:result (:result (step "execute_final_plan"))
+            :final_plan (:final_plan (:loop_result (step "refinement_loop")))
+            :coverage (:last_coverage (:loop_result (step "refinement_loop")))
+            :requirements (:last_requirements (:loop_result (step "refinement_loop")))
+            :trace (:trace (:loop_result (step "refinement_loop")))})
+)

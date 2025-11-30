@@ -1,6 +1,6 @@
-use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::ir::core::{IrMapEntry, IrNode};
 use rtfs::runtime::ir_runtime::IrRuntime;
+use rtfs::runtime::pure_host::create_pure_host;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 use std::sync::Arc;
@@ -117,9 +117,7 @@ fn step_params_eval_failure_cleanup() {
             ir_type: rtfs::ir::core::IrType::Int,
             source_location: None,
         }],
-        ir_type: rtfs::ir::core::IrType::Vector(Box::new(
-            rtfs::ir::core::IrType::Int,
-        )),
+        ir_type: rtfs::ir::core::IrType::Vector(Box::new(rtfs::ir::core::IrType::Int)),
         source_location: None,
     };
 
