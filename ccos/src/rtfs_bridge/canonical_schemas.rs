@@ -363,10 +363,9 @@ mod tests {
             MapKey::String(":description".to_string()),
             Value::String("A test capability".to_string()),
         );
-        // Use string provider type "mcp" to indicate remote capability (doesn't need :language)
         cap_map.insert(
-            MapKey::String(":provider".to_string()),
-            Value::String("mcp".to_string()),
+            MapKey::String(":language".to_string()),
+            Value::String("rust".to_string()),
         );
 
         let result = CanonicalCapabilitySchema::validate(&cap_map);

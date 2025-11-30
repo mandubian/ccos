@@ -18,7 +18,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::agent::AgentRegistry; // bring trait into scope for record_feedback
+// AgentRegistry migration: Removed AgentRegistry import
+// Agents are now managed via CapabilityMarketplace with :kind :agent capabilities
 use crate::arbiter::prompt::{FilePromptStore, PromptStore};
 use crate::arbiter::{Arbiter, DelegatingArbiter};
 use crate::capability_marketplace::CapabilityMarketplace;
@@ -59,7 +60,8 @@ pub struct CCOS {
     pub rtfs_runtime: Arc<Mutex<dyn RTFSRuntime>>,
     // Optional LLM-driven engine
     pub delegating_arbiter: Option<Arc<DelegatingArbiter>>,
-    pub agent_registry: Arc<std::sync::RwLock<crate::agent::InMemoryAgentRegistry>>, // M4
+    // AgentRegistry migration: Removed agent_registry field
+    // Agents are now managed via CapabilityMarketplace with :kind :agent capabilities
     pub agent_config: Arc<AgentConfig>, // Global agent configuration (future: loaded from RTFS form)
     /// Missing capability resolver for runtime trap functionality
     pub missing_capability_resolver:
@@ -359,10 +361,8 @@ impl CCOS {
             Arc::clone(&intent_graph),
         ));
 
-        // Initialize AgentRegistry (M4) from agent configuration
-        let agent_registry = Arc::new(std::sync::RwLock::new(
-            crate::agent::InMemoryAgentRegistry::new(),
-        ));
+        // AgentRegistry migration: Agents are now registered as capabilities with :kind :agent
+        // TODO: Migrate delegation feedback tracking to CapabilityMarketplace
 
         // Allow enabling delegation via environment variable for examples / dev runs
         // If the AgentConfig doesn't explicitly enable delegation, allow an env override.
@@ -559,7 +559,6 @@ impl CCOS {
                 Arc::new(ModuleRegistry::new()),
             ))),
             delegating_arbiter,
-            agent_registry,
             agent_config,
             missing_capability_resolver: Some(missing_capability_resolver),
             debug_callback: debug_callback.clone(),
@@ -978,16 +977,13 @@ impl CCOS {
                             let _ =
                                 chain.record_delegation_event(&stored.intent_id, "completed", meta);
                         }
-                        // Feedback update (rolling average) via registry
-                        if result.success {
-                            if let Ok(mut reg) = self.agent_registry.write() {
-                                reg.record_feedback(&agent_id, true);
-                            }
-                        } else {
-                            if let Ok(mut reg) = self.agent_registry.write() {
-                                reg.record_feedback(&agent_id, false);
-                            }
-                        }
+                        // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
+                        // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
+                        // if result.success {
+                        //     // Update agent capability success metrics in marketplace
+                        // } else {
+                        //     // Update agent capability failure metrics in marketplace
+                        // }
                     }
                 }
             }
@@ -1135,15 +1131,13 @@ impl CCOS {
                             let _ =
                                 chain.record_delegation_event(&stored.intent_id, "completed", meta);
                         }
-                        if result.success {
-                            if let Ok(mut reg) = self.agent_registry.write() {
-                                reg.record_feedback(&agent_id, true);
-                            }
-                        } else {
-                            if let Ok(mut reg) = self.agent_registry.write() {
-                                reg.record_feedback(&agent_id, false);
-                            }
-                        }
+                        // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
+                        // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
+                        // if result.success {
+                        //     // Update agent capability success metrics in marketplace
+                        // } else {
+                        //     // Update agent capability failure metrics in marketplace
+                        // }
                     }
                 }
             }
@@ -1286,14 +1280,13 @@ impl CCOS {
                                 meta,
                             );
                         }
-                        // Update agent registry
-                        if let Ok(mut reg) = self.agent_registry.write() {
-                            if result.success {
-                                let _ = reg.record_feedback(&agent_id, true);
-                            } else {
-                                let _ = reg.record_feedback(&agent_id, false);
-                            }
-                        }
+                        // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
+                        // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
+                        // if result.success {
+                        //     // Update agent capability success metrics in marketplace
+                        // } else {
+                        //     // Update agent capability failure metrics in marketplace
+                        // }
                     }
                 }
             }
@@ -1327,20 +1320,8 @@ impl CCOS {
         self.missing_capability_resolver.as_ref().map(Arc::clone)
     }
 
-    pub fn get_agent_registry(
-        &self,
-    ) -> Arc<std::sync::RwLock<crate::agent::InMemoryAgentRegistry>> {
-        Arc::clone(&self.agent_registry)
-    }
-
-    /// Optional-style accessor for symmetry with older code paths that treated
-    /// the registry as optional. Always returns Some but keeps call sites
-    /// forward-compatible if registry becomes optional again.
-    pub fn get_agent_registry_opt(
-        &self,
-    ) -> Option<Arc<std::sync::RwLock<crate::agent::InMemoryAgentRegistry>>> {
-        Some(Arc::clone(&self.agent_registry))
-    }
+    // AgentRegistry migration: Removed get_agent_registry() methods
+    // Use CapabilityMarketplace.get_capability() with :kind :agent filter instead
 
     pub fn get_delegating_arbiter(&self) -> Option<Arc<DelegatingArbiter>> {
         self.delegating_arbiter.as_ref().map(Arc::clone)

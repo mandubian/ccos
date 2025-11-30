@@ -180,16 +180,16 @@ impl ToolAliasStore {
         None
     }
 
-    fn suggest_mcp_token_env_var(server_name: &str) -> String {
-        let namespace = if let Some(slash_pos) = server_name.find('/') {
-            &server_name[..slash_pos]
-        } else {
-            server_name
-        };
+    // fn suggest_mcp_token_env_var(server_name: &str) -> String {
+    //     let namespace = if let Some(slash_pos) = server_name.find('/') {
+    //         &server_name[..slash_pos]
+    //     } else {
+    //         server_name
+    //     };
 
-        let normalized = namespace.replace('-', "_").to_uppercase();
-        format!("{}_MCP_TOKEN", normalized)
-    }
+    //     let normalized = namespace.replace('-', "_").to_uppercase();
+    //     format!("{}_MCP_TOKEN", normalized)
+    // }
 
     async fn materialize_alias(
         alias: &ToolAliasRecord,

@@ -2,7 +2,7 @@
 // Cognitive Computing Operating System - orchestration layer built on RTFS
 
 // Include the CCOS module structure
-pub mod agent;
+// AgentRegistry migration: agent module removed (deprecated, use CapabilityMarketplace with :kind :agent)
 pub mod arbiter;
 pub mod archivable_types;
 pub mod catalog;
