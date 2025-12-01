@@ -21,8 +21,12 @@ pub struct ServerInfo {
     pub id: String,
     pub name: String,
     pub endpoint: String,
+    pub description: Option<String>,
+    pub source: Option<String>,
+    pub matching_capabilities: Option<Vec<String>>,
     pub status: String,
     pub health_score: Option<f64>,
+    pub auth_status: Option<String>,
 }
 
 /// Server list output
@@ -37,6 +41,10 @@ pub struct ServerListOutput {
 pub struct ApprovalItem {
     pub id: String,
     pub server_name: String,
+    pub endpoint: String,
+    pub source: String,
+    pub risk_level: String,
+    pub goal: Option<String>,
     pub status: String,
     pub requested_at: String,
 }

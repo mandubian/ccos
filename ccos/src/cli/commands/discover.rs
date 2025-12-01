@@ -1,6 +1,5 @@
 use crate::cli::CliContext;
 use crate::cli::OutputFormatter;
-use crate::discovery::{ApprovalQueue, GoalDiscoveryAgent};
 use clap::Subcommand;
 use rtfs::runtime::error::RuntimeResult;
 
@@ -42,10 +41,7 @@ pub async fn execute(
         DiscoverCommand::Goal { goal } => {
             ctx.status(&format!("Discovering capabilities for goal: {}", goal));
 
-            let queue = ApprovalQueue::new("."); // TODO: use configured path
-            let agent = GoalDiscoveryAgent::new(queue);
-
-            let queued_ids = agent.process_goal(&goal).await?;
+            let queued_ids = crate::ops::discover::discover_by_goal(goal).await?;
 
             if queued_ids.is_empty() {
                 formatter.warning("No capabilities found.");
@@ -79,4 +75,3 @@ pub async fn execute(
 
     Ok(())
 }
-

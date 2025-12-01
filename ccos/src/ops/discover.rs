@@ -1,17 +1,19 @@
 //! Discovery operations - pure logic functions for capability discovery
 
+use crate::discovery::{ApprovalQueue, GoalDiscoveryAgent};
 use rtfs::runtime::error::RuntimeResult;
 
 /// Goal-driven discovery
 pub async fn discover_by_goal(goal: String) -> RuntimeResult<Vec<String>> {
-    // TODO: Implement goal-driven discovery logic
-    Ok(vec!["discovery_result_1".to_string(), "discovery_result_2".to_string()])
+    let queue = ApprovalQueue::new(".");
+    let agent = GoalDiscoveryAgent::new(queue);
+    agent.process_goal(&goal).await
 }
 
 /// Search catalog
-pub async fn search_catalog(query: String) -> RuntimeResult<Vec<String>> {
+pub async fn search_catalog(_query: String) -> RuntimeResult<Vec<String>> {
     // TODO: Implement catalog search logic
-    Ok(vec!["search_result_1".to_string(), "search_result_2".to_string()])
+    Ok(vec![])
 }
 
 /// Inspect capability details

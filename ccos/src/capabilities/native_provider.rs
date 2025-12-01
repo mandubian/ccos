@@ -645,12 +645,15 @@ fn create_approval_approve_capability() -> NativeCapability {
     let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
         let inputs = inputs.clone();
         async move {
-            let id = match inputs {
-                Value::String(s) => s.clone(),
-                _ => get_string_param(&inputs, "id")?,
+            let (id, reason) = match inputs {
+                Value::String(s) => (s.clone(), None),
+                _ => (
+                    get_string_param(&inputs, "id")?,
+                    get_string_param(&inputs, "reason").ok()
+                ),
             };
 
-            match ops::approval::approve_discovery(id).await {
+            match ops::approval::approve_discovery(id, reason).await {
                 Ok(_) => Ok(Value::String("Approval successful".to_string())),
                 Err(e) => Err(e),
             }
@@ -668,12 +671,15 @@ fn create_approval_reject_capability() -> NativeCapability {
     let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
         let inputs = inputs.clone();
         async move {
-            let id = match inputs {
-                Value::String(s) => s.clone(),
-                _ => get_string_param(&inputs, "id")?,
+            let (id, reason) = match inputs {
+                Value::String(s) => (s.clone(), "Rejected via capability".to_string()),
+                _ => (
+                    get_string_param(&inputs, "id")?,
+                    get_string_param(&inputs, "reason").unwrap_or_else(|_| "Rejected via capability".to_string())
+                ),
             };
 
-            match ops::approval::reject_discovery(id).await {
+            match ops::approval::reject_discovery(id, reason).await {
                 Ok(_) => Ok(Value::String("Rejection successful".to_string())),
                 Err(e) => Err(e),
             }
