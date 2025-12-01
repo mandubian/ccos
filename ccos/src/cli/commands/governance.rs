@@ -19,10 +19,25 @@ pub enum GovernanceCommand {
 
 pub async fn execute(
     _ctx: &mut CliContext,
-    _command: GovernanceCommand,
+    command: GovernanceCommand,
 ) -> RuntimeResult<()> {
-    // Placeholder
-    println!("Governance command not yet implemented");
+    match command {
+        GovernanceCommand::Check { action } => {
+            let allowed = crate::ops::governance::check_action(action).await?;
+            if allowed {
+                println!("Action allowed.");
+            } else {
+                println!("Action denied.");
+            }
+        }
+        GovernanceCommand::Audit => {
+            let trail = crate::ops::governance::view_audit().await?;
+            println!("{}", trail);
+        }
+        GovernanceCommand::Constitution => {
+            let content = crate::ops::governance::view_constitution().await?;
+            println!("{}", content);
+        }
+    }
     Ok(())
 }
-

@@ -14,6 +14,10 @@ pub async fn list_pending() -> RuntimeResult<ApprovalListOutput> {
         ApprovalItem {
             id: item.id,
             server_name: item.server_info.name,
+            endpoint: item.server_info.endpoint,
+            source: item.source.name(),
+            risk_level: format!("{:?}", item.risk_assessment.level),
+            goal: item.requesting_goal,
             status: "pending".to_string(),
             requested_at: item.requested_at.to_rfc3339(),
         }
@@ -26,16 +30,16 @@ pub async fn list_pending() -> RuntimeResult<ApprovalListOutput> {
 }
 
 /// Approve a discovery
-pub async fn approve_discovery(id: String) -> RuntimeResult<()> {
+pub async fn approve_discovery(id: String, reason: Option<String>) -> RuntimeResult<()> {
     let queue = ApprovalQueue::new(".");
-    queue.approve(&id, None)?;
+    queue.approve(&id, reason)?;
     Ok(())
 }
 
 /// Reject a discovery
-pub async fn reject_discovery(id: String) -> RuntimeResult<()> {
+pub async fn reject_discovery(id: String, reason: String) -> RuntimeResult<()> {
     let queue = ApprovalQueue::new(".");
-    queue.reject(&id, "Rejected via CLI".to_string())?;
+    queue.reject(&id, reason)?;
     Ok(())
 }
 
@@ -48,6 +52,10 @@ pub async fn list_timeout() -> RuntimeResult<ApprovalListOutput> {
         ApprovalItem {
             id: item.id,
             server_name: item.server_info.name,
+            endpoint: item.server_info.endpoint,
+            source: item.source.name(),
+            risk_level: format!("{:?}", item.risk_assessment.level), // Risk level still relevant for timeouts?
+            goal: item.requesting_goal,
             status: "timeout".to_string(),
             requested_at: item.requested_at.to_rfc3339(),
         }

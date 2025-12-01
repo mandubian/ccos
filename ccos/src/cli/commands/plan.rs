@@ -25,10 +25,25 @@ pub enum PlanCommand {
 
 pub async fn execute(
     _ctx: &mut CliContext,
-    _command: PlanCommand,
+    command: PlanCommand,
 ) -> RuntimeResult<()> {
-    // Placeholder
-    println!("Plan command not yet implemented");
+    match command {
+        PlanCommand::Create { goal } => {
+            let result = crate::ops::plan::create_plan(goal).await?;
+            println!("{}", result);
+        }
+        PlanCommand::Execute { plan } => {
+            let result = crate::ops::plan::execute_plan(plan).await?;
+            println!("{}", result);
+        }
+        PlanCommand::Validate { plan } => {
+            let valid = crate::ops::plan::validate_plan(plan).await?;
+            if valid {
+                println!("Plan is valid.");
+            } else {
+                println!("Plan is invalid.");
+            }
+        }
+    }
     Ok(())
 }
-

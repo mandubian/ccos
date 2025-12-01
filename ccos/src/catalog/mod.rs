@@ -468,7 +468,7 @@ fn infer_source_from_provider(
         ProviderType::MCP(_) | ProviderType::OpenApi(_) | ProviderType::Registry(_) => {
             CatalogSource::Discovered
         }
-        ProviderType::Local(_) | ProviderType::RemoteRTFS(_) | ProviderType::Stream(_) => {
+        ProviderType::Local(_) | ProviderType::RemoteRTFS(_) | ProviderType::Stream(_) | ProviderType::Native(_) => {
             CatalogSource::Generated
         }
         ProviderType::Http(_) | ProviderType::A2A(_) | ProviderType::Plugin(_) => {
@@ -489,6 +489,7 @@ fn provider_to_string(provider: &crate::capability_marketplace::types::ProviderT
         ProviderType::RemoteRTFS(_) => "remote_rtfs",
         ProviderType::Stream(_) => "stream",
         ProviderType::Registry(_) => "registry",
+        ProviderType::Native(_) => "native",
     }
     .to_string()
 }

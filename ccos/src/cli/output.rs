@@ -86,6 +86,21 @@ impl OutputFormatter {
         }
     }
 
+    /// Print an info message
+    pub fn info(&self, message: &str) {
+        match self.format {
+            OutputFormat::Json => {
+                println!(
+                    "{}",
+                    serde_json::json!({"status": "info", "message": message})
+                );
+            }
+            _ => {
+                println!("{} {}", "i".blue(), message);
+            }
+        }
+    }
+
     /// Print a warning message
     pub fn warning(&self, message: &str) {
         match self.format {
