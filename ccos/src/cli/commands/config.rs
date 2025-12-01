@@ -1,6 +1,7 @@
 //! Config command - configuration management
 
 use crate::cli::{CliContext, OutputFormat, OutputFormatter};
+use crate::ops::config;
 use clap::Subcommand;
 use rtfs::runtime::error::RuntimeResult;
 
@@ -33,7 +34,7 @@ pub async fn execute(ctx: &CliContext, command: ConfigCommand) -> RuntimeResult<
 
     match &command {
         ConfigCommand::Show { section } => {
-            command.show_config(ctx, section.as_deref(), &formatter)
+            command.show_config(ctx, section.as_deref(), &formatter).await
         }
         ConfigCommand::Validate => command.validate_config(ctx, &formatter),
         ConfigCommand::Init { output, force } => {
@@ -43,131 +44,29 @@ pub async fn execute(ctx: &CliContext, command: ConfigCommand) -> RuntimeResult<
 }
 
 impl ConfigCommand {
-    fn show_config(
+    async fn show_config(
         &self,
         ctx: &CliContext,
-        section: Option<&str>,
+        _section: Option<&str>,
         formatter: &OutputFormatter,
     ) -> RuntimeResult<()> {
+        // Use ops function to get config info
+        let config_info = config::show_config(ctx.config_path.clone()).await?;
+
         match ctx.output_format {
             OutputFormat::Json => {
-                if let Some(section_name) = section {
-                    match section_name {
-                        "llm_profiles" | "llm-profiles" | "llm" => {
-                            formatter.json(&ctx.config.llm_profiles);
-                        }
-                        "discovery" => {
-                            formatter.json(&ctx.config.discovery);
-                        }
-                        "governance" => {
-                            formatter.json(&ctx.config.governance);
-                        }
-                        "capabilities" => {
-                            formatter.json(&ctx.config.capabilities);
-                        }
-                        "marketplace" => {
-                            formatter.json(&ctx.config.marketplace);
-                        }
-                        "agent" => {
-                            // Basic agent info
-                            let info = serde_json::json!({
-                                "agent_id": ctx.config.agent_id,
-                                "profile": ctx.config.profile,
-                                "version": ctx.config.version,
-                            });
-                            formatter.json(&info);
-                        }
-                        _ => {
-                            formatter.error(&format!("Unknown section: {}", section_name));
-                            formatter.list_item("Available sections: llm_profiles, discovery, governance, capabilities, marketplace, agent");
-                            return Ok(());
-                        }
-                    }
-                } else {
-                    formatter.json(&ctx.config);
-                }
+                formatter.json(&config_info);
             }
             _ => {
                 formatter.section("Configuration");
-                formatter.kv("Config file", ctx.config_path.to_string_lossy().as_ref());
-                println!();
+                formatter.kv("Config file", &config_info.config_path);
+                formatter.kv("Valid", if config_info.is_valid { "Yes" } else { "No" });
 
-                if section.is_none() || section == Some("agent") {
-                    formatter.section("Agent");
-                    formatter.kv("Agent ID", &ctx.config.agent_id);
-                    formatter.kv("Profile", &ctx.config.profile);
-                    formatter.kv("Version", &ctx.config.version);
-                    println!();
-                }
-
-                if section.is_none() || section == Some("llm_profiles") {
-                    formatter.section("LLM Profiles");
-                    if let Some(ref profiles_config) = ctx.config.llm_profiles {
-                        if profiles_config.profiles.is_empty()
-                            && profiles_config
-                                .model_sets
-                                .as_ref()
-                                .map_or(true, |s| s.is_empty())
-                        {
-                            formatter.list_item("(none configured)");
-                        } else {
-                            // List explicit profiles
-                            for profile in &profiles_config.profiles {
-                                formatter.list_item(&format!(
-                                    "{} ({}/{})",
-                                    profile.name, profile.provider, profile.model
-                                ));
-                            }
-                            // List model sets
-                            if let Some(ref model_sets) = profiles_config.model_sets {
-                                for set in model_sets {
-                                    formatter.list_item(&format!(
-                                        "[Model Set] {} ({} provider, {} models)",
-                                        set.name,
-                                        set.provider,
-                                        set.models.len()
-                                    ));
-                                }
-                            }
-                        }
-                        if let Some(ref default) = profiles_config.default {
-                            formatter.kv("Default profile", default);
-                        }
-                    } else {
-                        formatter.list_item("(no llm_profiles section)");
+                if !config_info.warnings.is_empty() {
+                    formatter.warning("Configuration warnings:");
+                    for warning in &config_info.warnings {
+                        formatter.list_item(warning);
                     }
-                    println!();
-                }
-
-                if section.is_none() || section == Some("discovery") {
-                    formatter.section("Discovery");
-                    formatter.kv(
-                        "Match threshold",
-                        &ctx.config.discovery.match_threshold.to_string(),
-                    );
-                    formatter.kv(
-                        "Use embeddings",
-                        &ctx.config.discovery.use_embeddings.to_string(),
-                    );
-                    if let Some(ref model) = ctx.config.discovery.embedding_model {
-                        formatter.kv("Embedding model", model);
-                    }
-                    println!();
-                }
-
-                if section.is_none() || section == Some("governance") {
-                    formatter.section("Governance");
-                    if ctx.config.governance.policies.is_empty() {
-                        formatter.list_item("(no policies configured)");
-                    } else {
-                        for (name, policy) in &ctx.config.governance.policies {
-                            formatter.list_item(&format!(
-                                "{}: risk_tier={}, approvals={}",
-                                name, policy.risk_tier, policy.requires_approvals
-                            ));
-                        }
-                    }
-                    println!();
                 }
             }
         }

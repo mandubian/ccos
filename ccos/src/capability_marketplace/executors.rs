@@ -19,6 +19,7 @@ pub trait CapabilityExecutor: Send + Sync {
     async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value>;
 }
 
+use crate::capabilities::native_provider::NativeCapabilityProvider;
 use crate::capabilities::SessionPoolManager;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -1007,6 +1008,7 @@ pub enum ExecutorVariant {
     Http(HttpExecutor),
     OpenApi(OpenApiExecutor),
     Registry(RegistryExecutor),
+    Native(NativeCapabilityProvider),
 }
 
 impl ExecutorVariant {
@@ -1018,6 +1020,18 @@ impl ExecutorVariant {
             ExecutorVariant::Http(e) => e.execute(provider, inputs).await,
             ExecutorVariant::OpenApi(e) => e.execute(provider, inputs).await,
             ExecutorVariant::Registry(e) => e.execute(provider, inputs).await,
+            ExecutorVariant::Native(native_provider) => {
+                // For Native capabilities, the provider type contains the capability ID
+                // and we dispatch through the NativeCapabilityProvider
+                if let ProviderType::Native(native) = provider {
+                    // Execute the native capability handler directly
+                    (native.handler)(inputs)
+                } else {
+                    Err(RuntimeError::Generic(
+                        "ProviderType mismatch for Native executor".to_string(),
+                    ))
+                }
+            }
         }
     }
 }

@@ -3,6 +3,7 @@ use super::executors::{
     A2AExecutor, ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor, OpenApiExecutor,
     RegistryExecutor,
 };
+use crate::capabilities::native_provider::NativeCapabilityProvider;
 use super::resource_monitor::ResourceMonitor;
 use super::types::*;
 use super::versioning::{compare_versions, detect_breaking_changes, VersionComparison};
@@ -109,7 +110,8 @@ impl SerializableProvider {
             ProviderType::Local(_)
             | ProviderType::Stream(_)
             | ProviderType::Registry(_)
-            | ProviderType::Plugin(_) => None,
+            | ProviderType::Plugin(_)
+            | ProviderType::Native(_) => None,
         }
     }
 
@@ -197,7 +199,8 @@ fn infer_catalog_source(manifest: &CapabilityManifest) -> CatalogSource {
         | ProviderType::Stream(_)
         | ProviderType::Http(_)
         | ProviderType::Plugin(_)
-        | ProviderType::A2A(_) => CatalogSource::Generated,
+        | ProviderType::A2A(_)
+        | ProviderType::Native(_) => CatalogSource::Generated,
     }
 }
 
@@ -319,6 +322,10 @@ impl CapabilityMarketplace {
         marketplace.executor_registry.insert(
             TypeId::of::<RegistryCapability>(),
             ExecutorVariant::Registry(RegistryExecutor),
+        );
+        marketplace.executor_registry.insert(
+            TypeId::of::<NativeCapability>(),
+            ExecutorVariant::Native(NativeCapabilityProvider::new()),
         );
         marketplace
     }
@@ -1205,6 +1212,56 @@ impl CapabilityMarketplace {
         Ok(())
     }
 
+    /// Register a native capability dynamically
+    pub async fn register_native_capability(
+        &self,
+        id: String,
+        name: String,
+        description: String,
+        handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync>,
+        security_level: String,
+    ) -> Result<(), RuntimeError> {
+        let provenance = CapabilityProvenance {
+            source: "native".to_string(),
+            version: Some("1.0.0".to_string()),
+            content_hash: self.compute_content_hash(&format!(
+                "{}{}{}{}",
+                id, name, description, security_level
+            )),
+            custody_chain: vec!["native_registration".to_string()],
+            registered_at: chrono::Utc::now(),
+        };
+
+        let mut metadata = HashMap::new();
+        metadata.insert("security_level".to_string(), security_level.clone());
+
+        let capability = CapabilityManifest {
+            id: id.clone(),
+            name,
+            description,
+            provider: ProviderType::Native(NativeCapability {
+                handler,
+                security_level: security_level.clone(),
+                metadata: HashMap::new(),
+            }),
+            version: "1.0.0".to_string(),
+            input_schema: None,
+            output_schema: None,
+            attestation: None,
+            provenance: Some(provenance),
+            permissions: vec![],
+            effects: vec![],
+            metadata,
+            agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
+        };
+
+        let mut caps = self.capabilities.write().await;
+        caps.insert(id, capability);
+        Ok(())
+    }
+
     pub async fn register_mcp_capability(
         &self,
         id: String,
@@ -1823,6 +1880,7 @@ impl CapabilityMarketplace {
                 ProviderType::RemoteRTFS(_) => std::any::TypeId::of::<RemoteRTFSCapability>(),
                 ProviderType::Stream(_) => std::any::TypeId::of::<StreamCapabilityImpl>(),
                 ProviderType::Registry(_) => std::any::TypeId::of::<RegistryCapability>(),
+                ProviderType::Native(_) => std::any::TypeId::of::<NativeCapability>(),
             }) {
             executor.execute(&manifest.provider, inputs_ref).await
         } else {
@@ -1852,6 +1910,9 @@ impl CapabilityMarketplace {
                 ProviderType::Registry(_) => Err(RuntimeError::Generic(
                     "Registry provider missing executor".to_string(),
                 )),
+                ProviderType::Native(native) => {
+                    (native.handler)(inputs_ref)
+                }
             }
         }?;
 
@@ -2120,6 +2181,7 @@ impl CapabilityMarketplace {
                 ProviderType::RemoteRTFS(_) => "remote_rtfs",
                 ProviderType::Stream(_) => "stream",
                 ProviderType::Registry(_) => "registry",
+                ProviderType::Native(_) => "native",
             };
             // Namespace heuristic: split by '.' keep first or use entire if absent
             let namespace = id.split('.').next().unwrap_or("");
@@ -2150,6 +2212,7 @@ impl CapabilityMarketplace {
                 ProviderType::RemoteRTFS(_) => "remote_rtfs",
                 ProviderType::Stream(_) => "stream",
                 ProviderType::Registry(_) => "registry",
+                ProviderType::Native(_) => "native",
             };
             *by_provider.entry(provider_label).or_insert(0) += 1;
             let ns = id.split('.').next().unwrap_or("").to_string();
@@ -2186,24 +2249,25 @@ impl CapabilityMarketplace {
         for cap in caps.values() {
             // Skip non-serializable provider types
             let provider_label = match &cap.provider {
-                ProviderType::Http(_) => ":http",
-                ProviderType::OpenApi(_) => ":openapi",
-                ProviderType::MCP(_) => ":mcp",
-                ProviderType::A2A(_) => ":a2a",
-                ProviderType::RemoteRTFS(_) => ":remote_rtfs",
-                ProviderType::Local(_)
-                | ProviderType::Stream(_)
-                | ProviderType::Registry(_)
-                | ProviderType::Plugin(_) => {
-                    if let Some(cb) = &self.debug_callback {
-                        cb(format!(
-                            "Skipping RTFS export for non-serializable provider: {}",
-                            cap.id
-                        ));
+                    ProviderType::Http(_) => ":http",
+                    ProviderType::OpenApi(_) => ":openapi",
+                    ProviderType::MCP(_) => ":mcp",
+                    ProviderType::A2A(_) => ":a2a",
+                    ProviderType::RemoteRTFS(_) => ":remote_rtfs",
+                    ProviderType::Local(_)
+                    | ProviderType::Stream(_)
+                    | ProviderType::Registry(_)
+                    | ProviderType::Plugin(_)
+                    | ProviderType::Native(_) => {
+                        if let Some(cb) = &self.debug_callback {
+                            cb(format!(
+                                "Skipping RTFS export for non-serializable provider: {}",
+                                cap.id
+                            ));
+                        }
+                        continue;
                     }
-                    continue;
-                }
-            };
+                };
 
             let input_schema_str = cap
                 .input_schema
@@ -2764,5 +2828,82 @@ impl CapabilityMarketplace {
         }
 
         Ok(loaded)
+    }
+
+    /// Add native capability provider to the marketplace
+    pub fn add_native_provider(&mut self, native_provider: NativeCapabilityProvider) {
+        // Store the native provider in the executor registry
+        self.executor_registry.insert(
+            TypeId::of::<NativeCapability>(),
+            ExecutorVariant::Native(native_provider),
+        );
+    }
+
+    /// Get the native capability provider if available
+    pub fn get_native_provider(&self) -> Option<&NativeCapabilityProvider> {
+        self.executor_registry
+            .get(&TypeId::of::<NativeCapability>())
+            .and_then(|variant| match variant {
+                ExecutorVariant::Native(provider) => Some(provider),
+                _ => None,
+            })
+    }
+
+    /// Register a native capability through the native provider
+    pub fn register_native_capability_via_provider(
+        &mut self,
+        id: String,
+        name: String,
+        description: String,
+        handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync>,
+        security_level: String,
+    ) -> RuntimeResult<()> {
+        if let Some(native_provider) = self.get_native_provider_mut() {
+            native_provider.register_native_capability_with_metadata(
+                id,
+                name,
+                description,
+                handler,
+                security_level,
+            )
+        } else {
+            Err(RuntimeError::Generic(
+                "Native capability provider not available".to_string(),
+            ))
+        }
+    }
+
+    /// Register an RTFS capability through the native provider
+    pub fn register_rtfs_capability_via_provider(
+        &mut self,
+        id: String,
+        name: String,
+        description: String,
+        rtfs_function: String,
+        security_level: String,
+    ) -> RuntimeResult<()> {
+        if let Some(native_provider) = self.get_native_provider_mut() {
+            native_provider.register_rtfs_capability_with_metadata(
+                id,
+                name,
+                description,
+                rtfs_function,
+                security_level,
+            )
+        } else {
+            Err(RuntimeError::Generic(
+                "Native capability provider not available".to_string(),
+            ))
+        }
+    }
+
+    /// Get mutable reference to native capability provider
+    fn get_native_provider_mut(&mut self) -> Option<&mut NativeCapabilityProvider> {
+        self.executor_registry
+            .get_mut(&TypeId::of::<NativeCapability>())
+            .and_then(|variant| match variant {
+                ExecutorVariant::Native(provider) => Some(provider),
+                _ => None,
+            })
     }
 }
