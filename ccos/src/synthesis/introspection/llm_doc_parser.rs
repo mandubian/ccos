@@ -19,21 +19,6 @@ use rtfs::ast::{Keyword, MapTypeEntry, PrimitiveType, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 
-/// Default documentation URLs for common API domains
-/// Used when we need to fetch documentation for LLM parsing
-fn get_default_doc_urls(domain: &str) -> Vec<&'static str> {
-    match domain {
-        "openweathermap.org" | "api.openweathermap.org" => vec![
-            "https://openweathermap.org/current",
-            "https://openweathermap.org/forecast5",
-            "https://openweathermap.org/api/one-call-3",
-        ],
-        "jsonplaceholder.typicode.com" => {
-            vec!["https://jsonplaceholder.typicode.com/guide/"]
-        }
-        _ => vec![],
-    }
-}
 
 /// Extracted endpoint from LLM parsing
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,58 +102,17 @@ impl LlmDocParser {
     }
 
     /// Parse API documentation for a domain using default doc URLs
+    /// NOTE: This method is deprecated - use parse_from_url() with a user-provided URL instead
     pub async fn parse_for_domain(
         &self,
         api_domain: &str,
-        llm_provider: &dyn LlmProvider,
+        _llm_provider: &dyn LlmProvider,
     ) -> RuntimeResult<APIIntrospectionResult> {
-        let doc_urls = get_default_doc_urls(api_domain);
-
-        if doc_urls.is_empty() {
-            return Err(RuntimeError::Generic(format!(
-                "No documentation URLs known for domain: {}",
-                api_domain
-            )));
-        }
-
-        // Fetch all doc pages and combine
-        let mut combined_text = String::new();
-        for url in &doc_urls {
-            match self.fetch_page(url).await {
-                Ok(html) => {
-                    if let Ok(text) = self.extract_text_from_html(&html) {
-                        combined_text.push_str(&text);
-                        combined_text.push_str("\n\n---\n\n");
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Failed to fetch {}: {}", url, e);
-                }
-            }
-        }
-
-        if combined_text.is_empty() {
-            return Err(RuntimeError::Generic(format!(
-                "Failed to fetch any documentation for domain: {}",
-                api_domain
-            )));
-        }
-
-        // Limit total size
-        if combined_text.len() > 25000 {
-            combined_text = combined_text[..25000].to_string();
-        }
-
-        log::info!(
-            "🤖 Parsing combined documentation ({} chars) for {}",
-            combined_text.len(),
+        // No hardcoded URLs - user must provide documentation URL
+        Err(RuntimeError::Generic(format!(
+            "No documentation URLs available for domain: {}. Please provide a documentation URL manually.",
             api_domain
-        );
-
-        let parsed = self
-            .parse_with_llm(&combined_text, api_domain, llm_provider)
-            .await?;
-        self.convert_to_introspection_result(parsed)
+        )))
     }
 
     /// Fetch a web page

@@ -160,7 +160,7 @@ name = "openrouter_free"
 provider = "openrouter"
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
-default = "balanced"
+default = "balanced_ds_32"
 
   [[llm_profiles.model_sets.models]]
   name = "fast"
@@ -192,6 +192,19 @@ default = "balanced"
   max_tokens = 4096
   quality = "balanced"
 
+  [[llm_profiles.model_sets.models]]
+  name = "balanced_ds_32"
+  model = "deepseek/deepseek-v3.2"
+  max_prompt_cost_per_1k = 0.0
+  max_completion_cost_per_1k = 0.0
+  quality = "balanced"
+
+  [[llm_profiles.model_sets.models]]
+  name = "balanced_ds_32_spe"
+  model = "deepseek/deepseek-v3.2-speciale"
+  max_prompt_cost_per_1k = 0.0
+  max_completion_cost_per_1k = 0.0
+  quality = "balanced"  
 
   [[llm_profiles.model_sets.models]]
   name = "premium"

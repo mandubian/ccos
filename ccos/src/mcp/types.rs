@@ -66,6 +66,8 @@ pub struct DiscoveryOptions {
     /// When true, output schemas are only introspected if explicitly requested
     /// Input schemas are always loaded as they're provided by MCP servers
     pub lazy_output_schemas: bool,
+    /// Whether to ignore approved capability files and force network discovery
+    pub ignore_approved_files: bool,
 }
 
 impl Default for DiscoveryOptions {
@@ -81,6 +83,7 @@ impl Default for DiscoveryOptions {
             rate_limit: RateLimitConfig::default(),
             max_parallel_discoveries: 5, // Conservative default to avoid rate limits
             lazy_output_schemas: true, // Skip expensive introspection by default
+            ignore_approved_files: false,
         }
     }
 }

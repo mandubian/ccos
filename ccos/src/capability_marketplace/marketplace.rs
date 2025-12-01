@@ -791,6 +791,16 @@ impl CapabilityMarketplace {
     ) -> RuntimeResult<()> {
         let id = manifest.id.clone();
 
+        // Check if already registered to avoid duplicates
+        {
+            let caps = self.capabilities.read().await;
+            if caps.contains_key(&id) {
+                // Already registered - skip to avoid duplicates
+                log::debug!("Capability {} already registered, skipping duplicate registration", id);
+                return Ok(());
+            }
+        }
+
         let catalog_manifest = manifest.clone();
 
         // Register the capability

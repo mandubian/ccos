@@ -86,6 +86,10 @@ pub struct ApprovedDiscovery {
     pub approved_by: ApprovalAuthority,
     pub approval_reason: Option<String>,
     
+    // Capability files (RTFS files for non-MCP servers)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_files: Option<Vec<String>>,
+    
     // Health tracking
     pub last_successful_call: Option<DateTime<Utc>>,
     pub consecutive_failures: u32,
@@ -330,6 +334,17 @@ impl ApprovalQueue {
         self.save_pending(&state)
     }
 
+    pub fn remove_pending(&self, id: &str) -> RuntimeResult<Option<PendingDiscovery>> {
+        let mut state = self.load_pending()?;
+        if let Some(pos) = state.items.iter().position(|item| item.id == id) {
+            let removed = state.items.remove(pos);
+            self.save_pending(&state)?;
+            Ok(Some(removed))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn list_pending(&self) -> RuntimeResult<Vec<PendingDiscovery>> {
         self.check_timeouts()?;
         Ok(self.load_pending()?.items)
@@ -357,11 +372,89 @@ impl ApprovalQueue {
         Ok(self.load_rejected()?.items)
     }
 
+    /// Update capability_files for an approved server
+    pub fn update_capability_files(&self, server_id: &str, files: Vec<String>) -> RuntimeResult<()> {
+        let mut approved_state = self.load_approved()?;
+        if let Some(item) = approved_state.items.iter_mut().find(|item| item.id == server_id) {
+            item.capability_files = if files.is_empty() { None } else { Some(files) };
+            self.save_approved(&approved_state)?;
+            Ok(())
+        } else {
+            Err(RuntimeError::Generic(format!("Approved server not found: {}", server_id)))
+        }
+    }
+
+    /// Add new capability files to an approved server (merge with existing)
+    pub fn add_capability_files_to_approved(&self, server_endpoint: &str, new_files: Vec<String>) -> RuntimeResult<()> {
+        let mut approved_state = self.load_approved()?;
+        if let Some(item) = approved_state.items.iter_mut().find(|item| item.server_info.endpoint == server_endpoint) {
+            let mut existing_files = item.capability_files.clone().unwrap_or_default();
+            existing_files.extend(new_files);
+            item.capability_files = if existing_files.is_empty() { None } else { Some(existing_files) };
+            self.save_approved(&approved_state)?;
+            Ok(())
+        } else {
+            Err(RuntimeError::Generic(format!("Approved server not found for endpoint: {}", server_endpoint)))
+        }
+    }
+
     pub fn approve(&self, id: &str, reason: Option<String>) -> RuntimeResult<()> {
         let mut pending_state = self.load_pending()?;
         if let Some(pos) = pending_state.items.iter().position(|item| item.id == id) {
             let item = pending_state.items.remove(pos);
             self.save_pending(&pending_state)?;
+            
+            // Move capability files from pending to approved directory
+            let pending_dir = std::path::Path::new("capabilities/servers/pending");
+            let approved_dir = std::path::Path::new("capabilities/servers/approved");
+            std::fs::create_dir_all(approved_dir).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to create approved directory: {}", e))
+            })?;
+            
+            let server_id = item.server_info.name.to_lowercase().replace(" ", "_").replace("/", "_");
+            let pending_server_dir = pending_dir.join(&server_id);
+            let approved_server_dir = approved_dir.join(&server_id);
+            
+            let mut capability_files = Vec::new();
+            
+            // Move capability files if they exist
+            if pending_server_dir.exists() {
+                if approved_server_dir.exists() {
+                    // Remove existing approved directory to replace it
+                    std::fs::remove_dir_all(&approved_server_dir).map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to remove existing approved directory: {}", e))
+                    })?;
+                }
+                
+                // Move the entire directory
+                std::fs::rename(&pending_server_dir, &approved_server_dir).map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to move capability files: {}", e))
+                })?;
+                
+                // Collect all RTFS file paths
+                if let Ok(entries) = std::fs::read_dir(&approved_server_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() && path.extension().map_or(false, |ext| ext == "rtfs") {
+                            if let Ok(rel_path) = path.strip_prefix("capabilities/servers/approved") {
+                                capability_files.push(rel_path.to_string_lossy().to_string());
+                            }
+                        } else if path.is_dir() {
+                            // Recursively find RTFS files in subdirectories
+                            if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                                for sub_entry in sub_entries.flatten() {
+                                    let sub_path = sub_entry.path();
+                                    if sub_path.is_file() && sub_path.extension().map_or(false, |ext| ext == "rtfs") {
+                                        if let Ok(rel_path) = sub_path.strip_prefix("capabilities/servers/approved") {
+                                            capability_files.push(rel_path.to_string_lossy().to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             
             let approved = ApprovedDiscovery {
                 id: item.id,
@@ -373,6 +466,7 @@ impl ApprovalQueue {
                 approved_at: Utc::now(),
                 approved_by: ApprovalAuthority::User("cli_user".to_string()), // Default for CLI
                 approval_reason: reason,
+                capability_files: if capability_files.is_empty() { None } else { Some(capability_files) },
                 last_successful_call: None,
                 consecutive_failures: 0,
                 total_calls: 0,
@@ -461,6 +555,7 @@ impl ApprovalQueue {
                 approved_at: Utc::now(),
                 approved_by: ApprovalAuthority::User("cli_user".to_string()),
                 approval_reason: Some("Manually retried".to_string()),
+                capability_files: None, // Retried servers don't have capability files yet
                 last_successful_call: None,
                 consecutive_failures: 0,
                 total_calls: 0,
