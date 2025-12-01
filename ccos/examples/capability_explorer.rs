@@ -85,6 +85,7 @@ struct CapabilityExplorer {
     catalog: Arc<CatalogService>,
     discovered_tools: Vec<DiscoveredTool>,
     selected_capability: Option<CapabilityManifest>,
+    selected_server: Option<String>, // Track currently selected server
 }
 
 /// Discovered tool with metadata
@@ -114,6 +115,7 @@ impl CapabilityExplorer {
             catalog,
             discovered_tools: Vec::new(),
             selected_capability: None,
+            selected_server: None,
         }
     }
     
@@ -586,6 +588,7 @@ impl CapabilityExplorer {
         };
         
         // Use discover_and_export_tools to ensure RTFS files are created
+        // Note: discover_and_export_tools already registers in marketplace if options.register_in_marketplace is true
         match self.discovery_service.discover_and_export_tools(&config, &options).await {
             Ok(manifests) => {
                 let count = manifests.len();
@@ -596,8 +599,7 @@ impl CapabilityExplorer {
                         server_name: config.name.clone(),
                         discovery_hint: None,
                     });
-                    // Also register in marketplace
-                    let _ = self.marketplace.register_capability_manifest(manifest.clone()).await;
+                    // Don't register again - discover_and_export_tools already did it
                 }
                 
                 if !quiet {
@@ -738,7 +740,7 @@ impl CapabilityExplorer {
         input.trim().to_string()
     }
     
-    async fn list_servers(&self) {
+    async fn list_servers(&mut self) {
         println!();
         println!("{}", "📋 Available Registries & Servers".white().bold().underline());
         println!();
@@ -763,12 +765,85 @@ impl CapabilityExplorer {
                     "🔓".to_string()
                 };
                 
-                println!("  {} [{}] {} {}", 
+                let current_marker = if self.selected_server.as_ref().map(|s| s.as_str()) == Some(&server.name) {
+                    " ← current".cyan().to_string()
+                } else {
+                    "".to_string()
+                };
+                
+                println!("  {} [{}] {} {}{}", 
                     auth_status,
                     (i + 1).to_string().yellow(),
                     server.name.white().bold(),
-                    format!("({})", server.endpoint).dimmed()
+                    format!("({})", server.endpoint).dimmed(),
+                    current_marker
                 );
+            }
+            
+            if let Some(ref server_name) = self.selected_server {
+                println!();
+                println!("  {} Current server: {}", "ℹ️".cyan(), server_name.cyan().bold());
+            }
+
+            println!();
+            let choice = self.prompt("Select server ID to set as current (0 to deselect, Enter to keep current):");
+            if !choice.is_empty() {
+                if let Ok(idx) = choice.parse::<usize>() {
+                    if idx == 0 {
+                         self.selected_server = None;
+                         println!("  {} Selection cleared", "✓".green());
+                    } else if idx > 0 && idx <= servers.len() {
+                        let config = &servers[idx - 1];
+                        self.selected_server = Some(config.name.clone());
+                        println!("  {} Selected server: {}", "✓".green(), config.name.cyan().bold());
+                        
+                        // Try to load capabilities from files immediately (if approved)
+                        // This allows using "list" (4) immediately without forcing a network discovery
+                        let options = DiscoveryOptions {
+                            introspect_output_schemas: false,
+                            use_cache: true,
+                            register_in_marketplace: true,
+                            export_to_rtfs: false, // Don't re-export when loading
+                            export_directory: None,
+                            auth_headers: config.auth_token.as_ref().map(|token| {
+                                let mut headers = HashMap::new();
+                                headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+                                headers
+                            }),
+                            ..Default::default()
+                        };
+                        
+                        println!("  {} Loading known capabilities...", "⏳".yellow());
+                        match self.discovery_service.discover_and_export_tools(config, &options).await {
+                            Ok(manifests) => {
+                                if !manifests.is_empty() {
+                                    println!("  {} Loaded {} capability(ies) from known configuration", "✓".green(), manifests.len());
+                                    // Store for exploration
+                                    for manifest in &manifests {
+                                        // Only add if not already present
+                                        if !self.discovered_tools.iter().any(|t| t.manifest.id == manifest.id) {
+                                            self.discovered_tools.push(DiscoveredTool {
+                                                manifest: manifest.clone(),
+                                                server_name: config.name.clone(),
+                                                discovery_hint: None,
+                                            });
+                                        }
+                                    }
+                                } else {
+                                    println!("  {} No capabilities found in local configuration. Use 'discover' (2) to fetch from server.", "ℹ️".cyan());
+                                }
+                            }
+                            Err(e) => {
+                                log::debug!("Failed to auto-load capabilities: {}", e);
+                                println!("  {} No local capabilities loaded. Use 'discover' (2) to fetch from server.", "ℹ️".cyan());
+                            }
+                        }
+                    } else {
+                        println!("  {} Invalid selection", "✗".red());
+                    }
+                } else {
+                    println!("  {} Invalid selection", "✗".red());
+                }
             }
         }
         println!();
@@ -798,6 +873,8 @@ impl CapabilityExplorer {
                 protocol_version: "2024-11-05".to_string(),
             };
             
+            // Store selected server
+            self.selected_server = Some(config.name.clone());
             self.perform_discovery(&config, None).await;
         } else {
             println!("  Select a server:");
@@ -819,9 +896,13 @@ impl CapabilityExplorer {
                         timeout_seconds: 30,
                         protocol_version: "2024-11-05".to_string(),
                     };
+                    // Store selected server
+                    self.selected_server = Some(config.name.clone());
                     self.perform_discovery(&config, None).await;
                 } else if idx > 0 && idx <= servers.len() {
                     let config = servers[idx - 1].clone();
+                    // Store selected server
+                    self.selected_server = Some(config.name.clone());
                     self.perform_discovery(&config, None).await;
                 } else {
                     println!("  {} Invalid selection", "✗".red());
@@ -876,7 +957,7 @@ impl CapabilityExplorer {
                     println!();
                 }
                 
-                // Store discovered tools and explicitly register in marketplace
+                // Store discovered tools (already registered by discover_and_export_tools)
                 for manifest in filtered_manifests {
                     // Print tool summary
                     println!("    {} {}", "•".green(), manifest.name.white().bold());
@@ -889,13 +970,7 @@ impl CapabilityExplorer {
                         println!("      {}", short_desc.dimmed());
                     }
                     
-                    // Explicitly register in marketplace (in case discovery service didn't)
-                    if let Err(e) = self.marketplace.register_capability_manifest(manifest.clone()).await {
-                        // Ignore errors if already registered
-                        log::debug!("Registration note for {}: {}", manifest.id, e);
-                    }
-                    
-                    // Store discovered tool
+                    // Store discovered tool (capability already registered by discover_and_export_tools)
                     self.discovered_tools.push(DiscoveredTool {
                         manifest: manifest.clone(),
                         server_name: config.name.clone(),
@@ -1293,10 +1368,41 @@ impl CapabilityExplorer {
                         continue;
                     }
                     
-                    // Parse value based on type
-                    let parsed_value = self.parse_value(&value, &entry.value_type);
-                    let map_key = rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(key_str));
-                    map.insert(map_key, parsed_value);
+                    // Validate required fields are not empty
+                    if value.is_empty() && !entry.optional {
+                        println!("  {} Required parameter '{}' cannot be empty", "✗".red(), key_str);
+                        return None;
+                    }
+                    
+                    // Parse value based on type (with validation)
+                    match self.parse_value(&value, &entry.value_type) {
+                        Ok(parsed_value) => {
+                            let map_key = rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(key_str));
+                            map.insert(map_key, parsed_value);
+                        }
+                        Err(e) => {
+                            println!("  {} Invalid value for '{}': {}", "✗".red(), key_str, e);
+                            println!("  {} Please enter a valid value or 'cancel' to abort", "💡".cyan());
+                            // Retry this parameter
+                            let retry_value = self.prompt(&prompt_str);
+                            if retry_value == "cancel" {
+                                return None;
+                            }
+                            if retry_value == "skip" && entry.optional {
+                                continue;
+                            }
+                            match self.parse_value(&retry_value, &entry.value_type) {
+                                Ok(parsed_value) => {
+                                    let map_key = rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(key_str));
+                                    map.insert(map_key, parsed_value);
+                                }
+                                Err(_) => {
+                                    println!("  {} Invalid value again. Cancelling.", "✗".red());
+                                    return None;
+                                }
+                            }
+                        }
+                    }
                 }
                 
                 return Some(Value::Map(map));
@@ -1320,24 +1426,28 @@ impl CapabilityExplorer {
         }
     }
     
-    fn parse_value(&self, input: &str, type_expr: &rtfs::ast::TypeExpr) -> rtfs::runtime::values::Value {
+    fn parse_value(&self, input: &str, type_expr: &rtfs::ast::TypeExpr) -> Result<rtfs::runtime::values::Value, String> {
         use rtfs::ast::{PrimitiveType, TypeExpr};
         use rtfs::runtime::values::Value;
         
         match type_expr {
             TypeExpr::Primitive(PrimitiveType::Int) => {
-                input.parse::<i64>().map(Value::Integer).unwrap_or(Value::String(input.to_string()))
+                input.parse::<i64>()
+                    .map(Value::Integer)
+                    .map_err(|_| format!("Expected integer, got: '{}'", input))
             }
             TypeExpr::Primitive(PrimitiveType::Float) => {
-                input.parse::<f64>().map(Value::Float).unwrap_or(Value::String(input.to_string()))
+                input.parse::<f64>()
+                    .map(Value::Float)
+                    .map_err(|_| format!("Expected float, got: '{}'", input))
             }
             TypeExpr::Primitive(PrimitiveType::Bool) => {
-                Value::Boolean(input.to_lowercase() == "true" || input == "1")
+                Ok(Value::Boolean(input.to_lowercase() == "true" || input == "1"))
             }
             TypeExpr::Primitive(PrimitiveType::String) => {
-                Value::String(input.to_string())
+                Ok(Value::String(input.to_string()))
             }
-            _ => Value::String(input.to_string()),
+            _ => Ok(Value::String(input.to_string())),
         }
     }
     
@@ -1420,19 +1530,27 @@ impl CapabilityExplorer {
                 timeout_seconds: 30,
                 protocol_version: "2024-11-05".to_string(),
             };
-            self.perform_discovery(&config, args.hint.clone()).await;
+            // Store selected server
+            self.selected_server = Some(config.name.clone());
+            self.perform_discovery(&config, args.hint.clone(), true).await;
         } else if args.hint.is_some() {
             // Search in known servers
             let servers = self.discovery_service.list_known_servers();
             for config in &servers {
-                self.perform_discovery(config, args.hint.clone()).await;
+                self.perform_discovery(config, args.hint.clone(), true).await;
             }
         }
         
         self.print_menu();
         
         loop {
-            let cmd = self.prompt("explorer>");
+            // Show current server in prompt if one is selected
+            let prompt = if let Some(ref server) = self.selected_server {
+                format!("explorer [{}]>", server.cyan().bold())
+            } else {
+                "explorer>".to_string()
+            };
+            let cmd = self.prompt(&prompt);
             
             match cmd.as_str() {
                 "1" | "servers" | "s" => self.list_servers().await,

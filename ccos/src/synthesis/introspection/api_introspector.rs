@@ -117,6 +117,11 @@ impl APIIntrospector {
         self.llm_provider = Some(llm_provider);
     }
 
+    /// Get a reference to the LLM provider if available
+    pub fn llm_provider(&self) -> Option<&Arc<dyn LlmProvider>> {
+        self.llm_provider.as_ref()
+    }
+
     /// Create in mock mode for testing
     pub fn mock() -> Self {
         Self {
@@ -760,42 +765,16 @@ impl APIIntrospector {
     }
 
     /// Discover endpoints by making API calls (fallback method)
-    /// Uses LLM doc parsing if an LLM provider is available
+    /// No automatic LLM parsing - user must provide documentation URL via CLI prompt
     async fn discover_endpoints_by_calls(
         &self,
         _base_url: &str,
         api_domain: &str,
     ) -> RuntimeResult<APIIntrospectionResult> {
-        // Try LLM doc parsing if provider is available
-        if let Some(ref llm_provider) = self.llm_provider {
-            log::info!(
-                "🤖 Attempting LLM-based documentation parsing for: {}",
-                api_domain
-            );
-
-            let parser = super::llm_doc_parser::LlmDocParser::new();
-
-            match parser
-                .parse_for_domain(api_domain, llm_provider.as_ref())
-                .await
-            {
-                Ok(result) => {
-                    log::info!(
-                        "✅ Successfully parsed {} endpoints via LLM for: {}",
-                        result.endpoints.len(),
-                        api_domain
-                    );
-                    return Ok(result);
-                }
-                Err(e) => {
-                    log::warn!("LLM doc parsing failed for {}: {}", api_domain, e);
-                }
-            }
-        }
-
-        // Return error - no methods worked
+        // No automatic LLM parsing with hardcoded URLs
+        // User will be prompted for documentation URL in the CLI error handler
         Err(RuntimeError::Generic(format!(
-            "API discovery failed for domain: {}. No OpenAPI spec found, not in known APIs registry, not in APIs.guru, and LLM parsing unavailable or failed.",
+            "API discovery failed for domain: {}. No OpenAPI spec found, not in known APIs registry, not in APIs.guru. Use --llm flag and provide a documentation URL when prompted.",
             api_domain
         )))
     }
@@ -1299,6 +1278,104 @@ impl APIIntrospector {
             input_schema_str,
             output_schema_str,
             implementation_code
+        )
+    }
+
+    /// Generate HTTP implementation code for an API capability
+    pub fn generate_http_implementation(
+        &self,
+        capability: &CapabilityManifest,
+        introspection: &APIIntrospectionResult,
+    ) -> String {
+        let base_url = capability
+            .metadata
+            .get("base_url")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        let endpoint_path = capability
+            .metadata
+            .get("endpoint_path")
+            .map(|s| s.as_str())
+            .unwrap_or("/");
+        let endpoint_method = capability
+            .metadata
+            .get("endpoint_method")
+            .map(|s| s.as_str())
+            .unwrap_or("GET");
+        
+        let requires_auth = introspection.auth_requirements.required;
+        let auth_location = &introspection.auth_requirements.auth_location;
+        let auth_param_name = &introspection.auth_requirements.auth_param_name;
+        let auth_env_var = introspection.auth_requirements.env_var_name.as_deref().unwrap_or("API_KEY");
+        
+        // Build query parameters from input schema
+        let mut query_params = Vec::new();
+        if let Some(ref input_schema) = capability.input_schema {
+            if let TypeExpr::Map { entries, .. } = input_schema {
+                for entry in entries {
+                    let param_name = entry.key.0.clone();
+                    query_params.push(format!("(str \"{}\" \"=\" (get input_map :{}))", param_name, param_name));
+                }
+            }
+        }
+        
+        // Add auth parameter if needed
+        if requires_auth {
+            match auth_location.as_str() {
+                "query" => {
+                    query_params.push(format!("(str \"{}\" \"=\" (get env \"{}\"))", auth_param_name, auth_env_var));
+                }
+                "header" => {
+                    // Will be added to headers
+                }
+                _ => {}
+            }
+        }
+        
+        let query_str = if query_params.is_empty() {
+            "\"\"".to_string()
+        } else {
+            format!("(str {} \"&\")", query_params.join(" \"&\" "))
+        };
+        
+        // Build headers
+        let mut header_entries = vec!["\"Content-Type\" \"application/json\"".to_string()];
+        if requires_auth && auth_location == "header" {
+            if auth_param_name == "Authorization" {
+                header_entries.push(format!("(str \"Authorization\" \" \" (str \"Bearer \" (get env \"{}\")))", auth_env_var));
+            } else {
+                header_entries.push(format!("(str \"{}\" \" \" (get env \"{}\"))", auth_param_name, auth_env_var));
+            }
+        }
+        let headers_str = format!("(hash-map {})", header_entries.join(" "));
+        
+        // Build URL
+        let url_str = if query_params.is_empty() {
+            format!("(str \"{}\" \"{}\")", base_url, endpoint_path)
+        } else {
+            format!("(str \"{}\" \"{}\" \"?\" {})", base_url, endpoint_path, query_str)
+        };
+        
+        // Generate implementation
+        format!(
+            r#"(do
+  (let [base_url "{}"
+        path "{}"
+        method "{}"
+        input_map (if (map? input) input (apply hash-map input))
+        url {}
+        headers {}
+        body (if (contains? input_map :body) (get input_map :body) nil)]
+    (call "ccos.network.http-fetch"
+          :method method
+          :url url
+          :headers headers
+          :body body)))"#,
+            base_url,
+            endpoint_path,
+            endpoint_method,
+            url_str,
+            headers_str
         )
     }
 

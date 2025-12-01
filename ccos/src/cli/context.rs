@@ -143,90 +143,118 @@ impl CliContext {
     }
 
     /// Create an LLM provider from the agent configuration
-    /// Uses the default profile from llm_profiles, or falls back to env vars
+    /// Uses the default profile from llm_profiles (supports both explicit profiles and model_sets)
     pub async fn create_llm_provider(&self, model_override: Option<String>) -> RuntimeResult<Arc<dyn LlmProvider>> {
         // Try to get from config's llm_profiles
         if let Some(ref profiles) = self.config.llm_profiles {
-            // Get default profile or first available
-            let profile = if let Some(ref default_name) = profiles.default {
-                profiles.profiles.iter().find(|p| &p.name == default_name)
+            // Determine which profile name to use
+            let profile_name = if let Some(ref default_name) = profiles.default {
+                default_name.clone()
+            } else if let Some(first_profile) = profiles.profiles.first() {
+                first_profile.name.clone()
             } else {
-                profiles.profiles.first()
+                // No explicit profiles, try first model set
+                if let Some(ref model_sets) = profiles.model_sets {
+                    if let Some(first_set) = model_sets.first() {
+                        if let Some(ref default_spec) = first_set.default {
+                            format!("{}:{}", first_set.name, default_spec)
+                        } else if let Some(first_spec) = first_set.models.first() {
+                            format!("{}:{}", first_set.name, first_spec.name)
+                        } else {
+                            return self.create_llm_provider_from_env(model_override).await;
+                        }
+                    } else {
+                        return self.create_llm_provider_from_env(model_override).await;
+                    }
+                } else {
+                    return self.create_llm_provider_from_env(model_override).await;
+                }
             };
 
-            if let Some(profile) = profile {
-                let provider_type = match profile.provider.to_lowercase().as_str() {
-                    "openai" | "openrouter" => LlmProviderType::OpenAI,
-                    "anthropic" | "claude" => LlmProviderType::Anthropic,
-                    "local" | "ollama" => LlmProviderType::Local,
-                    "stub" | "test" => LlmProviderType::Stub,
-                    _ => LlmProviderType::OpenAI, // Default to OpenAI-compatible
-                };
+            // Try to find the profile (explicit or from model set)
+            let profile = self.find_llm_profile(profiles, &profile_name)?;
 
-                // Get API key from env var or inline
-                let api_key = profile.api_key_env
-                    .as_ref()
-                    .and_then(|env_var| std::env::var(env_var).ok())
-                    .or_else(|| profile.api_key.clone());
+            let provider_type = match profile.provider.to_lowercase().as_str() {
+                "openai" | "openrouter" => LlmProviderType::OpenAI,
+                "anthropic" | "claude" => LlmProviderType::Anthropic,
+                "local" | "ollama" => LlmProviderType::Local,
+                "stub" | "test" => LlmProviderType::Stub,
+                _ => LlmProviderType::OpenAI, // Default to OpenAI-compatible
+            };
 
-                let config = LlmProviderConfig {
-                    provider_type,
-                    model: model_override.unwrap_or_else(|| profile.model.clone()),
-                    api_key,
-                    base_url: profile.base_url.clone(),
-                    max_tokens: profile.max_tokens,
-                    temperature: profile.temperature,
-                    timeout_seconds: Some(60),
-                    retry_config: Default::default(),
-                };
+            // Get API key from env var or inline
+            let api_key = profile.api_key_env
+                .as_ref()
+                .and_then(|env_var| std::env::var(env_var).ok())
+                .or_else(|| profile.api_key.clone());
 
-                let provider = LlmProviderFactory::create_provider(config).await?;
-                return Ok(Arc::from(provider));
-            }
+            let config = LlmProviderConfig {
+                provider_type,
+                model: model_override.unwrap_or_else(|| profile.model.clone()),
+                api_key,
+                base_url: profile.base_url.clone(),
+                max_tokens: profile.max_tokens,
+                temperature: profile.temperature,
+                timeout_seconds: Some(120), // Increased to 120s for documentation parsing and long responses
+                retry_config: Default::default(),
+            };
+
+            let provider = LlmProviderFactory::create_provider(config).await?;
+            return Ok(Arc::from(provider));
         }
 
         // Fallback: try environment variables directly
         self.create_llm_provider_from_env(model_override).await
     }
 
+    /// Find an LLM profile by name (supports both explicit profiles and model_sets)
+    fn find_llm_profile(
+        &self,
+        profiles_config: &rtfs::config::types::LlmProfilesConfig,
+        profile_name: &str,
+    ) -> RuntimeResult<rtfs::config::types::LlmProfile> {
+        // 1. Check explicit profiles first
+        if let Some(profile) = profiles_config
+            .profiles
+            .iter()
+            .find(|p| p.name == profile_name)
+        {
+            return Ok(profile.clone());
+        }
+
+        // 2. Check model sets (format: "set_name:spec_name")
+        if let Some(model_sets) = &profiles_config.model_sets {
+            if let Some((set_name, spec_name)) = profile_name.split_once(':') {
+                if let Some(set) = model_sets.iter().find(|s| s.name == set_name) {
+                    if let Some(spec) = set.models.iter().find(|m| m.name == spec_name) {
+                        // Construct synthetic profile from model set
+                        return Ok(rtfs::config::types::LlmProfile {
+                            name: profile_name.to_string(),
+                            provider: set.provider.clone(),
+                            model: spec.model.clone(),
+                            base_url: set.base_url.clone(),
+                            api_key_env: set.api_key_env.clone(),
+                            api_key: set.api_key.clone(),
+                            temperature: None,
+                            max_tokens: spec.max_output_tokens,
+                        });
+                    }
+                }
+            }
+        }
+
+        Err(RuntimeError::Generic(format!(
+            "LLM profile '{}' not found in llm_profiles. Check agent_config.toml for available profiles.",
+            profile_name
+        )))
+    }
+
     /// Create LLM provider from environment variables (fallback)
-    async fn create_llm_provider_from_env(&self, model: Option<String>) -> RuntimeResult<Arc<dyn LlmProvider>> {
-        // Try OpenAI first
-        if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
-            let config = LlmProviderConfig {
-                provider_type: LlmProviderType::OpenAI,
-                model: model.clone().unwrap_or_else(|| "gpt-4o-mini".to_string()),
-                api_key: Some(api_key),
-                base_url: std::env::var("OPENAI_API_BASE").ok(),
-                max_tokens: Some(4096),
-                temperature: Some(0.3),
-                timeout_seconds: Some(60),
-                retry_config: Default::default(),
-            };
-
-            let provider = LlmProviderFactory::create_provider(config).await?;
-            return Ok(Arc::from(provider));
-        }
-
-        // Try Anthropic
-        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
-            let config = LlmProviderConfig {
-                provider_type: LlmProviderType::Anthropic,
-                model: model.unwrap_or_else(|| "claude-3-haiku-20240307".to_string()),
-                api_key: Some(api_key),
-                base_url: None,
-                max_tokens: Some(4096),
-                temperature: Some(0.3),
-                timeout_seconds: Some(60),
-                retry_config: Default::default(),
-            };
-
-            let provider = LlmProviderFactory::create_provider(config).await?;
-            return Ok(Arc::from(provider));
-        }
-
+    /// Note: This should only be called if llm_profiles are not configured.
+    /// It will return an error to ensure users configure llm_profiles in agent_config.toml
+    async fn create_llm_provider_from_env(&self, _model: Option<String>) -> RuntimeResult<Arc<dyn LlmProvider>> {
         Err(RuntimeError::Generic(
-            "No LLM configuration found. Set OPENAI_API_KEY or ANTHROPIC_API_KEY, or configure llm_profiles in agent_config.toml".to_string()
+            "No LLM configuration found. Please configure llm_profiles in agent_config.toml with your LLM provider settings.".to_string()
         ))
     }
 }

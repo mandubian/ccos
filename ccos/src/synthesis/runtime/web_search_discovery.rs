@@ -199,8 +199,15 @@ impl WebSearchDiscovery {
                 eprintln!("✅ Found {} results via DuckDuckGo", results.len());
                 return Ok(results);
             }
-            Ok(_) => eprintln!("⚠️ No results from DuckDuckGo"),
-            Err(e) => eprintln!("❌ DuckDuckGo failed: {}", e),
+            Ok(_) => {
+                // Silently continue to next search method
+            }
+            Err(e) => {
+                // Only log if it's not a timeout (timeouts are expected and we'll try other methods)
+                if !e.to_string().contains("timeout") && !e.to_string().contains("timed out") {
+                    eprintln!("⚠️ DuckDuckGo search failed: {}", e);
+                }
+            }
         }
 
         // Google Custom Search (free tier: 100 queries/day)
@@ -250,7 +257,7 @@ impl WebSearchDiscovery {
         let response = client
             .get(&url)
             .header("User-Agent", &self.user_agent)
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(5)) // Reduced timeout - DuckDuckGo can be slow, we have fallbacks
             .send()
             .await
             .map_err(Self::handle_reqwest_error)?;

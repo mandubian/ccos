@@ -58,3 +58,4 @@ rtfs/.rtfs_ccos_repl_history
 # Runtime capabilities (not source code - stored at project root)
 capabilities/generated/
 capabilities/discovered/
+capabilities/servers/

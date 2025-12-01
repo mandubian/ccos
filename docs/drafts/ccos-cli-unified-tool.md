@@ -1,7 +1,8 @@
 # CCOS CLI: Unified Command-Line Tool
 
-**Status**: Implementation (Phases 1-5 complete)  
+**Status**: Implementation (Phases 1-5 complete, Phase 6 planned)  
 **Created**: 2025-11-30  
+**Updated**: 2025-12-01  
 **Umbrella Issue**: [#167](https://github.com/mandubian/ccos/issues/167)
 
 ## GitHub Issues
@@ -14,6 +15,7 @@
 | [#170](https://github.com/mandubian/ccos/issues/170) | Add goal-driven discovery with external registry search | 3 | Done |
 | [#171](https://github.com/mandubian/ccos/issues/171) | Implement server health monitoring and auto-dismissal | 4 | Done |
 | [#172](https://github.com/mandubian/ccos/issues/172) | Port capability_explorer to CLI subcommands | 5 | Done |
+| [#173](https://github.com/mandubian/ccos/issues/173) | Expose CLI as Governed Native Capabilities | 6 | Planned |
 
 ## Overview
 
@@ -43,47 +45,52 @@ ccos <subcommand> [options]
 
 ## Command Structure
 
+Commands marked with `★` are exposed as native RTFS capabilities (Phase 6).
+
 ```
 ccos
 ├── discover                    # Capability discovery
-│   ├── goal <goal>             # Goal-driven discovery
-│   ├── server <name>           # Discover from specific server
-│   ├── search <query>          # Search catalog
-│   └── inspect <id>            # Inspect capability details
+│   ├── goal <goal>         ★   # Goal-driven discovery (ccos.cli.discovery.goal)
+│   ├── server <name>       ★   # Discover from specific server
+│   ├── search <query>      ★   # Search catalog (ccos.cli.discovery.search)
+│   └── inspect <id>        ★   # Inspect capability details (ccos.cli.discovery.inspect)
 │
 ├── server                      # Server management
-│   ├── list                    # List configured servers
-│   ├── add <url>               # Add new server (queues for approval)
-│   ├── remove <id>             # Remove server
-│   └── health                  # Check server health
+│   ├── list                ★   # List configured servers (ccos.cli.server.list)
+│   ├── add <url>           ★   # Add new server (ccos.cli.server.add)
+│   ├── remove <id>         ★   # Remove server (ccos.cli.server.remove)
+│   ├── search <query>      ★   # Search registries (ccos.cli.server.search)
+│   └── health              ★   # Check server health (ccos.cli.server.health)
 │
 ├── approval                    # Approval queue management
-│   ├── pending                 # List pending approvals
-│   ├── approve <id>            # Approve a discovery
-│   ├── reject <id>             # Reject a discovery
-│   └── timeout                 # List timed-out items
+│   ├── pending             ★   # List pending approvals (ccos.cli.approval.pending)
+│   ├── approve <id>        ★   # Approve a discovery (ccos.cli.approval.approve)
+│   ├── reject <id>         ★   # Reject a discovery (ccos.cli.approval.reject)
+│   └── timeout             ★   # List timed-out items
 │
-├── call <capability> [args]    # Execute a capability
+├── call <capability> [args] ★  # Execute a capability (ccos.cli.call)
 │
 ├── plan                        # Planning
-│   ├── create <goal>           # Create plan from goal
-│   ├── execute <plan>          # Execute a plan
-│   └── validate <plan>         # Validate plan syntax
+│   ├── create <goal>       ★   # Create plan from goal (ccos.cli.plan.create)
+│   ├── execute <plan>      ★   # Execute a plan (ccos.cli.plan.execute)
+│   └── validate <plan>     ★   # Validate plan syntax (ccos.cli.plan.validate)
 │
 ├── rtfs                        # RTFS operations
 │   ├── eval <expr>             # Evaluate RTFS expression
-│   ├── repl                    # Interactive REPL
+│   ├── repl                    # Interactive REPL (not exposed as capability)
 │   └── run <file>              # Run RTFS file
 │
 ├── governance                  # Governance operations
-│   ├── check <action>          # Check if action is allowed
-│   ├── audit                   # View audit trail
-│   └── constitution            # View/edit constitution
+│   ├── check <action>      ★   # Check if action is allowed (ccos.cli.governance.check)
+│   ├── audit               ★   # View audit trail (ccos.cli.governance.audit)
+│   └── constitution        ★   # View/edit constitution (ccos.cli.governance.constitution)
+│
+├── explore                     # Interactive TUI (not exposed as capability)
 │
 └── config                      # Configuration
-    ├── show                    # Show current config
-    ├── validate                # Validate config
-    └── init                    # Initialize new config
+    ├── show                ★   # Show current config (ccos.cli.config.show)
+    ├── validate            ★   # Validate config (ccos.cli.config.validate)
+    └── init                ★   # Initialize new config (ccos.cli.config.init)
 ```
 
 ## Implementation Phases
@@ -125,6 +132,165 @@ ccos
 - Keep TUI as `ccos explore` (interactive mode)
 - Deprecate standalone example
 
+### Phase 6: CLI as Governed Native Capabilities (TBD)
+
+Expose CLI commands as RTFS-callable capabilities under governance control, enabling agents to programmatically discover tools, manage servers, and execute CLI operations while respecting security policies and constitutional rules.
+
+#### Motivation
+
+The `capability_explorer.rs` example already implements ad-hoc "discovery capabilities" like `ccos.discovery.servers`, `ccos.discovery.search`, etc. This phase generalizes that pattern:
+
+1. **Agent Autonomy**: Agents can discover new MCP servers, search for capabilities, and invoke CLI operations programmatically.
+2. **Governance Control**: The Governance Kernel controls which CLI operations agents can invoke based on security levels and constitution rules.
+3. **Dynamic Registration**: Newly-discovered capabilities become immediately callable without restart.
+4. **Unified Interface**: Same operations available via CLI (humans) and RTFS (agents).
+
+#### Implementation Steps
+
+1. **Create `ccos::ops` Module**
+   - Extract pure logic from CLI commands into `ccos/src/ops/` returning `RuntimeResult<T>` (serializable structs).
+   - CLI commands become thin wrappers: call `ops::*`, format output.
+   - Submodules: `server.rs`, `discover.rs`, `approval.rs`, `config.rs`, `plan.rs`.
+
+2. **Add `ProviderType::Native` Variant**
+   - Extend `ProviderType` enum with `Native(NativeCapability)`.
+   - `NativeCapability` holds: handler closure, security_level, and optional metadata.
+
+3. **Create `NativeCapabilityProvider`**
+   - Registry of `ccos.cli.*` capabilities with auto-generated schemas.
+   - Each capability declares: ID, input/output schema, security level, domains, categories.
+
+4. **Integrate Governance Checks**
+   - Extend `GovernanceKernel::detect_security_level` with `ccos.cli.*` patterns.
+   - Add constitution rules for agent restrictions (e.g., no `config.init` without human approval).
+
+5. **Support Dynamic Registration**
+   - `CapabilityMarketplace::register_native_capability(id, handler, schema, security_level)`.
+   - Hook into discovery so newly-approved servers can register capabilities at runtime.
+
+6. **Update CLI Commands**
+   - Refactor commands to call `ccos::ops` functions.
+   - Output formatting remains in CLI layer.
+
+#### Security Levels by Command
+
+| Command | Capability ID | Security Level | Notes |
+|---------|---------------|----------------|-------|
+| `server list` | `ccos.cli.server.list` | low | Read-only |
+| `server search` | `ccos.cli.server.search` | low | Read-only |
+| `server add` | `ccos.cli.server.add` | medium | Queues for approval |
+| `server remove` | `ccos.cli.server.remove` | high | Destructive |
+| `discover goal` | `ccos.cli.discovery.goal` | low | Read-only search |
+| `discover inspect` | `ccos.cli.discovery.inspect` | low | Read-only |
+| `approval pending` | `ccos.cli.approval.pending` | low | Read-only |
+| `approval approve` | `ccos.cli.approval.approve` | high | Modifies trust |
+| `approval reject` | `ccos.cli.approval.reject` | medium | Modifies trust |
+| `call` | `ccos.cli.call` | medium | Delegates to target capability |
+| `config show` | `ccos.cli.config.show` | low | Read-only |
+| `config init` | `ccos.cli.config.init` | critical | System modification |
+| `governance check` | `ccos.cli.governance.check` | low | Read-only |
+| `governance constitution` | `ccos.cli.governance.constitution` | critical | System modification |
+
+#### Example Schema (server.list)
+
+```rtfs
+;; Capability: ccos.cli.server.list
+;; Returns list of configured/approved servers
+
+(deftype ServerInfo
+  {:name String
+   :endpoint String
+   :status (Union :active :dismissed :pending)
+   :health-score (Optional Float)})
+
+(deftype ServerListOutput
+  {:servers (Vector ServerInfo)
+   :count Integer})
+
+;; Input: none (empty map)
+;; Output: ServerListOutput
+```
+
+#### Governance Integration
+
+```rust
+impl GovernanceKernel {
+    pub fn detect_security_level(&self, capability_id: &str) -> String {
+        let id_lower = capability_id.to_lowercase();
+        
+        // CLI capability patterns
+        if id_lower.starts_with("ccos.cli.") {
+            // Critical: system modification
+            if id_lower.contains("config.init") 
+                || id_lower.contains("governance.constitution") {
+                return "critical".to_string();
+            }
+            // High: destructive or trust-modifying
+            if id_lower.contains("remove") 
+                || id_lower.contains("approve") {
+                return "high".to_string();
+            }
+            // Medium: state-changing but safe
+            if id_lower.contains("add") 
+                || id_lower.contains("reject")
+                || id_lower.contains("call") {
+                return "medium".to_string();
+            }
+            // Default: read-only CLI operations
+            return "low".to_string();
+        }
+        
+        // ... existing patterns ...
+    }
+}
+```
+
+#### Constitution Rules Example
+
+```toml
+# In constitution.toml or as RTFS rules
+
+[[rules]]
+id = "cli-agent-restrictions"
+description = "Agents cannot modify system configuration without human approval"
+match = "ccos.cli.config.*"
+action = "require-human-approval"
+
+[[rules]]
+id = "cli-discovery-allowed"
+description = "Agents can freely discover and search capabilities"
+match = "ccos.cli.discovery.*"
+action = "allow"
+
+[[rules]]
+id = "cli-approval-restricted"
+description = "Only humans can approve new servers"
+match = "ccos.cli.approval.approve"
+action = "require-human-approval"
+```
+
+#### Dynamic Registration Flow
+
+```
+Agent calls: (call :ccos.cli.server.search {:query "weather api"})
+                    ↓
+        GovernanceKernel checks security level ("low") → ALLOW
+                    ↓
+        NativeCapabilityProvider executes ops::server::search()
+                    ↓
+        Returns: [{:name "openweathermap" :endpoint "..." :status :pending}]
+                    ↓
+Agent calls: (call :ccos.cli.approval.approve {:id "openweathermap"})
+                    ↓
+        GovernanceKernel checks security level ("high") → REQUIRE APPROVAL
+                    ↓
+        Human approves via CLI or TUI
+                    ↓
+        Server approved → capabilities registered dynamically
+                    ↓
+Agent can now call: (call :openweathermap.get_current_weather {:city "Paris"})
+```
+
 ## File Structure
 
 ```
@@ -145,6 +311,17 @@ ccos/src/
 │   │   └── config.rs               # config subcommand
 │   ├── output.rs                   # Output formatting (table, json, rtfs)
 │   └── context.rs                  # Shared CLI context
+├── ops/                            # Pure logic functions (Phase 6)
+│   ├── mod.rs                      # ops module
+│   ├── server.rs                   # server operations (list, search, add, remove)
+│   ├── discover.rs                 # discovery operations (goal, inspect, search)
+│   ├── approval.rs                 # approval operations (pending, approve, reject)
+│   ├── config.rs                   # config operations (show, validate, init)
+│   ├── plan.rs                     # plan operations (create, execute, validate)
+│   └── governance.rs               # governance operations (check, audit)
+├── capabilities/
+│   ├── native_provider.rs          # Native capability provider (Phase 6)
+│   └── ...
 ├── discovery/
 │   ├── approval_queue.rs           # Approval queue system
 │   ├── goal_discovery.rs           # Goal-driven discovery
@@ -291,7 +468,8 @@ Log events for audit trail:
 1. **Phase 1-2**: `ccos` CLI exists alongside examples
 2. **Phase 3-4**: Feature parity with capability_explorer
 3. **Phase 5**: capability_explorer becomes thin wrapper or deprecated
-4. **Future**: Other examples migrated or deprecated
+4. **Phase 6**: CLI commands callable as RTFS capabilities by agents
+5. **Future**: Other examples migrated or deprecated
 
 ---
 
@@ -403,3 +581,5 @@ The current `ccos explore` command provides capability exploration. The long-ter
 
 - [Capability Explorer RTFS Mode](../ccos/guides/capability-explorer-rtfs-mode.md)
 - [Missing Capability Resolution](../ccos/specs/032-missing-capability-resolution.md)
+- [Governance Kernel](../ccos/specs/005-governance-kernel.md)
+- [Capability System Architecture](../ccos/specs/030-capability-system-architecture.md)

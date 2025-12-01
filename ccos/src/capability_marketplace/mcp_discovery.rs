@@ -1598,8 +1598,23 @@ impl MCPDiscoveryProvider {
                     }
                 }
                 MapKey::Keyword(k) if k.0 == "provider" => {
-                    if let Expression::Map(provider_map) = value {
-                        provider_info = Some(provider_map.clone());
+                    match value {
+                        Expression::Map(provider_map) => {
+                            provider_info = Some(provider_map.clone());
+                        }
+                        Expression::Literal(Literal::String(provider_str)) => {
+                            // String provider (for HTTP APIs) - create a synthetic provider map
+                            // We'll handle this in the conversion step
+                            let mut synthetic_map = std::collections::HashMap::new();
+                            synthetic_map.insert(
+                                MapKey::Keyword(Keyword("provider_type".to_string())),
+                                Expression::Literal(Literal::String(provider_str.clone())),
+                            );
+                            provider_info = Some(synthetic_map);
+                        }
+                        _ => {
+                            // Ignore other provider formats
+                        }
                     }
                 }
                 MapKey::Keyword(k) if k.0 == "permissions" => {
@@ -1624,14 +1639,29 @@ impl MCPDiscoveryProvider {
                 }
                 MapKey::Keyword(k) if k.0 == "metadata" => {
                     if let Expression::Map(meta_map) = value {
+                        // Extract nested metadata, especially openapi base_url
                         for (meta_key, meta_value) in meta_map {
-                            if let (MapKey::Keyword(k), Expression::Literal(Literal::String(v))) =
-                                (meta_key, meta_value)
-                            {
-                                if k.0 == "ccos_effects" {
-                                    serialized_effects = Some(v.clone());
+                            match (meta_key, meta_value) {
+                                (MapKey::Keyword(k), Expression::Literal(Literal::String(v))) => {
+                                    if k.0 == "ccos_effects" {
+                                        serialized_effects = Some(v.clone());
+                                    }
+                                    metadata.insert(k.0.clone(), v.clone());
                                 }
-                                metadata.insert(k.0.clone(), v.clone());
+                                (MapKey::Keyword(k), Expression::Map(nested_map)) if k.0 == "openapi" => {
+                                    // Extract base_url from nested openapi map
+                                    for (nested_key, nested_value) in nested_map {
+                                        if let (MapKey::Keyword(nk), Expression::Literal(Literal::String(nv))) = (nested_key, nested_value) {
+                                            if nk.0 == "base_url" {
+                                                metadata.insert("openapi_base_url".to_string(), nv.clone());
+                                                metadata.insert("base_url".to_string(), nv.clone());
+                                            } else {
+                                                metadata.insert(format!("openapi_{}", nk.0), nv.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -1651,11 +1681,49 @@ impl MCPDiscoveryProvider {
 
         // Convert provider info
         let provider = if let Some(provider_map) = provider_info {
-            self.convert_rtfs_provider_to_manifest(&provider_map)?
+            // Check if this is a string provider (HTTP API) or MCP provider map
+            if provider_map.len() == 1 {
+                if let Some((MapKey::Keyword(k), Expression::Literal(Literal::String(_provider_type)))) = provider_map.iter().next() {
+                    if k.0 == "provider_type" {
+                        // This is a string provider - create Http provider from metadata
+                        // Extract base_url from openapi metadata if available
+                        let base_url = if let Some(openapi_base_url) = metadata.get("openapi_base_url") {
+                            openapi_base_url.clone()
+                        } else if let Some(base_url) = metadata.get("base_url") {
+                            base_url.clone()
+                        } else {
+                            // Fallback: try to extract from metadata map structure
+                            // The metadata might be nested, so we need to parse it properly
+                            "https://api.example.com".to_string()
+                        };
+                        
+                        ProviderType::Http(crate::capability_marketplace::types::HttpCapability {
+                            base_url,
+                            timeout_ms: 30000,
+                            auth_token: None,
+                        })
+                    } else {
+                        self.convert_rtfs_provider_to_manifest(&provider_map)?
+                    }
+                } else {
+                    self.convert_rtfs_provider_to_manifest(&provider_map)?
+                }
+            } else {
+                self.convert_rtfs_provider_to_manifest(&provider_map)?
+            }
         } else {
-            return Err(RuntimeError::Generic(
-                "RTFS capability missing provider info".to_string(),
-            ));
+            // No provider info - try to create Http provider from metadata
+            // For API capabilities, base_url is often in openapi metadata
+            let base_url = metadata.get("openapi_base_url")
+                .or_else(|| metadata.get("base_url"))
+                .cloned()
+                .unwrap_or_else(|| "https://api.example.com".to_string());
+            
+            ProviderType::Http(crate::capability_marketplace::types::HttpCapability {
+                base_url,
+                timeout_ms: 30000,
+                auth_token: None,
+            })
         };
 
         // Convert input/output schemas

@@ -18,7 +18,6 @@ use crate::mcp::types::*;
 use crate::mcp::cache::MCPCache;
 use crate::mcp::rate_limiter::{RateLimiter, RetryContext};
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
-use crate::capability_marketplace::versioning::{compare_versions, VersionComparison};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogService, CatalogSource};
 use crate::planner::modular_planner::types::DomainHint;
@@ -118,11 +117,89 @@ impl MCPDiscoveryService {
     ///
     /// This is the core discovery method that all modules should use.
     /// It handles session management, caching, rate limiting, retries, and schema conversion.
+    /// For approved non-MCP servers, it loads RTFS capability files instead of connecting via MCP.
     pub async fn discover_tools(
         &self,
         server_config: &MCPServerConfig,
         options: &DiscoveryOptions,
     ) -> RuntimeResult<Vec<DiscoveredMCPTool>> {
+        // Check for approved RTFS capability files first (for non-MCP servers)
+        if !options.ignore_approved_files {
+            eprintln!("🔍 Checking approved servers for: {}", server_config.name);
+            match self.approval_queue.list_approved() {
+                Ok(approved) => {
+                    eprintln!("📋 Loaded {} approved server(s) from queue", approved.len());
+                    log::debug!("Loaded {} approved server(s) from queue", approved.len());
+                    
+                    // Try to find matching approved server
+                    let approved_server = approved.iter().find(|s| {
+                        // Match by name (handle slashes vs underscores) or endpoint
+                        let server_name_normalized = server_config.name.replace("/", "_").replace(" ", "_").to_lowercase();
+                        let approved_name_normalized = s.server_info.name.replace("/", "_").replace(" ", "_").to_lowercase();
+                        let matches = server_name_normalized == approved_name_normalized 
+                            || s.server_info.name == server_config.name 
+                            || s.server_info.endpoint == server_config.endpoint;
+                        if matches {
+                            eprintln!("✅ Found approved server match: {} (normalized: {})", s.server_info.name, approved_name_normalized);
+                            log::debug!("Found approved server match: {} (normalized: {})", s.server_info.name, approved_name_normalized);
+                        }
+                        matches
+                    });
+                    
+                    if let Some(approved_server) = approved_server {
+                        // Try to load capability files - use from approved.json if available, otherwise discover from directory
+                        let mut files_to_load = if let Some(ref files) = approved_server.capability_files {
+                            if !files.is_empty() {
+                                files.clone()
+                            } else {
+                                Vec::new()
+                            }
+                        } else {
+                            Vec::new()
+                        };
+                        
+                        // If capability_files is not set or empty, try to discover files from directory
+                        if files_to_load.is_empty() {
+                            let server_id = approved_server.server_info.name.to_lowercase().replace(" ", "_").replace("/", "_");
+                            let approved_dir = std::path::Path::new("capabilities/servers/approved").join(&server_id);
+                            
+                            if approved_dir.exists() {
+                                // Recursively collect RTFS files from directory
+                                Self::collect_rtfs_files_recursive(&approved_dir, "capabilities/servers/approved", &mut files_to_load);
+                                
+                                if !files_to_load.is_empty() {
+                                    // Update approved.json with found files (best effort)
+                                    let _ = self.update_approved_capability_files(&approved_server.id, &files_to_load);
+                                } else {
+                                    // Keep going to MCP discovery if no files found
+                                    eprintln!("⚠️  No RTFS capability files found for approved server: {} (searched in {})",
+                                        approved_server.server_info.name,
+                                        approved_dir.display()
+                                    );
+                                }
+                            }
+                        }
+                        
+                        if !files_to_load.is_empty() {
+                            // Load RTFS capability files instead of connecting via MCP
+                            eprintln!("🔄 Loading RTFS capabilities for approved server: {}", approved_server.server_info.name);
+                            log::info!("Loading RTFS capabilities for approved server: {}", approved_server.server_info.name);
+                            return self.load_rtfs_capabilities_from_approved(approved_server, &files_to_load).await;
+                        }
+                    } else {
+                        eprintln!("ℹ️  No approved server match found for: {} (will try MCP)", server_config.name);
+                        log::debug!("No approved server match found for: {}", server_config.name);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to check approved queue: {}", e);
+                    // Continue to MCP discovery
+                }
+            }
+        } else {
+            eprintln!("ℹ️  Ignoring approved files (forced discovery)");
+        }
+        
         // Check cache first if enabled
         if options.use_cache {
             if let Some(cached_tools) = self.cache.get(server_config) {
@@ -205,6 +282,117 @@ impl MCPDiscoveryService {
         }
         
         false
+    }
+
+    /// Recursively collect RTFS files from a directory
+    fn collect_rtfs_files_recursive(dir: &std::path::Path, base_path: &str, files: &mut Vec<String>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().map_or(false, |ext| ext == "rtfs") {
+                    if let Ok(rel_path) = path.strip_prefix(base_path) {
+                        files.push(rel_path.to_string_lossy().to_string());
+                    }
+                } else if path.is_dir() {
+                    // Recursively search subdirectories
+                    Self::collect_rtfs_files_recursive(&path, base_path, files);
+                }
+            }
+        }
+    }
+
+    /// Update capability_files in approved.json (helper method)
+    fn update_approved_capability_files(&self, server_id: &str, files: &[String]) -> RuntimeResult<()> {
+        // Best-effort update - don't fail discovery if this fails
+        if let Err(e) = self.approval_queue.update_capability_files(server_id, files.to_vec()) {
+            log::warn!("Failed to update capability_files for server {}: {}", server_id, e);
+        }
+        Ok(())
+    }
+
+    /// Load RTFS capability files from an approved server
+    async fn load_rtfs_capabilities_from_approved(
+        &self,
+        approved_server: &ApprovedDiscovery,
+        capability_files: &[String],
+    ) -> RuntimeResult<Vec<DiscoveredMCPTool>> {
+        use crate::capability_marketplace::mcp_discovery::MCPDiscoveryProvider;
+        
+        let mut discovered_tools = Vec::new();
+        let mut errors = Vec::new();
+        
+        eprintln!("📂 Loading {} capability file(s) for approved server: {}", capability_files.len(), approved_server.server_info.name);
+        
+        for file_path in capability_files {
+            let full_path = std::path::Path::new("capabilities/servers/approved").join(file_path);
+            
+            if !full_path.exists() {
+                let err_msg = format!("Capability file not found: {}", full_path.display());
+                eprintln!("⚠️  {}", err_msg);
+                log::warn!("{}", err_msg);
+                errors.push(err_msg);
+                continue;
+            }
+            
+            eprintln!("📄 Loading RTFS file: {}", full_path.display());
+            log::debug!("Loading RTFS file: {}", full_path.display());
+            
+            let parser = MCPDiscoveryProvider::new(MCPServerConfig::default())
+                .map_err(|e| RuntimeError::Generic(format!("Failed to initialize RTFS parser: {}", e)))?;
+            
+            match parser.load_rtfs_capabilities(full_path.to_str().unwrap()) {
+                Ok(module) => {
+                    eprintln!("✅ Parsed RTFS module with {} capabilities", module.capabilities.len());
+                    log::debug!("Parsed RTFS module with {} capabilities", module.capabilities.len());
+                    for (idx, cap_def) in module.capabilities.iter().enumerate() {
+                        match parser.rtfs_to_capability_manifest(cap_def) {
+                            Ok(manifest) => {
+                                eprintln!("✅ Successfully converted capability: {}", manifest.name);
+                                log::debug!("Successfully converted capability: {}", manifest.name);
+                                // Convert CapabilityManifest to DiscoveredMCPTool
+                                let tool = DiscoveredMCPTool {
+                                    tool_name: manifest.name.clone(),
+                                    description: Some(manifest.description.clone()),
+                                    input_schema: manifest.input_schema.clone(),
+                                    output_schema: manifest.output_schema.clone(),
+                                    input_schema_json: None, // Could extract from metadata if needed
+                                };
+                                discovered_tools.push(tool);
+                            }
+                            Err(e) => {
+                                let err_msg = format!("Failed to convert RTFS capability #{} in {}: {}", idx + 1, full_path.display(), e);
+                                eprintln!("❌ {}", err_msg);
+                                log::warn!("{}", err_msg);
+                                errors.push(err_msg);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let err_msg = format!("Failed to load RTFS file {}: {}", full_path.display(), e);
+                    eprintln!("❌ {}", err_msg);
+                    log::warn!("{}", err_msg);
+                    errors.push(err_msg);
+                }
+            }
+        }
+        
+        if discovered_tools.is_empty() {
+            let error_summary = if errors.is_empty() {
+                "No capabilities found in files".to_string()
+            } else {
+                format!("Errors encountered:\n  {}", errors.join("\n  "))
+            };
+            return Err(RuntimeError::Generic(format!(
+                "No valid capabilities found in approved files for server: {}\n{}",
+                approved_server.server_info.name,
+                error_summary
+            )));
+        }
+        
+        eprintln!("✅ Successfully loaded {} capability(ies) from approved server: {}", discovered_tools.len(), approved_server.server_info.name);
+        log::info!("Successfully loaded {} capability(ies) from approved server: {}", discovered_tools.len(), approved_server.server_info.name);
+        Ok(discovered_tools)
     }
 
     /// Inner discovery method (without retry logic)
@@ -507,6 +695,33 @@ impl MCPDiscoveryService {
         server_config: &MCPServerConfig,
         options: &DiscoveryOptions,
     ) -> RuntimeResult<Vec<CapabilityManifest>> {
+        // Check if this server is approved and has RTFS files - if so, skip export
+        let is_approved_with_files = {
+            if let Ok(approved) = self.approval_queue.list_approved() {
+                if let Some(approved_server) = approved.iter().find(|s| {
+                    let server_name_normalized = server_config.name.replace("/", "_").replace(" ", "_").to_lowercase();
+                    let approved_name_normalized = s.server_info.name.replace("/", "_").replace(" ", "_").to_lowercase();
+                    server_name_normalized == approved_name_normalized 
+                        || s.server_info.name == server_config.name 
+                        || s.server_info.endpoint == server_config.endpoint
+                }) {
+                    // Check if it has capability files
+                    if let Some(ref files) = approved_server.capability_files {
+                        !files.is_empty()
+                    } else {
+                        // Check if directory exists
+                        let server_id = approved_server.server_info.name.to_lowercase().replace(" ", "_").replace("/", "_");
+                        let approved_dir = std::path::Path::new("capabilities/servers/approved").join(&server_id);
+                        approved_dir.exists()
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
         // Discover tools
         let tools = self.discover_tools(server_config, options).await?;
 
@@ -517,6 +732,97 @@ impl MCPDiscoveryService {
             manifests.push(manifest);
         }
 
+        // Skip export if loading from approved files (they're already saved)
+        if is_approved_with_files {
+            eprintln!("ℹ️  Capabilities loaded from approved RTFS files - skipping export");
+            // Still register in marketplace if requested (but don't export)
+            if options.register_in_marketplace {
+                for manifest in &manifests {
+                    self.register_capability(manifest).await?;
+                }
+            }
+            return Ok(manifests);
+        }
+
+        // Check for existing capabilities and warn user
+        let mut existing_capabilities = Vec::new();
+        if let Some(ref marketplace) = self.marketplace {
+            for manifest in &manifests {
+                if marketplace.has_capability(&manifest.id).await {
+                    existing_capabilities.push(manifest.id.clone());
+                }
+            }
+        }
+        
+        // Also check if RTFS export file already exists (only if not loading from approved files)
+        let export_file_exists = if is_approved_with_files {
+            false // Don't check - we're loading from approved files, skip export
+        } else {
+            let export_dir = options.export_directory.as_ref()
+                .map(|s| {
+                    let path = std::path::PathBuf::from(s);
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        std::env::current_dir()
+                            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                            .join(&path)
+                    }
+                })
+                .unwrap_or_else(|| {
+                    std::env::var("CCOS_CAPABILITY_STORAGE")
+                        .ok()
+                        .map(|s| {
+                            let path = std::path::PathBuf::from(s);
+                            if path.is_absolute() {
+                                path
+                            } else {
+                                std::env::current_dir()
+                                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                                    .join(&path)
+                            }
+                        })
+                        .unwrap_or_else(|| {
+                            std::env::current_dir()
+                                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                                .join("capabilities/discovered")
+                        })
+                });
+            let server_dir = export_dir.join("mcp").join(&server_config.name);
+            let module_file = server_dir.join("capabilities.rtfs");
+            module_file.exists()
+        };
+
+        // Warn if capabilities already exist
+        if !existing_capabilities.is_empty() || export_file_exists {
+            eprintln!();
+            eprintln!("⚠️  Warning: Some capabilities were already discovered:");
+            if !existing_capabilities.is_empty() {
+                eprintln!("   • {} capability(ies) already registered in marketplace:", existing_capabilities.len());
+                for cap_id in &existing_capabilities {
+                    eprintln!("     - {}", cap_id);
+                }
+            }
+            if export_file_exists {
+                eprintln!("   • RTFS export file already exists for this server");
+            }
+            eprintln!();
+            
+            // Ask for confirmation before proceeding
+            print!("Continue and overwrite? (y/n): ");
+            use std::io::{self, Write};
+            io::stdout().flush().map_err(|e| RuntimeError::Generic(format!("Failed to flush stdout: {}", e)))?;
+            
+            let mut confirm = String::new();
+            io::stdin().read_line(&mut confirm).map_err(|e| RuntimeError::Generic(format!("Failed to read input: {}", e)))?;
+            let confirm = confirm.trim().to_lowercase();
+            
+            if confirm != "y" && confirm != "yes" {
+                eprintln!("   Skipping registration and export.");
+                return Ok(manifests); // Return manifests but don't register/export
+            }
+        }
+
         // Register if requested
         if options.register_in_marketplace {
             for manifest in &manifests {
@@ -524,7 +830,7 @@ impl MCPDiscoveryService {
             }
         }
 
-        // Export to RTFS if requested
+        // Export to RTFS if requested (only if user confirmed)
         if options.export_to_rtfs {
             self.export_server_capabilities_to_rtfs(server_config, &manifests, options).await?;
         }
@@ -543,12 +849,38 @@ impl MCPDiscoveryService {
         use std::fs;
 
         // Determine export directory
+        // Use absolute path or relative to current working directory
         let export_dir = options.export_directory.as_ref()
-            .map(PathBuf::from)
+            .map(|s| {
+                let path = PathBuf::from(s);
+                if path.is_absolute() {
+                    path
+                } else {
+                    // Make relative to current working directory
+                    std::env::current_dir()
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                        .join(&path)
+                }
+            })
             .unwrap_or_else(|| {
+                // Default: use environment variable or fallback to capabilities/discovered in current dir
                 std::env::var("CCOS_CAPABILITY_STORAGE")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|_| PathBuf::from("../capabilities/discovered"))
+                    .map(|s| {
+                        let path = PathBuf::from(s);
+                        if path.is_absolute() {
+                            path
+                        } else {
+                            std::env::current_dir()
+                                .unwrap_or_else(|_| PathBuf::from("."))
+                                .join(&path)
+                        }
+                    })
+                    .unwrap_or_else(|_| {
+                        // Default to capabilities/discovered in current working directory
+                        std::env::current_dir()
+                            .unwrap_or_else(|_| PathBuf::from("."))
+                            .join("capabilities/discovered")
+                    })
             });
 
         // Create directory structure: capabilities/discovered/mcp/<server_name>/
