@@ -409,6 +409,7 @@ mod discovery_options_tests {
             auth_headers: Some(auth_headers.clone()),
             retry_policy: RetryPolicy::aggressive(),
             rate_limit: RateLimitConfig::strict(),
+            ignore_approved_files: false,
         };
 
         assert!(options.introspect_output_schemas);

@@ -15,6 +15,7 @@ fn test_approval_workflow() {
             name: "test-server".to_string(),
             endpoint: "http://localhost".to_string(),
             description: None,
+            auth_env_var: None,
         },
         domain_match: vec![],
         risk_assessment: RiskAssessment {
@@ -61,6 +62,7 @@ fn test_rejection_workflow() {
             name: "bad-server".to_string(),
             endpoint: "http://localhost".to_string(),
             description: None,
+            auth_env_var: None,
         },
         domain_match: vec![],
         risk_assessment: RiskAssessment {
