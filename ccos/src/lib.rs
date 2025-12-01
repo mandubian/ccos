@@ -46,6 +46,7 @@ pub mod environment;
 pub mod examples_common;
 pub mod host;
 pub mod observability;
+pub mod ops;
 pub mod prelude;
 pub mod state_provider;
 pub mod streaming;

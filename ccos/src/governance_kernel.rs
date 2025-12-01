@@ -25,15 +25,60 @@ use super::types::Intent; // for delegation validation
 use super::types::{ExecutionResult, Plan, PlanBody, StorableIntent};
 use rtfs::runtime::error::RuntimeError;
 
+/// Action to take when a rule matches
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuleAction {
+    Allow,
+    Deny(String), // Reason
+    RequireHumanApproval,
+}
+
+/// A rule in the Constitution
+#[derive(Debug, Clone)]
+pub struct ConstitutionRule {
+    pub id: String,
+    pub description: String,
+    pub match_pattern: String, // Glob-like pattern for capability ID
+    pub action: RuleAction,
+}
+
 /// Represents the system's constitution, a set of human-authored rules.
 // TODO: This should be loaded from a secure, signed configuration file.
 pub struct Constitution {
-    rules: Vec<String>,
+    rules: Vec<ConstitutionRule>,
 }
 
 impl Default for Constitution {
     fn default() -> Self {
-        Self { rules: vec![] }
+        // Default rules as defined in the spec
+        let rules = vec![
+            ConstitutionRule {
+                id: "cli-agent-restrictions".to_string(),
+                description: "Agents cannot modify system configuration without human approval".to_string(),
+                match_pattern: "ccos.cli.config.*".to_string(),
+                action: RuleAction::RequireHumanApproval,
+            },
+            ConstitutionRule {
+                id: "cli-discovery-allowed".to_string(),
+                description: "Agents can freely discover and search capabilities".to_string(),
+                match_pattern: "ccos.cli.discovery.*".to_string(),
+                action: RuleAction::Allow,
+            },
+            ConstitutionRule {
+                id: "cli-approval-restricted".to_string(),
+                description: "Only humans can approve new servers".to_string(),
+                match_pattern: "ccos.cli.approval.approve".to_string(),
+                action: RuleAction::RequireHumanApproval,
+            },
+            ConstitutionRule {
+                id: "no-global-thermonuclear-war".to_string(),
+                description: "Prevent global thermonuclear war".to_string(),
+                match_pattern: "*launch-nukes*".to_string(),
+                action: RuleAction::Deny("Rule against global thermonuclear war".to_string()),
+            },
+        ];
+
+        Self { rules }
     }
 }
 
@@ -72,18 +117,20 @@ impl GovernanceKernel {
         // --- 2. Plan Scaffolding (SEP-012) ---
         let safe_plan = self.scaffold_plan(plan)?;
 
-        // --- 3. Constitution Validation (SEP-010) ---
-        self.validate_against_constitution(&safe_plan)?;
-
-        // --- 4. Execution Mode Detection (Criticality-Based Execution) ---
+        // --- 3. Execution Mode Detection (Criticality-Based Execution) ---
         // Read execution mode from plan policies or intent constraints
-        // This determines how critical actions should be handled
+        // We detect this early to use it in constitution validation
         let execution_mode = self.detect_execution_mode(&safe_plan, intent_opt.as_ref())?;
 
+        // --- 4. Constitution Validation (SEP-010) ---
+        // Pass execution mode to validation logic
+        self.validate_against_constitution(&safe_plan, &execution_mode)?;
+
+        // --- 5. Execution Mode Validation ---
         // Validate execution mode is compatible with plan security requirements
         self.validate_execution_mode(&safe_plan, intent_opt.as_ref(), &execution_mode)?;
 
-        // --- 5. Attestation Verification (SEP-011) ---
+        // --- 6. Attestation Verification (SEP-011) ---
         // TODO: Verify the cryptographic attestations of all capabilities
         // called within the plan.
 
@@ -94,7 +141,7 @@ impl GovernanceKernel {
             Value::String(execution_mode.clone()),
         );
 
-        // --- 6. Execution ---
+        // --- 7. Execution ---
         // If all checks pass, delegate execution to the Orchestrator.
         // Execution mode is passed via context cross_plan_params for RuntimeHost to use
         self.orchestrator
@@ -180,9 +227,40 @@ impl GovernanceKernel {
     }
 
     /// Validates the plan against the rules of the system's Constitution.
-    fn validate_against_constitution(&self, plan: &Plan) -> RuntimeResult<()> {
-        // TODO: Implement actual validation logic based on loaded constitutional rules.
-        // For now, this is a placeholder.
+    fn validate_against_constitution(&self, plan: &Plan, execution_mode: &str) -> RuntimeResult<()> {
+        // Check required capabilities against rules
+        for capability_id in &plan.capabilities_required {
+            for rule in &self.constitution.rules {
+                if self.matches_pattern(capability_id, &rule.match_pattern) {
+                    match &rule.action {
+                        RuleAction::Deny(reason) => {
+                            return Err(RuntimeError::Generic(format!(
+                                "Plan rejected by constitution rule '{}': {}",
+                                rule.id, reason
+                            )));
+                        }
+                        RuleAction::RequireHumanApproval => {
+                            // If rule requires approval, execution mode must support it
+                            // Modes "require-approval", "safe-only" (if deemed unsafe), and "dry-run" are acceptable.
+                            // "full" mode is rejected if approval is required.
+                            
+                            if execution_mode == "full" {
+                                return Err(RuntimeError::Generic(format!(
+                                    "Plan requires human approval for capability '{}' (rule '{}'), but execution mode is 'full'. Use 'require-approval' mode.",
+                                    capability_id, rule.id
+                                )));
+                            }
+                        }
+                        RuleAction::Allow => {
+                            // Explicit allow, continue checking other rules/capabilities
+                            // (In a more complex system, this might override a Deny, but here we process all applicable rules)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Keep existing simple check as well
         if let PlanBody::Rtfs(body_text) = &plan.body {
             if body_text.contains("launch-nukes") {
                 return Err(RuntimeError::Generic(
@@ -192,6 +270,34 @@ impl GovernanceKernel {
             }
         }
         Ok(())
+    }
+    
+    /// Helper to check if an ID matches a pattern
+    /// Supports simpler patterns:
+    /// - "exact.match"
+    /// - "prefix.*"
+    /// - "*suffix"
+    /// - "*contains*"
+    fn matches_pattern(&self, id: &str, pattern: &str) -> bool {
+        if pattern == "*" {
+            return true;
+        }
+        
+        if let Some(prefix) = pattern.strip_suffix('*') {
+            if let Some(suffix) = prefix.strip_prefix('*') {
+                // "*contains*"
+                return id.contains(suffix);
+            }
+            // "prefix*"
+            return id.starts_with(prefix);
+        }
+        
+        if let Some(suffix) = pattern.strip_prefix('*') {
+            // "*suffix"
+            return id.ends_with(suffix);
+        }
+        
+        id == pattern
     }
 
     /// Delegation validation hook (M4): governance pre-approval of agent selection.
@@ -300,6 +406,31 @@ impl GovernanceKernel {
     /// don't declare security levels in their manifest metadata.
     pub fn detect_security_level(&self, capability_id: &str) -> String {
         let id_lower = capability_id.to_lowercase();
+
+        // CLI capability patterns
+        if id_lower.starts_with("ccos.cli.") {
+            // Critical: system modification
+            if id_lower.contains("config.init")
+                || id_lower.contains("governance.constitution")
+            {
+                return "critical".to_string();
+            }
+            // High: destructive or trust-modifying
+            if id_lower.contains("remove")
+                || id_lower.contains("approve")
+            {
+                return "high".to_string();
+            }
+            // Medium: state-changing but safe
+            if id_lower.contains("add")
+                || id_lower.contains("reject")
+                || id_lower.contains("call")
+            {
+                return "medium".to_string();
+            }
+            // Default: read-only CLI operations
+            return "low".to_string();
+        }
 
         // Critical operations: payments, billing, charges, transfers
         if id_lower.contains("payment")

@@ -1025,7 +1025,7 @@ impl ExecutorVariant {
                 // and we dispatch through the NativeCapabilityProvider
                 if let ProviderType::Native(native) = provider {
                     // Execute the native capability handler directly
-                    (native.handler)(inputs)
+                    (native.handler)(inputs).await
                 } else {
                     Err(RuntimeError::Generic(
                         "ProviderType mismatch for Native executor".to_string(),

@@ -3,6 +3,7 @@ use crate::streaming::{
     StreamingProvider,
 };
 use chrono::{DateTime, Datelike, Timelike, Utc};
+use futures::future::BoxFuture;
 use rtfs::ast::TypeExpr;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
@@ -1031,6 +1032,7 @@ pub enum ProviderType {
     RemoteRTFS(RemoteRTFSCapability),
     Stream(StreamCapabilityImpl),
     Registry(RegistryCapability),
+    Native(NativeCapability),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1104,6 +1106,28 @@ pub struct A2ACapability {
 pub struct PluginCapability {
     pub plugin_path: String,
     pub function_name: String,
+}
+
+#[derive(Clone)]
+pub struct NativeCapability {
+    pub handler: Arc<dyn Fn(&Value) -> BoxFuture<'static, RuntimeResult<Value>> + Send + Sync>,
+    pub security_level: String,
+    pub metadata: HashMap<String, String>,
+}
+
+impl std::fmt::Debug for NativeCapability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeCapability")
+            .field("security_level", &self.security_level)
+            .field("metadata", &self.metadata)
+            .finish()
+    }
+}
+
+impl PartialEq for NativeCapability {
+    fn eq(&self, other: &Self) -> bool {
+        self.security_level == other.security_level && self.metadata == other.metadata
+    }
 }
 
 pub struct CapabilityMarketplace {

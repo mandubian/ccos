@@ -9,6 +9,7 @@ use super::types::*;
 use super::versioning::{compare_versions, detect_breaking_changes, VersionComparison};
 use crate::catalog::{CatalogService, CatalogSource};
 use crate::utils::value_conversion;
+use futures::future::BoxFuture;
 use rtfs::ast::{MapKey, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use super::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
@@ -1218,7 +1219,7 @@ impl CapabilityMarketplace {
         id: String,
         name: String,
         description: String,
-        handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync>,
+        handler: Arc<dyn Fn(&Value) -> BoxFuture<'static, RuntimeResult<Value>> + Send + Sync>,
         security_level: String,
     ) -> Result<(), RuntimeError> {
         let provenance = CapabilityProvenance {
@@ -1911,7 +1912,7 @@ impl CapabilityMarketplace {
                     "Registry provider missing executor".to_string(),
                 )),
                 ProviderType::Native(native) => {
-                    (native.handler)(inputs_ref)
+                    (native.handler)(inputs_ref).await
                 }
             }
         }?;
@@ -2855,7 +2856,7 @@ impl CapabilityMarketplace {
         id: String,
         name: String,
         description: String,
-        handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync>,
+        handler: Arc<dyn Fn(&Value) -> BoxFuture<'static, RuntimeResult<Value>> + Send + Sync>,
         security_level: String,
     ) -> RuntimeResult<()> {
         if let Some(native_provider) = self.get_native_provider_mut() {
