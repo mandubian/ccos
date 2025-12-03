@@ -46,6 +46,11 @@ pub async fn discover_by_goal_with_options(
     let queue = ApprovalQueue::new(".");
     let agent = GoalDiscoveryAgent::new_with_config(queue, config);
 
+    // Show mode being used
+    if options.llm {
+        println!("🧠 Using LLM-enhanced discovery (intent analysis + semantic ranking)");
+    }
+
     // Get scored results (before queuing)
     let scored_results = agent.search_and_score(&goal, options.llm).await?;
 

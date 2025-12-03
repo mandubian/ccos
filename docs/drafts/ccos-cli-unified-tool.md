@@ -1,6 +1,6 @@
 # CCOS CLI: Unified Command-Line Tool
 
-**Status**: Implementation (Phases 1-7 complete)  
+**Status**: Implementation (Phases 1-8 complete)  
 **Created**: 2025-11-30  
 **Updated**: 2025-12-03  
 **Umbrella Issue**: [#167](https://github.com/mandubian/ccos/issues/167)
@@ -17,7 +17,7 @@
 | [#172](https://github.com/mandubian/ccos/issues/172) | Port capability_explorer to CLI subcommands | 5 | Done |
 | [#173](https://github.com/mandubian/ccos/issues/173) | Expose CLI as Governed Native Capabilities | 6 | Done |
 | [#174](https://github.com/mandubian/ccos/issues/174) | [CLI UX] Interactive Mode and Discovery Filtering | 7 | Done |
-| [#175](https://github.com/mandubian/ccos/issues/175) | [CLI UX] Intelligent Discovery with LLM Integration | 8 | Planned |
+| [#175](https://github.com/mandubian/ccos/issues/175) | [CLI UX] Intelligent Discovery with LLM Integration | 8 | Done |
 
 ## Overview
 
@@ -147,41 +147,50 @@ Improve CLI usability for capability discovery by wiring up existing scoring inf
 
 (Details moved to done section...)
 
-### Phase 8: Intelligent Discovery with LLM Integration (Planned)
+### Phase 8: Intelligent Discovery with LLM Integration (Done)
 
-Restore and enhance LLM-based discovery capabilities to provide "intelligent" search and ranking.
+LLM-enhanced discovery capabilities that provide "intelligent" search and ranking.
 
 **Goal**: Enable `ccos discover goal "..." --llm` to use an LLM for:
 1.  **Intent Analysis**: Understand the user's goal beyond keywords (e.g., "track project progress" -> implies "issues", "tasks", "gantt").
 2.  **Query Expansion**: Generate multiple diverse search queries for registries (MCP, APIs.guru, Web).
 3.  **Semantic Ranking**: Rank discovery results based on semantic relevance to the intent, providing reasoning for the score.
 
-**Implementation**:
-- Integrate `LlmClient` into `GoalDiscoveryAgent`.
-- Implement `analyze_goal_with_llm(goal: &str)` to extract intents and queries.
-- Implement `rank_results_with_llm(goal, results)` to re-score candidates.
-- Update `discover` command to use these methods when `--llm` is passed.
+**Usage**:
+```bash
+# Standard keyword-based discovery
+ccos discover goal "github issues"
+
+# LLM-enhanced discovery with intent analysis and semantic ranking
+ccos discover goal "github issues" --llm
+```
+
+**Implementation Details**:
+- Created `ccos/src/discovery/llm_discovery.rs` with `LlmDiscoveryService`
+- `LlmDiscoveryService::analyze_goal()` extracts intent using LLM:
+  - Primary action (e.g., "list", "get", "track")
+  - Target object (e.g., "issues", "weather")
+  - Domain keywords, synonyms, implied concepts
+  - Expanded search queries for better registry coverage
+- `LlmDiscoveryService::rank_results()` scores candidates semantically:
+  - LLM evaluates each candidate against the goal intent
+  - Returns scores with reasoning
+  - Recommends results above 0.6 threshold
+- Integrated into `GoalDiscoveryAgent.search_and_score()`:
+  - If `--llm`: analyze goal → search with expanded queries → rank with LLM
+  - Fallback to keyword matching on LLM failure
+- Cost control: pre-filters candidates before LLM ranking (max 15)
+
+**Key Types**:
+- `IntentAnalysis`: Structured goal analysis (action, target, keywords, synonyms, implied concepts)
+- `RankedResult`: Discovery result with LLM score and reasoning
+- `LlmSearchResult`: Combined results with optional intent analysis
 
 #### Motivation
 
 The current keyword-based scoring (`capability_matcher.rs`) is fast but limited. It fails on semantic gaps (e.g., "finding bugs" doesn't match "issue tracker" if keywords don't overlap). LLM integration bridges this gap.
 
-#### Implementation Steps
-
-1.  **LlmClient Integration**: Add `LlmClient` to `GoalDiscoveryAgent`.
-2.  **Prompt Engineering**: Create prompts for "Goal Analysis" and "Candidate Ranking".
-3.  **Workflow**:
-    *   If `--llm`:
-        *   Analyze Goal -> `Intent` + `[SearchQueries]`
-        *   Run `RegistrySearcher` with expanded queries.
-        *   Collect results (deduplicated).
-        *   Rank top N results using LLM (expensive, so only rank candidates that pass a basic filter).
-    *   If no `--llm`:
-        *   Use existing keyword/regex logic.
-
-#### Motivation
-
-The `capability_explorer.rs` example already implements ad-hoc "discovery capabilities" like `ccos.discovery.servers`, `ccos.discovery.search`, etc. This phase generalizes that pattern:
+### Future Enhancements
 
 1. **Agent Autonomy**: Agents can discover new MCP servers, search for capabilities, and invoke CLI operations programmatically.
 2. **Governance Control**: The Governance Kernel controls which CLI operations agents can invoke based on security levels and constitution rules.

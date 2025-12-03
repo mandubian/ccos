@@ -1,6 +1,7 @@
 use crate::discovery::approval_queue::{ApprovalQueue, PendingDiscovery, RiskAssessment, RiskLevel};
 use crate::discovery::capability_matcher::calculate_description_match_score_improved;
 use crate::discovery::config::DiscoveryConfig;
+use crate::discovery::llm_discovery::{IntentAnalysis, LlmDiscoveryService};
 use crate::discovery::registry_search::{RegistrySearchResult, RegistrySearcher};
 use rtfs::runtime::error::RuntimeResult;
 use chrono::Utc;
@@ -14,6 +15,17 @@ struct ScoredResult {
 
 /// Public type alias for scored results returned by search_and_score
 pub type ScoredSearchResult = (RegistrySearchResult, f64);
+
+/// Result of LLM-enhanced search containing both results and analysis
+#[derive(Debug)]
+pub struct LlmSearchResult {
+    /// The scored search results
+    pub results: Vec<ScoredSearchResult>,
+    /// Intent analysis from LLM (if llm_enabled)
+    pub intent_analysis: Option<IntentAnalysis>,
+    /// Whether LLM was used
+    pub llm_used: bool,
+}
 
 pub struct GoalDiscoveryAgent {
     registry_searcher: RegistrySearcher,
@@ -54,11 +66,177 @@ impl GoalDiscoveryAgent {
 
     /// Search and score results without queuing (for interactive mode)
     pub async fn search_and_score(&self, goal: &str, llm_enabled: bool) -> RuntimeResult<Vec<ScoredSearchResult>> {
-        // TODO: Use LLM for semantic analysis if enabled
+        let result = self.search_and_score_with_llm(goal, llm_enabled).await?;
+        Ok(result.results)
+    }
+
+    /// Search and score results with full LLM analysis info
+    pub async fn search_and_score_with_llm(&self, goal: &str, llm_enabled: bool) -> RuntimeResult<LlmSearchResult> {
+        let debug = std::env::var("CCOS_DEBUG").is_ok();
+        
+        // If LLM enabled, try to use it for enhanced discovery
         if llm_enabled {
-            println!("⚠️ LLM analysis enabled but not yet implemented (falling back to semantic matching)");
+            match self.search_with_llm(goal).await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    log::warn!("LLM discovery failed, falling back to keyword matching: {}", e);
+                    println!("⚠️  LLM analysis failed: {}. Falling back to keyword matching.", e);
+                }
+            }
         }
 
+        // Keyword-based search (fallback or default)
+        let results = self.keyword_search_and_score(goal).await?;
+        
+        if debug && llm_enabled {
+            eprintln!("📊 Using keyword-based scoring (LLM fallback)");
+        }
+        
+        Ok(LlmSearchResult {
+            results,
+            intent_analysis: None,
+            llm_used: false,
+        })
+    }
+
+    /// LLM-enhanced search: analyze goal, expand queries, rank semantically
+    async fn search_with_llm(&self, goal: &str) -> RuntimeResult<LlmSearchResult> {
+        let debug = std::env::var("CCOS_DEBUG").is_ok();
+        
+        println!("🧠 Analyzing goal with LLM...");
+        
+        // Create LLM discovery service
+        let llm_service = LlmDiscoveryService::new().await?;
+        
+        // Step 1: Analyze the goal to extract intent and expand queries
+        let intent = llm_service.analyze_goal(goal).await?;
+        
+        if debug {
+            eprintln!("📊 LLM Intent Analysis:");
+            eprintln!("   Action: {}", intent.primary_action);
+            eprintln!("   Target: {}", intent.target_object);
+            eprintln!("   Keywords: {:?}", intent.domain_keywords);
+            eprintln!("   Implied: {:?}", intent.implied_concepts);
+            eprintln!("   Queries: {:?}", intent.expanded_queries);
+            eprintln!("   Confidence: {:.2}", intent.confidence);
+        }
+        
+        println!(
+            "   Intent: {} {} (confidence: {:.0}%)",
+            intent.primary_action, intent.target_object, intent.confidence * 100.0
+        );
+        
+        // Step 2: Search with expanded queries
+        println!("🔍 Searching registries with {} queries...", intent.expanded_queries.len().max(1));
+        
+        let mut all_results: Vec<RegistrySearchResult> = Vec::new();
+        let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        
+        // Search with original goal first
+        let original_results = self.registry_searcher.search(goal).await?;
+        for result in original_results {
+            if seen_names.insert(result.server_info.name.clone()) {
+                all_results.push(result);
+            }
+        }
+        
+        // Search with expanded queries
+        for query in &intent.expanded_queries {
+            if query != goal && !query.is_empty() {
+                match self.registry_searcher.search(query).await {
+                    Ok(results) => {
+                        for result in results {
+                            if seen_names.insert(result.server_info.name.clone()) {
+                                all_results.push(result);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if debug {
+                            eprintln!("   ⚠️  Query '{}' failed: {}", query, e);
+                        }
+                    }
+                }
+            }
+        }
+        
+        if debug {
+            eprintln!("🔍 Total unique results from all queries: {}", all_results.len());
+        }
+        
+        if all_results.is_empty() {
+            return Ok(LlmSearchResult {
+                results: Vec::new(),
+                intent_analysis: Some(intent),
+                llm_used: true,
+            });
+        }
+        
+        // Step 3: Pre-filter with keyword matching to reduce LLM ranking cost
+        let pre_filtered: Vec<RegistrySearchResult> = all_results
+            .into_iter()
+            .filter(|r| {
+                let name = r.server_info.name.to_lowercase();
+                let desc = r.server_info.description.as_deref().unwrap_or("").to_lowercase();
+                
+                // Keep if any intent keyword matches name or description
+                let keywords: Vec<&str> = intent.domain_keywords.iter()
+                    .chain(intent.synonyms.iter())
+                    .chain(intent.implied_concepts.iter())
+                    .map(|s| s.as_str())
+                    .collect();
+                
+                if keywords.is_empty() {
+                    return true;
+                }
+                
+                keywords.iter().any(|kw| {
+                    name.contains(kw) || desc.contains(kw)
+                })
+            })
+            .take(15) // Limit candidates for LLM ranking (cost control)
+            .collect();
+        
+        if debug {
+            eprintln!("🔍 Pre-filtered to {} candidates for LLM ranking", pre_filtered.len());
+        }
+        
+        if pre_filtered.is_empty() {
+            // Fall back to keyword scoring if no candidates pass filter
+            let results = self.keyword_search_and_score(goal).await?;
+            return Ok(LlmSearchResult {
+                results,
+                intent_analysis: Some(intent),
+                llm_used: true,
+            });
+        }
+        
+        // Step 4: Rank candidates with LLM
+        println!("🎯 Ranking {} candidates with LLM...", pre_filtered.len());
+        
+        let ranked = llm_service.rank_results(goal, Some(&intent), pre_filtered).await?;
+        
+        // Convert ranked results to scored results, applying threshold
+        let threshold = self.config.match_threshold;
+        let results: Vec<ScoredSearchResult> = ranked
+            .into_iter()
+            .filter(|r| r.llm_score >= threshold)
+            .map(|r| (r.result, r.llm_score))
+            .collect();
+        
+        if debug {
+            eprintln!("🎯 {} results above threshold ({:.2})", results.len(), threshold);
+        }
+        
+        Ok(LlmSearchResult {
+            results,
+            intent_analysis: Some(intent),
+            llm_used: true,
+        })
+    }
+
+    /// Keyword-based search and scoring (original implementation)
+    async fn keyword_search_and_score(&self, goal: &str) -> RuntimeResult<Vec<ScoredSearchResult>> {
         // Search registries
         let results = self.registry_searcher.search(goal).await?;
         
