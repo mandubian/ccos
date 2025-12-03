@@ -119,21 +119,31 @@ Analyze this goal and respond with ONLY a JSON object in this exact format:
 {{
   "primary_action": "the main verb/action (e.g., list, get, search, send, track, create)",
   "target_object": "the main target (e.g., issues, pull requests, SMS, weather, users)",
-  "domain_keywords": ["key", "domain", "words"],
+  "domain_keywords": ["key", "domain", "words", "and", "service", "names"],
   "synonyms": ["alternative", "terms", "for", "target"],
   "implied_concepts": ["concepts", "not", "stated", "but", "implied"],
-  "expanded_queries": ["query 1 for registry search", "query 2 with synonyms", "query 3 with domain"],
+  "expanded_queries": ["query 1 for registry search", "query 2 with synonyms", "query 3 with service name"],
   "confidence": 0.85
 }}
 
 Guidelines:
 - primary_action: Extract the core action verb
 - target_object: The main thing being acted upon
-- domain_keywords: Keywords that identify the domain (github, weather, messaging, etc.)
+- domain_keywords: Keywords AND well-known service names for this domain. Examples:
+  * For bugs/issues: include "github", "jira", "linear", "gitlab"
+  * For messaging: include "slack", "discord", "twilio", "telegram"
+  * For weather: include "openweathermap", "weatherapi"
+  * For databases: include "postgres", "mysql", "mongodb", "sqlite"
+  * For email: include "sendgrid", "mailgun", "ses"
 - synonyms: Alternative names for the target (PRs for pull requests, SMS for text messages)
 - implied_concepts: What's implied but not said (e.g., "track progress" implies issues, tasks, kanban)
-- expanded_queries: 2-4 diverse search queries that could find relevant servers/APIs
+- expanded_queries: 3-5 search queries that MUST include:
+  * At least one query with the target object name (e.g., "issues", "bugs")
+  * At least one query with a well-known service name (e.g., "github", "jira")
+  * At least one query with a synonym or related concept
 - confidence: How confident you are in your analysis (0.0-1.0)
+
+IMPORTANT: The MCP registry searches by name and description, so include specific service names in your queries.
 
 Respond with ONLY the JSON object, no markdown formatting or explanation."#)
     }

@@ -103,13 +103,17 @@ impl RegistrySearcher {
             }
         }
         
-        // 4. Web search (fallback)
-        match self.search_web(query).await {
-            Ok(web_results) => results.extend(web_results),
-            Err(e) => {
-                // Log but don't fail - web search is optional
-                eprintln!("⚠️  Web search failed: {}", e);
+        // 4. Web search (fallback) - can be disabled with CCOS_DISABLE_WEB_SEARCH=1
+        if std::env::var("CCOS_DISABLE_WEB_SEARCH").is_err() {
+            match self.search_web(query).await {
+                Ok(web_results) => results.extend(web_results),
+                Err(e) => {
+                    // Log but don't fail - web search is optional
+                    eprintln!("⚠️  Web search failed: {}", e);
+                }
             }
+        } else if debug {
+            eprintln!("🔍 Web search disabled (CCOS_DISABLE_WEB_SEARCH=1)");
         }
         
         Ok(results)

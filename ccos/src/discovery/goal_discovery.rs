@@ -126,35 +126,50 @@ impl GoalDiscoveryAgent {
             intent.primary_action, intent.target_object, intent.confidence * 100.0
         );
         
-        // Step 2: Search with expanded queries
-        println!("🔍 Searching registries with {} queries...", intent.expanded_queries.len().max(1));
+        // Step 2: Build search query set from intent
+        // Collect all unique queries: original goal + domain keywords + expanded queries
+        let mut search_queries: Vec<String> = Vec::new();
+        let mut seen_queries: std::collections::HashSet<String> = std::collections::HashSet::new();
+        
+        // Add original goal
+        search_queries.push(goal.to_string());
+        seen_queries.insert(goal.to_lowercase());
+        
+        // Add domain keywords (important: these are often single service names like "github")
+        // The MCP registry works best with single-word or specific service names
+        for keyword in &intent.domain_keywords {
+            let lower = keyword.to_lowercase();
+            if !lower.is_empty() && seen_queries.insert(lower) {
+                search_queries.push(keyword.clone());
+            }
+        }
+        
+        // Add expanded queries
+        for query in &intent.expanded_queries {
+            let lower = query.to_lowercase();
+            if !lower.is_empty() && seen_queries.insert(lower) {
+                search_queries.push(query.clone());
+            }
+        }
+        
+        println!("🔍 Searching registries with {} queries...", search_queries.len());
         
         let mut all_results: Vec<RegistrySearchResult> = Vec::new();
         let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         
-        // Search with original goal first
-        let original_results = self.registry_searcher.search(goal).await?;
-        for result in original_results {
-            if seen_names.insert(result.server_info.name.clone()) {
-                all_results.push(result);
-            }
-        }
-        
-        // Search with expanded queries
-        for query in &intent.expanded_queries {
-            if query != goal && !query.is_empty() {
-                match self.registry_searcher.search(query).await {
-                    Ok(results) => {
-                        for result in results {
-                            if seen_names.insert(result.server_info.name.clone()) {
-                                all_results.push(result);
-                            }
+        // Search with all queries
+        for query in &search_queries {
+            match self.registry_searcher.search(query).await {
+                Ok(results) => {
+                    for result in results {
+                        if seen_names.insert(result.server_info.name.clone()) {
+                            all_results.push(result);
                         }
                     }
-                    Err(e) => {
-                        if debug {
-                            eprintln!("   ⚠️  Query '{}' failed: {}", query, e);
-                        }
+                }
+                Err(e) => {
+                    if debug {
+                        eprintln!("   ⚠️  Query '{}' failed: {}", query, e);
                     }
                 }
             }
