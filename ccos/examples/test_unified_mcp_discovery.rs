@@ -16,6 +16,7 @@ use ccos::capability_marketplace::mcp_discovery::MCPServerConfig;
 use ccos::catalog::CatalogService;
 use ccos::mcp::core::MCPDiscoveryService;
 use ccos::mcp::types::DiscoveryOptions;
+use ccos::mcp::rate_limiter::{RateLimitConfig, RetryPolicy};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -102,6 +103,11 @@ async fn test_discovery_with_config(
             headers.insert("Authorization".to_string(), format!("Bearer {}", token));
             headers
         }),
+        retry_policy: RetryPolicy::default(),
+        rate_limit: RateLimitConfig::default(),
+        max_parallel_discoveries: 5,
+        lazy_output_schemas: true,
+        ignore_approved_files: false,
     };
 
     println!("    🔍 Discovering tools...");
@@ -170,6 +176,11 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
                 headers.insert("Authorization".to_string(), format!("Bearer {}", token));
                 headers
             }),
+            retry_policy: ccos::mcp::types::RetryPolicy::default(),
+            rate_limit: ccos::mcp::types::RateLimitConfig::default(),
+            max_parallel_discoveries: 5,
+            lazy_output_schemas: true,
+            ignore_approved_files: false,
         };
 
         // Use discover_and_export_tools which handles registration and export automatically
@@ -226,6 +237,11 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
                 headers.insert("Authorization".to_string(), format!("Bearer {}", token));
                 headers
             }),
+            retry_policy: ccos::mcp::types::RetryPolicy::default(),
+            rate_limit: ccos::mcp::types::RateLimitConfig::default(),
+            max_parallel_discoveries: 5,
+            lazy_output_schemas: true,
+            ignore_approved_files: false,
         };
 
         // First discovery (should hit the server)
@@ -305,6 +321,10 @@ async fn test_error_handling() -> Result<(), Box<dyn std::error::Error>> {
         export_to_rtfs: false,
         export_directory: None,
         auth_headers: None,
+        max_parallel_discoveries: 5,
+        lazy_output_schemas: true,
+        ignore_approved_files: false,
+        ..Default::default()
     };
 
     println!("  🔍 Testing discovery with invalid server...");

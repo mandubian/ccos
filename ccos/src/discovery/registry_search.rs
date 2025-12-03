@@ -27,31 +27,47 @@ impl RegistrySearcher {
 
     pub async fn search(&self, query: &str) -> RuntimeResult<Vec<RegistrySearchResult>> {
         let mut results = Vec::new();
+        let debug = std::env::var("CCOS_DEBUG").is_ok();
         
-        // 1. Search MCP Registry
-        let mcp_servers = self.mcp_client.search_servers(query).await?;
-        let registry_results: Vec<RegistrySearchResult> = mcp_servers.into_iter().map(|server| {
-            let endpoint = if let Some(remotes) = &server.remotes {
-                MCPRegistryClient::select_best_remote_url(remotes).unwrap_or_default()
-            } else {
-                String::new()
-            };
-            
-            RegistrySearchResult {
-                source: DiscoverySource::McpRegistry { name: server.name.clone() },
-                server_info: ServerInfo {
-                    name: server.name.clone(),
-                    endpoint,
-                    description: Some(server.description),
-                    auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server.name)),
-                },
-                match_score: 1.0, // Default score
+        // 1. Search MCP Registry (remote)
+        match self.mcp_client.search_servers(query).await {
+            Ok(mcp_servers) => {
+                if debug {
+                    eprintln!("🔍 MCP Registry: found {} servers", mcp_servers.len());
+                }
+                let registry_results: Vec<RegistrySearchResult> = mcp_servers.into_iter().map(|server| {
+                    let endpoint = if let Some(remotes) = &server.remotes {
+                        MCPRegistryClient::select_best_remote_url(remotes).unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    
+                    RegistrySearchResult {
+                        source: DiscoverySource::McpRegistry { name: server.name.clone() },
+                        server_info: ServerInfo {
+                            name: server.name.clone(),
+                            endpoint,
+                            description: Some(server.description),
+                            auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server.name)),
+                            capabilities_path: None,
+                        },
+                        match_score: 1.0, // Default score
+                    }
+                }).collect();
+                results.extend(registry_results);
             }
-        }).collect();
-        results.extend(registry_results);
+            Err(e) => {
+                if debug {
+                    eprintln!("⚠️  MCP Registry search failed: {}", e);
+                }
+            }
+        }
         
         // 2. Search local overrides.json
         let override_results = self.search_overrides(query)?;
+        if debug && !override_results.is_empty() {
+            eprintln!("🔍 Local overrides: found {} servers", override_results.len());
+        }
         results.extend(override_results);
         
         // 3. Search APIs.guru (OpenAPI directory)
@@ -97,6 +113,7 @@ impl RegistrySearcher {
                     endpoint,
                     description: api.description.or(Some(api.title)),
                     auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server_name)),
+                    capabilities_path: None,
                 },
                 match_score: 0.8, // Slightly lower score than MCP registry
             }
@@ -181,6 +198,7 @@ impl RegistrySearcher {
                             endpoint: result.url.clone(),
                             description: Some(format!("{} - {}", result.title, result.snippet)),
                             auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server_name)),
+                            capabilities_path: None,
                         },
                         match_score: if is_mcp_server { 0.6 } else { 0.5 }, // MCP servers score slightly higher
                     })
@@ -213,11 +231,20 @@ impl RegistrySearcher {
     fn search_overrides(&self, query: &str) -> RuntimeResult<Vec<RegistrySearchResult>> {
         let mut results = Vec::new();
         let query_lower = query.to_lowercase();
-        // Split query into individual words for better matching
-        let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+        let debug = std::env::var("CCOS_DEBUG").is_ok();
+        
+        // Split query into words, filtering out common action verbs
+        let action_verbs = ["list", "get", "create", "update", "delete", "show", "find", "search"];
+        let query_words: Vec<&str> = query_lower
+            .split_whitespace()
+            .filter(|w| !action_verbs.contains(w) && w.len() > 2)
+            .collect();
         
         let overrides_path = Self::find_overrides_path();
         if let Some(path) = overrides_path {
+            if debug {
+                eprintln!("🔍 Checking local overrides: {}", path.display());
+            }
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
                     if let Some(entries) = parsed.get("entries").and_then(|e| e.as_array()) {
@@ -233,19 +260,16 @@ impl RegistrySearcher {
                                     .unwrap_or("")
                                     .to_lowercase();
                                 
-                                // Match if:
-                                // 1. Full query matches (exact or substring)
-                                // 2. All query words are present (AND logic)
-                                let full_match = name.contains(&query_lower) || description.contains(&query_lower);
-                                let all_words_match = if query_words.len() > 1 {
-                                    query_words.iter().all(|word| {
-                                        name.contains(word) || description.contains(word)
-                                    })
-                                } else {
-                                    false
-                                };
+                                // Match if ANY domain word matches (more lenient)
+                                // This allows "list github issues" to match a server with "github" in name
+                                let any_word_match = query_words.iter().any(|word| {
+                                    name.contains(word) || description.contains(word)
+                                });
                                 
-                                if full_match || all_words_match {
+                                // Also check full query match for exact searches
+                                let full_match = name.contains(&query_lower) || description.contains(&query_lower);
+                                
+                                if full_match || any_word_match {
                                     // Extract endpoint from remotes
                                     let endpoint = if let Some(remotes) = server.get("remotes").and_then(|r| r.as_array()) {
                                         // Find first HTTP/HTTPS remote
@@ -278,6 +302,7 @@ impl RegistrySearcher {
                                                     .and_then(|d| d.as_str())
                                                     .map(|s| s.to_string()),
                                                 auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server_name_clone)),
+                                                capabilities_path: None,
                                             },
                                             match_score: 1.2, // Slightly higher score for local overrides
                                         });

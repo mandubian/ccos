@@ -18,7 +18,8 @@ fn test_defn_recursion_persistence() {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
-    let mut evaluator = Evaluator::new(module_registry, security_context, host);
+    let macro_expander = rtfs::compiler::expander::MacroExpander::default();
+    let mut evaluator = Evaluator::new(module_registry, security_context, host, macro_expander);
 
     // Evaluate the definition using evaluate_with_env to persist it
     if let TopLevel::Expression(expr) = &parsed[0] {

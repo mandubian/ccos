@@ -116,6 +116,9 @@ async fn test_discovery_with_config(
         // Use default rate limiting and retry policies
         retry_policy: RetryPolicy::default(),
         rate_limit: RateLimitConfig::default(),
+        max_parallel_discoveries: 5,
+        lazy_output_schemas: true,
+        ignore_approved_files: false,
     };
 
     println!("    🔍 Discovering tools (with rate limiting and retry)...");
@@ -186,6 +189,9 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
             }),
             retry_policy: RetryPolicy::default(),
             rate_limit: RateLimitConfig::default(),
+            max_parallel_discoveries: 5,
+            lazy_output_schemas: true,
+            ignore_approved_files: false,
         };
 
         // Use discover_and_export_tools which handles registration and export automatically
@@ -244,6 +250,9 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
             }),
             retry_policy: RetryPolicy::default(),
             rate_limit: RateLimitConfig::default(),
+            max_parallel_discoveries: 5,
+            lazy_output_schemas: true,
+            ignore_approved_files: false,
         };
 
         // First discovery (should hit the server)
@@ -325,6 +334,9 @@ async fn test_error_handling() -> Result<(), Box<dyn std::error::Error>> {
         auth_headers: None,
         retry_policy: RetryPolicy::no_retry(), // No retries for faster test
         rate_limit: RateLimitConfig::disabled(),
+        max_parallel_discoveries: 5,
+        lazy_output_schemas: true,
+        ignore_approved_files: false,
     };
 
     println!("  🔍 Testing discovery with invalid server (no retries)...");
@@ -388,6 +400,9 @@ async fn test_rate_limiting() -> Result<(), Box<dyn std::error::Error>> {
             }),
             retry_policy: RetryPolicy::default(),
             rate_limit: RateLimitConfig::strict(), // 1 request per second
+            max_parallel_discoveries: 5,
+            lazy_output_schemas: true,
+            ignore_approved_files: false,
         };
 
         let start = std::time::Instant::now();

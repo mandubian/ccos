@@ -675,8 +675,48 @@ impl MCPDiscoveryProvider {
             .and_then(|schema| self.convert_json_schema_to_rtfs(schema).ok())
             .and_then(|expr| self.convert_rtfs_to_type_expr(&expr).ok());
 
+        // Add input-schema and output-schema to the capability map itself
+        let mut capability_map = match capability {
+            Expression::Map(map) => map,
+            _ => return Err(RuntimeError::Generic("Expected capability to be a Map".to_string())),
+        };
+
+        // Add input-schema to capability map
+        if let Some(ref input_schema_expr) = input_schema {
+            // Convert TypeExpr to Expression by parsing RTFS text representation
+            let rtfs_text = self.type_expr_to_rtfs_text(input_schema_expr);
+            if let Ok(parsed) = rtfs::parser::parse(&rtfs_text) {
+                if let Some(TopLevel::Expression(expr)) = parsed.first() {
+                    capability_map.insert(
+                        MapKey::Keyword(Keyword("input-schema".to_string())),
+                        expr.clone(),
+                    );
+                }
+            }
+        }
+
+        // Add output-schema to capability map (use :any if not available)
+        if let Some(ref output_schema_expr) = output_schema {
+            // Convert TypeExpr to Expression by parsing RTFS text representation
+            let rtfs_text = self.type_expr_to_rtfs_text(output_schema_expr);
+            if let Ok(parsed) = rtfs::parser::parse(&rtfs_text) {
+                if let Some(TopLevel::Expression(expr)) = parsed.first() {
+                    capability_map.insert(
+                        MapKey::Keyword(Keyword("output-schema".to_string())),
+                        expr.clone(),
+                    );
+                }
+            }
+        } else {
+            // Use :any as default when output schema is unknown
+            capability_map.insert(
+                MapKey::Keyword(Keyword("output-schema".to_string())),
+                Expression::Literal(Literal::Keyword(Keyword("any".to_string()))),
+            );
+        }
+
         Ok(RTFSCapabilityDefinition {
-            capability,
+            capability: Expression::Map(capability_map),
             input_schema,
             output_schema,
         })
@@ -735,11 +775,35 @@ impl MCPDiscoveryProvider {
                 rtfs_content.push_str(",\n");
             }
             rtfs_content.push_str("      {\n");
+            
+            // Write capability map (which should now include input-schema and output-schema)
             rtfs_content.push_str("        :capability ");
             rtfs_content.push_str(&self.expression_to_rtfs_text(&capability.capability, 0));
             rtfs_content.push_str(",\n");
 
-            if let Some(input_schema) = &capability.input_schema {
+            // Also include schemas in the wrapper for backward compatibility
+            // Extract from capability map if present, otherwise use separate fields
+            let mut input_schema_text = None;
+            let mut output_schema_text = None;
+            
+            if let Expression::Map(ref cap_map) = capability.capability {
+                let input_key = MapKey::Keyword(Keyword("input-schema".to_string()));
+                let output_key = MapKey::Keyword(Keyword("output-schema".to_string()));
+                
+                if let Some(input_expr) = cap_map.get(&input_key) {
+                    input_schema_text = Some(self.expression_to_rtfs_text(input_expr, 0));
+                }
+                if let Some(output_expr) = cap_map.get(&output_key) {
+                    output_schema_text = Some(self.expression_to_rtfs_text(output_expr, 0));
+                }
+            }
+            
+            // Write input-schema
+            if let Some(text) = input_schema_text {
+                rtfs_content.push_str("        :input-schema ");
+                rtfs_content.push_str(&text);
+                rtfs_content.push_str(",\n");
+            } else if let Some(input_schema) = &capability.input_schema {
                 rtfs_content.push_str("        :input-schema ");
                 rtfs_content.push_str(&self.type_expr_to_rtfs_text(input_schema));
                 rtfs_content.push_str(",\n");
@@ -747,11 +811,16 @@ impl MCPDiscoveryProvider {
                 rtfs_content.push_str("        :input-schema nil,\n");
             }
 
-            if let Some(output_schema) = &capability.output_schema {
+            // Write output-schema (use :any instead of nil when missing)
+            if let Some(text) = output_schema_text {
+                rtfs_content.push_str("        :output-schema ");
+                rtfs_content.push_str(&text);
+            } else if let Some(output_schema) = &capability.output_schema {
                 rtfs_content.push_str("        :output-schema ");
                 rtfs_content.push_str(&self.type_expr_to_rtfs_text(output_schema));
             } else {
-                rtfs_content.push_str("        :output-schema nil");
+                // Use :any instead of nil when output schema is unknown
+                rtfs_content.push_str("        :output-schema :any");
             }
             rtfs_content.push_str("\n      }");
         }
