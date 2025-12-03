@@ -2,6 +2,7 @@ use crate::cli::CliContext;
 use crate::cli::OutputFormatter;
 use clap::Subcommand;
 use rtfs::runtime::error::RuntimeResult;
+use dialoguer::{Select, Confirm};
 
 #[derive(Subcommand)]
 pub enum ApprovalCommand {
@@ -16,6 +17,14 @@ pub enum ApprovalCommand {
         /// Approval reason
         #[arg(short, long)]
         reason: Option<String>,
+
+        /// Force merge without prompting (for scripts)
+        #[arg(long)]
+        force_merge: bool,
+
+        /// Skip if server already approved (for scripts)
+        #[arg(long)]
+        skip_existing: bool,
     },
 
     /// Reject a pending discovery
@@ -58,11 +67,71 @@ pub async fn execute(
                 }
             }
         }
-        ApprovalCommand::Approve { id, reason } => {
-            crate::ops::approval::approve_discovery(id.clone(), reason.clone()).await?;
-            formatter.success(&format!("Approved discovery: {}", id));
-            if let Some(r) = reason {
-                formatter.list_item(&format!("Reason: {}", r));
+        ApprovalCommand::Approve { id, reason, force_merge, skip_existing } => {
+            // Check for conflict with existing approved server
+            if let Some(conflict) = crate::ops::approval::check_approval_conflict(id.clone()).await? {
+                println!();
+                formatter.warning(&format!(
+                    "Server \"{}\" already exists in approved list",
+                    conflict.existing_name
+                ));
+                println!("  Current: v{}, {} capability files, approved on {}",
+                    conflict.existing_version,
+                    conflict.existing_tool_count,
+                    &conflict.existing_approved_at[..10] // Just the date
+                );
+                println!("  New: \"{}\" ({})", conflict.pending_name, conflict.pending_endpoint);
+                println!();
+
+                if skip_existing {
+                    formatter.info("Skipping (--skip-existing flag)");
+                    return Ok(());
+                }
+
+                if !force_merge {
+                    let options = vec![
+                        "Merge - Add new tools, keep usage stats, increment version",
+                        "Skip - Keep existing, discard this pending item",
+                        "Cancel - Do nothing",
+                    ];
+
+                    let selection = Select::new()
+                        .with_prompt("What would you like to do?")
+                        .items(&options)
+                        .default(0)
+                        .interact()
+                        .map_err(|e| rtfs::runtime::error::RuntimeError::Generic(
+                            format!("Selection error: {}", e)
+                        ))?;
+
+                    match selection {
+                        0 => {
+                            // Merge - proceed with approval (existing logic handles merge)
+                            crate::ops::approval::approve_discovery(id.clone(), reason.clone()).await?;
+                            formatter.success(&format!("Merged into existing server (now v{})", conflict.existing_version + 1));
+                        }
+                        1 => {
+                            // Skip - remove from pending without approving
+                            crate::ops::approval::skip_pending(id.clone()).await?;
+                            formatter.info("Skipped - pending item removed, existing server unchanged");
+                        }
+                        _ => {
+                            formatter.info("Cancelled");
+                            return Ok(());
+                        }
+                    }
+                } else {
+                    // Force merge
+                    crate::ops::approval::approve_discovery(id.clone(), reason.clone()).await?;
+                    formatter.success(&format!("Force-merged into existing server (now v{})", conflict.existing_version + 1));
+                }
+            } else {
+                // No conflict - normal approval
+                crate::ops::approval::approve_discovery(id.clone(), reason.clone()).await?;
+                formatter.success(&format!("Approved discovery: {}", id));
+                if let Some(r) = reason {
+                    formatter.list_item(&format!("Reason: {}", r));
+                }
             }
         }
         ApprovalCommand::Reject { id, reason } => {

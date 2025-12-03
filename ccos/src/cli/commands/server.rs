@@ -6,17 +6,22 @@ use rtfs::runtime::error::RuntimeResult;
 
 #[derive(Subcommand)]
 pub enum ServerCommand {
+    /// List approved servers
     List,
+    /// Add a server to approval queue
     Add {
         url: String,
         name: Option<String>,
     },
+    /// Remove a server
     Remove {
         name: String,
     },
+    /// Check server health
     Health {
         name: Option<String>,
     },
+    /// Search for servers
     Search {
         query: String,
         capability: Option<String>,
@@ -25,12 +30,19 @@ pub enum ServerCommand {
         llm: bool,
         llm_model: Option<String>,
     },
+    /// Dismiss a failing server
     Dismiss {
         name: String,
         reason: Option<String>,
     },
+    /// Retry a dismissed server
     Retry {
         name: String,
+    },
+    /// Introspect a server to discover its tools/capabilities
+    Introspect {
+        /// Server name or endpoint URL
+        server: String,
     },
 }
 
@@ -198,6 +210,45 @@ impl ServerCommand {
                             }
                             Err(e) => {
                         formatter.warning(&format!("Failed to retry server: {}", e));
+                    }
+                }
+            }
+            ServerCommand::Introspect { server } => {
+                formatter.info(&format!("Introspecting server: {}", server));
+                
+                match crate::ops::server::introspect_server(server.clone()).await {
+                    Ok(result) => {
+                        formatter.section(&format!("Server: {}", result.server_name));
+                        formatter.kv("Endpoint", &result.server_url);
+                        formatter.kv("Protocol", &result.protocol_version);
+                        formatter.kv("Tools Found", &result.tools.len().to_string());
+                        println!();
+                        
+                        if result.tools.is_empty() {
+                            formatter.warning("No tools discovered from this server.");
+                        } else {
+                            formatter.section("Available Tools");
+                            for tool in &result.tools {
+                                println!("  📦 {}", tool.tool_name);
+                                if let Some(desc) = &tool.description {
+                                    println!("     {}", desc.chars().take(80).collect::<String>());
+                                }
+                                if let Some(schema_json) = &tool.input_schema_json {
+                                    // Show parameter names from JSON schema
+                                    if let Some(props) = schema_json.get("properties") {
+                                        if let Some(obj) = props.as_object() {
+                                            let params: Vec<&str> = obj.keys().map(|s| s.as_str()).collect();
+                                            println!("     Parameters: {}", params.join(", "));
+                                        }
+                                    }
+                                }
+                                println!();
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        formatter.warning(&format!("Failed to introspect server: {}", e));
+                        formatter.list_item("Make sure the server is accessible and supports MCP protocol.");
                     }
                 }
             }

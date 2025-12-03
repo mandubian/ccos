@@ -2717,6 +2717,8 @@ fn catalog_hit_to_info(hit: ccos::catalog::CatalogHit) -> CapabilityInfo {
         name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
         description: hit.entry.description.unwrap_or_default(),
         input_schema: None,
+        categories: Vec::new(),
+        domains: Vec::new(),
     }
 }
 

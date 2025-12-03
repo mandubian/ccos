@@ -585,6 +585,7 @@ impl CapabilityExplorer {
             rate_limit: Default::default(),
             max_parallel_discoveries: 5,
             lazy_output_schemas: true,
+            ignore_approved_files: false,
         };
         
         // Use discover_and_export_tools to ensure RTFS files are created
@@ -1532,12 +1533,12 @@ impl CapabilityExplorer {
             };
             // Store selected server
             self.selected_server = Some(config.name.clone());
-            self.perform_discovery(&config, args.hint.clone(), true).await;
+            self.perform_discovery(&config, args.hint.clone()).await;
         } else if args.hint.is_some() {
             // Search in known servers
             let servers = self.discovery_service.list_known_servers();
             for config in &servers {
-                self.perform_discovery(config, args.hint.clone(), true).await;
+                self.perform_discovery(config, args.hint.clone()).await;
             }
         }
         

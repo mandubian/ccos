@@ -16,6 +16,8 @@
 | [#171](https://github.com/mandubian/ccos/issues/171) | Implement server health monitoring and auto-dismissal | 4 | Done |
 | [#172](https://github.com/mandubian/ccos/issues/172) | Port capability_explorer to CLI subcommands | 5 | Done |
 | [#173](https://github.com/mandubian/ccos/issues/173) | Expose CLI as Governed Native Capabilities | 6 | Done |
+| [#174](https://github.com/mandubian/ccos/issues/174) | [CLI UX] Interactive Mode and Discovery Filtering | 7 | Done |
+| [#175](https://github.com/mandubian/ccos/issues/175) | [CLI UX] Intelligent Discovery with LLM Integration | 8 | Planned |
 
 ## Overview
 
@@ -132,9 +134,47 @@ ccos
 - Keep TUI as `ccos explore` (interactive mode)
 - Deprecate standalone example
 
-### Phase 6: CLI as Governed Native Capabilities (TBD)
+### Phase 6: CLI as Governed Native Capabilities ✅
 
 Expose CLI commands as RTFS-callable capabilities under governance control, enabling agents to programmatically discover tools, manage servers, and execute CLI operations while respecting security policies and constitutional rules.
+
+### Phase 7: Interactive Mode and Discovery Filtering (Done)
+
+Improve CLI usability for capability discovery by wiring up existing scoring infrastructure and adding interactive selection modes.
+
+(Details moved to done section...)
+
+### Phase 8: Intelligent Discovery with LLM Integration (Planned)
+
+Restore and enhance LLM-based discovery capabilities to provide "intelligent" search and ranking.
+
+**Goal**: Enable `ccos discover goal "..." --llm` to use an LLM for:
+1.  **Intent Analysis**: Understand the user's goal beyond keywords (e.g., "track project progress" -> implies "issues", "tasks", "gantt").
+2.  **Query Expansion**: Generate multiple diverse search queries for registries (MCP, APIs.guru, Web).
+3.  **Semantic Ranking**: Rank discovery results based on semantic relevance to the intent, providing reasoning for the score.
+
+**Implementation**:
+- Integrate `LlmClient` into `GoalDiscoveryAgent`.
+- Implement `analyze_goal_with_llm(goal: &str)` to extract intents and queries.
+- Implement `rank_results_with_llm(goal, results)` to re-score candidates.
+- Update `discover` command to use these methods when `--llm` is passed.
+
+#### Motivation
+
+The current keyword-based scoring (`capability_matcher.rs`) is fast but limited. It fails on semantic gaps (e.g., "finding bugs" doesn't match "issue tracker" if keywords don't overlap). LLM integration bridges this gap.
+
+#### Implementation Steps
+
+1.  **LlmClient Integration**: Add `LlmClient` to `GoalDiscoveryAgent`.
+2.  **Prompt Engineering**: Create prompts for "Goal Analysis" and "Candidate Ranking".
+3.  **Workflow**:
+    *   If `--llm`:
+        *   Analyze Goal -> `Intent` + `[SearchQueries]`
+        *   Run `RegistrySearcher` with expanded queries.
+        *   Collect results (deduplicated).
+        *   Rank top N results using LLM (expensive, so only rank candidates that pass a basic filter).
+    *   If no `--llm`:
+        *   Use existing keyword/regex logic.
 
 #### Motivation
 

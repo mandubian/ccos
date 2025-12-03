@@ -76,3 +76,61 @@ pub use arbiter_config::{
     IntentPattern, LlmConfig, LlmProviderType, MarketplaceType, PlanTemplate, SecurityConfig,
     TemplateConfig,
 };
+
+/// Get a default LLM provider from environment variables.
+/// Tries OPENAI_API_KEY, then ANTHROPIC_API_KEY, then OPENROUTER_API_KEY.
+/// Returns None if no API key is configured.
+pub async fn get_default_llm_provider() -> Option<Box<dyn LlmProvider + Send + Sync>> {
+    // Try OpenAI first
+    if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
+        let config = LlmProviderConfig {
+            provider_type: LlmProviderType::OpenAI,
+            model: std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string()),
+            api_key: Some(api_key),
+            base_url: std::env::var("OPENAI_BASE_URL").ok(),
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+            timeout_seconds: None,
+            retry_config: Default::default(),
+        };
+        if let Ok(provider) = LlmProviderFactory::create_provider(config).await {
+            return Some(provider);
+        }
+    }
+    
+    // Try Anthropic
+    if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
+        let config = LlmProviderConfig {
+            provider_type: LlmProviderType::Anthropic,
+            model: std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-3-haiku-20240307".to_string()),
+            api_key: Some(api_key),
+            base_url: None,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+            timeout_seconds: None,
+            retry_config: Default::default(),
+        };
+        if let Ok(provider) = LlmProviderFactory::create_provider(config).await {
+            return Some(provider);
+        }
+    }
+    
+    // Try OpenRouter
+    if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
+        let config = LlmProviderConfig {
+            provider_type: LlmProviderType::OpenAI, // OpenRouter uses OpenAI-compatible API
+            model: std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "anthropic/claude-3-haiku".to_string()),
+            api_key: Some(api_key),
+            base_url: Some("https://openrouter.ai/api/v1".to_string()),
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+            timeout_seconds: None,
+            retry_config: Default::default(),
+        };
+        if let Ok(provider) = LlmProviderFactory::create_provider(config).await {
+            return Some(provider);
+        }
+    }
+    
+    None
+}

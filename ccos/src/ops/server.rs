@@ -5,12 +5,14 @@ use crate::discovery::{
     ServerInfo as DiscoveryServerInfo,
 };
 use crate::mcp::core::MCPDiscoveryService;
-use crate::capability_marketplace::mcp_discovery::MCPServerConfig;
-use crate::mcp::types::DiscoveryOptions;
+use crate::capability_marketplace::mcp_discovery::{MCPServerConfig, MCPDiscoveryProvider};
+use crate::mcp::types::{DiscoveryOptions, MCPTool};
 use crate::synthesis::introspection::api_introspector::APIIntrospector;
+use crate::synthesis::introspection::mcp_introspector::{MCPIntrospector, MCPIntrospectionResult};
 use chrono::Utc;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::io::{self, Write};
+use std::path::PathBuf;
 use uuid::Uuid;
 use super::{ServerInfo, ServerListOutput};
 
@@ -74,6 +76,7 @@ pub async fn add_server(url: String, name: Option<String>) -> RuntimeResult<Stri
             endpoint: url.clone(),
             description: Some("Manually added via CLI".to_string()),
             auth_env_var: Some(ApprovalQueue::suggest_auth_env_var(&name_str)),
+            capabilities_path: None,
         },
         domain_match: vec![],
         risk_assessment: RiskAssessment {
@@ -233,4 +236,377 @@ pub async fn search_servers(
             }
         })
         .collect())
+}
+
+/// Introspect a server to discover its tools/capabilities
+/// 
+/// Can be called with either:
+/// - Server name (looks up endpoint from approved/pending servers)
+/// - Direct endpoint URL
+pub async fn introspect_server(server: String) -> RuntimeResult<MCPIntrospectionResult> {
+    let queue = ApprovalQueue::new(".");
+    
+    // Try to find server by name in approved or pending
+    let (endpoint, auth_env_var_owned) = if server.starts_with("http") {
+        // Direct URL provided - no auth_env_var
+        (server.clone(), None)
+    } else {
+        // Look up by name
+        let approved = queue.list_approved()?;
+        let pending = queue.list_pending()?;
+        
+        // Search approved first
+        let found_approved = approved.iter()
+            .find(|s| s.server_info.name == server || s.id == server)
+            .map(|s| (s.server_info.endpoint.clone(), s.server_info.auth_env_var.clone()));
+        
+        let found = found_approved.or_else(|| {
+            // Search pending
+            pending.iter()
+                .find(|s| s.server_info.name == server || s.id == server)
+                .map(|s| (s.server_info.endpoint.clone(), s.server_info.auth_env_var.clone()))
+        });
+        
+        if let Some((ep, auth)) = found {
+            (ep, auth)
+        } else {
+            return Err(RuntimeError::Generic(format!(
+                "Server '{}' not found. Use the endpoint URL directly or add the server first.",
+                server
+            )));
+        }
+    };
+    
+    if endpoint.is_empty() || !endpoint.starts_with("http") {
+        return Err(RuntimeError::Generic(format!(
+            "Server '{}' does not have a valid HTTP endpoint: '{}'",
+            server, endpoint
+        )));
+    }
+    
+    // Convert owned Option<String> to Option<&str> for the function call
+    let auth_env_var = auth_env_var_owned.as_deref();
+    introspect_server_by_url(&endpoint, &server, auth_env_var).await
+}
+
+/// Introspect a server by endpoint URL directly (for interactive discovery)
+/// 
+/// If auth_env_var is provided, reads the token from that environment variable
+/// and includes it in Authorization header.
+pub async fn introspect_server_by_url(
+    endpoint: &str,
+    name: &str,
+    auth_env_var: Option<&str>,
+) -> RuntimeResult<MCPIntrospectionResult> {
+    let introspector = MCPIntrospector::new();
+    
+    // Build auth headers if env var is specified
+    let auth_headers = if let Some(env_var) = auth_env_var {
+        if let Ok(token) = std::env::var(env_var) {
+            let mut headers = std::collections::HashMap::new();
+            
+            // Format Authorization header
+            // Handle cases where token already includes "Bearer " prefix
+            let auth_value = if token.trim_start().starts_with("Bearer ") {
+                token.trim().to_string()
+            } else if token.trim_start().starts_with("bearer ") {
+                // Case-insensitive check
+                format!("Bearer {}", token.trim_start().strip_prefix("bearer ").unwrap_or(&token).trim())
+            } else {
+                // Token doesn't have Bearer prefix - add it
+                format!("Bearer {}", token.trim())
+            };
+            
+            headers.insert("Authorization".to_string(), auth_value.clone());
+            
+            // Debug: show what we're sending (masked)
+            if std::env::var("CCOS_DEBUG").is_ok() {
+                let masked = if auth_value.len() > 20 {
+                    format!("{}...{}", &auth_value[..10], &auth_value[auth_value.len()-4..])
+                } else {
+                    "***".to_string()
+                };
+                eprintln!("🔐 Using auth from {}: {}", env_var, masked);
+                eprintln!("   Authorization header format: Bearer <token>");
+            }
+            
+            Some(headers)
+        } else {
+            // Token not set - return helpful error
+            let mut error_msg = format!(
+                "Authentication required: Environment variable '{}' is not set.\n\
+                 Set it with: export {}='your-token-here'\n\
+                 Note: Token should be just the token value (we add 'Bearer' prefix automatically)",
+                env_var, env_var
+            );
+            
+            // Add GitHub-specific hint
+            if name.to_lowercase().contains("github") {
+                error_msg.push_str(&format!(
+                    "\n\n💡 For GitHub servers, you can also use:\n\
+                     • GITHUB_TOKEN (standard GitHub token)\n\
+                     • GITHUB_PAT (Personal Access Token)"
+                ));
+            }
+            
+            return Err(rtfs::runtime::error::RuntimeError::Generic(error_msg));
+        }
+    } else {
+        None
+    };
+    
+    // Catch auth errors and provide better context
+    match introspector.introspect_mcp_server_with_auth(endpoint, name, auth_headers.clone()).await {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            let error_msg = e.to_string();
+            
+            // Enhance error message with env var context and GitHub Copilot guidance
+            if error_msg.contains("401") || error_msg.contains("Unauthorized") || error_msg.contains("authentication failed") {
+                let mut enhanced_msg = error_msg.clone();
+                
+                if let Some(env_var) = auth_env_var {
+                    enhanced_msg.push_str(&format!("\n\n🔐 Using environment variable: {}", env_var));
+                }
+                
+                // GitHub Copilot specific guidance
+                if endpoint.contains("githubcopilot.com") || name.to_lowercase().contains("github") {
+                    enhanced_msg.push_str(
+                        "\n\n💡 GitHub Copilot MCP requires a GitHub Copilot API token:\n\
+                         • This is different from a regular GitHub PAT\n\
+                         • Get it from: https://github.com/settings/tokens?type=beta\n\
+                         • Or from GitHub Copilot settings\n\
+                         • The token should have 'copilot' scope/permissions"
+                    );
+                }
+                
+                return Err(rtfs::runtime::error::RuntimeError::Generic(enhanced_msg));
+            }
+            
+            Err(e)
+        }
+    }
+}
+
+/// Save discovered tools to RTFS capabilities file and link to pending entry
+pub async fn save_discovered_tools(
+    introspection: &MCPIntrospectionResult,
+    server_info: &DiscoveryServerInfo,
+    pending_id: Option<&str>,
+) -> RuntimeResult<String> {
+    // Convert DiscoveredMCPTool to MCPTool
+    let mcp_tools: Vec<MCPTool> = introspection.tools.iter().map(|tool| {
+        MCPTool {
+            name: tool.tool_name.clone(),
+            description: tool.description.clone(),
+            input_schema: tool.input_schema_json.clone(),
+            output_schema: None, // DiscoveredMCPTool doesn't have output_schema_json
+            metadata: None,
+            annotations: None,
+        }
+    }).collect();
+    
+    if mcp_tools.is_empty() {
+        return Err(RuntimeError::Generic("No tools to save".to_string()));
+    }
+    
+    // Create server config
+    let server_config = MCPServerConfig {
+        name: introspection.server_name.clone(),
+        endpoint: introspection.server_url.clone(),
+        auth_token: None, // Don't store token in file
+        timeout_seconds: 30,
+        protocol_version: introspection.protocol_version.clone(),
+    };
+    
+    // Create discovery provider
+    let provider = MCPDiscoveryProvider::new(server_config.clone())?;
+    
+    // Convert tools to RTFS format
+    let rtfs_capabilities = provider.convert_tools_to_rtfs_format(&mcp_tools)?;
+    
+    // Find the pending entry to get the server ID
+    let queue = ApprovalQueue::new(".");
+    let pending = queue.list_pending()?;
+    
+    // Find the pending entry for this server
+    let entry = if let Some(id) = pending_id {
+        // Use provided ID if available
+        pending.iter().find(|e| e.id == id)
+    } else {
+        // Fallback to name/endpoint matching
+        pending.iter().find(|e| {
+            e.server_info.name == introspection.server_name || 
+            e.server_info.endpoint == introspection.server_url
+        })
+    }.ok_or_else(|| {
+        RuntimeError::Generic(format!(
+            "Pending entry not found for server: {}",
+            introspection.server_name
+        ))
+    })?;
+    
+    // Use the same server_id format as approval flow
+    let server_id = entry.server_info.name.to_lowercase()
+        .replace(" ", "_")
+        .replace("/", "_");
+    
+    // Save to capabilities/servers/pending/{server_id}/capabilities.rtfs
+    // This matches the approval flow which moves files from pending to approved
+    let pending_dir = PathBuf::from("capabilities/servers/pending");
+    let server_dir = pending_dir.join(&server_id);
+    
+    // Create directory if it doesn't exist
+    std::fs::create_dir_all(&server_dir).map_err(|e| {
+        RuntimeError::Generic(format!("Failed to create pending capabilities directory: {}", e))
+    })?;
+    
+    let capabilities_file = server_dir.join("capabilities.rtfs");
+    let capabilities_path = capabilities_file.to_string_lossy().to_string();
+    
+    // Save RTFS capabilities
+    provider.save_rtfs_capabilities(&rtfs_capabilities, &capabilities_path)?;
+    
+    // Update the pending entry to include capabilities_path
+    let mut updated_entry = entry.clone();
+    updated_entry.server_info.capabilities_path = Some(capabilities_path.clone());
+    
+    // Remove old entry and add updated one
+    queue.remove_pending(&entry.id)?;
+    queue.add(updated_entry)?;
+    
+    Ok(capabilities_path)
+}
+
+/// Save API capabilities discovered from documentation parsing
+pub async fn save_api_capabilities(
+    api_result: &crate::synthesis::introspection::APIIntrospectionResult,
+    pending_id: &str,
+) -> RuntimeResult<String> {
+    use std::io::Write;
+    
+    let queue = crate::discovery::ApprovalQueue::new(".");
+    let entry = queue.get_pending(pending_id)?
+        .ok_or_else(|| RuntimeError::Generic(format!("Pending entry not found for ID: {}", pending_id)))?;
+    
+    // Generate RTFS content for HTTP API capabilities
+    let mut rtfs_content = String::new();
+    rtfs_content.push_str(";; Auto-generated HTTP API capabilities from documentation parsing\n");
+    rtfs_content.push_str(&format!(";; API: {} v{}\n", api_result.api_title, api_result.api_version));
+    rtfs_content.push_str(&format!(";; Base URL: {}\n\n", api_result.base_url));
+    
+    // Create a module for the API
+    let module_name = api_result.api_title
+        .to_lowercase()
+        .replace(" ", "_")
+        .replace("-", "_")
+        .replace(".", "_");
+    
+    rtfs_content.push_str(&format!("(module {}\n", module_name));
+    rtfs_content.push_str("  :version \"1.0.0\"\n");
+    rtfs_content.push_str(&format!("  :description \"{}\"\n\n", api_result.api_title));
+    
+    // Generate capability for each endpoint
+    for endpoint in &api_result.endpoints {
+        let cap_name = endpoint.endpoint_id
+            .replace(".", "_")
+            .replace("-", "_")
+            .replace("/", "_");
+        
+        rtfs_content.push_str(&format!("  (def-capability {}\n", cap_name));
+        rtfs_content.push_str("    :type :capability\n");
+        rtfs_content.push_str(&format!("    :id \"{}.{}\"\n", module_name, cap_name));
+        rtfs_content.push_str(&format!("    :name \"{}\"\n", endpoint.name));
+        rtfs_content.push_str(&format!("    :description \"{}\"\n", endpoint.description.replace("\"", "\\\"")));
+        rtfs_content.push_str("    :version \"1.0.0\"\n");
+        rtfs_content.push_str("    :provider :Http\n");
+        rtfs_content.push_str(&format!("    :provider-meta {{\n"));
+        rtfs_content.push_str(&format!("      :base-url \"{}\"\n", api_result.base_url));
+        rtfs_content.push_str(&format!("      :method \"{}\"\n", endpoint.method));
+        rtfs_content.push_str(&format!("      :path \"{}\"\n", endpoint.path));
+        rtfs_content.push_str("      :timeout-ms 30000\n");
+        if endpoint.requires_auth {
+            let auth = &api_result.auth_requirements;
+            rtfs_content.push_str(&format!("      :auth-type \"{}\"\n", auth.auth_type));
+            rtfs_content.push_str(&format!("      :auth-location \"{}\"\n", auth.auth_location));
+        }
+        rtfs_content.push_str("    }\n");
+        
+        // Input schema
+        if let Some(ref schema) = endpoint.input_schema {
+            rtfs_content.push_str(&format!("    :input-schema {}\n", format_type_expr(schema)));
+        } else {
+            rtfs_content.push_str("    :input-schema :any\n");
+        }
+        
+        // Output schema
+        if let Some(ref schema) = endpoint.output_schema {
+            rtfs_content.push_str(&format!("    :output-schema {}\n", format_type_expr(schema)));
+        } else {
+            rtfs_content.push_str("    :output-schema :any\n");
+        }
+        
+        rtfs_content.push_str("    :permissions [:http]\n");
+        rtfs_content.push_str("    :effects []\n");
+        rtfs_content.push_str("  )\n\n");
+    }
+    
+    rtfs_content.push_str(")\n");
+    
+    // Save to file
+    let server_id = entry.server_info.name
+        .to_lowercase()
+        .replace(" ", "_")
+        .replace("/", "_");
+    
+    let pending_dir = std::path::Path::new("capabilities/servers/pending");
+    let server_dir = pending_dir.join(&server_id);
+    
+    std::fs::create_dir_all(&server_dir).map_err(|e| {
+        RuntimeError::Generic(format!("Failed to create pending capabilities directory: {}", e))
+    })?;
+    
+    let capabilities_file = server_dir.join("capabilities.rtfs");
+    let capabilities_path = capabilities_file.to_string_lossy().to_string();
+    
+    let mut file = std::fs::File::create(&capabilities_file).map_err(|e| {
+        RuntimeError::Generic(format!("Failed to create capabilities file: {}", e))
+    })?;
+    
+    file.write_all(rtfs_content.as_bytes()).map_err(|e| {
+        RuntimeError::Generic(format!("Failed to write capabilities: {}", e))
+    })?;
+    
+    // Update the pending entry to include capabilities_path
+    let mut updated_entry = entry.clone();
+    updated_entry.server_info.capabilities_path = Some(capabilities_path.clone());
+    
+    queue.remove_pending(&entry.id)?;
+    queue.add(updated_entry)?;
+    
+    Ok(capabilities_path)
+}
+
+/// Helper to format TypeExpr as RTFS string
+fn format_type_expr(type_expr: &rtfs::ast::TypeExpr) -> String {
+    use rtfs::ast::TypeExpr;
+    
+    match type_expr {
+        TypeExpr::Primitive(p) => format!(":{:?}", p).to_lowercase(),
+        TypeExpr::Any => ":any".to_string(),
+        TypeExpr::Vector(inner) => format!("[{}]", format_type_expr(inner)),
+        TypeExpr::Map { entries, wildcard } => {
+            let mut parts = Vec::new();
+            for entry in entries {
+                let opt = if entry.optional { " :optional" } else { "" };
+                parts.push(format!(":{} {}{}", entry.key.0, format_type_expr(&entry.value_type), opt));
+            }
+            if let Some(w) = wildcard {
+                parts.push(format!(":* {}", format_type_expr(w)));
+            }
+            format!("{{{}}}", parts.join(" "))
+        }
+        TypeExpr::Alias(s) => format!(":{}", s.0),
+        _ => ":any".to_string(),
+    }
 }
