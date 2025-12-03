@@ -30,6 +30,18 @@ pub async fn execute(
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
+    // Load capabilities from approved servers directory
+    let approved_dir = std::path::Path::new("capabilities/servers/approved");
+    if approved_dir.exists() {
+        ctx.status("Loading capabilities from approved servers...");
+        let count = marketplace.import_capabilities_from_rtfs_dir_recursive(approved_dir).await?;
+        if count > 0 {
+            ctx.status(&format!("Loaded {} capabilities from approved servers", count));
+        } else {
+            ctx.status("Warning: No capabilities loaded from approved servers");
+        }
+    }
+
     // Parse arguments
     let input_value = parse_args(&args.args)?;
 
@@ -85,7 +97,8 @@ fn parse_args(args: &[String]) -> RuntimeResult<Value> {
         }
     }
 
-    // Parse key=value pairs
+    // Parse key=value pairs (standard HTTP query param style: q=London)
+    // Keys are automatically prefixed with ':' to become RTFS keywords
     let mut map = serde_json::Map::new();
     for arg in args {
         if let Some((key, val_str)) = arg.split_once('=') {
@@ -94,9 +107,15 @@ fn parse_args(args: &[String]) -> RuntimeResult<Value> {
             } else {
                 Value::String(val_str.to_string())
             };
-            map.insert(key.to_string(), value);
+            // Normalize key: add ':' prefix if not already present for RTFS keyword conversion
+            let normalized_key = if key.starts_with(':') {
+                key.to_string()
+            } else {
+                format!(":{}", key)
+            };
+            map.insert(normalized_key, value);
         } else {
-             return Err(RuntimeError::Generic(format!("Invalid argument format: {}", arg)));
+             return Err(RuntimeError::Generic(format!("Invalid argument format: '{}'. Use key=value format (e.g., q=London)", arg)));
         }
     }
 

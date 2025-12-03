@@ -15,6 +15,9 @@ pub struct RegistrySearchResult {
     pub source: DiscoverySource,
     pub server_info: ServerInfo,
     pub match_score: f32,
+    /// Alternative endpoints (e.g., multiple remotes from MCP registry)
+    /// If present, user should be prompted to select which endpoint(s) to use
+    pub alternative_endpoints: Vec<String>,
 }
 
 impl RegistrySearcher {
@@ -36,10 +39,29 @@ impl RegistrySearcher {
                     eprintln!("🔍 MCP Registry: found {} servers", mcp_servers.len());
                 }
                 let registry_results: Vec<RegistrySearchResult> = mcp_servers.into_iter().map(|server| {
-                    let endpoint = if let Some(remotes) = &server.remotes {
-                        MCPRegistryClient::select_best_remote_url(remotes).unwrap_or_default()
+                    let (endpoint, alternatives) = if let Some(remotes) = &server.remotes {
+                        // Collect all HTTP/HTTPS remotes as alternatives
+                        let all_http_remotes: Vec<String> = remotes.iter()
+                            .filter_map(|r| {
+                                let remote_type = r.r#type.to_ascii_lowercase();
+                                let url = r.url.trim();
+                                if !url.is_empty() && (remote_type == "http" || remote_type == "https" 
+                                    || url.starts_with("http://") || url.starts_with("https://")) {
+                                    Some(url.to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        
+                        // Select best as primary, rest as alternatives
+                        let primary = MCPRegistryClient::select_best_remote_url(remotes).unwrap_or_default();
+                        let mut alternatives = all_http_remotes;
+                        alternatives.retain(|url| url != &primary);
+                        
+                        (primary, alternatives)
                     } else {
-                        String::new()
+                        (String::new(), Vec::new())
                     };
                     
                     RegistrySearchResult {
@@ -50,8 +72,10 @@ impl RegistrySearcher {
                             description: Some(server.description),
                             auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server.name)),
                             capabilities_path: None,
+                            alternative_endpoints: alternatives,
                         },
                         match_score: 1.0, // Default score
+                        alternative_endpoints: Vec::new(), // Not used anymore, kept for compatibility
                     }
                 }).collect();
                 results.extend(registry_results);
@@ -114,8 +138,10 @@ impl RegistrySearcher {
                     description: api.description.or(Some(api.title)),
                     auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server_name)),
                     capabilities_path: None,
+                    alternative_endpoints: Vec::new(),
                 },
                 match_score: 0.8, // Slightly lower score than MCP registry
+                alternative_endpoints: Vec::new(),
             }
         }).collect();
         
@@ -191,16 +217,49 @@ impl RegistrySearcher {
                         "api"
                     };
                     
+                    // Sanitize name for ID generation (important for deduplication)
+                    let safe_server_name = crate::utils::fs::sanitize_filename(&server_name);
+                    
+                    // Clean title and snippet more thoroughly to avoid HTML leakage
+                    // Use regex to strip HTML tags, and handle truncated tags
+                    let html_re = regex::Regex::new(r"<[^>]*>").unwrap();
+                    let mut clean_title = html_re.replace_all(&result.title, "").trim().to_string();
+                    let mut clean_snippet = html_re.replace_all(&result.snippet, "").trim().to_string();
+                    
+                    // Helper closure to clean truncated tags
+                    let strip_truncated = |s: &str| -> String {
+                        if s.starts_with('<') {
+                            if let Some(idx) = s.find('>') {
+                                s[idx+1..].trim().to_string()
+                            } else {
+                                s.trim_start_matches('<')
+                                    .trim_start_matches(|c: char| c.is_alphanumeric() || c == '-')
+                                    .trim()
+                                    .to_string()
+                            }
+                        } else {
+                            s.to_string()
+                        }
+                    };
+
+                    clean_title = strip_truncated(&clean_title);
+                    clean_snippet = strip_truncated(&clean_snippet);
+
+                    // Also check for leading "- " which might happen after stripping
+                    clean_snippet = clean_snippet.trim_start_matches("- ").to_string();
+                    
                     Some(RegistrySearchResult {
                         source: DiscoverySource::WebSearch { url: result.url.clone() },
                         server_info: ServerInfo {
-                            name: format!("web/{}/{}", server_type, server_name),
+                            name: format!("web/{}/{}", server_type, safe_server_name),
                             endpoint: result.url.clone(),
-                            description: Some(format!("{} - {}", result.title, result.snippet)),
-                            auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server_name)),
+                            description: Some(format!("{} - {}", clean_title, clean_snippet)),
+                            auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&safe_server_name)),
                             capabilities_path: None,
+                            alternative_endpoints: Vec::new(),
                         },
                         match_score: if is_mcp_server { 0.6 } else { 0.5 }, // MCP servers score slightly higher
+                        alternative_endpoints: Vec::new(),
                     })
                 } else {
                     None
@@ -271,17 +330,24 @@ impl RegistrySearcher {
                                 
                                 if full_match || any_word_match {
                                     // Extract endpoint from remotes
-                                    let endpoint = if let Some(remotes) = server.get("remotes").and_then(|r| r.as_array()) {
-                                        // Find first HTTP/HTTPS remote
-                                        remotes.iter()
-                                            .find_map(|r| {
+                                    let (endpoint, alternatives) = if let Some(remotes) = server.get("remotes").and_then(|r| r.as_array()) {
+                                        // Collect all HTTP/HTTPS remotes
+                                        let all_http_remotes: Vec<String> = remotes.iter()
+                                            .filter_map(|r| {
                                                 r.get("url").and_then(|u| u.as_str())
                                                     .filter(|url| url.starts_with("http"))
                                                     .map(|url| url.to_string())
                                             })
-                                            .unwrap_or_default()
+                                            .collect();
+                                        
+                                        // Use first as primary, rest as alternatives
+                                        let primary = all_http_remotes.first().cloned().unwrap_or_default();
+                                        let mut alternatives = all_http_remotes;
+                                        alternatives.retain(|url| url != &primary);
+                                        
+                                        (primary, alternatives)
                                     } else {
-                                        String::new()
+                                        (String::new(), Vec::new())
                                     };
                                     
                                     if !endpoint.is_empty() {
@@ -303,8 +369,10 @@ impl RegistrySearcher {
                                                     .map(|s| s.to_string()),
                                                 auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server_name_clone)),
                                                 capabilities_path: None,
+                                                alternative_endpoints: alternatives,
                                             },
                                             match_score: 1.2, // Slightly higher score for local overrides
+                                            alternative_endpoints: Vec::new(),
                                         });
                                     }
                                 }

@@ -1,8 +1,8 @@
 # CCOS CLI: Unified Command-Line Tool
 
-**Status**: Implementation (Phases 1-6 complete)  
+**Status**: Implementation (Phases 1-7 complete)  
 **Created**: 2025-11-30  
-**Updated**: 2025-12-01  
+**Updated**: 2025-12-03  
 **Umbrella Issue**: [#167](https://github.com/mandubian/ccos/issues/167)
 
 ## GitHub Issues
@@ -105,11 +105,11 @@ ccos
 
 ### Phase 2: Approval Queue System (Issue #169)
 - Create `ccos/src/discovery/approval_queue.rs`
-- Implement file-based persistence:
-  - `capabilities/servers/pending.json`
-  - `capabilities/servers/approved.json`
-  - `capabilities/servers/rejected.json`
-  - `capabilities/servers/timeout/`
+- Implement directory-based persistence for scalability:
+  - `capabilities/servers/pending/<server_name>/`
+  - `capabilities/servers/approved/<server_name>/`
+  - `capabilities/servers/rejected/<server_name>/`
+  - `capabilities/servers/timeout/<server_name>/`
 - Add governance integration for auto-approval
 - Implement `ccos approval` subcommands
 
@@ -141,6 +141,9 @@ Expose CLI commands as RTFS-callable capabilities under governance control, enab
 ### Phase 7: Interactive Mode and Discovery Filtering (Done)
 
 Improve CLI usability for capability discovery by wiring up existing scoring infrastructure and adding interactive selection modes.
+- Default non-interactive mode limits discovery results to top 3 to prevent queue spam.
+- Explorer now isolates sessions per server, loading approved capabilities from disk to ensure correct OpenAPI/MCP provider handling.
+- Improved JSON pretty-printing for capability results.
 
 (Details moved to done section...)
 

@@ -37,6 +37,7 @@ pub async fn execute(
                .arg("--example")
                .arg("capability_explorer")
                .arg("--quiet")
+               .arg("--") // Separator for arguments passed to the example
                .arg("--rtfs")
                .arg(expr);
             
@@ -55,6 +56,7 @@ pub async fn execute(
                .arg("--example")
                .arg("capability_explorer")
                .arg("--quiet")
+               .arg("--") // Separator for arguments passed to the example
                .arg("--rtfs-file")
                .arg(file);
                

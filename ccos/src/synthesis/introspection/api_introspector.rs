@@ -1309,12 +1309,17 @@ impl APIIntrospector {
         let auth_env_var = introspection.auth_requirements.env_var_name.as_deref().unwrap_or("API_KEY");
         
         // Build query parameters from input schema
+        // Only include parameters that are present and non-nil
         let mut query_params = Vec::new();
         if let Some(ref input_schema) = capability.input_schema {
             if let TypeExpr::Map { entries, .. } = input_schema {
                 for entry in entries {
                     let param_name = entry.key.0.clone();
-                    query_params.push(format!("(str \"{}\" \"=\" (get input_map :{}))", param_name, param_name));
+                    // Only add parameter if it exists and is not nil
+                    query_params.push(format!(
+                        "(if (and (contains? input_map :{}) (not (nil? (get input_map :{})))) (str \"{}\" \"=\" (get input_map :{})) \"\")",
+                        param_name, param_name, param_name, param_name
+                    ));
                 }
             }
         }
@@ -1332,10 +1337,16 @@ impl APIIntrospector {
             }
         }
         
+        // Build query string: filter out empty strings and join with &
+        // Use a helper function to filter and join
         let query_str = if query_params.is_empty() {
             "\"\"".to_string()
         } else {
-            format!("(str {} \"&\")", query_params.join(" \"&\" "))
+            // Create a list of non-empty query param strings, then join with &
+            format!(
+                "(let [params (vector {}) filtered (filter (fn [p] (not (empty? p))) params)] (if (empty? filtered) \"\" (apply str (interpose \"&\" filtered))))",
+                query_params.join(" ")
+            )
         };
         
         // Build headers

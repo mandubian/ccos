@@ -77,6 +77,7 @@ pub async fn add_server(url: String, name: Option<String>) -> RuntimeResult<Stri
             description: Some("Manually added via CLI".to_string()),
             auth_env_var: Some(ApprovalQueue::suggest_auth_env_var(&name_str)),
             capabilities_path: None,
+            alternative_endpoints: Vec::new(),
         },
         domain_match: vec![],
         risk_assessment: RiskAssessment {
@@ -430,26 +431,30 @@ pub async fn save_discovered_tools(
     let pending = queue.list_pending()?;
     
     // Find the pending entry for this server
+    // Use server_info from the parameter (which matches the discovery result) rather than introspection
+    // because introspection.server_name might differ from the discovery server_info.name
     let entry = if let Some(id) = pending_id {
         // Use provided ID if available
         pending.iter().find(|e| e.id == id)
     } else {
-        // Fallback to name/endpoint matching
+        // Fallback to name/endpoint matching using server_info (from discovery) not introspection
         pending.iter().find(|e| {
-            e.server_info.name == introspection.server_name || 
+            e.server_info.name == server_info.name || 
+            e.server_info.endpoint == server_info.endpoint ||
             e.server_info.endpoint == introspection.server_url
         })
     }.ok_or_else(|| {
         RuntimeError::Generic(format!(
-            "Pending entry not found for server: {}",
-            introspection.server_name
+            "Pending entry not found for server: {} (searched by ID: {:?}, name: {}, endpoint: {})",
+            server_info.name,
+            pending_id,
+            server_info.name,
+            server_info.endpoint
         ))
     })?;
     
-    // Use the same server_id format as approval flow
-    let server_id = entry.server_info.name.to_lowercase()
-        .replace(" ", "_")
-        .replace("/", "_");
+    // Use the same server_id format as approval flow (sanitize_filename to match directory structure)
+    let server_id = crate::utils::fs::sanitize_filename(&entry.server_info.name);
     
     // Save to capabilities/servers/pending/{server_id}/capabilities.rtfs
     // This matches the approval flow which moves files from pending to approved
@@ -468,12 +473,12 @@ pub async fn save_discovered_tools(
     provider.save_rtfs_capabilities(&rtfs_capabilities, &capabilities_path)?;
     
     // Update the pending entry to include capabilities_path
+    // IMPORTANT: Update in place to avoid removing the directory (which would delete capabilities.rtfs)
     let mut updated_entry = entry.clone();
     updated_entry.server_info.capabilities_path = Some(capabilities_path.clone());
     
-    // Remove old entry and add updated one
-    queue.remove_pending(&entry.id)?;
-    queue.add(updated_entry)?;
+    // Update the entry in place (preserves directory and capabilities.rtfs file)
+    queue.update_pending(&updated_entry)?;
     
     Ok(capabilities_path)
 }
