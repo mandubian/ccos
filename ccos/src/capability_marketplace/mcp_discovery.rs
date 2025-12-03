@@ -1467,10 +1467,19 @@ impl MCPDiscoveryProvider {
                             MapKey::Keyword(k) => format!(":{}", k.0),
                             MapKey::Integer(i) => format!("{}", i),
                         };
-                        let value_str = self.expression_to_rtfs_text(value, 0);
+                        // Use increased indentation for nested structures
+                        let value_str = self.expression_to_rtfs_text(value, indent + 1);
                         entries.push(format!("{} {}", key_str, value_str));
                     }
-                    format!("{{{}}}", entries.join(", "))
+                    // Use multi-line format for maps to avoid very long lines that break the parser
+                    // RTFS maps use whitespace separation, not commas
+                    let entry_indent = "  ".repeat(indent + 1);
+                    let entries_str: Vec<String> = entries
+                        .iter()
+                        .map(|e| format!("{}{}", entry_indent, e))
+                        .collect();
+                    let map_indent = "  ".repeat(indent);
+                    format!("{{\n{}\n{}}}", entries_str.join("\n"), map_indent)
                 }
             }
             Expression::FunctionCall { callee, arguments } => {
@@ -1749,22 +1758,55 @@ impl MCPDiscoveryProvider {
         let version = version.unwrap_or_else(|| "1.0.0".to_string());
 
         // Convert provider info
-        let provider = if let Some(provider_map) = provider_info {
+        // Check if OpenAPI metadata is present - if so, prefer OpenApiCapability
+        // which properly handles query parameters and authentication
+        let has_openapi_metadata = metadata.contains_key("openapi_base_url") 
+            || metadata.contains_key("openapi_endpoint_path")
+            || metadata.contains_key("openapi_endpoint_method");
+        
+        let provider = if has_openapi_metadata {
+            // Create OpenApiCapability from metadata - this properly handles query params
+            let base_url = metadata.get("openapi_base_url")
+                .or_else(|| metadata.get("base_url"))
+                .cloned()
+                .unwrap_or_else(|| "https://api.example.com".to_string());
+            let endpoint_path = metadata.get("openapi_endpoint_path").cloned().unwrap_or_else(|| "/".to_string());
+            let endpoint_method = metadata.get("openapi_endpoint_method").cloned().unwrap_or_else(|| "GET".to_string());
+            
+            // Create a single operation from the endpoint metadata
+            let operation = crate::capability_marketplace::types::OpenApiOperation {
+                operation_id: Some(name.clone()),
+                method: endpoint_method.to_uppercase(),
+                path: endpoint_path,
+                summary: Some(description.clone()),
+                description: None,
+            };
+            
+            // Check for auth - OpenWeatherMap uses query param "appid"
+            let auth = Some(crate::capability_marketplace::types::OpenApiAuth {
+                auth_type: "apiKey".to_string(),
+                location: "query".to_string(),
+                parameter_name: "appid".to_string(),
+                env_var_name: Some("OPENWEATHER_API_KEY".to_string()),
+                required: true,
+            });
+            
+            ProviderType::OpenApi(crate::capability_marketplace::types::OpenApiCapability {
+                base_url,
+                spec_url: None,
+                operations: vec![operation],
+                auth,
+                timeout_ms: 30000,
+            })
+        } else if let Some(provider_map) = provider_info {
             // Check if this is a string provider (HTTP API) or MCP provider map
             if provider_map.len() == 1 {
                 if let Some((MapKey::Keyword(k), Expression::Literal(Literal::String(_provider_type)))) = provider_map.iter().next() {
                     if k.0 == "provider_type" {
                         // This is a string provider - create Http provider from metadata
-                        // Extract base_url from openapi metadata if available
-                        let base_url = if let Some(openapi_base_url) = metadata.get("openapi_base_url") {
-                            openapi_base_url.clone()
-                        } else if let Some(base_url) = metadata.get("base_url") {
-                            base_url.clone()
-                        } else {
-                            // Fallback: try to extract from metadata map structure
-                            // The metadata might be nested, so we need to parse it properly
-                            "https://api.example.com".to_string()
-                        };
+                        let base_url = metadata.get("base_url")
+                            .cloned()
+                            .unwrap_or_else(|| "https://api.example.com".to_string());
                         
                         ProviderType::Http(crate::capability_marketplace::types::HttpCapability {
                             base_url,
@@ -1781,10 +1823,8 @@ impl MCPDiscoveryProvider {
                 self.convert_rtfs_provider_to_manifest(&provider_map)?
             }
         } else {
-            // No provider info - try to create Http provider from metadata
-            // For API capabilities, base_url is often in openapi metadata
-            let base_url = metadata.get("openapi_base_url")
-                .or_else(|| metadata.get("base_url"))
+            // No provider info - create Http provider as fallback
+            let base_url = metadata.get("base_url")
                 .cloned()
                 .unwrap_or_else(|| "https://api.example.com".to_string());
             

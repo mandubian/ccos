@@ -205,10 +205,18 @@ impl GoalDiscoveryAgent {
             RiskLevel::High
         };
         
+        // Merge alternative_endpoints from RegistrySearchResult into ServerInfo
+        let mut server_info = result.server_info;
+        if !result.alternative_endpoints.is_empty() {
+            server_info.alternative_endpoints.extend(result.alternative_endpoints);
+            server_info.alternative_endpoints.sort();
+            server_info.alternative_endpoints.dedup();
+        }
+        
         let discovery = PendingDiscovery {
             id: id.clone(),
             source: result.source,
-            server_info: result.server_info,
+            server_info,
             domain_match: keywords.iter().map(|s| s.to_string()).collect(),
             risk_assessment: RiskAssessment {
                 level: risk,
@@ -222,8 +230,9 @@ impl GoalDiscoveryAgent {
             requesting_goal: Some(goal.to_string()),
         };
         
-        self.approval_queue.add(discovery)?;
-        Ok(id)
+        // add() returns the ID (existing if duplicate, new if not)
+        let actual_id = self.approval_queue.add(discovery)?;
+        Ok(actual_id)
     }
 }
 

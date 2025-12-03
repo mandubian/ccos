@@ -2,7 +2,7 @@
 
 use crate::discovery::config::DiscoveryConfig;
 use crate::discovery::{ApprovalQueue, GoalDiscoveryAgent};
-use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Password, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
 use rtfs::runtime::error::RuntimeResult;
 
 /// Options for goal-driven server discovery
@@ -70,14 +70,24 @@ pub async fn discover_by_goal_with_options(
     }
 
     // Apply top N limit if specified
-    let results: Vec<_> = if let Some(n) = options.top {
+    // In non-interactive mode, default to top 3 to avoid spamming the approval queue
+    let effective_top = options.top.or(if !options.interactive { Some(3) } else { None });
+    let total_found = scored_results.len();
+
+    let results: Vec<_> = if let Some(n) = effective_top {
+        if total_found > n && !options.interactive {
+            println!(
+                "⚠️  Non-interactive mode: limiting to top {} results (found {}). Use --interactive or --top N to see all.",
+                n, total_found
+            );
+        }
         scored_results.into_iter().take(n).collect()
     } else {
         scored_results
     };
 
     println!(
-        "🔍 Found {} server candidates above threshold ({:.2})",
+        "🔍 Processing {} server candidates (threshold: {:.2})",
         results.len(),
         options.threshold
     );
@@ -144,19 +154,22 @@ pub async fn discover_by_goal_with_options(
             .map(|i| results[i].clone())
             .collect();
         
-        // Check for conflicts with already approved servers and prompt user
+        // Check for conflicts with already approved or pending servers and prompt user
         let queue = crate::discovery::ApprovalQueue::new(".");
         let mut servers_to_queue = Vec::new();
         
         for (result, score) in &selected {
             let approved = queue.list_approved()?;
-            let conflict = approved.iter().find(|existing| {
+            let pending = queue.list_pending()?;
+            
+            // Check approved servers first
+            let approved_conflict = approved.iter().find(|existing| {
                 existing.server_info.name == result.server_info.name ||
                 (!result.server_info.endpoint.is_empty() && 
                  existing.server_info.endpoint == result.server_info.endpoint)
             });
             
-            if let Some(existing) = conflict {
+            if let Some(existing) = approved_conflict {
                 println!();
                 println!("⚠️  Server \"{}\" already exists in approved list", existing.server_info.name);
                 println!("   Current: v{}, approved on {}", 
@@ -185,6 +198,51 @@ pub async fn discover_by_goal_with_options(
                     servers_to_queue.push((result.clone(), *score));
                 } else {
                     println!("   ✓ Skipped - keeping existing approved server");
+                }
+                continue;
+            }
+            
+            // Check pending servers
+            let pending_conflict = pending.iter().find(|existing| {
+                existing.server_info.name == result.server_info.name ||
+                (!result.server_info.endpoint.is_empty() && 
+                 existing.server_info.endpoint == result.server_info.endpoint)
+            });
+            
+            if let Some(existing) = pending_conflict {
+                println!();
+                println!("⚠️  Server \"{}\" already exists in pending list", existing.server_info.name);
+                println!("   Current: queued on {}, expires on {}", 
+                    &existing.requested_at.to_rfc3339()[..10],
+                    &existing.expires_at.to_rfc3339()[..10]
+                );
+                println!("   New discovery: \"{}\" ({})", result.server_info.name, result.server_info.endpoint);
+                println!();
+                
+                let options = vec![
+                    "Merge - Update existing pending entry (keeps existing ID)",
+                    "Replace - Remove old entry and add new one",
+                    "Skip - Keep existing pending entry",
+                ];
+                
+                let selection = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("What would you like to do?")
+                    .items(&options)
+                    .default(0)
+                    .interact()
+                    .map_err(|e| rtfs::runtime::error::RuntimeError::Generic(
+                        format!("Selection error: {}", e)
+                    ))?;
+                
+                if selection == 0 {
+                    // Merge - add will automatically merge
+                    servers_to_queue.push((result.clone(), *score));
+                } else if selection == 1 {
+                    // Replace - remove old entry first
+                    queue.remove_pending(&existing.id)?;
+                    servers_to_queue.push((result.clone(), *score));
+                } else {
+                    println!("   ✓ Skipped - keeping existing pending entry");
                 }
             } else {
                 // No conflict, add to pending
@@ -215,139 +273,175 @@ pub async fn discover_by_goal_with_options(
         if introspect {
             println!("\n🔍 Introspecting queued servers...\n");
             for (pending_id, result) in &queued_servers {
-                let endpoint = &result.server_info.endpoint;
                 let name = &result.server_info.name;
                 
-                if endpoint.is_empty() || !endpoint.starts_with("http") {
+                // Collect all endpoints to try (primary + alternatives)
+                let mut endpoints_to_try = vec![result.server_info.endpoint.clone()];
+                endpoints_to_try.extend(result.server_info.alternative_endpoints.clone());
+                
+                // Filter to only HTTP endpoints
+                endpoints_to_try.retain(|e| !e.is_empty() && e.starts_with("http"));
+                
+                if endpoints_to_try.is_empty() {
                     println!("⚠️  {} - No HTTP endpoint, skipping", name);
                     continue;
                 }
                 
-                println!("📡 Connecting to {}...", name);
-                let auth_env_var = result.server_info.auth_env_var.as_deref();
+                // Show which endpoints we'll try
+                if endpoints_to_try.len() > 1 {
+                    println!("📡 Connecting to {} ({} endpoint(s) available)...", name, endpoints_to_try.len());
+                } else {
+                    println!("📡 Connecting to {}...", name);
+                }
                 
-                match crate::ops::server::introspect_server_by_url(endpoint, name, auth_env_var).await {
-                    Ok(introspection) => {
-                        if introspection.tools.is_empty() {
-                            println!("   ⚠️  No tools found");
-                        } else {
-                            println!("   ✅ Found {} tools:", introspection.tools.len());
-                            for tool in introspection.tools.iter().take(10) {
-                                let desc = tool.description.as_deref()
-                                    .map(|d| d.chars().take(50).collect::<String>())
-                                    .unwrap_or_default();
-                                println!("      • {} - {}", tool.tool_name, desc);
-                            }
-                            if introspection.tools.len() > 10 {
-                                println!("      ... and {} more", introspection.tools.len() - 10);
-                            }
-                            
-                            // Save tools to RTFS file and link to pending entry
-                            if let Err(e) = crate::ops::server::save_discovered_tools(
-                                &introspection,
-                                &result.server_info,
-                                Some(pending_id),
-                            ).await {
-                                println!("   ⚠️  Failed to save capabilities: {}", e);
-                            } else {
-                                println!("   💾 Capabilities saved to RTFS file");
-                            }
-                        }
+                let auth_env_var = result.server_info.auth_env_var.as_deref();
+                let mut introspection_success = false;
+                
+                // Try each endpoint until one succeeds
+                for (idx, endpoint) in endpoints_to_try.iter().enumerate() {
+                    if idx > 0 {
+                        println!("   🔄 Trying alternative endpoint {} of {}...", idx + 1, endpoints_to_try.len());
                     }
-                    Err(e) => {
-                        let error_msg = e.to_string();
-                        
-                        // Check if it's an auth failure
-                        if error_msg.contains("401") || error_msg.contains("Unauthorized") || error_msg.contains("not set") {
-                            println!("   ⚠️  Authentication required");
-                            
-                            // Show expected env var
-                            if let Some(env_var) = auth_env_var {
-                                println!("   📝 Expected environment variable: {}", env_var);
-                                println!("   💡 Set it with: export {}=<your-token>", env_var);
-                                
-                                // GitHub-specific hint
-                                if name.to_lowercase().contains("github") {
-                                    println!("   💡 For GitHub, you can also use: GITHUB_TOKEN or GITHUB_PAT");
+                    
+                    match crate::ops::server::introspect_server_by_url(endpoint, name, auth_env_var).await {
+                        Ok(introspection) => {
+                            if introspection.tools.is_empty() {
+                                println!("   ⚠️  No tools found");
+                            } else {
+                                println!("   ✅ Found {} tools:", introspection.tools.len());
+                                for tool in introspection.tools.iter().take(10) {
+                                    let desc = tool.description.as_deref()
+                                        .map(|d| d.chars().take(50).collect::<String>())
+                                        .unwrap_or_default();
+                                    println!("      • {} - {}", tool.tool_name, desc);
+                                }
+                                if introspection.tools.len() > 10 {
+                                    println!("      ... and {} more", introspection.tools.len() - 10);
                                 }
                                 
-                                // Ask if user wants to update the token and retry
-                                println!();
-                                let retry = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                                    .with_prompt(&format!("Do you want to set {} and retry?", env_var))
-                                    .default(false)
-                                    .interact()
-                                    .unwrap_or(false);
-                                
-                                if retry {
-                                    // Prompt for token (hidden input)
-                                    let token = dialoguer::Password::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                                        .with_prompt(&format!("Enter token for {} (input hidden)", env_var))
-                                        .interact()
-                                        .ok();
+                                // Save tools to RTFS file and link to pending entry
+                                if let Err(e) = crate::ops::server::save_discovered_tools(
+                                    &introspection,
+                                    &result.server_info,
+                                    Some(pending_id),
+                                ).await {
+                                    println!("   ⚠️  Failed to save capabilities: {}", e);
+                                } else {
+                                    println!("   💾 Capabilities saved to RTFS file");
+                                }
+                            }
+                            introspection_success = true;
+                            break; // Success, no need to try other endpoints
+                        }
+                        Err(e) => {
+                            let error_msg = e.to_string();
+                            
+                            // If this is the last endpoint, show the error
+                            if idx == endpoints_to_try.len() - 1 {
+                                // Check if it's an auth failure
+                                if error_msg.contains("401") || error_msg.contains("Unauthorized") || error_msg.contains("not set") {
+                                    println!("   ⚠️  Authentication required");
                                     
-                                    if let Some(token) = token {
-                                        std::env::set_var(env_var, &token);
-                                        println!("   ✓ Token set. Retrying...");
+                                    // Show expected env var
+                                    if let Some(env_var) = auth_env_var {
+                                        println!("   📝 Expected environment variable: {}", env_var);
+                                        println!("   💡 Set it with: export {}=<your-token>", env_var);
                                         
-                                        // Retry with new token
-                                        match crate::ops::server::introspect_server_by_url(endpoint, name, Some(env_var)).await {
-                                            Ok(introspection) => {
-                                                if introspection.tools.is_empty() {
-                                                    println!("   ⚠️  No tools found");
-                                                } else {
-                                                    println!("   ✅ Found {} tools:", introspection.tools.len());
-                                                    for tool in introspection.tools.iter().take(10) {
-                                                        let desc = tool.description.as_deref()
-                                                            .map(|d| d.chars().take(50).collect::<String>())
-                                                            .unwrap_or_default();
-                                                        println!("      • {} - {}", tool.tool_name, desc);
-                                                    }
-                                                    if introspection.tools.len() > 10 {
-                                                        println!("      ... and {} more", introspection.tools.len() - 10);
-                                                    }
-                                                    
-                                                    // Save tools to RTFS file and link to pending entry
-                                                    if let Err(e) = crate::ops::server::save_discovered_tools(
-                                                        &introspection,
-                                                        &result.server_info,
-                                                        Some(pending_id),
-                                                    ).await {
-                                                        println!("   ⚠️  Failed to save capabilities: {}", e);
-                                                    } else {
-                                                        println!("   💾 Capabilities saved to RTFS file");
-                                                    }
-                                                }
-                                            }
-                                            Err(e2) => {
-                                                println!("   ❌ Still failed: {}", e2);
-                                                println!("   💡 Troubleshooting:");
+                                        // GitHub-specific hint
+                                        if name.to_lowercase().contains("github") {
+                                            println!("   💡 For GitHub, you can also use: GITHUB_TOKEN or GITHUB_PAT");
+                                        }
+                                        
+                                        // Ask if user wants to update the token and retry
+                                        println!();
+                                        let retry = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                                            .with_prompt(&format!("Do you want to set {} and retry?", env_var))
+                                            .default(false)
+                                            .interact()
+                                            .unwrap_or(false);
+                                        
+                                        if retry {
+                                            // Prompt for token (hidden input)
+                                            let token = dialoguer::Password::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                                                .with_prompt(&format!("Enter token for {} (input hidden)", env_var))
+                                                .interact()
+                                                .ok();
+                                            
+                                            if let Some(token) = token {
+                                                std::env::set_var(env_var, &token);
+                                                println!("   ✓ Token set. Retrying...");
                                                 
-                                                // Check if it's GitHub Copilot endpoint
-                                                if endpoint.contains("githubcopilot.com") {
-                                                    println!("      ⚠️  This is GitHub Copilot MCP (not regular GitHub)");
-                                                    println!("      • Requires a GitHub Copilot API token (not regular PAT)");
-                                                    println!("      • Get token from: https://github.com/settings/tokens?type=beta");
-                                                    println!("      • Token must have 'copilot' scope/permissions");
-                                                } else {
-                                                    println!("      • Verify token is valid and not expired");
-                                                    println!("      • Check token has required permissions/scopes");
-                                                    if name.to_lowercase().contains("github") {
-                                                        println!("      • For GitHub: Use a Personal Access Token (PAT) with appropriate scopes");
+                                                // Retry with new token
+                                                match crate::ops::server::introspect_server_by_url(endpoint, name, Some(env_var)).await {
+                                                    Ok(introspection) => {
+                                                        if introspection.tools.is_empty() {
+                                                            println!("   ⚠️  No tools found");
+                                                        } else {
+                                                            println!("   ✅ Found {} tools:", introspection.tools.len());
+                                                            for tool in introspection.tools.iter().take(10) {
+                                                                let desc = tool.description.as_deref()
+                                                                    .map(|d| d.chars().take(50).collect::<String>())
+                                                                    .unwrap_or_default();
+                                                                println!("      • {} - {}", tool.tool_name, desc);
+                                                            }
+                                                            if introspection.tools.len() > 10 {
+                                                                println!("      ... and {} more", introspection.tools.len() - 10);
+                                                            }
+                                                            
+                                                            // Save tools to RTFS file and link to pending entry
+                                                            if let Err(e) = crate::ops::server::save_discovered_tools(
+                                                                &introspection,
+                                                                &result.server_info,
+                                                                Some(pending_id),
+                                                            ).await {
+                                                                println!("   ⚠️  Failed to save capabilities: {}", e);
+                                                            } else {
+                                                                println!("   💾 Capabilities saved to RTFS file");
+                                                            }
+                                                            introspection_success = true;
+                                                        }
+                                                    }
+                                                    Err(e2) => {
+                                                        println!("   ❌ Still failed: {}", e2);
+                                                        println!("   💡 Troubleshooting:");
+                                                        
+                                                        // Check if it's GitHub Copilot endpoint
+                                                        if endpoint.contains("githubcopilot.com") {
+                                                            println!("      ⚠️  This is GitHub Copilot MCP (not regular GitHub)");
+                                                            println!("      • Requires a GitHub Copilot API token (not regular PAT)");
+                                                            println!("      • Get token from: https://github.com/settings/tokens?type=beta");
+                                                            println!("      • Token must have 'copilot' scope/permissions");
+                                                        } else {
+                                                            println!("      • Verify token is valid and not expired");
+                                                            println!("      • Check token has required permissions/scopes");
+                                                            if name.to_lowercase().contains("github") {
+                                                                println!("      • For GitHub: Use a Personal Access Token (PAT) with appropriate scopes");
+                                                            }
+                                                        }
+                                                        println!("      • Token should be just the token value (we add 'Bearer' prefix automatically)");
                                                     }
                                                 }
-                                                println!("      • Token should be just the token value (we add 'Bearer' prefix automatically)");
                                             }
                                         }
                                     }
+                                } else {
+                                    println!("   ❌ {}", error_msg);
                                 }
                             } else {
-                                println!("   ❌ {}", error_msg);
+                                // Not the last endpoint, just log and continue trying
+                                if endpoints_to_try.len() > 1 {
+                                    println!("   ⚠️  Failed: {} (trying next endpoint...)", error_msg);
+                                } else {
+                                    println!("   ❌ Failed: {}", error_msg);
+                                }
                             }
-                        } else {
-                            println!("   ❌ Failed: {}", error_msg);
                         }
                     }
+                }
+                
+                // If all endpoints failed, show a summary
+                if !introspection_success && endpoints_to_try.len() > 1 {
+                    println!("   ❌ All {} endpoint(s) failed for {}", endpoints_to_try.len(), name);
                 }
                 println!();
             }
@@ -500,8 +594,10 @@ async fn handle_mcp_url(
                     description: Some("Manually added MCP server".to_string()),
                     auth_env_var: None,
                     capabilities_path: None,
+                    alternative_endpoints: Vec::new(),
                 },
                 match_score: 1.0,
+                alternative_endpoints: Vec::new(),
             };
             
             let id = agent.queue_result(goal, result.clone(), 1.0)?;
@@ -578,8 +674,10 @@ async fn handle_documentation_url(
                     description: Some(format!("HTTP API parsed from documentation: {}", url)),
                     auth_env_var: api_result.auth_requirements.env_var_name.clone(),
                     capabilities_path: None,
+                    alternative_endpoints: Vec::new(),
                 },
                 match_score: 1.0,
+                alternative_endpoints: Vec::new(),
             };
             
             let id = agent.queue_result(goal, result.clone(), 1.0)?;

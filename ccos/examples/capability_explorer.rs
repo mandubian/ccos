@@ -103,6 +103,15 @@ impl CapabilityExplorer {
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let catalog = Arc::new(CatalogService::new());
         
+        // Load capabilities from approved servers directory
+        let approved_dir = std::path::Path::new("capabilities/servers/approved");
+        if approved_dir.exists() {
+            // println!("Loading capabilities from approved servers...");
+            if let Err(e) = marketplace.import_capabilities_from_rtfs_dir_recursive(approved_dir).await {
+                eprintln!("Failed to load capabilities from approved servers: {}", e);
+            }
+        }
+        
         let discovery_service = Arc::new(
             MCPDiscoveryService::new()
                 .with_marketplace(Arc::clone(&marketplace))
@@ -798,45 +807,92 @@ impl CapabilityExplorer {
                         self.selected_server = Some(config.name.clone());
                         println!("  {} Selected server: {}", "✓".green(), config.name.cyan().bold());
                         
-                        // Try to load capabilities from files immediately (if approved)
-                        // This allows using "list" (4) immediately without forcing a network discovery
-                        let options = DiscoveryOptions {
-                            introspect_output_schemas: false,
-                            use_cache: true,
-                            register_in_marketplace: true,
-                            export_to_rtfs: false, // Don't re-export when loading
-                            export_directory: None,
-                            auth_headers: config.auth_token.as_ref().map(|token| {
-                                let mut headers = HashMap::new();
-                                headers.insert("Authorization".to_string(), format!("Bearer {}", token));
-                                headers
-                            }),
-                            ..Default::default()
-                        };
+                        // Reset environment to isolate the selected server
+                        // This ensures we only explore capabilities from this server
+                        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+                        self.marketplace = Arc::new(CapabilityMarketplace::new(registry));
+                        self.catalog = Arc::new(CatalogService::new());
+                        self.discovery_service = Arc::new(
+                            MCPDiscoveryService::new()
+                                .with_marketplace(Arc::clone(&self.marketplace))
+                                .with_catalog(Arc::clone(&self.catalog))
+                        );
+                        self.discovered_tools.clear();
                         
-                        println!("  {} Loading known capabilities...", "⏳".yellow());
-                        match self.discovery_service.discover_and_export_tools(config, &options).await {
-                            Ok(manifests) => {
-                                if !manifests.is_empty() {
-                                    println!("  {} Loaded {} capability(ies) from known configuration", "✓".green(), manifests.len());
-                                    // Store for exploration
-                                    for manifest in &manifests {
-                                        // Only add if not already present
-                                        if !self.discovered_tools.iter().any(|t| t.manifest.id == manifest.id) {
-                                            self.discovered_tools.push(DiscoveredTool {
-                                                manifest: manifest.clone(),
+                        // Try to load from approved capabilities first
+                        let sanitized_name = ccos::utils::fs::sanitize_filename(&config.name);
+                        let approved_path = std::path::Path::new("capabilities/servers/approved").join(&sanitized_name);
+                        
+                        let mut loaded_from_approved = false;
+                        if approved_path.exists() {
+                            println!("  {} Loading approved capabilities from {}...", "⏳".yellow(), approved_path.display());
+                            match self.marketplace.import_capabilities_from_rtfs_dir_recursive(&approved_path).await {
+                                Ok(count) => {
+                                    if count > 0 {
+                                        println!("  {} Loaded {} approved capability(ies)", "✓".green(), count);
+                                        
+                                        // Fetch them from marketplace to populate discovered_tools
+                                        let all_caps = self.marketplace.list_capabilities().await;
+                                        for cap in all_caps {
+                                             self.discovered_tools.push(DiscoveredTool {
+                                                manifest: cap,
                                                 server_name: config.name.clone(),
                                                 discovery_hint: None,
                                             });
                                         }
+                                        
+                                        if !self.discovered_tools.is_empty() {
+                                            println!("  {} Added {} capabilities to explorer list", "✓".green(), self.discovered_tools.len());
+                                            loaded_from_approved = true;
+                                        }
                                     }
-                                } else {
-                                    println!("  {} No capabilities found in local configuration. Use 'discover' (2) to fetch from server.", "ℹ️".cyan());
+                                },
+                                Err(e) => {
+                                    eprintln!("  {} Failed to load approved capabilities: {}", "✗".red(), e);
                                 }
                             }
-                            Err(e) => {
-                                log::debug!("Failed to auto-load capabilities: {}", e);
-                                println!("  {} No local capabilities loaded. Use 'discover' (2) to fetch from server.", "ℹ️".cyan());
+                        }
+
+                        if !loaded_from_approved {
+                            // Fallback to introspection if not approved or load failed
+                            let options = DiscoveryOptions {
+                                introspect_output_schemas: false,
+                                use_cache: true,
+                                register_in_marketplace: true,
+                                export_to_rtfs: false, // Don't re-export when loading
+                                export_directory: None,
+                                auth_headers: config.auth_token.as_ref().map(|token| {
+                                    let mut headers = HashMap::new();
+                                    headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+                                    headers
+                                }),
+                                ..Default::default()
+                            };
+                            
+                            println!("  {} Loading capabilities via introspection...", "⏳".yellow());
+                            match self.discovery_service.discover_and_export_tools(config, &options).await {
+                                Ok(manifests) => {
+                                    if !manifests.is_empty() {
+                                        println!("  {} Loaded {} capability(ies) from server introspection", "✓".green(), manifests.len());
+                                        // Store for exploration
+                                        for manifest in &manifests {
+                                            // Only add if not already present
+                                            if !self.discovered_tools.iter().any(|t| t.manifest.id == manifest.id) {
+                                                self.discovered_tools.push(DiscoveredTool {
+                                                    manifest: manifest.clone(),
+                                                    server_name: config.name.clone(),
+                                                    discovery_hint: None,
+                                                });
+                                            }
+                                        }
+                                    } else {
+                                        println!("  {} No capabilities found via introspection. Use 'discover' (2) to try again.", "ℹ️".cyan());
+                                    }
+                                }
+                                Err(e) => {
+                                    log::debug!("Failed to auto-load capabilities: {}", e);
+                                    println!("  {} Introspection failed. Use 'discover' (2) to try again with options.", "ℹ️".cyan());
+                                }
                             }
                         }
                     } else {
@@ -1315,14 +1371,23 @@ impl CapabilityExplorer {
                 println!();
                 println!("{}", "┌─ Result ──────────────────────────────────────────────────────────────────────┐".green());
                 
-                // Pretty print result
-                let result_str = format!("{:?}", result);
-                let lines = textwrap::wrap(&result_str, 76);
-                for line in lines.iter().take(30) {
-                    println!("│ {:<76} │", line);
+                // Pretty print result as JSON
+                let result_json = ccos::utils::value_conversion::rtfs_value_to_json(&result)
+                    .unwrap_or(serde_json::Value::String(format!("{:?}", result)));
+                
+                let result_str = serde_json::to_string_pretty(&result_json).unwrap_or_default();
+                let lines: Vec<&str> = result_str.lines().collect();
+                
+                for line in lines.iter().take(100) {
+                    if line.len() > 76 {
+                        println!("│ {:<76} │", &line[0..76]);
+                        // Simple truncation for now to keep box intact
+                    } else {
+                        println!("│ {:<76} │", line);
+                    }
                 }
-                if lines.len() > 30 {
-                    println!("│ {:<76} │", format!("... ({} more lines)", lines.len() - 30).dimmed());
+                if lines.len() > 100 {
+                    println!("│ {:<76} │", format!("... ({} more lines)", lines.len() - 100).dimmed());
                 }
                 
                 println!("{}", "└──────────────────────────────────────────────────────────────────────────────┘".green());
