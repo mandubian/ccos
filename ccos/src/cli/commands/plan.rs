@@ -1,4 +1,5 @@
 use crate::cli::CliContext;
+use crate::ops::plan::{CreatePlanOptions, ExecutePlanOptions};
 use clap::Subcommand;
 use rtfs::runtime::error::RuntimeResult;
 
@@ -8,36 +9,88 @@ pub enum PlanCommand {
     Create {
         /// Goal description
         goal: String,
+
+        /// Show the plan without executing (dry-run mode)
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Save plan to file
+        #[arg(long)]
+        save: Option<String>,
+
+        /// Show verbose output
+        #[arg(long, short)]
+        verbose: bool,
+
+        /// Skip capability validation
+        #[arg(long)]
+        skip_validation: bool,
     },
 
     /// Execute a plan
     Execute {
         /// Plan ID or path
         plan: String,
+
+        /// Maximum repair attempts on failure (0 = no repair)
+        #[arg(long, default_value = "0")]
+        repair: usize,
+
+        /// Show verbose output
+        #[arg(long, short)]
+        verbose: bool,
     },
 
-    /// Validate plan syntax
+    /// Validate plan syntax and capability availability
     Validate {
         /// Plan ID or path
         plan: String,
     },
 }
 
-pub async fn execute(
-    _ctx: &mut CliContext,
-    command: PlanCommand,
-) -> RuntimeResult<()> {
+pub async fn execute(_ctx: &mut CliContext, command: PlanCommand) -> RuntimeResult<()> {
     match command {
-        PlanCommand::Create { goal } => {
-            let result = crate::ops::plan::create_plan(goal).await?;
-            println!("{}", result);
+        PlanCommand::Create {
+            goal,
+            dry_run,
+            save,
+            verbose,
+            skip_validation,
+        } => {
+            let options = CreatePlanOptions {
+                dry_run,
+                save_to: save,
+                verbose,
+                skip_validation,
+            };
+            let result = crate::ops::plan::create_plan_with_options(goal, options).await?;
+
+            // In non-dry-run mode, print the plan
+            if !dry_run {
+                println!("{}", result.rtfs_code);
+            }
+
+            // Show validation summary
+            if !result.all_resolved {
+                println!(
+                    "\n⚠️  {} capability(ies) not found:",
+                    result.unresolved_capabilities.len()
+                );
+                for cap in &result.unresolved_capabilities {
+                    println!("   • {}", cap);
+                }
+            }
         }
-        PlanCommand::Execute { plan } => {
-            let result = crate::ops::plan::execute_plan(plan).await?;
+        PlanCommand::Execute { plan, repair, verbose } => {
+            let options = ExecutePlanOptions {
+                max_repair_attempts: repair,
+                verbose,
+            };
+            let result = crate::ops::plan::execute_plan_with_options(plan, options).await?;
             println!("{}", result);
         }
         PlanCommand::Validate { plan } => {
-            let valid = crate::ops::plan::validate_plan(plan).await?;
+            let valid = crate::ops::plan::validate_plan_full(plan).await?;
             if valid {
                 println!("Plan is valid.");
             } else {
