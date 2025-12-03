@@ -42,6 +42,10 @@ pub async fn execute(
         }
     }
 
+    // Register native capabilities (ccos.cli.*)
+    ctx.status("Registering native CLI capabilities...");
+    crate::ops::native::register_native_capabilities(&marketplace).await?;
+
     // Parse arguments
     let input_value = parse_args(&args.args)?;
 

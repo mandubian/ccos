@@ -1,6 +1,6 @@
 # CCOS CLI: Unified Command-Line Tool
 
-**Status**: Implementation (Phases 1-8 complete)  
+**Status**: Implementation (Phases 1-9 complete)  
 **Created**: 2025-11-30  
 **Updated**: 2025-12-03  
 **Umbrella Issue**: [#167](https://github.com/mandubian/ccos/issues/167)
@@ -18,6 +18,7 @@
 | [#173](https://github.com/mandubian/ccos/issues/173) | Expose CLI as Governed Native Capabilities | 6 | Done |
 | [#174](https://github.com/mandubian/ccos/issues/174) | [CLI UX] Interactive Mode and Discovery Filtering | 7 | Done |
 | [#175](https://github.com/mandubian/ccos/issues/175) | [CLI UX] Intelligent Discovery with LLM Integration | 8 | Done |
+| [#176](https://github.com/mandubian/ccos/issues/176) | [Plan] End-to-End Plan Creation & Execution | 9 | Done |
 
 ## Overview
 
@@ -189,6 +190,21 @@ ccos discover goal "github issues" --llm
 #### Motivation
 
 The current keyword-based scoring (`capability_matcher.rs`) is fast but limited. It fails on semantic gaps (e.g., "finding bugs" doesn't match "issue tracker" if keywords don't overlap). LLM integration bridges this gap.
+
+### Phase 9: End-to-End Plan Execution (Done)
+
+Fully integrated planning and execution pipeline, enabling natural language to executable RTFS plans using native CLI capabilities.
+
+**Features**:
+1.  **Plan Creation**: `ccos plan create "goal"` uses LLM (`LlmRtfsPlanGenerationProvider`) to generate RTFS plans.
+2.  **Plan Execution**: `ccos plan execute <file>` or `ccos plan execute "rtfs code"` runs plans using the CCOS runtime.
+3.  **Native Capability Wiring**: `ccos.cli.*` capabilities are automatically registered and available to the runtime during execution.
+4.  **CLI-Runtime Bridge**: Unified `RuntimeContext` and `CapabilityMarketplace` setup for CLI commands.
+
+**Key Components**:
+- `ccos/src/ops/plan.rs`: Core planning logic.
+- `ccos/src/ops/native.rs`: Centralized native capability registration.
+- `ccos/src/cli/commands/plan.rs` & `call.rs`: CLI command wrappers.
 
 ### Future Enhancements
 

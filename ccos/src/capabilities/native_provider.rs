@@ -867,9 +867,19 @@ fn create_plan_create_capability() -> NativeCapability {
                 _ => get_string_param(&inputs, "goal")?,
             };
 
-            match ops::plan::create_plan(goal).await {
-                Ok(plan) => Ok(Value::String(plan)),
-                Err(e) => Err(e),
+            // Use spawn_blocking to run in a separate thread with its own runtime
+            // This ensures Send requirements are met
+            let goal_clone = goal.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| RuntimeError::Generic(format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(ops::plan::create_plan(goal_clone))
+            }).await;
+            
+            match result {
+                Ok(Ok(plan)) => Ok(Value::String(plan)),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(RuntimeError::Generic(format!("Task join error: {}", e))),
             }
         }.boxed()
     });
@@ -890,9 +900,19 @@ fn create_plan_execute_capability() -> NativeCapability {
                 _ => get_string_param(&inputs, "plan")?,
             };
 
-            match ops::plan::execute_plan(plan).await {
-                Ok(result) => Ok(Value::String(result)),
-                Err(e) => Err(e),
+            // Use spawn_blocking to run in a separate thread with its own runtime
+            // This ensures Send requirements are met
+            let plan_clone = plan.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| RuntimeError::Generic(format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(ops::plan::execute_plan(plan_clone))
+            }).await;
+            
+            match result {
+                Ok(Ok(result)) => Ok(Value::String(result)),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(RuntimeError::Generic(format!("Task join error: {}", e))),
             }
         }.boxed()
     });

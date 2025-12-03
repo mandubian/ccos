@@ -373,11 +373,28 @@ pub async fn discover_by_goal_with_options(
                                                 .ok();
                                             
                                             if let Some(token) = token {
-                                                std::env::set_var(env_var, &token);
-                                                println!("   ✓ Token set. Retrying...");
+                                                // Validate env_var name before setting (set_var can panic on invalid names)
+                                                let token_set = if env_var.is_empty() || env_var.contains('=') || env_var.contains('\0') {
+                                                    println!("   ⚠️  Invalid environment variable name: {}", env_var);
+                                                    false
+                                                } else if token.contains('\0') {
+                                                    println!("   ⚠️  Token contains invalid characters");
+                                                    false
+                                                } else {
+                                                    // Safe to set: env_var is validated and token is from user input
+                                                    // Note: set_var can panic on invalid input, but we've validated both
+                                                    // In single-threaded CLI context, this is safe
+                                                    unsafe {
+                                                        std::env::set_var(env_var, &token);
+                                                    }
+                                                    println!("   ✓ Token set. Retrying...");
+                                                    true
+                                                };
                                                 
-                                                // Retry with new token
-                                                match crate::ops::server::introspect_server_by_url(endpoint, name, Some(env_var)).await {
+                                                // Only retry if token was successfully set
+                                                if token_set {
+                                                    // Retry with new token
+                                                    match crate::ops::server::introspect_server_by_url(endpoint, name, Some(env_var)).await {
                                                     Ok(introspection) => {
                                                         if introspection.tools.is_empty() {
                                                             println!("   ⚠️  No tools found");
@@ -425,6 +442,7 @@ pub async fn discover_by_goal_with_options(
                                                         }
                                                         println!("      • Token should be just the token value (we add 'Bearer' prefix automatically)");
                                                     }
+                                                }
                                                 }
                                             }
                                         }
