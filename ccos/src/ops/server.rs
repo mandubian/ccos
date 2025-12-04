@@ -10,61 +10,12 @@ use crate::mcp::core::MCPDiscoveryService;
 use crate::mcp::types::{DiscoveryOptions, MCPTool};
 use crate::synthesis::introspection::api_introspector::APIIntrospector;
 use crate::synthesis::introspection::mcp_introspector::{MCPIntrospectionResult, MCPIntrospector};
+use crate::utils::fs::find_workspace_root;
 use chrono::Utc;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
-
-/// Find the workspace root directory (where capabilities/ should be)
-/// Checks for ccos/Cargo.toml (workspace root) or walks up to find capabilities/
-fn find_workspace_root() -> PathBuf {
-    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    
-    // Strategy 1: Check if we're at workspace root (has ccos/Cargo.toml AND capabilities/)
-    if current_dir.join("ccos/Cargo.toml").exists() && current_dir.join("capabilities").exists() {
-        return current_dir;
-    }
-    
-    // Strategy 2: Walk up the directory tree to find workspace root
-    // Look for a directory that has both ccos/Cargo.toml and capabilities/
-    let mut path = current_dir.clone();
-    loop {
-        if path.join("ccos/Cargo.toml").exists() && path.join("capabilities").exists() {
-            return path;
-        }
-        if let Some(parent) = path.parent() {
-            path = parent.to_path_buf();
-        } else {
-            break;
-        }
-    }
-    
-    // Strategy 3: Walk up to find capabilities/ directory (workspace root indicator)
-    let mut path = current_dir.clone();
-    loop {
-        if path.join("capabilities").exists() {
-            return path;
-        }
-        if let Some(parent) = path.parent() {
-            path = parent.to_path_buf();
-        } else {
-            break;
-        }
-    }
-    
-    // Strategy 4: If we're inside ccos/ directory, go up one level
-    if current_dir.join("Cargo.toml").exists() {
-        if let Some(parent) = current_dir.parent() {
-            if parent.join("capabilities").exists() || parent.join("ccos/Cargo.toml").exists() {
-                return parent.to_path_buf();
-            }
-        }
-    }
-    
-    // Last resort: use current directory
-    current_dir
-}
 
 /// List configured servers
 pub async fn list_servers() -> RuntimeResult<ServerListOutput> {

@@ -1,6 +1,9 @@
 //! File system utilities
 //!
-//! Provides shared functions for file system operations, including filename sanitization.
+//! Provides shared functions for file system operations, including filename sanitization
+//! and workspace root detection.
+
+use std::path::PathBuf;
 
 /// Sanitize a string to be safe for use as a filename or directory name
 ///
@@ -33,6 +36,61 @@ pub fn sanitize_filename(input: &str) -> String {
 
     // Trim leading/trailing underscores
     result.trim_matches('_').to_string()
+}
+
+/// Find the workspace root directory (where `capabilities/` and `ccos/Cargo.toml` live).
+///
+/// Strategy:
+/// 1) If current dir has both `ccos/Cargo.toml` and `capabilities/`, use it.
+/// 2) Walk up to find a dir that has both.
+/// 3) Walk up to find a dir that has `capabilities/`.
+/// 4) If inside `ccos/`, go up one level if it has `capabilities/` or `ccos/Cargo.toml`.
+/// 5) Fallback to current dir.
+pub fn find_workspace_root() -> PathBuf {
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // Strategy 1
+    if current_dir.join("ccos/Cargo.toml").exists() && current_dir.join("capabilities").exists() {
+        return current_dir;
+    }
+
+    // Strategy 2
+    let mut path = current_dir.clone();
+    loop {
+        if path.join("ccos/Cargo.toml").exists() && path.join("capabilities").exists() {
+            return path;
+        }
+        if let Some(parent) = path.parent() {
+            path = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+
+    // Strategy 3
+    let mut path = current_dir.clone();
+    loop {
+        if path.join("capabilities").exists() {
+            return path;
+        }
+        if let Some(parent) = path.parent() {
+            path = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+
+    // Strategy 4
+    if current_dir.join("Cargo.toml").exists() {
+        if let Some(parent) = current_dir.parent() {
+            if parent.join("capabilities").exists() || parent.join("ccos/Cargo.toml").exists() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+
+    // Strategy 5
+    current_dir
 }
 
 #[cfg(test)]
