@@ -1,6 +1,7 @@
 // Server command implementation
 use crate::cli::output::OutputFormatter;
 use crate::cli::CliContext;
+use crate::utils::fs::find_workspace_root;
 use clap::Subcommand;
 use rtfs::runtime::error::RuntimeResult;
 
@@ -214,7 +215,8 @@ impl ServerCommand {
                 }
             }
             ServerCommand::Dismiss { name, reason } => {
-                let queue = crate::discovery::ApprovalQueue::new(".");
+                let workspace_root = find_workspace_root();
+                let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
                 let reason_str = reason
                     .clone()
                     .unwrap_or_else(|| "Manual dismissal".to_string());
@@ -230,7 +232,8 @@ impl ServerCommand {
                 }
             }
             ServerCommand::Retry { name } => {
-                let queue = crate::discovery::ApprovalQueue::new(".");
+                let workspace_root = find_workspace_root();
+                let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
                 match queue.retry_server(name) {
                     Ok(_) => {
                         formatter.success(&format!("Retried server '{}'", name));
