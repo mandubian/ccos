@@ -24,6 +24,7 @@ use crate::mcp::registry::MCPRegistryClient;
 use crate::mcp::types::*;
 use crate::planner::modular_planner::types::DomainHint;
 use crate::synthesis::mcp_introspector::MCPIntrospector;
+use crate::utils::fs::find_workspace_root;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -66,7 +67,7 @@ impl MCPDiscoveryService {
             session_manager: Arc::new(MCPSessionManager::with_client(http_client, None)),
             registry_client: MCPRegistryClient::new(),
             config_discovery: LocalConfigMcpDiscovery::new(),
-            approval_queue: ApprovalQueue::new("."),
+            approval_queue: ApprovalQueue::new(crate::utils::fs::find_workspace_root()),
             introspector: MCPIntrospector::new(),
             cache: Arc::new(MCPCache::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
@@ -92,7 +93,7 @@ impl MCPDiscoveryService {
             session_manager: Arc::new(MCPSessionManager::with_client(http_client, auth_headers)),
             registry_client: MCPRegistryClient::new(),
             config_discovery: LocalConfigMcpDiscovery::new(),
-            approval_queue: ApprovalQueue::new("."),
+            approval_queue: ApprovalQueue::new(crate::utils::fs::find_workspace_root()),
             introspector: MCPIntrospector::new(),
             cache: Arc::new(MCPCache::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
@@ -1350,7 +1351,7 @@ impl MCPDiscoveryService {
             session_manager: Arc::clone(&self.session_manager),
             registry_client: MCPRegistryClient::new(), // Registry client is stateless
             config_discovery: LocalConfigMcpDiscovery::new(), // Config discovery is stateless
-            approval_queue: ApprovalQueue::new("."),   // Approval queue is stateless (file-based)
+            approval_queue: ApprovalQueue::new(crate::utils::fs::find_workspace_root()),   // Approval queue is stateless (file-based)
             introspector: MCPIntrospector::new(),      // Introspector is stateless
             cache: Arc::clone(&self.cache),            // Share cache
             rate_limiter: Arc::clone(&self.rate_limiter), // Share rate limiter
