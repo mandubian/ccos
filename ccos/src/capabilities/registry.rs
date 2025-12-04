@@ -382,7 +382,6 @@ impl LocalProvider {
         eprintln!("HOST_CALL: event.append({}, <event-data>) - mock", key);
         Ok(Value::Boolean(true))
     }
-
 }
 
 impl CapabilityProvider for LocalProvider {

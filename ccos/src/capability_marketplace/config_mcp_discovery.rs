@@ -143,9 +143,7 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
         );
 
         // Create unified service once for all servers (more efficient)
-        let unified_service = Arc::new(
-            crate::mcp::core::MCPDiscoveryService::new()
-        );
+        let unified_service = Arc::new(crate::mcp::core::MCPDiscoveryService::new());
 
         for config in configs {
             println!(
@@ -159,7 +157,7 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
                 introspect_output_schemas: false,
                 use_cache: true,
                 register_in_marketplace: true, // Register in marketplace
-                export_to_rtfs: true, // Export to RTFS files
+                export_to_rtfs: true,          // Export to RTFS files
                 export_directory: Some("../capabilities/discovered".to_string()),
                 auth_headers: config.auth_token.as_ref().map(|token| {
                     let mut headers = std::collections::HashMap::new();
@@ -170,7 +168,10 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
             };
 
             // Use discover_and_export_tools which handles registration and export automatically
-            match unified_service.discover_and_export_tools(&config, &options).await {
+            match unified_service
+                .discover_and_export_tools(&config, &options)
+                .await
+            {
                 Ok(manifests) => {
                     println!("      ✅ Found {} capabilities", manifests.len());
                     all_manifests.extend(manifests);

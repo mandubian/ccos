@@ -3,21 +3,21 @@ use super::executors::{
     A2AExecutor, ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor, OpenApiExecutor,
     RegistryExecutor,
 };
-use crate::capabilities::native_provider::NativeCapabilityProvider;
+use super::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use super::resource_monitor::ResourceMonitor;
 use super::types::*;
 use super::versioning::{compare_versions, detect_breaking_changes, VersionComparison};
+use crate::capabilities::native_provider::NativeCapabilityProvider;
 use crate::catalog::{CatalogService, CatalogSource};
-use crate::utils::value_conversion;
-use futures::future::BoxFuture;
-use rtfs::ast::{MapKey, TypeExpr};
-use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use super::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use crate::streaming::{
     McpStreamingProvider, StreamConfig, StreamHandle, StreamType, StreamingProvider,
 };
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
+use crate::utils::value_conversion;
 use chrono::Utc;
+use futures::future::BoxFuture;
+use rtfs::ast::{MapKey, TypeExpr};
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
 use rtfs::runtime::values::Value;
 use serde::{Deserialize, Serialize};
@@ -466,11 +466,17 @@ impl CapabilityMarketplace {
 
         // Load previously discovered capabilities from RTFS files
         // This enables offline operation without re-querying MCP servers
-        match self.load_discovered_capabilities::<std::path::PathBuf>(None).await {
+        match self
+            .load_discovered_capabilities::<std::path::PathBuf>(None)
+            .await
+        {
             Ok(count) => {
                 if count > 0 {
                     if let Some(cb) = &self.debug_callback {
-                        cb(format!("Loaded {} previously discovered capabilities from RTFS files", count));
+                        cb(format!(
+                            "Loaded {} previously discovered capabilities from RTFS files",
+                            count
+                        ));
                     } else {
                         println!("📦 Loaded {} previously discovered capabilities", count);
                     }
@@ -479,7 +485,10 @@ impl CapabilityMarketplace {
             Err(e) => {
                 // Non-fatal: log and continue
                 if let Some(cb) = &self.debug_callback {
-                    cb(format!("Note: Could not load discovered capabilities: {}", e));
+                    cb(format!(
+                        "Note: Could not load discovered capabilities: {}",
+                        e
+                    ));
                 }
             }
         }
@@ -804,7 +813,10 @@ impl CapabilityMarketplace {
             let caps = self.capabilities.read().await;
             if caps.contains_key(&id) {
                 // Already registered - skip to avoid duplicates
-                log::debug!("Capability {} already registered, skipping duplicate registration", id);
+                log::debug!(
+                    "Capability {} already registered, skipping duplicate registration",
+                    id
+                );
                 return Ok(());
             }
         }
@@ -865,23 +877,24 @@ impl CapabilityMarketplace {
         match existing {
             Some(existing_manifest) => {
                 // Compare versions
-                let version_comparison = match compare_versions(&existing_manifest.version, &new_manifest.version) {
-                    Ok(comp) => comp,
-                    Err(e) => {
-                        // If version parsing fails, treat as equal and log warning
-                        if let Some(cb) = &self.debug_callback {
-                            cb(format!(
+                let version_comparison =
+                    match compare_versions(&existing_manifest.version, &new_manifest.version) {
+                        Ok(comp) => comp,
+                        Err(e) => {
+                            // If version parsing fails, treat as equal and log warning
+                            if let Some(cb) = &self.debug_callback {
+                                cb(format!(
                                 "Warning: Failed to parse versions for {}: {}. Treating as update.",
                                 id, e
                             ));
+                            }
+                            VersionComparison::Equal
                         }
-                        VersionComparison::Equal
-                    }
-                };
+                    };
 
                 // Detect breaking changes
-                let breaking_changes = detect_breaking_changes(&existing_manifest, &new_manifest)
-                    .unwrap_or_default();
+                let breaking_changes =
+                    detect_breaking_changes(&existing_manifest, &new_manifest).unwrap_or_default();
 
                 // Check if update should be allowed
                 let is_breaking = !breaking_changes.is_empty()
@@ -1225,10 +1238,8 @@ impl CapabilityMarketplace {
         let provenance = CapabilityProvenance {
             source: "native".to_string(),
             version: Some("1.0.0".to_string()),
-            content_hash: self.compute_content_hash(&format!(
-                "{}{}{}{}",
-                id, name, description, security_level
-            )),
+            content_hash: self
+                .compute_content_hash(&format!("{}{}{}{}", id, name, description, security_level)),
             custody_chain: vec!["native_registration".to_string()],
             registered_at: chrono::Utc::now(),
         };
@@ -1911,9 +1922,7 @@ impl CapabilityMarketplace {
                 ProviderType::Registry(_) => Err(RuntimeError::Generic(
                     "Registry provider missing executor".to_string(),
                 )),
-                ProviderType::Native(native) => {
-                    (native.handler)(inputs_ref).await
-                }
+                ProviderType::Native(native) => (native.handler)(inputs_ref).await,
             }
         }?;
 
@@ -2149,7 +2158,7 @@ impl CapabilityMarketplace {
     }
 
     /// Convert JSON to RTFS Value (public API wrapper for backward compatibility)
-    /// 
+    ///
     /// This delegates to the shared utility in `ccos::utils::value_conversion`.
     /// Prefer using `ccos::utils::value_conversion::json_to_rtfs_value` directly in new code.
     pub fn json_to_rtfs_value(json: &serde_json::Value) -> RuntimeResult<Value> {
@@ -2250,25 +2259,25 @@ impl CapabilityMarketplace {
         for cap in caps.values() {
             // Skip non-serializable provider types
             let provider_label = match &cap.provider {
-                    ProviderType::Http(_) => ":http",
-                    ProviderType::OpenApi(_) => ":openapi",
-                    ProviderType::MCP(_) => ":mcp",
-                    ProviderType::A2A(_) => ":a2a",
-                    ProviderType::RemoteRTFS(_) => ":remote_rtfs",
-                    ProviderType::Local(_)
-                    | ProviderType::Stream(_)
-                    | ProviderType::Registry(_)
-                    | ProviderType::Plugin(_)
-                    | ProviderType::Native(_) => {
-                        if let Some(cb) = &self.debug_callback {
-                            cb(format!(
-                                "Skipping RTFS export for non-serializable provider: {}",
-                                cap.id
-                            ));
-                        }
-                        continue;
+                ProviderType::Http(_) => ":http",
+                ProviderType::OpenApi(_) => ":openapi",
+                ProviderType::MCP(_) => ":mcp",
+                ProviderType::A2A(_) => ":a2a",
+                ProviderType::RemoteRTFS(_) => ":remote_rtfs",
+                ProviderType::Local(_)
+                | ProviderType::Stream(_)
+                | ProviderType::Registry(_)
+                | ProviderType::Plugin(_)
+                | ProviderType::Native(_) => {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Skipping RTFS export for non-serializable provider: {}",
+                            cap.id
+                        ));
                     }
-                };
+                    continue;
+                }
+            };
 
             let input_schema_str = cap
                 .input_schema
@@ -2488,8 +2497,9 @@ impl CapabilityMarketplace {
 
         rtfs_content.push_str(")\n"); // Close the (do ...) block
 
-        std::fs::write(&path, rtfs_content)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to write RTFS module export file: {}", e)))?;
+        std::fs::write(&path, rtfs_content).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to write RTFS module export file: {}", e))
+        })?;
 
         Ok(written)
     }
@@ -2542,7 +2552,7 @@ impl CapabilityMarketplace {
 
     /// Load all discovered capabilities from the standard discovered capabilities directory.
     /// This scans `capabilities/discovered/` recursively for `.rtfs` files and loads them.
-    /// 
+    ///
     /// The directory structure is expected to be:
     /// ```text
     /// capabilities/discovered/
@@ -2554,11 +2564,11 @@ impl CapabilityMarketplace {
     /// └── other/
     ///     └── capabilities.rtfs
     /// ```
-    /// 
+    ///
     /// # Arguments
     /// * `base_dir` - Optional base directory. Defaults to "capabilities/discovered" or
     ///   the value of CCOS_CAPABILITY_STORAGE environment variable.
-    /// 
+    ///
     /// # Returns
     /// The number of capabilities loaded.
     pub async fn load_discovered_capabilities<P: AsRef<Path>>(
@@ -2575,7 +2585,10 @@ impl CapabilityMarketplace {
 
         if !dir.exists() {
             if let Some(cb) = &self.debug_callback {
-                cb(format!("Discovered capabilities directory does not exist: {}", dir.display()));
+                cb(format!(
+                    "Discovered capabilities directory does not exist: {}",
+                    dir.display()
+                ));
             }
             return Ok(0);
         }
@@ -2584,7 +2597,7 @@ impl CapabilityMarketplace {
     }
 
     /// Recursively import capabilities from RTFS files in a directory and its subdirectories.
-    /// 
+    ///
     /// This method walks the directory tree and loads all `.rtfs` files it finds.
     pub async fn import_capabilities_from_rtfs_dir_recursive<P: AsRef<Path>>(
         &self,
@@ -2633,7 +2646,7 @@ impl CapabilityMarketplace {
                 };
 
                 let path = entry.path();
-                
+
                 // If it's a directory, add it to the queue for processing
                 if path.is_dir() {
                     dirs_to_process.push(path);
@@ -2641,7 +2654,26 @@ impl CapabilityMarketplace {
                 }
 
                 // Skip non-rtfs files
-                if path.extension().and_then(|s| s.to_str()).map_or(true, |ext| ext != "rtfs") {
+                if path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map_or(true, |ext| ext != "rtfs")
+                {
+                    continue;
+                }
+
+                // Skip directory listing files (capabilities.rtfs) - these are not individual capabilities
+                if path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map_or(false, |name| name == "capabilities.rtfs")
+                {
+                    if let Some(cb) = &self.debug_callback {
+                        cb(format!(
+                            "Skipping directory listing file: {}",
+                            path.display()
+                        ));
+                    }
                     continue;
                 }
 
@@ -2653,7 +2685,11 @@ impl CapabilityMarketplace {
                             eprintln!("✅ Loaded {} capabilities from {}", count, path.display());
                         }
                         if let Some(cb) = &self.debug_callback {
-                            cb(format!("Loaded {} capabilities from {}", count, path.display()));
+                            cb(format!(
+                                "Loaded {} capabilities from {}",
+                                count,
+                                path.display()
+                            ));
                         }
                     }
                     Err(e) => {
@@ -2672,19 +2708,13 @@ impl CapabilityMarketplace {
     /// Import capabilities from a single RTFS file.
     async fn import_single_rtfs_file<P: AsRef<Path>>(&self, path: P) -> RuntimeResult<usize> {
         let path = path.as_ref();
-        
-        let path_str = path.to_str().ok_or_else(|| {
-            RuntimeError::Generic(format!(
-                "Non-UTF8 path: {}",
-                path.display()
-            ))
-        })?;
+
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| RuntimeError::Generic(format!("Non-UTF8 path: {}", path.display())))?;
 
         let parser = MCPDiscoveryProvider::new(MCPServerConfig::default()).map_err(|e| {
-            RuntimeError::Generic(format!(
-                "Failed to initialize RTFS parser: {}",
-                e
-            ))
+            RuntimeError::Generic(format!("Failed to initialize RTFS parser: {}", e))
         })?;
 
         let module = parser.load_rtfs_capabilities(path_str)?;
@@ -2700,7 +2730,10 @@ impl CapabilityMarketplace {
                                 if let Some(cb) = &self.debug_callback {
                                     cb(format!(
                                         "Updated capability: {} (version comparison: {:?})",
-                                        result.previous_version.as_ref().unwrap_or(&"unknown".to_string()),
+                                        result
+                                            .previous_version
+                                            .as_ref()
+                                            .unwrap_or(&"unknown".to_string()),
                                         result.version_comparison
                                     ));
                                 }
@@ -2783,6 +2816,20 @@ impl CapabilityMarketplace {
                 .and_then(|s| s.to_str())
                 .map_or(true, |ext| ext != "rtfs")
             {
+                continue;
+            }
+            // Skip directory listing files (capabilities.rtfs) - these are not individual capabilities
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map_or(false, |name| name == "capabilities.rtfs")
+            {
+                if let Some(cb) = &self.debug_callback {
+                    cb(format!(
+                        "Skipping directory listing file: {}",
+                        path.display()
+                    ));
+                }
                 continue;
             }
 

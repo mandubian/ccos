@@ -18,10 +18,10 @@ use crate::single_mcp_discovery_impl::{run_discovery, Args};
 
 mod single_mcp_discovery_impl {
     use super::*;
-    use ccos::synthesis::mcp_introspector::MCPIntrospector;
-    use ccos::mcp::types::DiscoveredMCPTool;
+    use ccos::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
     use ccos::mcp::registry::MCPRegistryClient;
-    use ccos::mcp::discovery_session::{MCPSessionManager, MCPServerInfo};
+    use ccos::mcp::types::DiscoveredMCPTool;
+    use ccos::synthesis::mcp_introspector::MCPIntrospector;
     use rtfs::runtime::values::Value as RtfsValue;
     use serde_json;
     use std::path::Path;

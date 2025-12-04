@@ -155,7 +155,10 @@ mod tests {
     #[test]
     fn test_map_conversion() {
         let mut map = HashMap::new();
-        map.insert(MapKey::String("key".to_string()), Value::String("value".to_string()));
+        map.insert(
+            MapKey::String("key".to_string()),
+            Value::String("value".to_string()),
+        );
         let rtfs_val = Value::Map(map);
         let json_val = rtfs_value_to_json(&rtfs_val).unwrap();
         assert_eq!(json_val["key"], "value");
@@ -168,4 +171,3 @@ mod tests {
         assert_eq!(json_val.as_str(), Some("test"));
     }
 }
-

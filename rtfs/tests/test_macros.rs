@@ -1,7 +1,6 @@
-
-use rtfs::parser::parse;
-use rtfs::ast::{Expression, Literal, Symbol, TopLevel, DoExpr};
+use rtfs::ast::{DoExpr, Expression, Literal, Symbol, TopLevel};
 use rtfs::compiler::expander::MacroExpander;
+use rtfs::parser::parse;
 
 #[test]
 fn test_simple_macro() {
@@ -24,13 +23,13 @@ fn test_simple_macro() {
     let result = parse(input).unwrap();
     let parsed_expr = match &result[0] {
         TopLevel::Expression(expr) => expr.clone(),
-        _ => panic!("Expected expression result")
+        _ => panic!("Expected expression result"),
     };
-    
+
     // Expand macros
     let mut expander = MacroExpander::default();
     let expanded_expr = expander.expand_top_level(&parsed_expr).unwrap();
-    
+
     assert_eq!(expanded_expr, expected);
 }
 
@@ -54,13 +53,13 @@ fn test_quasiquote() {
     let result = parse(input).unwrap();
     let parsed_expr = match &result[0] {
         TopLevel::Expression(expr) => expr.clone(),
-        _ => panic!("Expected expression result")
+        _ => panic!("Expected expression result"),
     };
-    
+
     // Expand macros
     let mut expander = MacroExpander::default();
     let expanded_expr = expander.expand_top_level(&parsed_expr).unwrap();
-    
+
     assert_eq!(expanded_expr, expected);
 }
 
@@ -90,13 +89,13 @@ fn test_unquote_splicing() {
     let result = parse(input).unwrap();
     let parsed_expr = match &result[0] {
         TopLevel::Expression(expr) => expr.clone(),
-        _ => panic!("Expected expression result")
+        _ => panic!("Expected expression result"),
     };
-    
+
     // Expand macros
     let mut expander = MacroExpander::default();
     let expanded_expr = expander.expand_top_level(&parsed_expr).unwrap();
-    
+
     assert_eq!(expanded_expr, expected);
 }
 
@@ -119,13 +118,13 @@ fn test_recursive_macro() {
     let result = parse(input).unwrap();
     let parsed_expr = match &result[0] {
         TopLevel::Expression(expr) => expr.clone(),
-        _ => panic!("Expected expression result")
+        _ => panic!("Expected expression result"),
     };
-    
+
     // Expand macros
     let mut expander = MacroExpander::default();
     let expanded_expr = expander.expand_top_level(&parsed_expr).unwrap();
-    
+
     assert_eq!(expanded_expr, expected);
 }
 
@@ -161,7 +160,6 @@ fn test_variadic_macro() {
 
     assert_eq!(expanded_expr, expected);
 }
-
 
 // Integration test: expand top-levels to capture the MacroExpander, then
 // inject that expander into an evaluator and execute a new expression that
@@ -202,8 +200,12 @@ fn test_macro_runtime_integration() {
     evaluator.set_macro_expander(expander);
 
     let new_expr = rtfs::ast::TopLevel::Expression(rtfs::ast::Expression::FunctionCall {
-        callee: Box::new(rtfs::ast::Expression::Symbol(rtfs::ast::Symbol::new("incr"))),
-        arguments: vec![rtfs::ast::Expression::Literal(rtfs::ast::Literal::Integer(100))],
+        callee: Box::new(rtfs::ast::Expression::Symbol(rtfs::ast::Symbol::new(
+            "incr",
+        ))),
+        arguments: vec![rtfs::ast::Expression::Literal(rtfs::ast::Literal::Integer(
+            100,
+        ))],
     });
 
     let outcome2 = evaluator.eval_toplevel(&[new_expr]).unwrap();

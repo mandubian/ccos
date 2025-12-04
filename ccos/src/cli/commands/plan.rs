@@ -81,7 +81,11 @@ pub async fn execute(_ctx: &mut CliContext, command: PlanCommand) -> RuntimeResu
                 }
             }
         }
-        PlanCommand::Execute { plan, repair, verbose } => {
+        PlanCommand::Execute {
+            plan,
+            repair,
+            verbose,
+        } => {
             let options = ExecutePlanOptions {
                 max_repair_attempts: repair,
                 verbose,

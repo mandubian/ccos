@@ -248,7 +248,9 @@ fn binding_map_from_type_expr(
                 if entry.optional {
                     ty = TypeExpr::Optional(Box::new(ty));
                 }
-                let key_str = value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()));
+                let key_str = value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(
+                    entry.key.clone(),
+                ));
                 map.insert(format!(":{}", key_str), ty);
             }
             map

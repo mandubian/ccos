@@ -1,4 +1,4 @@
-use crate::ast::{Expression, Symbol, Literal};
+use crate::ast::{Expression, Literal, Symbol};
 use crate::compiler::macro_def::MacroDef;
 use std::collections::HashMap;
 
@@ -50,7 +50,7 @@ impl MacroExpander {
     pub fn default() -> Self {
         MacroExpander::new()
     }
-    
+
     pub fn expand_top_level(&mut self, expression: &Expression) -> Result<Expression, String> {
         self.expand(expression, 0)
     }
@@ -66,12 +66,20 @@ impl MacroExpander {
                 Ok(Expression::Quasiquote(Box::new(expanded_expr)))
             }
             Expression::Unquote(expr) => {
-                let new_level = if quasiquote_level == 0 { 0 } else { quasiquote_level - 1 };
+                let new_level = if quasiquote_level == 0 {
+                    0
+                } else {
+                    quasiquote_level - 1
+                };
                 let expanded_expr = self.expand(expr, new_level)?;
                 Ok(Expression::Unquote(Box::new(expanded_expr)))
             }
             Expression::UnquoteSplicing(expr) => {
-                let new_level = if quasiquote_level == 0 { 0 } else { quasiquote_level - 1 };
+                let new_level = if quasiquote_level == 0 {
+                    0
+                } else {
+                    quasiquote_level - 1
+                };
                 let expanded_expr = self.expand(expr, new_level)?;
                 Ok(Expression::UnquoteSplicing(Box::new(expanded_expr)))
             }
@@ -83,8 +91,7 @@ impl MacroExpander {
                         variadic_param: defmacro_expr.variadic_param.clone(),
                         body: defmacro_expr.body.clone(),
                     };
-                    self.macros
-                        .insert(defmacro_expr.name.clone(), macro_def);
+                    self.macros.insert(defmacro_expr.name.clone(), macro_def);
                     Ok(Expression::Literal(crate::ast::Literal::Nil))
                 } else {
                     Ok(expression.clone())
@@ -102,7 +109,7 @@ impl MacroExpander {
                             let macro_def = self.macros.get(symbol).unwrap().clone();
                             let args = &expressions[1..];
                             let mut bindings = HashMap::new();
-                            
+
                             // Bind regular parameters
                             let num_regular_params = macro_def.params.len();
                             for (param, arg) in macro_def.params.iter().zip(args.iter()) {
@@ -110,21 +117,24 @@ impl MacroExpander {
                                     bindings.insert(symbol.clone(), arg.clone());
                                 }
                             }
-                            
+
                             // Bind variadic parameter if present
                             if let Some(variadic_param) = &macro_def.variadic_param {
-                                if let crate::ast::Pattern::Symbol(symbol) = &variadic_param.pattern {
+                                if let crate::ast::Pattern::Symbol(symbol) = &variadic_param.pattern
+                                {
                                     let remaining_args = &args[num_regular_params..];
                                     let args_list = Expression::List(remaining_args.to_vec());
                                     bindings.insert(symbol.clone(), args_list);
                                 }
                             }
-                            
+
                             let substituted_body =
                                 self.substitute(&macro_def.body[0], &bindings, quasiquote_level)?;
                             // If the body is a quasiquote, evaluate it
                             let evaluated_body = match substituted_body {
-                                Expression::Quasiquote(expr) => self.substitute(&expr, &bindings, 1)?,
+                                Expression::Quasiquote(expr) => {
+                                    self.substitute(&expr, &bindings, 1)?
+                                }
                                 _ => substituted_body,
                             };
                             // Replace any remaining simple unquote forms that refer to
@@ -231,7 +241,9 @@ impl MacroExpander {
                                 self.substitute(&macro_def.body[0], &bindings, quasiquote_level)?;
                             // If the body is a quasiquote, evaluate it
                             let evaluated_body = match substituted_body {
-                                Expression::Quasiquote(expr) => self.substitute(&expr, &bindings, 1)?,
+                                Expression::Quasiquote(expr) => {
+                                    self.substitute(&expr, &bindings, 1)?
+                                }
                                 _ => substituted_body,
                             };
                             let final_body = self.replace_unquotes(&evaluated_body, &bindings)?;
@@ -262,12 +274,15 @@ impl MacroExpander {
     ) -> Result<Expression, String> {
         match expression {
             Expression::Quasiquote(expr) => {
-                let substituted_expr =
-                    self.substitute(expr, bindings, quasiquote_level + 1)?;
+                let substituted_expr = self.substitute(expr, bindings, quasiquote_level + 1)?;
                 Ok(Expression::Quasiquote(Box::new(substituted_expr)))
             }
             Expression::Unquote(expr) => {
-                let new_level = if quasiquote_level == 0 { 0 } else { quasiquote_level - 1 };
+                let new_level = if quasiquote_level == 0 {
+                    0
+                } else {
+                    quasiquote_level - 1
+                };
                 let substituted_expr = self.substitute(expr, bindings, new_level)?;
                 if new_level == 0 {
                     Ok(substituted_expr)
@@ -276,7 +291,11 @@ impl MacroExpander {
                 }
             }
             Expression::UnquoteSplicing(expr) => {
-                let new_level = if quasiquote_level == 0 { 0 } else { quasiquote_level - 1 };
+                let new_level = if quasiquote_level == 0 {
+                    0
+                } else {
+                    quasiquote_level - 1
+                };
                 let substituted_expr = self.substitute(expr, bindings, new_level)?;
                 if new_level == 0 {
                     Ok(substituted_expr)
@@ -331,7 +350,9 @@ impl MacroExpander {
                             if let Expression::List(spliced_list) = substituted_expr {
                                 new_list.extend(spliced_list);
                             } else {
-                                return Err("Unquote-splicing can only be used on a list".to_string());
+                                return Err(
+                                    "Unquote-splicing can only be used on a list".to_string()
+                                );
                             }
                         } else {
                             new_list.push(self.substitute(expr, bindings, quasiquote_level)?);
@@ -352,15 +373,13 @@ impl MacroExpander {
             Expression::Map(map) => {
                 let mut substituted_map = HashMap::new();
                 for (key, value) in map {
-                    let substituted_value =
-                        self.substitute(value, bindings, quasiquote_level)?;
+                    let substituted_value = self.substitute(value, bindings, quasiquote_level)?;
                     substituted_map.insert(key.clone(), substituted_value);
                 }
                 Ok(Expression::Map(substituted_map))
             }
             Expression::If(if_expr) => {
-                let condition =
-                    self.substitute(&if_expr.condition, bindings, quasiquote_level)?;
+                let condition = self.substitute(&if_expr.condition, bindings, quasiquote_level)?;
                 let then_branch =
                     self.substitute(&if_expr.then_branch, bindings, quasiquote_level)?;
                 let else_branch = if_expr
@@ -392,7 +411,10 @@ impl MacroExpander {
                     .iter()
                     .map(|expr| self.substitute(expr, bindings, quasiquote_level))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Expression::Let(crate::ast::LetExpr { bindings: processed_bindings, body }))
+                Ok(Expression::Let(crate::ast::LetExpr {
+                    bindings: processed_bindings,
+                    body,
+                }))
             }
             Expression::Do(do_expr) => {
                 let expressions = do_expr
@@ -481,7 +503,10 @@ impl MacroExpander {
                 for a in arguments {
                     new_args.push(self.replace_unquotes(a, bindings)?);
                 }
-                Ok(Expression::FunctionCall { callee: new_callee, arguments: new_args })
+                Ok(Expression::FunctionCall {
+                    callee: new_callee,
+                    arguments: new_args,
+                })
             }
             Expression::Map(map) => {
                 let mut new_map = HashMap::new();
@@ -514,14 +539,19 @@ impl MacroExpander {
                 for b in &let_expr.body {
                     body.push(self.replace_unquotes(b, bindings)?);
                 }
-                Ok(Expression::Let(crate::ast::LetExpr { bindings: processed_bindings, body }))
+                Ok(Expression::Let(crate::ast::LetExpr {
+                    bindings: processed_bindings,
+                    body,
+                }))
             }
             Expression::Do(do_expr) => {
                 let mut new_exprs = Vec::new();
                 for e in &do_expr.expressions {
                     new_exprs.push(self.replace_unquotes(e, bindings)?);
                 }
-                Ok(Expression::Do(crate::ast::DoExpr { expressions: new_exprs }))
+                Ok(Expression::Do(crate::ast::DoExpr {
+                    expressions: new_exprs,
+                }))
             }
             Expression::Fn(fn_expr) => {
                 let mut body = Vec::new();

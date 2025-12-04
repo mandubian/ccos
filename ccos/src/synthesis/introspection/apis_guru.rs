@@ -85,10 +85,9 @@ impl ApisGuruClient {
             )));
         }
 
-        let apis: HashMap<String, ApisGuruEntry> = response
-            .json()
-            .await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse APIs.guru response: {}", e)))?;
+        let apis: HashMap<String, ApisGuruEntry> = response.json().await.map_err(|e| {
+            RuntimeError::Generic(format!("Failed to parse APIs.guru response: {}", e))
+        })?;
 
         Ok(apis)
     }
@@ -134,10 +133,10 @@ impl ApisGuruClient {
 
         // Sort by relevance (exact matches first)
         results.sort_by(|a, b| {
-            let a_exact = a.api_id.to_lowercase() == query_lower
-                || a.title.to_lowercase() == query_lower;
-            let b_exact = b.api_id.to_lowercase() == query_lower
-                || b.title.to_lowercase() == query_lower;
+            let a_exact =
+                a.api_id.to_lowercase() == query_lower || a.title.to_lowercase() == query_lower;
+            let b_exact =
+                b.api_id.to_lowercase() == query_lower || b.title.to_lowercase() == query_lower;
 
             match (a_exact, b_exact) {
                 (true, false) => std::cmp::Ordering::Less,
@@ -201,7 +200,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_apis() {
         let client = ApisGuruClient::new();
-        
+
         // This test requires network access
         if let Ok(results) = client.search("github").await {
             println!("Found {} APIs matching 'github'", results.len());

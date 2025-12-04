@@ -11,12 +11,12 @@
 //!   - MCP_AUTH_TOKEN: Optional auth token for MCP servers
 //!   - GITHUB_MCP_ENDPOINT: Optional GitHub MCP server endpoint
 
-use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::capability_marketplace::mcp_discovery::MCPServerConfig;
+use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::catalog::CatalogService;
 use ccos::mcp::core::MCPDiscoveryService;
-use ccos::mcp::types::DiscoveryOptions;
 use ccos::mcp::rate_limiter::{RateLimitConfig, RetryPolicy};
+use ccos::mcp::types::DiscoveryOptions;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -27,14 +27,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 1: Create the unified discovery service
     println!("\n📦 Step 1: Creating Unified MCP Discovery Service");
     println!("{}", "─".repeat(80));
-    
+
     let unified_service = Arc::new(MCPDiscoveryService::new());
     println!("✅ Unified service created");
 
     // Step 2: Test listing known servers
     println!("\n📋 Step 2: Listing Known Servers");
     println!("{}", "─".repeat(80));
-    
+
     let servers = unified_service.list_known_servers();
     println!("Found {} configured servers:", servers.len());
     for server in &servers {
@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  1. Add servers to config/overrides.json");
         println!("  2. Set environment variables like GITHUB_MCP_ENDPOINT");
         println!("  3. Use a test server endpoint below");
-        
+
         // Use a test server if available
         let test_config = MCPServerConfig {
             name: "test-server".to_string(),
@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             timeout_seconds: 30,
             protocol_version: "2024-11-05".to_string(),
         };
-        
+
         test_discovery_with_config(&unified_service, &test_config).await?;
         return Ok(());
     }
@@ -64,16 +64,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 3: Test discovery for each server
     println!("\n🔍 Step 3: Testing Tool Discovery");
     println!("{}", "─".repeat(80));
-    
+
     for server_config in servers {
-        println!("\n  Testing server: {} ({})", server_config.name, server_config.endpoint);
+        println!(
+            "\n  Testing server: {} ({})",
+            server_config.name, server_config.endpoint
+        );
         test_discovery_with_config(&unified_service, &server_config).await?;
     }
 
     // Step 4: Test with marketplace and catalog
     println!("\n🏪 Step 4: Testing with Marketplace and Catalog");
     println!("{}", "─".repeat(80));
-    
+
     test_with_marketplace_and_catalog().await?;
 
     // Step 5: Test caching behavior
@@ -84,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n{}", "═".repeat(80));
     println!("✅ All tests completed successfully!");
-    
+
     Ok(())
 }
 
@@ -111,12 +114,20 @@ async fn test_discovery_with_config(
     };
 
     println!("    🔍 Discovering tools...");
-    match unified_service.discover_tools(server_config, &options).await {
+    match unified_service
+        .discover_tools(server_config, &options)
+        .await
+    {
         Ok(tools) => {
             println!("    ✅ Discovered {} tools:", tools.len());
             for tool in &tools {
-                println!("      - {}: {}", tool.tool_name, 
-                    tool.description.as_ref().unwrap_or(&"No description".to_string()));
+                println!(
+                    "      - {}: {}",
+                    tool.tool_name,
+                    tool.description
+                        .as_ref()
+                        .unwrap_or(&"No description".to_string())
+                );
             }
 
             // Test tool-to-manifest conversion
@@ -135,7 +146,9 @@ async fn test_discovery_with_config(
         }
         Err(e) => {
             println!("    ❌ Discovery failed: {}", e);
-            println!("    💡 This is normal if the server is not accessible or requires authentication");
+            println!(
+                "    💡 This is normal if the server is not accessible or requires authentication"
+            );
         }
     }
 
@@ -146,7 +159,7 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
     // Create marketplace and catalog
     use ccos::capabilities::registry::CapabilityRegistry;
     use tokio::sync::RwLock;
-    
+
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = Arc::new(CapabilityMarketplace::new(registry));
     let catalog = Arc::new(CatalogService::new());
@@ -155,7 +168,7 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
     let unified_service = Arc::new(
         MCPDiscoveryService::new()
             .with_marketplace(Arc::clone(&marketplace))
-            .with_catalog(Arc::clone(&catalog))
+            .with_catalog(Arc::clone(&catalog)),
     );
 
     println!("  ✅ Created service with marketplace and catalog");
@@ -163,13 +176,16 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
     // Try to discover from first available server
     let servers = unified_service.list_known_servers();
     if let Some(server_config) = servers.first() {
-        println!("\n  🔍 Discovering and registering tools from: {}", server_config.name);
-        
+        println!(
+            "\n  🔍 Discovering and registering tools from: {}",
+            server_config.name
+        );
+
         let options = DiscoveryOptions {
             introspect_output_schemas: false,
             use_cache: true,
             register_in_marketplace: true, // Enable auto-registration
-            export_to_rtfs: true, // Enable auto-export to RTFS files
+            export_to_rtfs: true,          // Enable auto-export to RTFS files
             export_directory: Some("capabilities/discovered".to_string()),
             auth_headers: server_config.auth_token.as_ref().map(|token| {
                 let mut headers = std::collections::HashMap::new();
@@ -184,10 +200,13 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
         };
 
         // Use discover_and_export_tools which handles registration and export automatically
-        match unified_service.discover_and_export_tools(server_config, &options).await {
+        match unified_service
+            .discover_and_export_tools(server_config, &options)
+            .await
+        {
             Ok(manifests) => {
                 println!("  ✅ Discovered {} tools", manifests.len());
-                
+
                 // Tools are already registered and exported by discover_and_export_tools
                 for manifest in &manifests {
                     println!("    ✅ Registered: {}", manifest.id);
@@ -195,16 +214,18 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
 
                 // Verify in marketplace
                 let all_capabilities = marketplace.list_capabilities().await;
-                println!("\n  📊 Marketplace now has {} total capabilities", all_capabilities.len());
-                
-                // Verify in catalog
-                let catalog_results = catalog.search_keyword(
-                    &server_config.name,
-                    None,
-                    10,
+                println!(
+                    "\n  📊 Marketplace now has {} total capabilities",
+                    all_capabilities.len()
                 );
-                println!("  📚 Catalog search for '{}' returned {} results", 
-                    server_config.name, catalog_results.len());
+
+                // Verify in catalog
+                let catalog_results = catalog.search_keyword(&server_config.name, None, 10);
+                println!(
+                    "  📚 Catalog search for '{}' returned {} results",
+                    server_config.name,
+                    catalog_results.len()
+                );
             }
             Err(e) => {
                 println!("  ⚠️  Discovery failed: {}", e);
@@ -221,10 +242,10 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
 async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n💾 Step 5: Testing Caching Behavior");
     println!("{}", "─".repeat(80));
-    
+
     let unified_service = Arc::new(MCPDiscoveryService::new());
     let servers = unified_service.list_known_servers();
-    
+
     if let Some(server_config) = servers.first() {
         let options = DiscoveryOptions {
             introspect_output_schemas: false,
@@ -247,27 +268,41 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
         // First discovery (should hit the server)
         println!("  ⏱️  First discovery (should hit server)...");
         let start1 = std::time::Instant::now();
-        match unified_service.discover_tools(server_config, &options).await {
+        match unified_service
+            .discover_tools(server_config, &options)
+            .await
+        {
             Ok(tools1) => {
                 let duration1 = start1.elapsed();
-                println!("    ✅ Discovered {} tools in {:?}", tools1.len(), duration1);
-                
+                println!(
+                    "    ✅ Discovered {} tools in {:?}",
+                    tools1.len(),
+                    duration1
+                );
+
                 // Second discovery (should use cache)
                 println!("  ⏱️  Second discovery (should use cache)...");
                 let start2 = std::time::Instant::now();
-                match unified_service.discover_tools(server_config, &options).await {
+                match unified_service
+                    .discover_tools(server_config, &options)
+                    .await
+                {
                     Ok(tools2) => {
                         let duration2 = start2.elapsed();
                         println!("    ✅ Got {} tools in {:?}", tools2.len(), duration2);
-                        
+
                         // Cached should be much faster (at least 10x)
                         if duration2 < duration1 / 5 {
-                            println!("    ✅ Cache speedup: {:.1}x faster", 
-                                duration1.as_secs_f64() / duration2.as_secs_f64());
+                            println!(
+                                "    ✅ Cache speedup: {:.1}x faster",
+                                duration1.as_secs_f64() / duration2.as_secs_f64()
+                            );
                         } else {
-                            println!("    ⚠️  Cache may not have been used (or server was very fast)");
+                            println!(
+                                "    ⚠️  Cache may not have been used (or server was very fast)"
+                            );
                         }
-                        
+
                         // Verify same results
                         assert_eq!(tools1.len(), tools2.len(), "Cached results should match");
                     }
@@ -276,7 +311,7 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => println!("    ❌ First discovery failed: {}", e),
         }
-        
+
         // Test with cache disabled
         println!("  ⏱️  Discovery with cache disabled...");
         let options_no_cache = DiscoveryOptions {
@@ -284,10 +319,17 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
             ..options.clone()
         };
         let start3 = std::time::Instant::now();
-        match unified_service.discover_tools(server_config, &options_no_cache).await {
+        match unified_service
+            .discover_tools(server_config, &options_no_cache)
+            .await
+        {
             Ok(tools3) => {
                 let duration3 = start3.elapsed();
-                println!("    ✅ Discovered {} tools in {:?} (no cache)", tools3.len(), duration3);
+                println!(
+                    "    ✅ Discovered {} tools in {:?} (no cache)",
+                    tools3.len(),
+                    duration3
+                );
             }
             Err(e) => println!("    ❌ Discovery without cache failed: {}", e),
         }
@@ -302,9 +344,9 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
 async fn test_error_handling() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🔧 Step 6: Testing Error Handling");
     println!("{}", "─".repeat(80));
-    
+
     let unified_service = Arc::new(MCPDiscoveryService::new());
-    
+
     // Test with invalid server
     let invalid_config = MCPServerConfig {
         name: "invalid-server".to_string(),
@@ -313,7 +355,7 @@ async fn test_error_handling() -> Result<(), Box<dyn std::error::Error>> {
         timeout_seconds: 5, // Short timeout for faster test
         protocol_version: "2024-11-05".to_string(),
     };
-    
+
     let options = DiscoveryOptions {
         introspect_output_schemas: false,
         use_cache: false, // Don't cache invalid results
@@ -328,7 +370,10 @@ async fn test_error_handling() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("  🔍 Testing discovery with invalid server...");
-    match unified_service.discover_tools(&invalid_config, &options).await {
+    match unified_service
+        .discover_tools(&invalid_config, &options)
+        .await
+    {
         Ok(_) => {
             println!("    ⚠️  Unexpectedly succeeded (server may be accessible)");
         }
@@ -344,16 +389,25 @@ async fn test_error_handling() -> Result<(), Box<dyn std::error::Error>> {
         let options_bad_auth = DiscoveryOptions {
             auth_headers: Some({
                 let mut headers = std::collections::HashMap::new();
-                headers.insert("Authorization".to_string(), "Bearer invalid_token_12345".to_string());
+                headers.insert(
+                    "Authorization".to_string(),
+                    "Bearer invalid_token_12345".to_string(),
+                );
                 headers
             }),
             ..options.clone()
         };
-        
-        match unified_service.discover_tools(server_config, &options_bad_auth).await {
+
+        match unified_service
+            .discover_tools(server_config, &options_bad_auth)
+            .await
+        {
             Ok(tools) => {
                 // Some servers may allow unauthenticated access
-                println!("    ⚠️  Server allowed access (may not require auth): {} tools", tools.len());
+                println!(
+                    "    ⚠️  Server allowed access (may not require auth): {} tools",
+                    tools.len()
+                );
             }
             Err(e) => {
                 println!("    ✅ Correctly rejected invalid auth: {}", e);

@@ -88,7 +88,7 @@ impl RtfsRepl {
         let security_context = crate::runtime::security::RuntimeContext::pure();
         let host = create_pure_host();
 
-                Self {
+        Self {
             runtime: Runtime::new(Box::new(TreeWalkingStrategy::new(Evaluator::new(
                 Arc::clone(&module_registry),
                 security_context,

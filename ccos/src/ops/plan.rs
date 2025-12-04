@@ -7,16 +7,25 @@
 //! - `repair_plan`: Attempts to fix a failing plan using LLM
 
 use crate::arbiter::llm_provider::{LlmProviderConfig, LlmProviderFactory, LlmProviderType};
+use crate::capabilities::{MCPSessionHandler, SessionPoolManager};
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::capabilities::registry::CapabilityRegistry;
+use crate::examples_common::builder::load_agent_config;
+use crate::mcp::core::MCPDiscoveryService;
+use crate::planner::modular_planner::decomposition::llm_adapter::CcosLlmAdapter;
+use crate::planner::modular_planner::decomposition::{HybridDecomposition, PatternDecomposition};
+use crate::planner::modular_planner::resolution::mcp::RuntimeMcpDiscovery;
+use crate::planner::modular_planner::resolution::{
+    CatalogResolution, CompositeResolution, McpResolution,
+};
+use crate::planner::modular_planner::{DecompositionStrategy, ModularPlanner, PlannerConfig};
+use crate::planner::CcosCatalogAdapter;
 use crate::types::Plan;
 use crate::CCOS;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::security::RuntimeContext;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use tokio::sync::RwLock;
+use std::sync::Arc;
 
 /// Options for plan creation
 #[derive(Debug, Clone, Default)]
@@ -65,71 +74,169 @@ pub async fn create_plan_with_options(
     goal: String,
     options: CreatePlanOptions,
 ) -> RuntimeResult<CreatePlanResult> {
-    // 1. Configure LLM Provider from environment
-    let config = get_llm_config_from_env()?;
-    
-    // 2. Create marketplace with native capabilities
-    let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
-    let causal_chain = Arc::new(Mutex::new(crate::causal_chain::CausalChain::new()?));
-    let marketplace = Arc::new(CapabilityMarketplace::with_causal_chain_and_debug_callback(
-        registry,
-        Some(causal_chain),
-        None,
-    ));
-    
-    // Register native capabilities
-    crate::ops::native::register_native_capabilities(&marketplace).await?;
-    
-    // 3. Load approved MCP server capabilities
-    load_approved_capabilities(&marketplace).await?;
-    
-    // 4. Get available capabilities for the prompt
-    let capabilities = marketplace.list_capabilities().await;
-    let capability_descriptions = format_capabilities_for_prompt(&capabilities);
-    
-    // 5. Generate plan using capability-aware prompt
     println!("🧠 Generating plan for goal: \"{}\"...", goal);
-    let rtfs_code = generate_capability_aware_plan(&goal, &capability_descriptions, &config).await?;
-    
-    // 6. Print the generated plan
+
+    let llm_config = get_llm_config_from_env()?;
+
+    // Load agent config from config file (if available)
+    let agent_config = load_agent_config("config/agent_config.toml").ok();
+
+    // Initialize full CCOS runtime so we have catalog, marketplace and governance wired.
+    // Pass agent config if available so LLM provider is properly configured.
+    let ccos = Arc::new(
+        CCOS::new_with_agent_config_and_configs_and_debug_callback(
+            Default::default(),
+            None,
+            agent_config,
+            None,
+        )
+        .await?,
+    );
+    let marketplace = ccos.get_capability_marketplace();
+
+    // Ensure native CLI capabilities plus approved MCP capabilities are registered.
+    crate::ops::native::register_native_capabilities(&marketplace).await?;
+    load_approved_capabilities(&marketplace).await?;
+
+    // Keep catalog in sync so planner queries see the latest capabilities.
+    ccos.get_catalog().ingest_marketplace(&marketplace).await;
+
+    configure_mcp_session_pool(&marketplace).await?;
+
+    // Build modular planner with hybrid decomposition + catalog/MCP resolution.
+    let mut planner = build_cli_modular_planner(ccos.clone(), &llm_config, options.verbose).await?;
+
+    let plan_result = planner
+        .plan(&goal)
+        .await
+        .map_err(|e| RuntimeError::Generic(format!("Planner failed: {}", e)))?;
+
+    let rtfs_code = plan_result.rtfs_plan.clone();
     println!("{}", rtfs_code);
-    
-    // 7. Validate capabilities (unless skipped)
-    let (validation_issues, all_resolved, unresolved) = if !options.skip_validation {
+
+    // Validate capability references unless explicitly skipped.
+    let (validation_issues, all_resolved, unresolved_capabilities) = if !options.skip_validation {
         validate_capabilities_in_code(&rtfs_code, &marketplace).await
     } else {
         (vec![], true, vec![])
     };
-    
-    // 7. Display validation issues
+
     if !validation_issues.is_empty() {
-        println!("\n⚠️  {} capability(ies) not found:", validation_issues.len());
+        println!(
+            "\n⚠️  {} capability(ies) not found:",
+            validation_issues.len()
+        );
         for issue in &validation_issues {
             println!("   • {}", issue.replace("Capability not found: ", ""));
         }
         println!();
     }
-    
-    // 8. Save to file if requested
+
     if let Some(path) = &options.save_to {
         std::fs::write(path, &rtfs_code).map_err(|e| {
             RuntimeError::Generic(format!("Failed to save plan to {}: {}", path, e))
         })?;
         println!("💾 Saved plan to: {}", path);
     }
-    
-    // 9. Display result for dry-run
+
     if options.dry_run {
         println!("\n📋 Generated Plan (dry-run):\n");
         println!("{}", rtfs_code);
     }
-    
+
+    if options.verbose {
+        println!(
+            "\n🔍 Planner created {} intents and resolved {} capabilities.",
+            plan_result.intent_ids.len(),
+            plan_result.resolutions.len()
+        );
+    }
+
     Ok(CreatePlanResult {
         rtfs_code,
         validation_issues,
         all_resolved,
-        unresolved_capabilities: unresolved,
+        unresolved_capabilities,
     })
+}
+
+async fn configure_mcp_session_pool(marketplace: &Arc<CapabilityMarketplace>) -> RuntimeResult<()> {
+    let mut session_pool = SessionPoolManager::new();
+    session_pool.register_handler("mcp", Arc::new(MCPSessionHandler::new()));
+    let pool = Arc::new(session_pool);
+    marketplace.set_session_pool(pool).await;
+    Ok(())
+}
+
+async fn build_cli_modular_planner(
+    ccos: Arc<CCOS>,
+    llm_config: &LlmProviderConfig,
+    verbose: bool,
+) -> RuntimeResult<ModularPlanner> {
+    let intent_graph = ccos.get_intent_graph();
+
+    // Resolution strategies (Catalog + MCP).
+    let catalog_adapter = Arc::new(CcosCatalogAdapter::new(ccos.get_catalog()));
+    let mut composite_resolution = CompositeResolution::new();
+    composite_resolution.add_strategy(Box::new(CatalogResolution::new(catalog_adapter)));
+
+    let discovery_service = Arc::new(
+        MCPDiscoveryService::with_auth_headers(mcp_auth_headers())
+            .with_marketplace(ccos.get_capability_marketplace())
+            .with_catalog(ccos.get_catalog()),
+    );
+
+    let mcp_discovery = Arc::new(
+        RuntimeMcpDiscovery::with_discovery_service(
+            ccos.get_capability_marketplace(),
+            discovery_service,
+        )
+        .with_catalog(ccos.get_catalog()),
+    );
+    composite_resolution.add_strategy(Box::new(McpResolution::new(mcp_discovery)));
+
+    // Decomposition strategy (Hybrid with LLM fallback, pattern if LLM missing).
+    let decomposition: Box<dyn DecompositionStrategy> = match LlmProviderFactory::create_provider(
+        llm_config.clone(),
+    )
+    .await
+    {
+        Ok(provider) => {
+            let adapter = Arc::new(CcosLlmAdapter::new(provider));
+            Box::new(HybridDecomposition::new().with_llm(adapter))
+        }
+        Err(e) => {
+            println!(
+                    "⚠️  Failed to initialize planner LLM provider: {}. Falling back to pattern-only decomposition.",
+                    e
+                );
+            Box::new(PatternDecomposition::new())
+        }
+    };
+
+    let config = PlannerConfig {
+        intent_namespace: "cli".to_string(),
+        verbose_llm: verbose,
+        show_prompt: verbose,
+        eager_discovery: true,
+        ..PlannerConfig::default()
+    };
+
+    Ok(
+        ModularPlanner::new(decomposition, Box::new(composite_resolution), intent_graph)
+            .with_config(config),
+    )
+}
+
+fn mcp_auth_headers() -> Option<HashMap<String, String>> {
+    if let Ok(token) = std::env::var("MCP_AUTH_TOKEN") {
+        if !token.is_empty() {
+            let mut headers = HashMap::new();
+            headers.insert("Authorization".to_string(), format!("Bearer {}", token));
+            return Some(headers);
+        }
+    }
+    None
 }
 
 /// Execute a plan (RTFS string or file path)
@@ -145,14 +252,14 @@ pub async fn execute_plan_with_options(
 ) -> RuntimeResult<String> {
     // 1. Resolve plan content
     let mut content = resolve_plan_content(&plan_input)?;
-    
+
     // 2. Initialize CCOS runtime
     println!("🚀 Initializing CCOS runtime...");
     let ccos = CCOS::new().await?;
-    
+
     // 3. Create execution context
     let context = RuntimeContext::full();
-    
+
     // Register native capabilities (ccos.cli.*) so they can be used in the plan
     let marketplace = ccos.get_capability_marketplace();
     crate::ops::native::register_native_capabilities(&marketplace).await?;
@@ -164,19 +271,19 @@ pub async fn execute_plan_with_options(
 
     while attempts < max_attempts {
         attempts += 1;
-        
+
         // Create Plan object
         let plan = Plan::new_rtfs(content.clone(), vec![]);
-        
+
         // Execute
         if attempts == 1 {
             println!("▶️  Executing plan...");
         } else {
             println!("🔄 Retry attempt {} of {}...", attempts, max_attempts);
         }
-        
+
         let result = ccos.validate_and_execute_plan(plan, &context).await;
-        
+
         match result {
             Ok(exec_result) if exec_result.success => {
                 return Ok(format!(
@@ -190,11 +297,11 @@ pub async fn execute_plan_with_options(
                     .get("error")
                     .map(|v| format!("{}", v))
                     .unwrap_or_else(|| "Unknown error".to_string());
-                
+
                 if attempts < max_attempts {
                     println!("❌ Execution failed: {}", error);
                     println!("🔧 Attempting to repair plan...");
-                    
+
                     match repair_plan(&content, &error).await {
                         Ok(repaired) => {
                             content = repaired;
@@ -211,11 +318,11 @@ pub async fn execute_plan_with_options(
             }
             Err(e) => {
                 let error = e.to_string();
-                
+
                 if attempts < max_attempts {
                     println!("❌ Execution error: {}", error);
                     println!("🔧 Attempting to repair plan...");
-                    
+
                     match repair_plan(&content, &error).await {
                         Ok(repaired) => {
                             content = repaired;
@@ -232,7 +339,7 @@ pub async fn execute_plan_with_options(
             }
         }
     }
-    
+
     Err(RuntimeError::Generic(format!(
         "❌ Plan execution failed after {} attempts: {}",
         attempts,
@@ -244,7 +351,7 @@ pub async fn execute_plan_with_options(
 /// This is used by native capabilities which need Send futures.
 pub async fn validate_plan(plan_input: String) -> RuntimeResult<bool> {
     let content = resolve_plan_content(&plan_input)?;
-    
+
     // Syntax validation only
     match rtfs::parser::parse(&content) {
         Ok(_) => Ok(true),
@@ -259,7 +366,7 @@ pub async fn validate_plan(plan_input: String) -> RuntimeResult<bool> {
 /// This creates CCOS and checks capabilities, so it's not Send-safe.
 pub async fn validate_plan_full(plan_input: String) -> RuntimeResult<bool> {
     let content = resolve_plan_content(&plan_input)?;
-    
+
     // 1. Syntax validation
     println!("🔍 Validating syntax...");
     if let Err(e) = rtfs::parser::parse(&content) {
@@ -267,21 +374,21 @@ pub async fn validate_plan_full(plan_input: String) -> RuntimeResult<bool> {
         return Ok(false);
     }
     println!("   ✅ Syntax valid");
-    
+
     // 2. Capability validation
     println!("🔍 Validating capabilities...");
     let capabilities = extract_capabilities_from_rtfs(&content);
-    
+
     if capabilities.is_empty() {
         println!("   ⚠️  No capabilities found in plan");
         return Ok(true);
     }
-    
+
     // Initialize CCOS to check capabilities
     let ccos = CCOS::new().await?;
     let marketplace = ccos.get_capability_marketplace();
     crate::ops::native::register_native_capabilities(&marketplace).await?;
-    
+
     let mut all_valid = true;
     for cap_id in &capabilities {
         let exists = marketplace.has_capability(cap_id).await;
@@ -292,28 +399,28 @@ pub async fn validate_plan_full(plan_input: String) -> RuntimeResult<bool> {
             all_valid = false;
         }
     }
-    
+
     if all_valid {
         println!("\n✅ Plan is valid and all capabilities are available.");
     } else {
         println!("\n⚠️  Plan has syntax errors or missing capabilities.");
     }
-    
+
     Ok(all_valid)
 }
 
 /// Repair a failing plan using LLM
 pub async fn repair_plan(original_plan: &str, error: &str) -> RuntimeResult<String> {
     let config = get_llm_config_from_env()?;
-    
+
     if matches!(config.provider_type, LlmProviderType::Stub) {
         return Err(RuntimeError::Generic(
             "Cannot repair plan without LLM API key".to_string(),
         ));
     }
-    
+
     let provider = LlmProviderFactory::create_provider(config).await?;
-    
+
     let prompt = format!(
         r#"The following RTFS plan failed with this error:
 
@@ -334,14 +441,14 @@ Rules:
 "#,
         error, original_plan
     );
-    
+
     let response = provider.generate_text(&prompt).await?;
-    
+
     // Extract RTFS from response
     let repaired = extract_rtfs_from_response(&response).ok_or_else(|| {
         RuntimeError::Generic("Failed to extract repaired RTFS from LLM response".to_string())
     })?;
-    
+
     // Validate syntax
     if let Err(e) = rtfs::parser::parse(&repaired) {
         return Err(RuntimeError::Generic(format!(
@@ -349,7 +456,7 @@ Rules:
             e
         )));
     }
-    
+
     Ok(repaired)
 }
 
@@ -373,39 +480,41 @@ fn resolve_plan_content(input: &str) -> RuntimeResult<String> {
 
 fn get_llm_config_from_env() -> RuntimeResult<LlmProviderConfig> {
     use crate::arbiter::arbiter_config::RetryConfig;
-    
+
     // Check for API keys
-    let (provider_type, api_key, model, base_url) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-        (
-            LlmProviderType::OpenAI, 
-            Some(key), 
-            std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "anthropic/claude-3.5-sonnet".to_string()),
-            std::env::var("CCOS_LLM_BASE_URL").ok().or_else(|| Some("https://openrouter.ai/api/v1".to_string()))
-        )
-    } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        (
-            LlmProviderType::OpenAI, 
-            Some(key), 
-            std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string()),
-            std::env::var("CCOS_LLM_BASE_URL").ok()
-        )
-    } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        (
-            LlmProviderType::Anthropic, 
-            Some(key), 
-            std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-3-5-sonnet-20240620".to_string()),
-            None
-        )
-    } else {
-        println!("⚠️  No LLM API key found (OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY).");
-        println!("   Using Stub provider (generates fake plans).");
-        (
-            LlmProviderType::Stub,
-            None,
-            "stub-model".to_string(),
-            None
-        )
-    };
+    let (provider_type, api_key, model, base_url) =
+        if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+            (
+                LlmProviderType::OpenAI,
+                Some(key),
+                std::env::var("OPENROUTER_MODEL")
+                    .unwrap_or_else(|_| "anthropic/claude-3.5-sonnet".to_string()),
+                std::env::var("CCOS_LLM_BASE_URL")
+                    .ok()
+                    .or_else(|| Some("https://openrouter.ai/api/v1".to_string())),
+            )
+        } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            (
+                LlmProviderType::OpenAI,
+                Some(key),
+                std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string()),
+                std::env::var("CCOS_LLM_BASE_URL").ok(),
+            )
+        } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            (
+                LlmProviderType::Anthropic,
+                Some(key),
+                std::env::var("ANTHROPIC_MODEL")
+                    .unwrap_or_else(|_| "claude-3-5-sonnet-20240620".to_string()),
+                None,
+            )
+        } else {
+            println!(
+            "⚠️  No LLM API key found (OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY)."
+        );
+            println!("   Using Stub provider (generates fake plans).");
+            (LlmProviderType::Stub, None, "stub-model".to_string(), None)
+        };
 
     Ok(LlmProviderConfig {
         provider_type,
@@ -425,11 +534,11 @@ async fn validate_capabilities_in_code(
     marketplace: &Arc<CapabilityMarketplace>,
 ) -> (Vec<String>, bool, Vec<String>) {
     let capabilities = extract_capabilities_from_rtfs(rtfs_code);
-    
+
     let mut issues = Vec::new();
     let mut unresolved = Vec::new();
     let mut all_resolved = true;
-    
+
     for cap_id in &capabilities {
         let exists = marketplace.has_capability(cap_id).await;
         if !exists {
@@ -438,14 +547,14 @@ async fn validate_capabilities_in_code(
             all_resolved = false;
         }
     }
-    
+
     (issues, all_resolved, unresolved)
 }
 
 /// Extract capability IDs from RTFS code
 fn extract_capabilities_from_rtfs(rtfs_code: &str) -> HashSet<String> {
     let mut capabilities = HashSet::new();
-    
+
     // Simple extraction for (call :capability.id ...) patterns
     for line in rtfs_code.lines() {
         let trimmed = line.trim();
@@ -461,7 +570,7 @@ fn extract_capabilities_from_rtfs(rtfs_code: &str) -> HashSet<String> {
             }
         }
     }
-    
+
     capabilities
 }
 
@@ -471,7 +580,7 @@ fn extract_rtfs_from_response(response: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    
+
     // Try to find fenced code blocks
     let mut cursor = trimmed;
     while let Some(start) = cursor.find("```") {
@@ -488,7 +597,7 @@ fn extract_rtfs_from_response(response: &str) -> Option<String> {
                 block_start = rest;
             }
         }
-        
+
         if let Some(end_idx) = block_start.find("```") {
             let code = block_start[..end_idx].trim();
             if !code.is_empty() && code.starts_with('(') {
@@ -499,94 +608,29 @@ fn extract_rtfs_from_response(response: &str) -> Option<String> {
             break;
         }
     }
-    
+
     // Fallback: use the response directly if it looks like RTFS
     let stripped = trimmed.trim_matches('`').trim();
     if stripped.starts_with('(') {
         return Some(stripped.to_string());
     }
-    
+
     None
 }
 
-/// Format capabilities for inclusion in LLM prompt
-/// Includes capability ID, description, and input schema for better plan generation
-fn format_capabilities_for_prompt(capabilities: &[crate::capability_marketplace::types::CapabilityManifest]) -> String {
-    if capabilities.is_empty() {
-        return "No capabilities are currently registered. You may need to use basic RTFS operations only.".to_string();
-    }
-    
-    let mut output = String::new();
-    output.push_str("Available capabilities:\n\n");
-    
-    for cap in capabilities {
-        output.push_str(&format!("## {}\n", cap.id));
-        output.push_str(&format!("Description: {}\n", cap.description));
-        
-        // Include input schema if available (formatted as RTFS type for LLM comprehension)
-        if let Some(schema) = &cap.input_schema {
-            output.push_str(&format!("Input schema: {}\n", schema));
-        }
-        
-        output.push('\n');
-    }
-    
-    output
-}
-
-/// Generate a plan using capability-aware LLM prompt
-async fn generate_capability_aware_plan(
-    goal: &str,
-    capability_descriptions: &str,
-    config: &LlmProviderConfig,
-) -> RuntimeResult<String> {
-    let provider = LlmProviderFactory::create_provider(config.clone()).await?;
-    
-    let system_prompt = format!(r#"You are an RTFS plan generator. Generate executable RTFS code for the user's goal.
-
-RTFS Syntax Rules:
-- Use prefix notation with parentheses: (function arg1 arg2)
-- Maps use curly braces with keyword keys: {{:key1 value1 :key2 value2}}
-- NO commas in maps or lists
-- Strings use double quotes: "string"
-- Keywords start with colon: :keyword
-- Call capabilities using: (call :capability.id {{:param value}})
-
-{}
-
-IMPORTANT:
-- ONLY use capabilities from the list above
-- If a capability doesn't exist, explain what's missing in a comment
-- For GitHub operations, use MCP server capabilities if available (e.g., github.list_issues)
-- Return ONLY the RTFS code, no explanations
-
-Output format: A single RTFS expression starting with (do ...) or (plan ...)"#, capability_descriptions);
-
-    let user_prompt = format!("Generate an RTFS plan for: {}", goal);
-    
-    let response = provider.generate_text(&format!("{}\n\n{}", system_prompt, user_prompt)).await?;
-    
-    // Extract RTFS from response
-    extract_rtfs_from_response(&response).ok_or_else(|| {
-        RuntimeError::Generic(format!("Failed to extract RTFS from LLM response: {}", response))
-    })
-}
-
 /// Load capabilities from approved MCP servers
-/// 
+///
 /// Uses the marketplace's built-in import_capabilities_from_rtfs_dir_recursive
 /// to load capabilities from the approved servers directory.
-async fn load_approved_capabilities(
-    marketplace: &Arc<CapabilityMarketplace>,
-) -> RuntimeResult<()> {
+async fn load_approved_capabilities(marketplace: &Arc<CapabilityMarketplace>) -> RuntimeResult<()> {
     // Try multiple potential locations for the approved servers directory
     let potential_paths = [
         std::path::PathBuf::from("capabilities/servers/approved"),
         std::path::PathBuf::from("../capabilities/servers/approved"),
     ];
-    
+
     let approved_dir = potential_paths.iter().find(|p| p.exists());
-    
+
     let approved_dir = match approved_dir {
         Some(path) => path,
         None => {
@@ -594,14 +638,15 @@ async fn load_approved_capabilities(
             return Ok(());
         }
     };
-    
+
     // Use the marketplace's built-in method to recursively import RTFS capabilities
-    let loaded = marketplace.import_capabilities_from_rtfs_dir_recursive(approved_dir).await?;
-    
+    let loaded = marketplace
+        .import_capabilities_from_rtfs_dir_recursive(approved_dir)
+        .await?;
+
     if loaded > 0 {
         println!("📦 Loaded {} capabilities from approved servers", loaded);
     }
-    
+
     Ok(())
 }
-

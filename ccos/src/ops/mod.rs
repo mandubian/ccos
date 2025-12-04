@@ -7,14 +7,13 @@
 pub mod approval;
 pub mod config;
 pub mod discover;
-    pub mod governance;
-    pub mod native;
-    pub mod plan;
+pub mod governance;
+pub mod native;
+pub mod plan;
 pub mod server;
 
 #[cfg(test)]
 mod tests;
-
 
 /// Server information for ops functions
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

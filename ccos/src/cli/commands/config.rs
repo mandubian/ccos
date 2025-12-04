@@ -34,12 +34,12 @@ pub async fn execute(ctx: &CliContext, command: ConfigCommand) -> RuntimeResult<
 
     match &command {
         ConfigCommand::Show { section } => {
-            command.show_config(ctx, section.as_deref(), &formatter).await
+            command
+                .show_config(ctx, section.as_deref(), &formatter)
+                .await
         }
         ConfigCommand::Validate => command.validate_config(ctx, &formatter),
-        ConfigCommand::Init { output, force } => {
-            command.init_config(output, *force, &formatter)
-        }
+        ConfigCommand::Init { output, force } => command.init_config(output, *force, &formatter),
     }
 }
 
@@ -75,10 +75,7 @@ impl ConfigCommand {
     }
 
     fn validate_config(&self, ctx: &CliContext, formatter: &OutputFormatter) -> RuntimeResult<()> {
-        ctx.status(&format!(
-            "Validating configuration: {:?}",
-            ctx.config_path
-        ));
+        ctx.status(&format!("Validating configuration: {:?}", ctx.config_path));
 
         let warnings = ctx.validate_config()?;
 

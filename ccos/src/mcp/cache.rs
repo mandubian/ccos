@@ -5,8 +5,8 @@
 //!
 //! Supports both in-memory and file-based caching with TTL support.
 
-use crate::mcp::types::{MCPServerConfig, DiscoveredMCPTool};
 use crate::mcp::registry::McpServer;
+use crate::mcp::types::{DiscoveredMCPTool, MCPServerConfig};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -50,7 +50,7 @@ impl MCPCache {
             memory_cache: Mutex::new(HashMap::new()),
             registry_cache: Mutex::new(HashMap::new()),
             cache_dir: None,
-            ttl_seconds: 86400, // 24 hours
+            ttl_seconds: 86400,         // 24 hours
             registry_ttl_seconds: 3600, // 1 hour for registry
         }
     }
@@ -115,7 +115,10 @@ impl MCPCache {
         cache_dir: &Path,
         server_config: &MCPServerConfig,
     ) -> Option<Vec<DiscoveredMCPTool>> {
-        let cache_file = cache_dir.join(format!("{}_tools.json", sanitize_filename(&server_config.name)));
+        let cache_file = cache_dir.join(format!(
+            "{}_tools.json",
+            sanitize_filename(&server_config.name)
+        ));
 
         if !cache_file.exists() {
             return None;
@@ -153,7 +156,10 @@ impl MCPCache {
         server_config: &MCPServerConfig,
         tools: &[DiscoveredMCPTool],
     ) {
-        let cache_file = cache_dir.join(format!("{}_tools.json", sanitize_filename(&server_config.name)));
+        let cache_file = cache_dir.join(format!(
+            "{}_tools.json",
+            sanitize_filename(&server_config.name)
+        ));
 
         let entry = CacheEntry {
             tools: tools.to_vec(),
@@ -287,12 +293,7 @@ impl MCPCache {
     }
 
     /// Save registry search results to file cache
-    fn save_registry_to_file_cache(
-        &self,
-        cache_dir: &Path,
-        query: &str,
-        servers: &[McpServer],
-    ) {
+    fn save_registry_to_file_cache(&self, cache_dir: &Path, query: &str, servers: &[McpServer]) {
         let cache_file = cache_dir.join(format!("registry_{}.json", sanitize_filename(query)));
 
         let entry = RegistrySearchCacheEntry {
@@ -319,10 +320,12 @@ impl MCPCache {
 /// Sanitize filename to be filesystem-safe
 fn sanitize_filename(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' {
-            c
-        } else {
-            '_'
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
         })
         .collect()
 }
@@ -332,4 +335,3 @@ impl Default for MCPCache {
         Self::new()
     }
 }
-

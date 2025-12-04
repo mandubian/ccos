@@ -296,7 +296,9 @@ impl CapabilityManifest {
     /// e.g., "github" matches "github.issues" and "github.repos"
     pub fn matches_domain(&self, domain: &str) -> bool {
         self.domains.iter().any(|d| {
-            d == domain || d.starts_with(&format!("{}.", domain)) || domain.starts_with(&format!("{}.", d))
+            d == domain
+                || d.starts_with(&format!("{}.", domain))
+                || domain.starts_with(&format!("{}.", d))
         })
     }
 
@@ -316,12 +318,12 @@ impl CapabilityManifest {
     }
 
     /// Infer domains from source (server/registry name) and capability name
-    /// 
+    ///
     /// For example:
     /// - source="github", name="list_issues" → ["github", "github.issues"]
     /// - source="modelcontextprotocol/github", name="get_pull_request" → ["github", "github.pull_requests"]
     /// - source="slack", name="send_message" → ["slack", "slack.messages"]
-    /// 
+    ///
     /// Returns the inferred domains that can be added to the capability
     pub fn infer_domains(source: &str, capability_name: &str) -> Vec<String> {
         let mut domains = Vec::new();
@@ -385,10 +387,23 @@ impl CapabilityManifest {
             s if s.contains("aws") || s.contains("amazon") => "cloud.aws".to_string(),
             s if s.contains("gcp") || s.contains("google") => "cloud.gcp".to_string(),
             s if s.contains("azure") => "cloud.azure".to_string(),
-            s if s.contains("postgres") || s.contains("mysql") || s.contains("sqlite") || s.contains("database") || s.contains("db") => "database".to_string(),
-            s if s.contains("file") || s.contains("filesystem") || s.contains("fs") => "filesystem".to_string(),
-            s if s.contains("http") || s.contains("fetch") || s.contains("web") => "web".to_string(),
-            s if s.contains("email") || s.contains("mail") || s.contains("smtp") => "email".to_string(),
+            s if s.contains("postgres")
+                || s.contains("mysql")
+                || s.contains("sqlite")
+                || s.contains("database")
+                || s.contains("db") =>
+            {
+                "database".to_string()
+            }
+            s if s.contains("file") || s.contains("filesystem") || s.contains("fs") => {
+                "filesystem".to_string()
+            }
+            s if s.contains("http") || s.contains("fetch") || s.contains("web") => {
+                "web".to_string()
+            }
+            s if s.contains("email") || s.contains("mail") || s.contains("smtp") => {
+                "email".to_string()
+            }
             s if s.contains("calendar") || s.contains("gcal") => "calendar".to_string(),
             _ => clean_name.replace(['-', '_'], "."),
         }
@@ -460,26 +475,26 @@ impl CapabilityManifest {
         let mut categories = Vec::new();
 
         // Determine CRUD category
-        if name_lower.starts_with("list_") 
+        if name_lower.starts_with("list_")
             || name_lower.starts_with("get_")
             || name_lower.starts_with("read_")
             || name_lower.starts_with("fetch_")
             || name_lower.starts_with("download_")
         {
             categories.push("crud.read".to_string());
-        } else if name_lower.starts_with("create_") 
+        } else if name_lower.starts_with("create_")
             || name_lower.starts_with("add_")
             || name_lower.starts_with("new_")
             || name_lower.starts_with("post_")
         {
             categories.push("crud.create".to_string());
-        } else if name_lower.starts_with("update_") 
+        } else if name_lower.starts_with("update_")
             || name_lower.starts_with("edit_")
             || name_lower.starts_with("modify_")
             || name_lower.starts_with("patch_")
         {
             categories.push("crud.update".to_string());
-        } else if name_lower.starts_with("delete_") 
+        } else if name_lower.starts_with("delete_")
             || name_lower.starts_with("remove_")
             || name_lower.starts_with("drop_")
         {
@@ -487,19 +502,31 @@ impl CapabilityManifest {
         }
 
         // Determine additional categories
-        if name_lower.starts_with("search_") || name_lower.starts_with("find_") || name_lower.contains("_search") {
+        if name_lower.starts_with("search_")
+            || name_lower.starts_with("find_")
+            || name_lower.contains("_search")
+        {
             categories.push("search".to_string());
         }
 
-        if name_lower.starts_with("send_") || name_lower.starts_with("notify_") || name_lower.contains("_message") {
+        if name_lower.starts_with("send_")
+            || name_lower.starts_with("notify_")
+            || name_lower.contains("_message")
+        {
             categories.push("notify".to_string());
         }
 
-        if name_lower.starts_with("transform_") || name_lower.starts_with("convert_") || name_lower.starts_with("format_") {
+        if name_lower.starts_with("transform_")
+            || name_lower.starts_with("convert_")
+            || name_lower.starts_with("format_")
+        {
             categories.push("transform".to_string());
         }
 
-        if name_lower.starts_with("validate_") || name_lower.starts_with("check_") || name_lower.starts_with("verify_") {
+        if name_lower.starts_with("validate_")
+            || name_lower.starts_with("check_")
+            || name_lower.starts_with("verify_")
+        {
             categories.push("validate".to_string());
         }
 
@@ -536,10 +563,8 @@ impl CapabilityManifest {
 
     /// Set the last updated timestamp in metadata
     pub fn set_last_updated(mut self) -> Self {
-        self.metadata.insert(
-            "last_updated".to_string(),
-            chrono::Utc::now().to_rfc3339(),
-        );
+        self.metadata
+            .insert("last_updated".to_string(), chrono::Utc::now().to_rfc3339());
         self
     }
 
@@ -550,7 +575,8 @@ impl CapabilityManifest {
 
     /// Set the previous version in metadata (used when updating)
     pub fn with_previous_version(mut self, previous_version: String) -> Self {
-        self.metadata.insert("previous_version".to_string(), previous_version);
+        self.metadata
+            .insert("previous_version".to_string(), previous_version);
         self
     }
 
@@ -1373,7 +1399,8 @@ mod tests {
         assert!(domains.contains(&"github.issues".to_string()));
 
         // Namespaced server name (MCP registry format)
-        let domains = CapabilityManifest::infer_domains("modelcontextprotocol/github", "get_pull_request");
+        let domains =
+            CapabilityManifest::infer_domains("modelcontextprotocol/github", "get_pull_request");
         assert!(domains.contains(&"github".to_string()));
         assert!(domains.contains(&"github.pull_requests".to_string()));
 
@@ -1436,21 +1463,54 @@ mod tests {
 
     #[test]
     fn test_extract_primary_domain() {
-        assert_eq!(CapabilityManifest::extract_primary_domain("github"), "github");
-        assert_eq!(CapabilityManifest::extract_primary_domain("modelcontextprotocol/github"), "github");
-        assert_eq!(CapabilityManifest::extract_primary_domain("GitHub-MCP-Server"), "github");
-        assert_eq!(CapabilityManifest::extract_primary_domain("my-postgres-db"), "database");
-        assert_eq!(CapabilityManifest::extract_primary_domain("aws-lambda"), "cloud.aws");
+        assert_eq!(
+            CapabilityManifest::extract_primary_domain("github"),
+            "github"
+        );
+        assert_eq!(
+            CapabilityManifest::extract_primary_domain("modelcontextprotocol/github"),
+            "github"
+        );
+        assert_eq!(
+            CapabilityManifest::extract_primary_domain("GitHub-MCP-Server"),
+            "github"
+        );
+        assert_eq!(
+            CapabilityManifest::extract_primary_domain("my-postgres-db"),
+            "database"
+        );
+        assert_eq!(
+            CapabilityManifest::extract_primary_domain("aws-lambda"),
+            "cloud.aws"
+        );
     }
 
     #[test]
     fn test_extract_sub_domain() {
-        assert_eq!(CapabilityManifest::extract_sub_domain("list_issues"), Some("issues".to_string()));
-        assert_eq!(CapabilityManifest::extract_sub_domain("get_pull_request"), Some("pull_requests".to_string()));
-        assert_eq!(CapabilityManifest::extract_sub_domain("get_pr"), Some("pull_requests".to_string()));
-        assert_eq!(CapabilityManifest::extract_sub_domain("send_message"), Some("messages".to_string()));
-        assert_eq!(CapabilityManifest::extract_sub_domain("create_branch"), Some("branches".to_string()));
-        assert_eq!(CapabilityManifest::extract_sub_domain("some_random_thing"), None);
+        assert_eq!(
+            CapabilityManifest::extract_sub_domain("list_issues"),
+            Some("issues".to_string())
+        );
+        assert_eq!(
+            CapabilityManifest::extract_sub_domain("get_pull_request"),
+            Some("pull_requests".to_string())
+        );
+        assert_eq!(
+            CapabilityManifest::extract_sub_domain("get_pr"),
+            Some("pull_requests".to_string())
+        );
+        assert_eq!(
+            CapabilityManifest::extract_sub_domain("send_message"),
+            Some("messages".to_string())
+        );
+        assert_eq!(
+            CapabilityManifest::extract_sub_domain("create_branch"),
+            Some("branches".to_string())
+        );
+        assert_eq!(
+            CapabilityManifest::extract_sub_domain("some_random_thing"),
+            None
+        );
     }
 
     #[test]
@@ -1466,7 +1526,8 @@ mod tests {
                 auth_token: None,
             }),
             "1.0.0".to_string(),
-        ).with_inferred_domains_and_categories("modelcontextprotocol/github");
+        )
+        .with_inferred_domains_and_categories("modelcontextprotocol/github");
 
         assert!(manifest.domains.contains(&"github".to_string()));
         assert!(manifest.domains.contains(&"github.issues".to_string()));

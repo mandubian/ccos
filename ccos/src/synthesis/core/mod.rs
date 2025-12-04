@@ -13,7 +13,9 @@ pub mod missing_capability_strategies;
 pub mod schema_serializer;
 
 // Re-export commonly used types
-pub use feature_flags::{FeatureFlagChecker, MissingCapabilityConfig, MissingCapabilityFeatureFlags};
+pub use feature_flags::{
+    FeatureFlagChecker, MissingCapabilityConfig, MissingCapabilityFeatureFlags,
+};
 pub use missing_capability_resolver::{
     MissingCapabilityRequest, MissingCapabilityResolver, ResolutionResult,
 };

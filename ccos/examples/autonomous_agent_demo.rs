@@ -35,10 +35,10 @@ use ccos::capability_marketplace::{CapabilityManifest, CapabilityMarketplace};
 use ccos::catalog::{CatalogEntryKind, CatalogFilter, CatalogService};
 use ccos::discovery::capability_matcher::{compute_mcp_tool_score, keyword_overlap};
 use ccos::discovery::embedding_service::EmbeddingService;
-use ccos::synthesis::mcp_introspector::MCPIntrospector;
-use ccos::mcp::types::DiscoveredMCPTool;
-use ccos::mcp::registry::MCPRegistryClient;
 use ccos::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
+use ccos::mcp::registry::MCPRegistryClient;
+use ccos::mcp::types::DiscoveredMCPTool;
+use ccos::synthesis::mcp_introspector::MCPIntrospector;
 use ccos::CCOS;
 use clap::Parser;
 use rtfs::config::types::AgentConfig;
@@ -49,12 +49,12 @@ use rtfs::runtime::values::Value;
 // Import Modular Planner components
 use ccos::planner::modular_planner::orchestrator::{PlanResult, TraceEvent as ModularTraceEvent};
 use ccos::planner::modular_planner::resolution::mcp::RuntimeMcpDiscovery;
-use ccos::planner::modular_planner::resolution::semantic::{CapabilityCatalog, CapabilityInfo};
 use ccos::planner::modular_planner::resolution::{CompositeResolution, McpResolution};
 use ccos::planner::modular_planner::{
     CatalogResolution, DecompositionStrategy, ModularPlanner, PatternDecomposition, PlannerConfig,
     ResolvedCapability,
 };
+use ccos::planner::CcosCatalogAdapter;
 
 // ============================================================================
 // CLI Arguments
@@ -1793,9 +1793,7 @@ Respond ONLY with the RTFS expression.
         for server in servers {
             if let Some(remotes) = &server.remotes {
                 if let Some(url) =
-                    ccos::mcp::registry::MCPRegistryClient::select_best_remote_url(
-                        remotes,
-                    )
+                    ccos::mcp::registry::MCPRegistryClient::select_best_remote_url(remotes)
                 {
                     println!(
                         "     🌐 Found MCP server in registry: {} ({})",
@@ -2680,48 +2678,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 // Modular Planner Mode
 // ============================================================================
 
-/// CCOS Catalog Adapter for Modular Planner
-struct CcosCatalogAdapter {
-    catalog: Arc<CatalogService>,
-}
-
-impl CcosCatalogAdapter {
-    fn new(catalog: Arc<CatalogService>) -> Self {
-        Self { catalog }
-    }
-}
-
-#[async_trait::async_trait(?Send)]
-impl CapabilityCatalog for CcosCatalogAdapter {
-    async fn list_capabilities(&self, _domain: Option<&str>) -> Vec<CapabilityInfo> {
-        let hits = self.catalog.search_keyword("", None, 100);
-        hits.into_iter().map(catalog_hit_to_info).collect()
-    }
-
-    async fn get_capability(&self, id: &str) -> Option<CapabilityInfo> {
-        let hits = self.catalog.search_keyword(id, None, 10);
-        hits.into_iter()
-            .find(|h| h.entry.id == id)
-            .map(catalog_hit_to_info)
-    }
-
-    async fn search(&self, query: &str, limit: usize) -> Vec<CapabilityInfo> {
-        let hits = self.catalog.search_semantic(query, None, limit);
-        hits.into_iter().map(catalog_hit_to_info).collect()
-    }
-}
-
-fn catalog_hit_to_info(hit: ccos::catalog::CatalogHit) -> CapabilityInfo {
-    CapabilityInfo {
-        id: hit.entry.id,
-        name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
-        description: hit.entry.description.unwrap_or_default(),
-        input_schema: None,
-        categories: Vec::new(),
-        domains: Vec::new(),
-    }
-}
-
 async fn run_modular_planner(
     ccos: Arc<CCOS>,
     goal: String,
@@ -2763,11 +2719,11 @@ async fn run_modular_planner(
             auth_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
         }
     }
-    
+
     // Create discovery service with auth headers
     let discovery_service = Arc::new(
         ccos::mcp::core::MCPDiscoveryService::with_auth_headers(Some(auth_headers))
-            .with_marketplace(ccos.get_capability_marketplace())
+            .with_marketplace(ccos.get_capability_marketplace()),
     );
 
     // Create runtime MCP discovery using the unified discovery service

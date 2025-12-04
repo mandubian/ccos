@@ -524,7 +524,10 @@ async fn handle_resolve(
     println!("   Pending: {}", stats.pending_count);
     println!("   In Progress: {}", stats.in_progress_count);
     println!("   Failed: {}", stats.failed_count);
-    println!("   Success Rate: {:.1}%", calculate_success_rate(&resolver.get_queue_stats()));
+    println!(
+        "   Success Rate: {:.1}%",
+        calculate_success_rate(&resolver.get_queue_stats())
+    );
 
     let post_resolution_capabilities = marketplace.list_capabilities().await;
     let mut reported_path = false;
@@ -757,7 +760,10 @@ async fn handle_stats(
     println!("   Pending: {}", stats.pending_count);
     println!("   In Progress: {}", stats.in_progress_count);
     println!("   Failed: {}", stats.failed_count);
-    println!("   Success Rate: {:.1}%", calculate_success_rate(&resolver.get_queue_stats()));
+    println!(
+        "   Success Rate: {:.1}%",
+        calculate_success_rate(&resolver.get_queue_stats())
+    );
 
     let total = stats.pending_count + stats.in_progress_count + stats.failed_count;
     if total > 0 {

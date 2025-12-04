@@ -4,11 +4,11 @@
 // Include the CCOS module structure
 // AgentRegistry migration: agent module removed (deprecated, use CapabilityMarketplace with :kind :agent)
 pub mod arbiter;
-pub mod cli;
 pub mod archivable_types;
 pub mod catalog;
 pub mod causal_chain;
 pub mod checkpoint_archive;
+pub mod cli;
 pub mod discovery;
 pub mod event_sink;
 pub mod execution_context;
@@ -16,6 +16,7 @@ pub mod governance_kernel;
 pub mod intent_archive;
 pub mod intent_graph;
 pub mod intent_storage;
+pub mod mcp;
 pub mod orchestrator;
 pub mod plan_archive;
 pub mod planner;
@@ -25,7 +26,6 @@ pub mod storage;
 pub mod storage_backends;
 pub mod synthesis;
 pub mod types;
-pub mod mcp;
 pub mod wm_integration;
 
 // Delegation and execution stack

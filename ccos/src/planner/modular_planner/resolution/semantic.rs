@@ -44,7 +44,9 @@ pub trait CapabilityCatalog: Send + Sync {
         limit: usize,
     ) -> Vec<CapabilityInfo> {
         // Default implementation falls back to listing and filtering
-        let all = self.list_capabilities(domains.first().map(|s| s.as_str())).await;
+        let all = self
+            .list_capabilities(domains.first().map(|s| s.as_str()))
+            .await;
         all.into_iter()
             .filter(|c| {
                 // Check domain match

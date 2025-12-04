@@ -5,6 +5,12 @@
 //! - Resolution queue for background processing
 //! - Integration with marketplace discovery
 
+use super::feature_flags::{FeatureFlagChecker, MissingCapabilityConfig};
+use super::missing_capability_strategies::{
+    ExternalLlmHintStrategy, MissingCapabilityStrategy, MissingCapabilityStrategyConfig,
+    PureRtfsGenerationStrategy, ServiceDiscoveryHintStrategy, UserInteractionStrategy,
+};
+use super::schema_serializer::type_expr_to_rtfs_compact;
 use crate::arbiter::prompt::{FilePromptStore, PromptManager};
 use crate::arbiter::DelegatingArbiter;
 use crate::capability_marketplace::types::{
@@ -18,12 +24,6 @@ use crate::discovery::capability_matcher::{
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::rtfs_bridge::expression_to_pretty_rtfs_string;
 use crate::rtfs_bridge::expression_to_rtfs_string;
-use super::feature_flags::{FeatureFlagChecker, MissingCapabilityConfig};
-use super::missing_capability_strategies::{
-    MissingCapabilityStrategy, MissingCapabilityStrategyConfig, PureRtfsGenerationStrategy,
-    UserInteractionStrategy, ExternalLlmHintStrategy, ServiceDiscoveryHintStrategy,
-};
-use super::schema_serializer::type_expr_to_rtfs_compact;
 use crate::synthesis::dialogue::capability_synthesizer::MultiCapabilityEndpoint;
 use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;
 use crate::synthesis::runtime::server_trust::{
@@ -565,23 +565,32 @@ impl RiskAssessment {
 
         // Analyze capability ID for risk indicators
         let id_lower = capability_id.to_lowercase();
-        
+
         if id_lower.contains("admin") || id_lower.contains("root") || id_lower.contains("sudo") {
             risk_factors.push("Administrative capability detected".to_string());
             security_concerns.push("High privilege access required".to_string());
         }
 
-        if id_lower.contains("payment") || id_lower.contains("financial") || id_lower.contains("billing") {
+        if id_lower.contains("payment")
+            || id_lower.contains("financial")
+            || id_lower.contains("billing")
+        {
             risk_factors.push("Financial capability detected".to_string());
             compliance_requirements.push("PCI-DSS compliance required".to_string());
         }
 
-        if id_lower.contains("auth") || id_lower.contains("security") || id_lower.contains("credential") {
+        if id_lower.contains("auth")
+            || id_lower.contains("security")
+            || id_lower.contains("credential")
+        {
             risk_factors.push("Security-related capability".to_string());
             security_concerns.push("Authentication/authorization access".to_string());
         }
 
-        if id_lower.contains("database") || id_lower.contains("storage") || id_lower.contains("delete") {
+        if id_lower.contains("database")
+            || id_lower.contains("storage")
+            || id_lower.contains("delete")
+        {
             risk_factors.push("Data access capability".to_string());
             compliance_requirements.push("Data protection compliance required".to_string());
         }
@@ -833,7 +842,9 @@ impl MissingCapabilityResolver {
         match expr {
             TypeExpr::Map { entries, wildcard } => {
                 for entry in entries {
-                    keys.insert(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone())));
+                    keys.insert(value_conversion::map_key_to_string(
+                        &rtfs::ast::MapKey::Keyword(entry.key.clone()),
+                    ));
                     Self::collect_map_keys(&entry.value_type, keys);
                 }
                 if let Some(wild) = wildcard {
@@ -1046,9 +1057,9 @@ impl MissingCapabilityResolver {
     fn literal_to_string(expr: &Expression) -> Option<String> {
         match expr {
             Expression::Literal(Literal::String(s)) => Some(s.clone()),
-            Expression::Literal(Literal::Keyword(k)) => {
-                Some(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(k.clone())))
-            }
+            Expression::Literal(Literal::Keyword(k)) => Some(value_conversion::map_key_to_string(
+                &rtfs::ast::MapKey::Keyword(k.clone()),
+            )),
             Expression::Literal(Literal::Symbol(symbol)) => Some(symbol.0.clone()),
             Expression::Literal(Literal::Nil) => None,
             _ => None,
@@ -2529,14 +2540,13 @@ impl MissingCapabilityResolver {
             .await?;
 
         // Find the selected server from ranked servers; if not found, reload curated overrides (user may have added one)
-        let mut selected_server_opt: Option<crate::mcp::registry::McpServer> =
-            ranked_servers
-                .iter()
-                .find(|ranked| {
-                    self.extract_domain_from_server_name(&ranked.server.name)
-                        == selection_result.selected_domain
-                })
-                .map(|r| r.server.clone());
+        let mut selected_server_opt: Option<crate::mcp::registry::McpServer> = ranked_servers
+            .iter()
+            .find(|ranked| {
+                self.extract_domain_from_server_name(&ranked.server.name)
+                    == selection_result.selected_domain
+            })
+            .map(|r| r.server.clone());
 
         if selected_server_opt.is_none() {
             // Try curated overrides again to include any newly added entry during interaction
@@ -2577,9 +2587,8 @@ impl MissingCapabilityResolver {
         };
 
         let server_url = if let Some(url) =
-            crate::mcp::registry::MCPRegistryClient::select_best_remote_url(
-                remotes,
-            ) {
+            crate::mcp::registry::MCPRegistryClient::select_best_remote_url(remotes)
+        {
             url
         } else {
             eprintln!(
@@ -2693,13 +2702,12 @@ impl MissingCapabilityResolver {
         );
 
         let need = self.build_need_from_request(capability_id, request);
-        let tool_map: HashMap<String, crate::mcp::types::DiscoveredMCPTool> =
-            introspection
-                .tools
-                .iter()
-                .cloned()
-                .map(|tool| (tool.tool_name.clone(), tool))
-                .collect();
+        let tool_map: HashMap<String, crate::mcp::types::DiscoveredMCPTool> = introspection
+            .tools
+            .iter()
+            .cloned()
+            .map(|tool| (tool.tool_name.clone(), tool))
+            .collect();
 
         let mut candidates: Vec<ToolPromptCandidate> = Vec::new();
         for (index, manifest) in manifests.iter().enumerate() {
@@ -3527,7 +3535,12 @@ impl MissingCapabilityResolver {
 
         match strategy.generate_pure_rtfs_implementation(request).await {
             Ok(rtfs_source) => {
-                self.process_generated_rtfs(rtfs_source, capability_id_normalized, "pure_rtfs_generated").await
+                self.process_generated_rtfs(
+                    rtfs_source,
+                    capability_id_normalized,
+                    "pure_rtfs_generated",
+                )
+                .await
             }
             Err(_) => Ok(None),
         }
@@ -3540,9 +3553,9 @@ impl MissingCapabilityResolver {
         _capability_id_normalized: &str,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
         let config = MissingCapabilityStrategyConfig::default();
-        let strategy = UserInteractionStrategy::new(config)
-            .with_marketplace(self.marketplace.clone());
-        
+        let strategy =
+            UserInteractionStrategy::new(config).with_marketplace(self.marketplace.clone());
+
         let context = crate::planner::modular_planner::ResolutionContext {
             domain_hints: vec![],
             resolved_capabilities: Default::default(),
@@ -3554,12 +3567,12 @@ impl MissingCapabilityResolver {
         // User interaction currently just prints to stdout/stderr and simulates choices
         // It doesn't return a manifest directly in the current implementation
         if let Ok(ResolutionResult::Resolved { .. }) = strategy.resolve(request, &context).await {
-             // If user provided a solution that resolved it, we might need to fetch it.
-             // But the current implementation returns NotFound(Not Implemented).
-             // If we implement it fully, we would return the manifest here.
-             Ok(None)
+            // If user provided a solution that resolved it, we might need to fetch it.
+            // But the current implementation returns NotFound(Not Implemented).
+            // If we implement it fully, we would return the manifest here.
+            Ok(None)
         } else {
-             Ok(None)
+            Ok(None)
         }
     }
 
@@ -3570,7 +3583,7 @@ impl MissingCapabilityResolver {
     ) -> RuntimeResult<Option<CapabilityManifest>> {
         let config = MissingCapabilityStrategyConfig::default();
         let mut strategy = ExternalLlmHintStrategy::new(config);
-        
+
         // Inject arbiter if available
         {
             let guard = self.delegating_arbiter.read().unwrap();
@@ -3583,7 +3596,8 @@ impl MissingCapabilityResolver {
 
         match strategy.generate_implementation(request).await {
             Ok(rtfs_source) => {
-                self.process_generated_rtfs(rtfs_source, capability_id_normalized, "llm_generated").await
+                self.process_generated_rtfs(rtfs_source, capability_id_normalized, "llm_generated")
+                    .await
             }
             Err(_) => Ok(None),
         }
@@ -3596,7 +3610,7 @@ impl MissingCapabilityResolver {
     ) -> RuntimeResult<Option<CapabilityManifest>> {
         let config = MissingCapabilityStrategyConfig::default();
         let strategy = ServiceDiscoveryHintStrategy::new(config);
-        
+
         let context = crate::planner::modular_planner::ResolutionContext {
             domain_hints: vec![],
             resolved_capabilities: Default::default(),
@@ -3626,10 +3640,9 @@ impl MissingCapabilityResolver {
                 manifest
                     .metadata
                     .insert("rtfs_implementation".to_string(), rtfs_source.clone());
-                manifest.metadata.insert(
-                    "resolution_source".to_string(),
-                    source_label.to_string(),
-                );
+                manifest
+                    .metadata
+                    .insert("resolution_source".to_string(), source_label.to_string());
 
                 // Persist generated RTFS to disk so it's available for inspection
                 if let Ok(path) = self.persist_llm_generated_capability(&manifest).await {
@@ -4097,9 +4110,9 @@ fn expression_sequence_items(expr: &Expression) -> Option<&[Expression]> {
 
 fn expr_to_symbol_name(expr: &Expression) -> Option<String> {
     match expr {
-        Expression::Literal(Literal::Keyword(k)) => {
-            Some(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(k.clone())))
-        }
+        Expression::Literal(Literal::Keyword(k)) => Some(value_conversion::map_key_to_string(
+            &rtfs::ast::MapKey::Keyword(k.clone()),
+        )),
         Expression::Literal(Literal::Symbol(s)) => Some(s.0.clone()),
         _ => None,
     }

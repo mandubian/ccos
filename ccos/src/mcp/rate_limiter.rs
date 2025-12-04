@@ -182,9 +182,9 @@ impl RetryPolicy {
             return Duration::ZERO;
         }
 
-        let base_delay = self.initial_delay.as_secs_f64()
-            * self.backoff_multiplier.powi((attempt - 1) as i32);
-        
+        let base_delay =
+            self.initial_delay.as_secs_f64() * self.backoff_multiplier.powi((attempt - 1) as i32);
+
         let delay_secs = base_delay.min(self.max_delay.as_secs_f64());
 
         let final_delay = if self.use_jitter {
@@ -251,7 +251,7 @@ impl TokenBucket {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_update);
         let new_tokens = elapsed.as_secs_f64() * self.config.requests_per_second;
-        
+
         self.tokens = (self.tokens + new_tokens).min(self.config.burst_size as f64);
         self.last_update = now;
     }
@@ -286,7 +286,7 @@ impl RateLimiter {
     /// if the caller should wait.
     pub fn acquire(&self, server_endpoint: &str) -> Result<(), Duration> {
         let mut buckets = self.buckets.lock().unwrap();
-        
+
         let bucket = buckets
             .entry(server_endpoint.to_string())
             .or_insert_with(|| TokenBucket::new(self.default_config.clone()));
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn test_per_server_rate_limits() {
         let limiter = RateLimiter::new();
-        
+
         // Set different limits for different servers
         limiter.set_server_config("http://server1", RateLimitConfig::strict());
         limiter.set_server_config("http://server2", RateLimitConfig::permissive());

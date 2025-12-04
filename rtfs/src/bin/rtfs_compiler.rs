@@ -371,7 +371,10 @@ fn main() {
             macro_expander = expander;
         }
         Err(e) => {
-            eprintln!("Warning: macro expansion failed for top-level program: {}", e);
+            eprintln!(
+                "Warning: macro expansion failed for top-level program: {}",
+                e
+            );
         }
     }
 
@@ -405,12 +408,20 @@ fn main() {
                     let expanded_expr = match macro_expander.expand(expr, 0) {
                         Ok(e) => e,
                         Err(e) => {
-                            eprintln!("Warning: macro expansion error for expression {}: {}", i + 1, e);
+                            eprintln!(
+                                "Warning: macro expansion error for expression {}: {}",
+                                i + 1,
+                                e
+                            );
                             expr.clone()
                         }
                     };
                     if args.verbose {
-                        println!("📄 Expanded AST for expression {}: {:#?}", i + 1, expanded_expr);
+                        println!(
+                            "📄 Expanded AST for expression {}: {:#?}",
+                            i + 1,
+                            expanded_expr
+                        );
                     }
                     match ir_converter.convert_expression(expanded_expr) {
                         Ok(ir_node) => {
@@ -451,12 +462,12 @@ fn main() {
         let exec_start = Instant::now();
 
         // Create a shared runtime strategy for all expressions to preserve state
-    let mut runtime_strategy: Box<dyn RuntimeStrategy> = args.runtime.clone().into();
-    // Inject the persistent MacroExpander so runtime strategies share the same
-    // macro registry as the compiler expansion pass. Clone since MacroExpander
-    // implements Clone and strategies take ownership.
-    runtime_strategy.set_macro_expander(macro_expander.clone());
-    let mut runtime = Runtime::new(runtime_strategy);
+        let mut runtime_strategy: Box<dyn RuntimeStrategy> = args.runtime.clone().into();
+        // Inject the persistent MacroExpander so runtime strategies share the same
+        // macro registry as the compiler expansion pass. Clone since MacroExpander
+        // implements Clone and strategies take ownership.
+        runtime_strategy.set_macro_expander(macro_expander.clone());
+        let mut runtime = Runtime::new(runtime_strategy);
 
         // For AST runtime, we can use eval_toplevel to preserve state
         if let RuntimeType::Ast = args.runtime {
@@ -567,12 +578,20 @@ fn main() {
                             let expanded_expr = match macro_expander.expand(expr, 0) {
                                 Ok(e) => e,
                                 Err(e) => {
-                                    eprintln!("Warning: macro expansion error for expression {}: {}", i + 1, e);
+                                    eprintln!(
+                                        "Warning: macro expansion error for expression {}: {}",
+                                        i + 1,
+                                        e
+                                    );
                                     expr.clone()
                                 }
                             };
                             if args.verbose {
-                                println!("📄 Expanded AST for expression {}: {:#?}", i + 1, expanded_expr);
+                                println!(
+                                    "📄 Expanded AST for expression {}: {:#?}",
+                                    i + 1,
+                                    expanded_expr
+                                );
                             }
                             let ir_node = match ir_converter.convert_expression(expanded_expr) {
                                 Ok(ir) => ir,

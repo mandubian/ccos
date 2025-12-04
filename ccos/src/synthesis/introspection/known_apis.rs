@@ -136,13 +136,11 @@ impl KnownApisRegistry {
 
     /// Load a single API definition file
     fn load_api_file(&mut self, path: &Path) -> RuntimeResult<()> {
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to read {:?}: {}", path, e))
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to read {:?}: {}", path, e)))?;
 
-        let api: KnownApiDefinition = toml::from_str(&content).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to parse {:?}: {}", path, e))
-        })?;
+        let api: KnownApiDefinition = toml::from_str(&content)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to parse {:?}: {}", path, e)))?;
 
         let name = api.api.name.clone();
 
@@ -200,7 +198,11 @@ impl KnownApisRegistry {
             let matches = api.api.name.to_lowercase().contains(&query_lower)
                 || api.api.title.to_lowercase().contains(&query_lower)
                 || api.api.description.to_lowercase().contains(&query_lower)
-                || api.api.domains.iter().any(|d| d.to_lowercase().contains(&query_lower));
+                || api
+                    .api
+                    .domains
+                    .iter()
+                    .any(|d| d.to_lowercase().contains(&query_lower));
 
             if matches {
                 results.push(api);
@@ -334,7 +336,7 @@ mod tests {
     #[test]
     fn test_load_openweathermap() {
         let registry = KnownApisRegistry::new().unwrap();
-        
+
         if let Some(api) = registry.find_by_domain("openweathermap") {
             assert_eq!(api.api.name, "openweathermap");
             assert!(!api.endpoints.is_empty());
@@ -344,7 +346,7 @@ mod tests {
     #[test]
     fn test_search_by_domain() {
         let registry = KnownApisRegistry::new().unwrap();
-        
+
         let results = registry.search("weather");
         // Should find openweathermap
         assert!(results.iter().any(|api| api.api.name == "openweathermap"));

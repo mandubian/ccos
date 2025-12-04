@@ -97,12 +97,13 @@ pub async fn get_default_llm_provider() -> Option<Box<dyn LlmProvider + Send + S
             return Some(provider);
         }
     }
-    
+
     // Try Anthropic
     if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
         let config = LlmProviderConfig {
             provider_type: LlmProviderType::Anthropic,
-            model: std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-3-haiku-20240307".to_string()),
+            model: std::env::var("ANTHROPIC_MODEL")
+                .unwrap_or_else(|_| "claude-3-haiku-20240307".to_string()),
             api_key: Some(api_key),
             base_url: None,
             max_tokens: Some(4096),
@@ -114,12 +115,13 @@ pub async fn get_default_llm_provider() -> Option<Box<dyn LlmProvider + Send + S
             return Some(provider);
         }
     }
-    
+
     // Try OpenRouter
     if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
         let config = LlmProviderConfig {
             provider_type: LlmProviderType::OpenAI, // OpenRouter uses OpenAI-compatible API
-            model: std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "anthropic/claude-3-haiku".to_string()),
+            model: std::env::var("OPENROUTER_MODEL")
+                .unwrap_or_else(|_| "anthropic/claude-3-haiku".to_string()),
             api_key: Some(api_key),
             base_url: Some("https://openrouter.ai/api/v1".to_string()),
             max_tokens: Some(4096),
@@ -131,6 +133,6 @@ pub async fn get_default_llm_provider() -> Option<Box<dyn LlmProvider + Send + S
             return Some(provider);
         }
     }
-    
+
     None
 }

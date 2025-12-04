@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use rtfs::compiler::expander::MacroExpander;
 use rtfs::parser;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::evaluator::Evaluator;
-use rtfs::compiler::expander::MacroExpander;
 use rtfs::runtime::execution_outcome::ExecutionOutcome;
 use rtfs::runtime::host_interface::HostInterface;
 use rtfs::runtime::module_runtime::ModuleRegistry;
@@ -77,7 +77,8 @@ impl RestrictedRtfsExecutor {
         let module_registry = Arc::new(ModuleRegistry::new());
         let host = Arc::new(RestrictedHost);
         let macro_expander = MacroExpander::default();
-        let evaluator = Evaluator::new_with_defaults(module_registry.clone(), host.clone(), macro_expander);
+        let evaluator =
+            Evaluator::new_with_defaults(module_registry.clone(), host.clone(), macro_expander);
 
         Self { evaluator }
     }

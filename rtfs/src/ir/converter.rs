@@ -1076,14 +1076,13 @@ impl<'a> IrConverter<'a> {
                 })
             }
             // Macro-related expressions should have been expanded away before IR conversion
-            Expression::Quasiquote(_) |
-            Expression::Unquote(_) |
-            Expression::UnquoteSplicing(_) |
-            Expression::Defmacro(_) => {
-                Err(IrConversionError::InternalError {
-                    message: "Macro-related expressions should have been expanded before IR conversion".to_string(),
-                })
-            }
+            Expression::Quasiquote(_)
+            | Expression::Unquote(_)
+            | Expression::UnquoteSplicing(_)
+            | Expression::Defmacro(_) => Err(IrConversionError::InternalError {
+                message: "Macro-related expressions should have been expanded before IR conversion"
+                    .to_string(),
+            }),
         }
     }
 

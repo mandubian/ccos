@@ -76,8 +76,8 @@ pub use runtime::server_trust;
 pub use runtime::web_search_discovery;
 
 // Re-export commonly used items for convenience
-pub use dialogue::preference_schema::{extract_with_metrics, ParamType};
 pub use dialogue::preference_schema::*;
+pub use dialogue::preference_schema::{extract_with_metrics, ParamType};
 pub use dialogue::skill_extractor::*;
 pub use status::*;
 
