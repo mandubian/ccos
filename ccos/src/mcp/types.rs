@@ -3,15 +3,13 @@
 //! This module defines core types used by the unified MCP discovery API.
 //! Types are defined here rather than re-exported to provide a single source of truth.
 
-use std::collections::HashMap;
+use crate::mcp::rate_limiter::{RateLimitConfig, RetryPolicy};
 use rtfs::ast::TypeExpr;
 use serde::{Deserialize, Serialize};
-use crate::mcp::rate_limiter::{RateLimitConfig, RetryPolicy};
+use std::collections::HashMap;
 
 // Re-export existing types to avoid duplication
-pub use crate::capability_marketplace::mcp_discovery::{
-    MCPServerConfig, MCPTool,
-};
+pub use crate::capability_marketplace::mcp_discovery::{MCPServerConfig, MCPTool};
 
 /// A discovered MCP tool with its schema
 ///
@@ -82,9 +80,8 @@ impl Default for DiscoveryOptions {
             retry_policy: RetryPolicy::default(),
             rate_limit: RateLimitConfig::default(),
             max_parallel_discoveries: 5, // Conservative default to avoid rate limits
-            lazy_output_schemas: true, // Skip expensive introspection by default
+            lazy_output_schemas: true,   // Skip expensive introspection by default
             ignore_approved_files: false,
         }
     }
 }
-

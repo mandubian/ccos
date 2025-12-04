@@ -7,13 +7,13 @@
 //! - Parent capability integration re-evaluation
 //! - End-to-end testing of resolved capabilities
 
+use super::governance_policies::GovernancePolicy;
+use super::static_analyzers::StaticAnalyzer;
+use super::validation_harness::{ValidationHarness, ValidationResult, ValidationStatus};
 use crate::capability_marketplace::types::{
     CapabilityAttestation, CapabilityManifest, CapabilityProvenance,
 };
 use crate::capability_marketplace::CapabilityMarketplace;
-use super::governance_policies::GovernancePolicy;
-use super::static_analyzers::StaticAnalyzer;
-use super::validation_harness::{ValidationHarness, ValidationResult, ValidationStatus};
 use chrono::Utc;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::values::Value;

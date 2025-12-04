@@ -1,7 +1,7 @@
 use crate::cli::CliContext;
 use crate::cli::OutputFormatter;
 use clap::Subcommand;
-use rtfs::runtime::error::{RuntimeResult, RuntimeError};
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -23,10 +23,7 @@ pub enum RtfsCommand {
     Repl,
 }
 
-pub async fn execute(
-    ctx: &mut CliContext,
-    command: RtfsCommand,
-) -> RuntimeResult<()> {
+pub async fn execute(ctx: &mut CliContext, command: RtfsCommand) -> RuntimeResult<()> {
     let _formatter = OutputFormatter::new(ctx.output_format);
 
     match command {
@@ -34,51 +31,51 @@ pub async fn execute(
             // Using capability_explorer for RTFS eval temporarily to leverage its context
             let mut cmd = Command::new("cargo");
             cmd.arg("run")
-               .arg("--example")
-               .arg("capability_explorer")
-               .arg("--quiet")
-               .arg("--") // Separator for arguments passed to the example
-               .arg("--rtfs")
-               .arg(expr);
-            
-            let status = cmd.status().map_err(|e| {
-                RuntimeError::Generic(format!("Failed to run RTFS eval: {}", e))
-            })?;
-            
+                .arg("--example")
+                .arg("capability_explorer")
+                .arg("--quiet")
+                .arg("--") // Separator for arguments passed to the example
+                .arg("--rtfs")
+                .arg(expr);
+
+            let status = cmd
+                .status()
+                .map_err(|e| RuntimeError::Generic(format!("Failed to run RTFS eval: {}", e)))?;
+
             if !status.success() {
                 return Err(RuntimeError::Generic("RTFS evaluation failed".to_string()));
             }
         }
         RtfsCommand::Run { file } => {
-             // Using capability_explorer for RTFS run temporarily
+            // Using capability_explorer for RTFS run temporarily
             let mut cmd = Command::new("cargo");
             cmd.arg("run")
-               .arg("--example")
-               .arg("capability_explorer")
-               .arg("--quiet")
-               .arg("--") // Separator for arguments passed to the example
-               .arg("--rtfs-file")
-               .arg(file);
-               
-            let status = cmd.status().map_err(|e| {
-                RuntimeError::Generic(format!("Failed to run RTFS file: {}", e))
-            })?;
-            
+                .arg("--example")
+                .arg("capability_explorer")
+                .arg("--quiet")
+                .arg("--") // Separator for arguments passed to the example
+                .arg("--rtfs-file")
+                .arg(file);
+
+            let status = cmd
+                .status()
+                .map_err(|e| RuntimeError::Generic(format!("Failed to run RTFS file: {}", e)))?;
+
             if !status.success() {
-                return Err(RuntimeError::Generic("RTFS file execution failed".to_string()));
+                return Err(RuntimeError::Generic(
+                    "RTFS file execution failed".to_string(),
+                ));
             }
         }
         RtfsCommand::Repl => {
             ctx.status("Starting RTFS REPL...");
             let mut cmd = Command::new("cargo");
-            cmd.arg("run")
-               .arg("--bin")
-               .arg("rtfs-ccos-repl");
-               
-            let status = cmd.status().map_err(|e| {
-                RuntimeError::Generic(format!("Failed to start REPL: {}", e))
-            })?;
-            
+            cmd.arg("run").arg("--bin").arg("rtfs-ccos-repl");
+
+            let status = cmd
+                .status()
+                .map_err(|e| RuntimeError::Generic(format!("Failed to start REPL: {}", e)))?;
+
             if !status.success() {
                 return Err(RuntimeError::Generic("REPL exited with error".to_string()));
             }
@@ -87,4 +84,3 @@ pub async fn execute(
 
     Ok(())
 }
-

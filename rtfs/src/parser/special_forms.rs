@@ -8,8 +8,8 @@ use std::collections::HashMap;
 // AST Node Imports - Ensure all used AST nodes are listed here
 use crate::ast::{
     CatchClause, CatchPattern, DefExpr, DefmacroExpr, DefnExpr, DefstructExpr, DefstructField,
-    DelegationHint, DoExpr, FnExpr, IfExpr, LetBinding, LetExpr, MatchClause,
-    MatchExpr, ParamDef, Pattern, TryCatchExpr, TypeExpr, ForExpr,
+    DelegationHint, DoExpr, FnExpr, ForExpr, IfExpr, LetBinding, LetExpr, MatchClause, MatchExpr,
+    ParamDef, Pattern, TryCatchExpr, TypeExpr,
 };
 
 // ...
@@ -36,11 +36,9 @@ pub(super) fn build_defmacro_expr(
         }
     }
 
-    let symbol_pair = pairs.next().ok_or_else(|| {
-        PestParseError::InvalidInput {
-            message: "defmacro requires a symbol (macro name)".to_string(),
-            span: Some(defmacro_span.clone()),
-        }
+    let symbol_pair = pairs.next().ok_or_else(|| PestParseError::InvalidInput {
+        message: "defmacro requires a symbol (macro name)".to_string(),
+        span: Some(defmacro_span.clone()),
     })?;
     if symbol_pair.as_rule() != Rule::symbol {
         return Err(PestParseError::InvalidInput {
@@ -205,7 +203,6 @@ pub(super) fn build_defmacro_expr(
         body,
     })
 }
-
 
 // Builder function imports from sibling modules
 // CORRECTED IMPORT: build_keyword_from_pair -> build_keyword

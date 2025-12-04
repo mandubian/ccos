@@ -1,9 +1,9 @@
 //! Approval operations - pure logic functions for approval queue management
 
-use crate::discovery::ApprovalQueue;
-use rtfs::runtime::error::RuntimeResult;
 use super::{ApprovalItem, ApprovalListOutput};
+use crate::discovery::ApprovalQueue;
 use chrono::Utc;
+use rtfs::runtime::error::RuntimeResult;
 use serde::Serialize;
 
 /// Information about a conflict when approving a server that already exists
@@ -23,8 +23,9 @@ pub async fn list_pending() -> RuntimeResult<ApprovalListOutput> {
     let queue = ApprovalQueue::new(".");
     let pending = queue.list_pending()?;
 
-    let items: Vec<ApprovalItem> = pending.into_iter().map(|item| {
-        ApprovalItem {
+    let items: Vec<ApprovalItem> = pending
+        .into_iter()
+        .map(|item| ApprovalItem {
             id: item.id,
             server_name: item.server_info.name,
             endpoint: item.server_info.endpoint,
@@ -33,8 +34,8 @@ pub async fn list_pending() -> RuntimeResult<ApprovalListOutput> {
             goal: item.requesting_goal,
             status: "pending".to_string(),
             requested_at: item.requested_at.to_rfc3339(),
-        }
-    }).collect();
+        })
+        .collect();
 
     Ok(ApprovalListOutput {
         items: items.clone(),
@@ -45,15 +46,16 @@ pub async fn list_pending() -> RuntimeResult<ApprovalListOutput> {
 /// Check if approving a discovery would conflict with an existing approved server
 pub async fn check_approval_conflict(id: String) -> RuntimeResult<Option<ApprovalConflict>> {
     let queue = ApprovalQueue::new(".");
-    
+
     if let Some(existing) = queue.check_approval_conflict(&id)? {
         let pending = queue.get_pending(&id)?;
         if let Some(pending_item) = pending {
-            let tool_count = existing.capability_files
+            let tool_count = existing
+                .capability_files
                 .as_ref()
                 .map(|files| files.len())
                 .unwrap_or(0);
-            
+
             return Ok(Some(ApprovalConflict {
                 existing_name: existing.server_info.name,
                 existing_endpoint: existing.server_info.endpoint,
@@ -65,7 +67,7 @@ pub async fn check_approval_conflict(id: String) -> RuntimeResult<Option<Approva
             }));
         }
     }
-    
+
     Ok(None)
 }
 
@@ -96,18 +98,21 @@ pub async fn list_timeout() -> RuntimeResult<ApprovalListOutput> {
     let queue = ApprovalQueue::new(".");
     let timeout_items = queue.list_timeouts()?;
 
-    let items: Vec<ApprovalItem> = timeout_items.into_iter().map(|item| {
-        ApprovalItem {
-            id: item.id,
-            server_name: item.server_info.name,
-            endpoint: item.server_info.endpoint,
-            source: item.source.name(),
-            risk_level: format!("{:?}", item.risk_assessment.level), // Risk level still relevant for timeouts?
-            goal: item.requesting_goal,
-            status: "timeout".to_string(),
-            requested_at: item.requested_at.to_rfc3339(),
-        }
-    }).collect();
+    let items: Vec<ApprovalItem> = timeout_items
+        .into_iter()
+        .map(|item| {
+            ApprovalItem {
+                id: item.id,
+                server_name: item.server_info.name,
+                endpoint: item.server_info.endpoint,
+                source: item.source.name(),
+                risk_level: format!("{:?}", item.risk_assessment.level), // Risk level still relevant for timeouts?
+                goal: item.requesting_goal,
+                status: "timeout".to_string(),
+                requested_at: item.requested_at.to_rfc3339(),
+            }
+        })
+        .collect();
 
     Ok(ApprovalListOutput {
         items: items.clone(),

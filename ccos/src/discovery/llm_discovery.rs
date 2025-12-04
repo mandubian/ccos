@@ -59,7 +59,7 @@ impl LlmDiscoveryService {
             .ok_or_else(|| RuntimeError::Generic(
                 "No LLM provider configured. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY.".to_string()
             ))?;
-        
+
         Ok(Self { provider })
     }
 
@@ -71,19 +71,19 @@ impl LlmDiscoveryService {
     /// Analyze a user's discovery goal to extract intent and generate expanded queries
     pub async fn analyze_goal(&self, goal: &str) -> RuntimeResult<IntentAnalysis> {
         let prompt = self.build_intent_analysis_prompt(goal);
-        
+
         let response = self.provider.generate_text(&prompt).await?;
-        
+
         self.parse_intent_analysis(&response, goal)
     }
 
     /// Rank discovery results using LLM semantic understanding
-    /// 
+    ///
     /// # Arguments
     /// * `goal` - The original user goal
     /// * `intent` - The analyzed intent (optional, for richer context)
     /// * `results` - Discovery results to rank (should be pre-filtered to top N for cost control)
-    /// 
+    ///
     /// # Returns
     /// Ranked results with LLM scores and reasoning
     pub async fn rank_results(
@@ -101,15 +101,16 @@ impl LlmDiscoveryService {
         let candidates: Vec<_> = results.into_iter().take(max_candidates).collect();
 
         let prompt = self.build_ranking_prompt(goal, intent, &candidates);
-        
+
         let response = self.provider.generate_text(&prompt).await?;
-        
+
         self.parse_ranking_response(&response, candidates)
     }
 
     /// Build the prompt for intent analysis
     fn build_intent_analysis_prompt(&self, goal: &str) -> String {
-        format!(r#"You are an expert at analyzing user goals for API and tool discovery.
+        format!(
+            r#"You are an expert at analyzing user goals for API and tool discovery.
 
 Given a user's goal, extract the intent and generate search queries for finding relevant APIs and MCP servers.
 
@@ -145,7 +146,8 @@ Guidelines:
 
 IMPORTANT: The MCP registry searches by name and description, so include specific service names in your queries.
 
-Respond with ONLY the JSON object, no markdown formatting or explanation."#)
+Respond with ONLY the JSON object, no markdown formatting or explanation."#
+        )
     }
 
     /// Build the prompt for ranking discovery results
@@ -230,11 +232,15 @@ Respond with ONLY the JSON array, no markdown formatting."#,
     fn parse_intent_analysis(&self, response: &str, goal: &str) -> RuntimeResult<IntentAnalysis> {
         // Extract JSON from response (handle markdown code blocks)
         let json_str = extract_json(response);
-        
+
         match serde_json::from_str::<IntentAnalysis>(json_str) {
             Ok(analysis) => Ok(analysis),
             Err(e) => {
-                log::warn!("Failed to parse LLM intent analysis: {}. Response: {}", e, response);
+                log::warn!(
+                    "Failed to parse LLM intent analysis: {}. Response: {}",
+                    e,
+                    response
+                );
                 // Return a fallback analysis based on simple keyword extraction
                 Ok(self.fallback_intent_analysis(goal))
             }
@@ -248,7 +254,7 @@ Respond with ONLY the JSON array, no markdown formatting."#,
         candidates: Vec<RegistrySearchResult>,
     ) -> RuntimeResult<Vec<RankedResult>> {
         let json_str = extract_json(response);
-        
+
         #[derive(Deserialize)]
         struct RankingEntry {
             index: usize,
@@ -261,7 +267,11 @@ Respond with ONLY the JSON array, no markdown formatting."#,
         let rankings: Vec<RankingEntry> = match serde_json::from_str(json_str) {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("Failed to parse LLM ranking response: {}. Response: {}", e, response);
+                log::warn!(
+                    "Failed to parse LLM ranking response: {}. Response: {}",
+                    e,
+                    response
+                );
                 // Fallback: return candidates with default scores
                 return Ok(candidates
                     .into_iter()
@@ -277,15 +287,19 @@ Respond with ONLY the JSON array, no markdown formatting."#,
 
         // Map rankings back to candidates
         let mut ranked: Vec<RankedResult> = Vec::with_capacity(candidates.len());
-        
+
         for (i, result) in candidates.into_iter().enumerate() {
             let ranking = rankings.iter().find(|r| r.index == i);
             let (score, reasoning, recommended) = if let Some(r) = ranking {
-                (r.score, r.reasoning.clone(), r.recommended || r.score >= 0.6)
+                (
+                    r.score,
+                    r.reasoning.clone(),
+                    r.recommended || r.score >= 0.6,
+                )
             } else {
                 (0.5, "No LLM ranking provided".to_string(), false)
             };
-            
+
             ranked.push(RankedResult {
                 result,
                 llm_score: score,
@@ -295,7 +309,11 @@ Respond with ONLY the JSON array, no markdown formatting."#,
         }
 
         // Sort by LLM score descending
-        ranked.sort_by(|a, b| b.llm_score.partial_cmp(&a.llm_score).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.sort_by(|a, b| {
+            b.llm_score
+                .partial_cmp(&a.llm_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Ok(ranked)
     }
@@ -304,9 +322,11 @@ Respond with ONLY the JSON array, no markdown formatting."#,
     fn fallback_intent_analysis(&self, goal: &str) -> IntentAnalysis {
         let goal_lower = goal.to_lowercase();
         let words: Vec<&str> = goal_lower.split_whitespace().collect();
-        
+
         // Simple action extraction
-        let action_verbs = ["list", "get", "search", "find", "create", "send", "track", "check", "fetch"];
+        let action_verbs = [
+            "list", "get", "search", "find", "create", "send", "track", "check", "fetch",
+        ];
         let primary_action = words
             .iter()
             .find(|w| action_verbs.contains(w))
@@ -314,14 +334,19 @@ Respond with ONLY the JSON array, no markdown formatting."#,
             .unwrap_or_else(|| "search".to_string());
 
         // Extract non-verb words as keywords
-        let stopwords = ["the", "a", "an", "for", "in", "on", "to", "and", "or", "of", "with"];
+        let stopwords = [
+            "the", "a", "an", "for", "in", "on", "to", "and", "or", "of", "with",
+        ];
         let domain_keywords: Vec<String> = words
             .iter()
             .filter(|w| !action_verbs.contains(w) && !stopwords.contains(w) && w.len() > 2)
             .map(|s| s.to_string())
             .collect();
 
-        let target_object = domain_keywords.first().cloned().unwrap_or_else(|| "items".to_string());
+        let target_object = domain_keywords
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "items".to_string());
 
         IntentAnalysis {
             primary_action,
@@ -329,10 +354,7 @@ Respond with ONLY the JSON array, no markdown formatting."#,
             domain_keywords: domain_keywords.clone(),
             synonyms: Vec::new(),
             implied_concepts: Vec::new(),
-            expanded_queries: vec![
-                goal.to_string(),
-                domain_keywords.join(" "),
-            ],
+            expanded_queries: vec![goal.to_string(), domain_keywords.join(" ")],
             confidence: 0.3,
         }
     }
@@ -341,7 +363,7 @@ Respond with ONLY the JSON array, no markdown formatting."#,
 /// Extract JSON from a response that might contain markdown code blocks
 fn extract_json(response: &str) -> &str {
     let trimmed = response.trim();
-    
+
     // Handle ```json ... ``` or ``` ... ```
     if trimmed.starts_with("```") {
         let start = trimmed.find('\n').map(|i| i + 1).unwrap_or(0);
@@ -350,11 +372,11 @@ fn extract_json(response: &str) -> &str {
             return trimmed[start..end].trim();
         }
     }
-    
+
     // Find positions of first '{' and '['
     let obj_start = trimmed.find('{');
     let arr_start = trimmed.find('[');
-    
+
     // Determine which comes first (prefer whichever appears earlier in the string)
     let (start, open_char, close_char) = match (obj_start, arr_start) {
         (Some(o), Some(a)) => {
@@ -368,7 +390,7 @@ fn extract_json(response: &str) -> &str {
         (None, Some(a)) => (a, '[', ']'),
         (None, None) => return trimmed,
     };
-    
+
     // Find matching closing character
     let mut depth = 0;
     for (i, c) in trimmed[start..].char_indices() {
@@ -381,7 +403,7 @@ fn extract_json(response: &str) -> &str {
             }
         }
     }
-    
+
     trimmed
 }
 
@@ -414,7 +436,7 @@ mod tests {
         let service = LlmDiscoveryService {
             provider: Box::new(StubProvider),
         };
-        
+
         let analysis = service.fallback_intent_analysis("list github issues");
         assert_eq!(analysis.primary_action, "list");
         assert!(analysis.domain_keywords.contains(&"github".to_string()));
@@ -423,7 +445,7 @@ mod tests {
 
     // Stub provider for testing
     struct StubProvider;
-    
+
     #[async_trait::async_trait]
     impl LlmProvider for StubProvider {
         async fn generate_intent(
@@ -433,7 +455,7 @@ mod tests {
         ) -> Result<crate::types::StorableIntent, RuntimeError> {
             Err(RuntimeError::Generic("Stub".to_string()))
         }
-        
+
         async fn generate_plan(
             &self,
             _intent: &crate::types::StorableIntent,
@@ -441,15 +463,18 @@ mod tests {
         ) -> Result<crate::types::Plan, RuntimeError> {
             Err(RuntimeError::Generic("Stub".to_string()))
         }
-        
-        async fn validate_plan(&self, _plan_content: &str) -> Result<crate::arbiter::llm_provider::ValidationResult, RuntimeError> {
+
+        async fn validate_plan(
+            &self,
+            _plan_content: &str,
+        ) -> Result<crate::arbiter::llm_provider::ValidationResult, RuntimeError> {
             Err(RuntimeError::Generic("Stub".to_string()))
         }
-        
+
         async fn generate_text(&self, _prompt: &str) -> Result<String, RuntimeError> {
             Ok(r#"{"primary_action": "test", "target_object": "test", "domain_keywords": [], "synonyms": [], "implied_concepts": [], "expanded_queries": [], "confidence": 0.5}"#.to_string())
         }
-        
+
         fn get_info(&self) -> crate::arbiter::llm_provider::LlmProviderInfo {
             crate::arbiter::llm_provider::LlmProviderInfo {
                 name: "Stub".to_string(),

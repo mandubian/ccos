@@ -24,13 +24,13 @@ use crate::planner::modular_planner::decomposition::{
     DecompositionError, EmbeddingProvider, HybridDecomposition,
 };
 use crate::planner::modular_planner::resolution::mcp::RuntimeMcpDiscovery;
-use crate::planner::modular_planner::resolution::semantic::{CapabilityCatalog, CapabilityInfo};
 use crate::planner::modular_planner::resolution::{
     CatalogConfig, CompositeResolution, McpResolution, ScoringMethod,
 };
 use crate::planner::modular_planner::{
     CatalogResolution, DecompositionStrategy, ModularPlanner, PatternDecomposition, PlannerConfig,
 };
+use crate::planner::CcosCatalogAdapter;
 use async_trait::async_trait;
 use rtfs::config::types::{AgentConfig, LlmProfile};
 use tokio::sync::Mutex as AsyncMutex;
@@ -413,7 +413,7 @@ impl ModularPlannerBuilder {
                 auth_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
             }
         }
-        
+
         // Create discovery service with auth headers
         let discovery_service = Arc::new(
             crate::mcp::core::MCPDiscoveryService::with_auth_headers(Some(auth_headers))
@@ -472,56 +472,6 @@ impl ModularPlannerBuilder {
             intent_graph: env.intent_graph,
             agent_config: env.agent_config,
         })
-    }
-}
-
-// ============================================================================
-// CCOS Catalog Adapter
-// ============================================================================
-
-/// Adapts the CCOS CatalogService to the CapabilityCatalog trait required by the planner
-struct CcosCatalogAdapter {
-    catalog: Arc<crate::catalog::CatalogService>,
-}
-
-impl CcosCatalogAdapter {
-    fn new(catalog: Arc<crate::catalog::CatalogService>) -> Self {
-        Self { catalog }
-    }
-}
-
-#[async_trait::async_trait(?Send)]
-impl CapabilityCatalog for CcosCatalogAdapter {
-    async fn list_capabilities(&self, _domain: Option<&str>) -> Vec<CapabilityInfo> {
-        // Return all capabilities (limit to 100 for sanity)
-        let hits = self.catalog.search_keyword("", None, 100);
-        hits.into_iter().map(catalog_hit_to_info).collect()
-    }
-
-    async fn get_capability(&self, id: &str) -> Option<CapabilityInfo> {
-        // Search specifically for this ID
-        let hits = self.catalog.search_keyword(id, None, 10);
-        hits.into_iter()
-            .find(|h| h.entry.id == id)
-            .map(catalog_hit_to_info)
-    }
-
-    async fn search(&self, query: &str, limit: usize) -> Vec<CapabilityInfo> {
-        // Use keyword search which has been improved for tokenized matching
-        let hits = self.catalog.search_keyword(query, None, limit);
-        hits.into_iter().map(catalog_hit_to_info).collect()
-    }
-}
-
-/// Helper to convert catalog hit to capability info
-fn catalog_hit_to_info(hit: crate::catalog::CatalogHit) -> CapabilityInfo {
-    CapabilityInfo {
-        id: hit.entry.id,
-        name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
-        description: hit.entry.description.unwrap_or_default(),
-        input_schema: None, // We don't need full schema for resolution matching
-        domains: Vec::new(),
-        categories: Vec::new(),
     }
 }
 

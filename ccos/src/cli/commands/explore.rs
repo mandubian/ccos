@@ -10,18 +10,15 @@ pub struct ExploreArgs {
     pub server: Option<String>,
 }
 
-pub async fn execute(
-    _ctx: &mut CliContext,
-    args: ExploreArgs,
-) -> RuntimeResult<()> {
+pub async fn execute(_ctx: &mut CliContext, args: ExploreArgs) -> RuntimeResult<()> {
     // Launch capability_explorer example as a subprocess for now
     // In future this should be integrated directly
-    
+
     let mut cmd = Command::new("cargo");
     cmd.arg("run")
-       .arg("--example")
-       .arg("capability_explorer")
-       .arg("--");
+        .arg("--example")
+        .arg("capability_explorer")
+        .arg("--");
 
     if let Some(s) = args.server {
         cmd.arg("--server");
@@ -37,9 +34,10 @@ pub async fn execute(
     })?;
 
     if !status.success() {
-        return Err(rtfs::runtime::error::RuntimeError::Generic("Explorer exited with error".to_string()));
+        return Err(rtfs::runtime::error::RuntimeError::Generic(
+            "Explorer exited with error".to_string(),
+        ));
     }
 
     Ok(())
 }
-

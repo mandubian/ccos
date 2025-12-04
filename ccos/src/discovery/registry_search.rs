@@ -1,9 +1,10 @@
-use crate::mcp::registry::MCPRegistryClient;
-use crate::discovery::approval_queue::{DiscoverySource, ServerInfo};
 use crate::discovery::apis_guru::ApisGuruClient;
+use crate::discovery::approval_queue::{DiscoverySource, ServerInfo};
+use crate::mcp::registry::MCPRegistryClient;
 use crate::synthesis::runtime::web_search_discovery::WebSearchDiscovery;
 use rtfs::runtime::error::RuntimeResult;
 use std::path::PathBuf;
+use serde::Deserialize;
 
 pub struct RegistrySearcher {
     mcp_client: MCPRegistryClient,
@@ -31,7 +32,7 @@ impl RegistrySearcher {
     pub async fn search(&self, query: &str) -> RuntimeResult<Vec<RegistrySearchResult>> {
         let mut results = Vec::new();
         let debug = std::env::var("CCOS_DEBUG").is_ok();
-        
+
         // 1. Search MCP Registry (remote)
         match self.mcp_client.search_servers(query).await {
             Ok(mcp_servers) => {
@@ -86,14 +87,17 @@ impl RegistrySearcher {
                 }
             }
         }
-        
+
         // 2. Search local overrides.json
         let override_results = self.search_overrides(query)?;
         if debug && !override_results.is_empty() {
-            eprintln!("🔍 Local overrides: found {} servers", override_results.len());
+            eprintln!(
+                "🔍 Local overrides: found {} servers",
+                override_results.len()
+            );
         }
         results.extend(override_results);
-        
+
         // 3. Search APIs.guru (OpenAPI directory)
         match self.search_apis_guru(query).await {
             Ok(apis_results) => results.extend(apis_results),
@@ -102,9 +106,9 @@ impl RegistrySearcher {
                 eprintln!("⚠️  APIs.guru search failed: {}", e);
             }
         }
-        
-        // 4. Web search (fallback) - can be disabled with CCOS_DISABLE_WEB_SEARCH=1
-        if std::env::var("CCOS_DISABLE_WEB_SEARCH").is_err() {
+
+        // 4. Web search (fallback) - can be disabled via env var or config file
+        if Self::is_web_search_enabled() {
             match self.search_web(query).await {
                 Ok(web_results) => results.extend(web_results),
                 Err(e) => {
@@ -113,59 +117,65 @@ impl RegistrySearcher {
                 }
             }
         } else if debug {
-            eprintln!("🔍 Web search disabled (CCOS_DISABLE_WEB_SEARCH=1)");
+            eprintln!("🔍 Web search disabled (via config or CCOS_DISABLE_WEB_SEARCH=1)");
         }
-        
+
         Ok(results)
     }
-    
+
     /// Search APIs.guru for OpenAPI specifications
     async fn search_apis_guru(&self, query: &str) -> RuntimeResult<Vec<RegistrySearchResult>> {
         let apis = self.apis_guru_client.search(query).await?;
-        
-        let results: Vec<RegistrySearchResult> = apis.into_iter().map(|api| {
-            // Use OpenAPI URL if available, otherwise Swagger URL
-            let endpoint = api.openapi_url
-                .or(api.swagger_url)
-                .unwrap_or_default();
-            
-            // Extract base URL from OpenAPI/Swagger URL for server endpoint
-            // For now, we'll use the spec URL itself - in production you'd parse the spec
-            let server_name = api.provider
-                .unwrap_or_else(|| api.name.clone());
-            
-            RegistrySearchResult {
-                source: DiscoverySource::ApisGuru { api_name: api.name.clone() },
-                server_info: ServerInfo {
-                    name: format!("apis.guru/{}", api.name),
-                    endpoint,
-                    description: api.description.or(Some(api.title)),
-                    auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server_name)),
-                    capabilities_path: None,
+
+        let results: Vec<RegistrySearchResult> = apis
+            .into_iter()
+            .map(|api| {
+                // Use OpenAPI URL if available, otherwise Swagger URL
+                let endpoint = api.openapi_url.or(api.swagger_url).unwrap_or_default();
+
+                // Extract base URL from OpenAPI/Swagger URL for server endpoint
+                // For now, we'll use the spec URL itself - in production you'd parse the spec
+                let server_name = api.provider.unwrap_or_else(|| api.name.clone());
+
+                RegistrySearchResult {
+                    source: DiscoverySource::ApisGuru {
+                        api_name: api.name.clone(),
+                    },
+                    server_info: ServerInfo {
+                        name: format!("apis.guru/{}", api.name),
+                        endpoint,
+                        description: api.description.or(Some(api.title)),
+                        auth_env_var: Some(
+                            crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(
+                                &server_name,
+                            ),
+                        ),
+                        capabilities_path: None,
+                        alternative_endpoints: Vec::new(),
+                    },
+                    match_score: 0.8, // Slightly lower score than MCP registry
                     alternative_endpoints: Vec::new(),
-                },
-                match_score: 0.8, // Slightly lower score than MCP registry
-                alternative_endpoints: Vec::new(),
-            }
-        }).collect();
-        
+                }
+            })
+            .collect();
+
         Ok(results)
     }
-    
+
     /// Search web for MCP servers
     async fn search_web(&self, query: &str) -> RuntimeResult<Vec<RegistrySearchResult>> {
         let mut web_searcher = WebSearchDiscovery::new("auto".to_string());
-        
+
         // Search specifically for MCP servers, not just any API
         let mcp_query = if query.to_lowercase().contains("mcp") {
             query.to_string()
         } else {
             format!("{} MCP server", query)
         };
-        
+
         // Search for MCP servers and API specs
         let search_results = web_searcher.search_for_api_specs(&mcp_query).await?;
-        
+
         let results: Vec<RegistrySearchResult> = search_results.into_iter()
             .filter_map(|result| {
                 // Include results that look like API endpoints or specs
@@ -270,10 +280,10 @@ impl RegistrySearcher {
                 }
             })
             .collect();
-        
+
         Ok(results)
     }
-    
+
     /// Extract domain name from URL for server naming
     fn extract_domain_from_url(url: &str) -> Option<String> {
         if let Ok(parsed) = url::Url::parse(url) {
@@ -289,20 +299,22 @@ impl RegistrySearcher {
         }
         None
     }
-    
+
     /// Search for servers in local overrides.json that match the query
     fn search_overrides(&self, query: &str) -> RuntimeResult<Vec<RegistrySearchResult>> {
         let mut results = Vec::new();
         let query_lower = query.to_lowercase();
         let debug = std::env::var("CCOS_DEBUG").is_ok();
-        
+
         // Split query into words, filtering out common action verbs
-        let action_verbs = ["list", "get", "create", "update", "delete", "show", "find", "search"];
+        let action_verbs = [
+            "list", "get", "create", "update", "delete", "show", "find", "search",
+        ];
         let query_words: Vec<&str> = query_lower
             .split_whitespace()
             .filter(|w| !action_verbs.contains(w) && w.len() > 2)
             .collect();
-        
+
         let overrides_path = Self::find_overrides_path();
         if let Some(path) = overrides_path {
             if debug {
@@ -314,52 +326,61 @@ impl RegistrySearcher {
                         for entry in entries {
                             if let Some(server) = entry.get("server") {
                                 // Check if server name or description matches query
-                                let name = server.get("name")
+                                let name = server
+                                    .get("name")
                                     .and_then(|n| n.as_str())
                                     .unwrap_or("")
                                     .to_lowercase();
-                                let description = server.get("description")
+                                let description = server
+                                    .get("description")
                                     .and_then(|d| d.as_str())
                                     .unwrap_or("")
                                     .to_lowercase();
-                                
+
                                 // Match if ANY domain word matches (more lenient)
                                 // This allows "list github issues" to match a server with "github" in name
-                                let any_word_match = query_words.iter().any(|word| {
-                                    name.contains(word) || description.contains(word)
-                                });
-                                
+                                let any_word_match = query_words
+                                    .iter()
+                                    .any(|word| name.contains(word) || description.contains(word));
+
                                 // Also check full query match for exact searches
-                                let full_match = name.contains(&query_lower) || description.contains(&query_lower);
-                                
+                                let full_match = name.contains(&query_lower)
+                                    || description.contains(&query_lower);
+
                                 if full_match || any_word_match {
                                     // Extract endpoint from remotes
-                                    let (endpoint, alternatives) = if let Some(remotes) = server.get("remotes").and_then(|r| r.as_array()) {
+                                    let (endpoint, alternatives) = if let Some(remotes) =
+                                        server.get("remotes").and_then(|r| r.as_array())
+                                    {
                                         // Collect all HTTP/HTTPS remotes
-                                        let all_http_remotes: Vec<String> = remotes.iter()
+                                        let all_http_remotes: Vec<String> = remotes
+                                            .iter()
                                             .filter_map(|r| {
-                                                r.get("url").and_then(|u| u.as_str())
+                                                r.get("url")
+                                                    .and_then(|u| u.as_str())
                                                     .filter(|url| url.starts_with("http"))
                                                     .map(|url| url.to_string())
                                             })
                                             .collect();
-                                        
+
                                         // Use first as primary, rest as alternatives
-                                        let primary = all_http_remotes.first().cloned().unwrap_or_default();
+                                        let primary =
+                                            all_http_remotes.first().cloned().unwrap_or_default();
                                         let mut alternatives = all_http_remotes;
                                         alternatives.retain(|url| url != &primary);
-                                        
+
                                         (primary, alternatives)
                                     } else {
                                         (String::new(), Vec::new())
                                     };
-                                    
+
                                     if !endpoint.is_empty() {
-                                        let server_name = server.get("name")
+                                        let server_name = server
+                                            .get("name")
                                             .and_then(|n| n.as_str())
                                             .unwrap_or("unknown")
                                             .to_string();
-                                        
+
                                         let server_name_clone = server_name.clone();
                                         results.push(RegistrySearchResult {
                                             source: DiscoverySource::LocalOverride {
@@ -386,10 +407,10 @@ impl RegistrySearcher {
                 }
             }
         }
-        
+
         Ok(results)
     }
-    
+
     fn find_overrides_path() -> Option<PathBuf> {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let candidates = vec![
@@ -398,7 +419,7 @@ impl RegistrySearcher {
                 .unwrap_or(&root)
                 .join("capabilities/mcp/overrides.json"),
         ];
-        
+
         for path in candidates {
             if path.exists() {
                 return Some(path);
@@ -406,5 +427,47 @@ impl RegistrySearcher {
         }
         None
     }
-}
 
+    /// Check if web search is enabled by checking both environment variable and config file
+    fn is_web_search_enabled() -> bool {
+        // First check environment variable (takes precedence)
+        if let Ok(disable) = std::env::var("CCOS_DISABLE_WEB_SEARCH") {
+            if disable == "1" || disable.to_lowercase() == "true" || disable.to_lowercase() == "on" {
+                return false;
+            }
+        }
+
+        // Check config file setting
+        // Try multiple config file paths
+        let config_paths = [
+            "config/agent_config.toml",
+            "../config/agent_config.toml",
+            "agent_config.toml",
+        ];
+
+        for config_path in &config_paths {
+            if let Ok(content) = std::fs::read_to_string(config_path) {
+                #[derive(Deserialize, Default)]
+                struct MissingCapabilitiesConfig {
+                    #[serde(default)]
+                    web_search: Option<bool>,
+                }
+
+                #[derive(Deserialize, Default)]
+                struct AgentConfigToml {
+                    #[serde(default)]
+                    missing_capabilities: MissingCapabilitiesConfig,
+                }
+
+                if let Ok(config) = toml::from_str::<AgentConfigToml>(&content) {
+                    if let Some(web_search) = config.missing_capabilities.web_search {
+                        return web_search;
+                    }
+                }
+            }
+        }
+
+        // Default: disabled (conservative)
+        false
+    }
+}

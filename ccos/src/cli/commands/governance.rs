@@ -17,10 +17,7 @@ pub enum GovernanceCommand {
     Constitution,
 }
 
-pub async fn execute(
-    _ctx: &mut CliContext,
-    command: GovernanceCommand,
-) -> RuntimeResult<()> {
+pub async fn execute(_ctx: &mut CliContext, command: GovernanceCommand) -> RuntimeResult<()> {
     match command {
         GovernanceCommand::Check { action } => {
             let allowed = crate::ops::governance::check_action(action).await?;

@@ -135,6 +135,8 @@ auto_resolution = true
 output_schema_introspection = true
 # Let the resolver call the promptstore-backed LLM synthesis flow
 llm_synthesis = true
+# Enable web search discovery fallback (disabled by default for performance/privacy)
+web_search = false
 # Optional guardrails
 human_approval_required = false
 # Tweak attempt/verbosity knobs (env overrides still win)

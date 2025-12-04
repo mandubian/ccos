@@ -27,7 +27,7 @@ impl Default for HybridConfig {
         Self {
             pattern_confidence_threshold: 0.7,
             prefer_grounded: true,
-            max_grounded_tools: 10,
+            max_grounded_tools: 0, // 0 = unlimited (like real MCP behavior)
         }
     }
 }

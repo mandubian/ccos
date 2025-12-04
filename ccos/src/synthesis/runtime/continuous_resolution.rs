@@ -7,9 +7,9 @@
 //! - Repeatable resolution with safe fallbacks
 
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::synthesis::introspection::mcp_introspector::MCPIntrospector;
 use crate::mcp::registry::MCPRegistryClient;
 use crate::synthesis::core::missing_capability_resolver::MissingCapabilityResolver;
+use crate::synthesis::introspection::mcp_introspector::MCPIntrospector;
 use crate::synthesis::registration::registration_flow::RegistrationFlow;
 use chrono::{DateTime, Utc};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
@@ -622,20 +622,27 @@ impl ContinuousResolutionLoop {
             ResolutionMethod::Manual => {
                 // Reconstruct a minimal request context to reuse the existing strategy logic
                 // In a real implementation, we might want to store/retrieve the original context
-                let request = crate::synthesis::missing_capability_resolver::MissingCapabilityRequest {
-                    capability_id: capability_id.to_string(),
-                    arguments: vec![], // No arguments available in this context
-                    context: Default::default(),
-                    requested_at: std::time::SystemTime::now(),
-                    attempt_count: 1, // Logic handles attempts separately
-                };
-                
-                if let Some(manifest) = self.resolver.attempt_user_interaction(&request, capability_id).await? {
+                let request =
+                    crate::synthesis::missing_capability_resolver::MissingCapabilityRequest {
+                        capability_id: capability_id.to_string(),
+                        arguments: vec![], // No arguments available in this context
+                        context: Default::default(),
+                        requested_at: std::time::SystemTime::now(),
+                        attempt_count: 1, // Logic handles attempts separately
+                    };
+
+                if let Some(manifest) = self
+                    .resolver
+                    .attempt_user_interaction(&request, capability_id)
+                    .await?
+                {
                     // Register if successful
-                    self.marketplace.register_capability_manifest(manifest).await?;
+                    self.marketplace
+                        .register_capability_manifest(manifest)
+                        .await?;
                     Ok(())
                 } else {
-                     Err(RuntimeError::Generic(
+                    Err(RuntimeError::Generic(
                         "User interaction did not resolve capability".to_string(),
                     ))
                 }

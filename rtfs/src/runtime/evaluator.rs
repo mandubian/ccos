@@ -4,6 +4,7 @@ use crate::ast::{
     CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr, ForExpr, IfExpr,
     Keyword, LetExpr, Literal, MapKey, MatchExpr, Symbol, TopLevel, TryCatchExpr,
 };
+use crate::compiler::expander::MacroExpander;
 use crate::runtime::environment::Environment;
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::execution_outcome::{CallMetadata, ExecutionOutcome, HostCall};
@@ -22,7 +23,6 @@ use crate::runtime::values::{Arity, BuiltinFunctionWithContext, Function, Value}
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
-use crate::compiler::expander::MacroExpander;
 type SpecialFormHandler =
     fn(&Evaluator, &[Expression], &mut Environment) -> Result<ExecutionOutcome, RuntimeError>;
 
@@ -126,7 +126,12 @@ impl Evaluator {
         host: Arc<dyn HostInterface>,
         macro_expander: MacroExpander,
     ) -> Self {
-        Self::new(module_registry, RuntimeContext::pure(), host, macro_expander)
+        Self::new(
+            module_registry,
+            RuntimeContext::pure(),
+            host,
+            macro_expander,
+        )
     }
 
     /// Configure type checking behavior
@@ -526,7 +531,12 @@ impl Evaluator {
         // Expand macros before evaluation
         let expanded_expr = match self.macro_expander.borrow_mut().expand(expr, 0) {
             Ok(expanded) => expanded,
-            Err(e) => return Err(RuntimeError::Generic(format!("Macro expansion error: {}", e))),
+            Err(e) => {
+                return Err(RuntimeError::Generic(format!(
+                    "Macro expansion error: {}",
+                    e
+                )))
+            }
         };
 
         // Create a new evaluator with incremented recursion depth for recursive calls
@@ -588,14 +598,12 @@ impl Evaluator {
                 }
             }
             // Macro-related expressions should have been expanded before evaluation
-            Expression::Quasiquote(_) |
-            Expression::Unquote(_) |
-            Expression::UnquoteSplicing(_) |
-            Expression::Defmacro(_) => {
-                Err(RuntimeError::InternalError(
-                    "Macro-related expressions should have been expanded before evaluation".to_string(),
-                ))
-            }
+            Expression::Quasiquote(_)
+            | Expression::Unquote(_)
+            | Expression::UnquoteSplicing(_)
+            | Expression::Defmacro(_) => Err(RuntimeError::InternalError(
+                "Macro-related expressions should have been expanded before evaluation".to_string(),
+            )),
             Expression::Vector(exprs) => {
                 let mut values_vec: Vec<Value> = Vec::new();
                 for e in exprs {
@@ -3800,6 +3808,11 @@ impl Default for Evaluator {
         // CCOS dependencies removed - using pure_host instead
         let host = crate::runtime::pure_host::create_pure_host();
 
-        Self::new(module_registry, security_context, host, MacroExpander::default())
+        Self::new(
+            module_registry,
+            security_context,
+            host,
+            MacroExpander::default(),
+        )
     }
 }

@@ -391,9 +391,9 @@ fn extract_map_keys(map_str: &str) -> Vec<String> {
 fn value_to_string(value: &Value) -> Option<String> {
     match value {
         Value::String(s) => Some(s.clone()),
-        Value::Keyword(k) => {
-            Some(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(k.clone())))
-        }
+        Value::Keyword(k) => Some(value_conversion::map_key_to_string(
+            &rtfs::ast::MapKey::Keyword(k.clone()),
+        )),
         _ => None,
     }
 }

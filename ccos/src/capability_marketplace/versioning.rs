@@ -26,7 +26,7 @@ impl SemanticVersion {
     /// - "1.0.0+build.123"
     pub fn parse(version_str: &str) -> RuntimeResult<Self> {
         let version_str = version_str.trim();
-        
+
         // Split on '+' for build metadata
         let (version_part, build_metadata) = if let Some(pos) = version_str.find('+') {
             (
@@ -65,9 +65,9 @@ impl SemanticVersion {
             .map_err(|_| RuntimeError::Generic(format!("Invalid minor version: {}", parts[1])))?;
 
         let patch = if parts.len() == 3 {
-            parts[2]
-                .parse::<u64>()
-                .map_err(|_| RuntimeError::Generic(format!("Invalid patch version: {}", parts[2])))?
+            parts[2].parse::<u64>().map_err(|_| {
+                RuntimeError::Generic(format!("Invalid patch version: {}", parts[2]))
+            })?
         } else {
             0
         };
@@ -120,9 +120,7 @@ impl SemanticVersion {
 
     /// Check if this version is a patch version bump from another
     pub fn is_patch_bump(&self, other: &Self) -> bool {
-        self.major == other.major
-            && self.minor == other.minor
-            && self.patch > other.patch
+        self.major == other.major && self.minor == other.minor && self.patch > other.patch
     }
 
     /// Check if this version is newer than another
@@ -239,10 +237,7 @@ pub fn detect_breaking_changes(
     let new_effects: std::collections::HashSet<_> = new_manifest.effects.iter().collect();
     let added_effects: Vec<_> = new_effects.difference(&old_effects).collect();
     if !added_effects.is_empty() {
-        breaking_changes.push(format!(
-            "Effects broadened: added {:?}",
-            added_effects
-        ));
+        breaking_changes.push(format!("Effects broadened: added {:?}", added_effects));
     }
 
     let old_permissions: std::collections::HashSet<_> = old_manifest.permissions.iter().collect();
@@ -313,4 +308,3 @@ mod tests {
         );
     }
 }
-

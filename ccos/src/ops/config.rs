@@ -1,7 +1,7 @@
 //! Config operations - pure logic functions for configuration management
 
-use rtfs::runtime::error::RuntimeResult;
 use super::ConfigInfo;
+use rtfs::runtime::error::RuntimeResult;
 use std::path::PathBuf;
 
 /// Show current configuration

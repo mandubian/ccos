@@ -14,13 +14,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use super::missing_capability_resolver::{MissingCapabilityRequest, ResolutionResult};
 use crate::arbiter::DelegatingArbiter;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::planner::modular_planner::types::{
     ApiAction, DomainHint, IntentType, OutputFormat, ToolSummary, TransformType,
 };
 use crate::planner::modular_planner::{ResolutionContext, ResolutionError};
-use super::missing_capability_resolver::{MissingCapabilityRequest, ResolutionResult};
 
 /// Trait for missing capability resolution strategies
 #[async_trait]
@@ -188,8 +188,12 @@ impl PureRtfsGenerationStrategy {
 
         let domain = DomainHint::infer_from_text(capability_id).unwrap_or(DomainHint::Generic);
 
-        let capability_type = Self::infer_capability_type(capability_id)
-            .ok_or_else(|| ResolutionError::NotFound(format!("Could not infer capability type for '{}'", capability_id)))?;
+        let capability_type = Self::infer_capability_type(capability_id).ok_or_else(|| {
+            ResolutionError::NotFound(format!(
+                "Could not infer capability type for '{}'",
+                capability_id
+            ))
+        })?;
 
         let rtfs_code = match capability_type {
             IntentType::DataTransform { transform } => self.generate_data_transform_implementation(
@@ -590,7 +594,9 @@ impl MissingCapabilityStrategy for UserInteractionStrategy {
     ) -> Result<ResolutionResult, ResolutionError> {
         // Check if we should actually be interactive (via environment variable)
         // Default to non-interactive to not block CI/tests unless requested
-        let is_interactive = std::env::var("CCOS_INTERACTIVE").map(|v| v == "1" || v == "true").unwrap_or(false);
+        let is_interactive = std::env::var("CCOS_INTERACTIVE")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
 
         println!("\n🤖 MISSING CAPABILITY: {}", request.capability_id);
         println!("   I couldn't find this capability automatically.");
@@ -598,10 +604,14 @@ impl MissingCapabilityStrategy for UserInteractionStrategy {
         // Suggest alternatives from marketplace
         if let Some(marketplace) = &self.marketplace {
             // Extract the last part of the capability ID (e.g., "list_issues") to search for
-            let search_term = request.capability_id.split('.').last().unwrap_or(&request.capability_id);
+            let search_term = request
+                .capability_id
+                .split('.')
+                .last()
+                .unwrap_or(&request.capability_id);
             // Search for capabilities containing this term
             let candidates = marketplace.search_by_id(search_term).await;
-            
+
             if !candidates.is_empty() {
                 println!("   Did you mean one of these?");
                 for (i, cap) in candidates.iter().take(3).enumerate() {
@@ -614,12 +624,12 @@ impl MissingCapabilityStrategy for UserInteractionStrategy {
         println!("   1. Generate Pure RTFS implementation (mock)");
         println!("   2. Search for generic alternative");
         println!("   3. Skip resolution (fail)");
-        
+
         let choice = if is_interactive {
             use std::io::{self, Write};
             print!("   > ");
             io::stdout().flush().unwrap_or(());
-            
+
             let mut input = String::new();
             if io::stdin().read_line(&mut input).is_ok() {
                 input.trim().to_string()
@@ -637,7 +647,7 @@ impl MissingCapabilityStrategy for UserInteractionStrategy {
                 let strategy = PureRtfsGenerationStrategy::new(self.config.clone());
                 match strategy.generate_pure_rtfs_implementation(request).await {
                     Ok(rtfs_source) => {
-                         Ok(ResolutionResult::Resolved {
+                        Ok(ResolutionResult::Resolved {
                             capability_id: request.capability_id.clone(), // We resolve for the requested ID
                             resolution_method: "user_selected_pure_rtfs".to_string(),
                             provider_info: Some(rtfs_source), // We pass the source back
@@ -646,8 +656,12 @@ impl MissingCapabilityStrategy for UserInteractionStrategy {
                     Err(e) => Err(e),
                 }
             }
-            "2" => Err(ResolutionError::NotFound("Generic search not implemented".to_string())),
-            _ => Err(ResolutionError::NotFound("User skipped resolution".to_string())),
+            "2" => Err(ResolutionError::NotFound(
+                "Generic search not implemented".to_string(),
+            )),
+            _ => Err(ResolutionError::NotFound(
+                "User skipped resolution".to_string(),
+            )),
         }
     }
 }
@@ -691,9 +705,9 @@ impl MissingCapabilityStrategy for ExternalLlmHintStrategy {
     ) -> Result<ResolutionResult, ResolutionError> {
         match self.generate_implementation(request).await {
             Ok(_) => {
-                 // For the trait implementation, we assume the caller will handle registration 
-                 // if they use the specific method, but here we just claim success.
-                 Ok(ResolutionResult::Resolved {
+                // For the trait implementation, we assume the caller will handle registration
+                // if they use the specific method, but here we just claim success.
+                Ok(ResolutionResult::Resolved {
                     capability_id: request.capability_id.clone(),
                     resolution_method: self.name().to_string(),
                     provider_info: Some("llm_generated".to_string()),
@@ -711,15 +725,14 @@ impl ExternalLlmHintStrategy {
         request: &MissingCapabilityRequest,
     ) -> Result<String, ResolutionError> {
         let arbiter = self.arbiter.as_ref().ok_or_else(|| {
-             ResolutionError::Internal("Arbiter not configured for LLM synthesis".to_string())
+            ResolutionError::Internal("Arbiter not configured for LLM synthesis".to_string())
         })?;
 
         let prompt = format!(
             "How would you implement a capability called '{}' in RTFS?\n\
              Provide ONLY the RTFS code block starting with (capability ...).\n\
              Context: {:?}",
-            request.capability_id,
-            request.context
+            request.capability_id, request.context
         );
 
         match arbiter.query_llm(&prompt).await {
@@ -729,7 +742,7 @@ impl ExternalLlmHintStrategy {
                     let rest = &response[start..];
                     if let Some(end) = rest[3..].find("```") {
                         // Skip language tag if present
-                        let content = &rest[3..end+3];
+                        let content = &rest[3..end + 3];
                         let newline = content.find('\n').unwrap_or(0);
                         content[newline..].trim().to_string()
                     } else {
@@ -741,12 +754,17 @@ impl ExternalLlmHintStrategy {
 
                 // Validate it looks like RTFS
                 if code.starts_with("(capability") {
-                     Ok(code.to_string())
+                    Ok(code.to_string())
                 } else {
-                    Err(ResolutionError::Internal("LLM did not return valid RTFS code".to_string()))
+                    Err(ResolutionError::Internal(
+                        "LLM did not return valid RTFS code".to_string(),
+                    ))
                 }
             }
-            Err(e) => Err(ResolutionError::Internal(format!("LLM query failed: {}", e))),
+            Err(e) => Err(ResolutionError::Internal(format!(
+                "LLM query failed: {}",
+                e
+            ))),
         }
     }
 }
@@ -781,9 +799,9 @@ impl MissingCapabilityStrategy for ServiceDiscoveryHintStrategy {
     ) -> Result<ResolutionResult, ResolutionError> {
         // Placeholder for service discovery hint logic
         // This would typically query a known registry or ask the user for a URL/name
-        
+
         Err(ResolutionError::NotFound(format!(
-            "No service discovery hints available for {}", 
+            "No service discovery hints available for {}",
             request.capability_id
         )))
     }

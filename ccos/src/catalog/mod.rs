@@ -138,7 +138,9 @@ impl CatalogEntry {
     /// Check if entry matches a domain (supports prefix matching)
     pub fn matches_domain(&self, domain: &str) -> bool {
         self.domains.iter().any(|d| {
-            d == domain || d.starts_with(&format!("{}.", domain)) || domain.starts_with(&format!("{}.", d))
+            d == domain
+                || d.starts_with(&format!("{}.", domain))
+                || domain.starts_with(&format!("{}.", d))
         })
     }
 
@@ -162,12 +164,18 @@ impl CatalogEntry {
         let inputs = extract_schema_fields(manifest.input_schema.as_ref());
         let outputs = extract_schema_fields(manifest.output_schema.as_ref());
         let provider = Some(provider_to_string(&manifest.provider));
-        
+
         // Include domains and categories in search blob for better discoverability
         let domain_text = manifest.domains.join(" ");
         let category_text = manifest.categories.join(" ");
         let search_blob = build_search_blob(
-            &[&manifest.id, &manifest.name, &manifest.description, &domain_text, &category_text],
+            &[
+                &manifest.id,
+                &manifest.name,
+                &manifest.description,
+                &domain_text,
+                &category_text,
+            ],
             &tags,
             &inputs,
             &outputs,
@@ -247,8 +255,8 @@ impl CatalogEntry {
             goal,
             search_blob,
             embedding,
-            domains: Vec::new(),  // Plans don't have domains yet
-            categories: Vec::new(),  // Plans don't have categories yet
+            domains: Vec::new(),    // Plans don't have domains yet
+            categories: Vec::new(), // Plans don't have categories yet
         }
     }
 }
@@ -468,9 +476,10 @@ fn infer_source_from_provider(
         ProviderType::MCP(_) | ProviderType::OpenApi(_) | ProviderType::Registry(_) => {
             CatalogSource::Discovered
         }
-        ProviderType::Local(_) | ProviderType::RemoteRTFS(_) | ProviderType::Stream(_) | ProviderType::Native(_) => {
-            CatalogSource::Generated
-        }
+        ProviderType::Local(_)
+        | ProviderType::RemoteRTFS(_)
+        | ProviderType::Stream(_)
+        | ProviderType::Native(_) => CatalogSource::Generated,
         ProviderType::Http(_) | ProviderType::A2A(_) | ProviderType::Plugin(_) => {
             CatalogSource::Unknown
         }

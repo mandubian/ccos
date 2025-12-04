@@ -7,10 +7,10 @@ use super::schema_builder::{ParamSchema, ParamTypeInfo};
 use super::skill_extractor::{
     extract_constraints, extract_skills_advanced, ExtractedSkill, SkillCategory,
 };
-use crate::synthesis::status::{STATUS_PROCESSING, STATUS_READY_FOR_EXECUTION};
-use crate::synthesis::InteractionTurn;
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::rtfs_bridge::extractors::capability_def_to_rtfs_string;
+use crate::synthesis::status::{STATUS_PROCESSING, STATUS_READY_FOR_EXECUTION};
+use crate::synthesis::InteractionTurn;
 use rtfs::ast::{
     CapabilityDefinition, DoExpr, Expression, Keyword, LetBinding, LetExpr, Literal, MapKey,
     Property, Symbol,

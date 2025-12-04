@@ -2374,7 +2374,6 @@ impl StandardLibrary {
     }
 }
 
-
 /// Load the standard library into a module registry
 /// This creates a "stdlib" module containing all built-in functions
 pub fn load_stdlib(module_registry: &ModuleRegistry) -> RuntimeResult<()> {

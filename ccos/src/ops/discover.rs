@@ -4,6 +4,57 @@ use crate::discovery::config::DiscoveryConfig;
 use crate::discovery::{ApprovalQueue, GoalDiscoveryAgent};
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
 use rtfs::runtime::error::RuntimeResult;
+use std::path::PathBuf;
+
+/// Find the workspace root directory (where capabilities/ should be)
+/// Checks for ccos/Cargo.toml (workspace root) or walks up to find capabilities/
+fn find_workspace_root() -> PathBuf {
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    
+    // Strategy 1: Check if we're at workspace root (has ccos/Cargo.toml AND capabilities/)
+    if current_dir.join("ccos/Cargo.toml").exists() && current_dir.join("capabilities").exists() {
+        return current_dir;
+    }
+    
+    // Strategy 2: Walk up the directory tree to find workspace root
+    // Look for a directory that has both ccos/Cargo.toml and capabilities/
+    let mut path = current_dir.clone();
+    loop {
+        if path.join("ccos/Cargo.toml").exists() && path.join("capabilities").exists() {
+            return path;
+        }
+        if let Some(parent) = path.parent() {
+            path = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+    
+    // Strategy 3: Walk up to find capabilities/ directory (workspace root indicator)
+    let mut path = current_dir.clone();
+    loop {
+        if path.join("capabilities").exists() {
+            return path;
+        }
+        if let Some(parent) = path.parent() {
+            path = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+    
+    // Strategy 4: If we're inside ccos/ directory, go up one level
+    if current_dir.join("Cargo.toml").exists() {
+        if let Some(parent) = current_dir.parent() {
+            if parent.join("capabilities").exists() || parent.join("ccos/Cargo.toml").exists() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+    
+    // Last resort: use current directory
+    current_dir
+}
 
 /// Options for goal-driven server discovery
 #[derive(Debug, Clone)]
@@ -43,7 +94,8 @@ pub async fn discover_by_goal_with_options(
     let mut config = DiscoveryConfig::from_env();
     config.match_threshold = options.threshold;
 
-    let queue = ApprovalQueue::new(".");
+    let workspace_root = find_workspace_root();
+    let queue = ApprovalQueue::new(&workspace_root);
     let agent = GoalDiscoveryAgent::new_with_config(queue, config);
 
     // Show mode being used
@@ -56,7 +108,7 @@ pub async fn discover_by_goal_with_options(
 
     if scored_results.is_empty() {
         println!("🔍 No matching servers found.");
-        
+
         if options.interactive {
             // Fallback: ask user if they want to add a server manually
             println!();
@@ -65,18 +117,20 @@ pub async fn discover_by_goal_with_options(
                 .default(false)
                 .interact()
                 .unwrap_or(false);
-                
+
             if add_manual {
                 return handle_manual_url_entry(&agent, &goal, options.llm).await;
             }
         }
-        
+
         return Ok(vec![]);
     }
 
     // Apply top N limit if specified
     // In non-interactive mode, default to top 3 to avoid spamming the approval queue
-    let effective_top = options.top.or(if !options.interactive { Some(3) } else { None });
+    let effective_top = options
+        .top
+        .or(if !options.interactive { Some(3) } else { None });
     let total_found = scored_results.len();
 
     let results: Vec<_> = if let Some(n) = effective_top {
@@ -111,10 +165,7 @@ pub async fn discover_by_goal_with_options(
                     .chars()
                     .take(60)
                     .collect::<String>();
-                format!(
-                    "[{:.2}] {} - {}",
-                    score, result.server_info.name, desc
-                )
+                format!("[{:.2}] {} - {}", score, result.server_info.name, desc)
             })
             .collect();
 
@@ -124,18 +175,20 @@ pub async fn discover_by_goal_with_options(
 
         // Show instructions before the multi-select
         println!("\n📋 All servers pre-selected. Use SPACE to toggle, ENTER to confirm.\n");
-        
+
         // Show interactive multi-select (all pre-selected - user deselects unwanted)
         let selections = MultiSelect::with_theme(&ColorfulTheme::default())
             .with_prompt("Select servers to queue")
             .items(&items)
             .defaults(&vec![true; items.len()]) // Pre-select all
             .interact()
-            .map_err(|e| rtfs::runtime::error::RuntimeError::Generic(format!("Selection cancelled: {}", e)))?;
+            .map_err(|e| {
+                rtfs::runtime::error::RuntimeError::Generic(format!("Selection cancelled: {}", e))
+            })?;
 
         if selections.is_empty() {
             println!("❌ No servers selected.");
-            
+
             // Fallback: ask user if they want to add a server manually
             println!();
             let add_manual = Confirm::with_theme(&ColorfulTheme::default())
@@ -143,61 +196,69 @@ pub async fn discover_by_goal_with_options(
                 .default(false)
                 .interact()
                 .unwrap_or(false);
-                
+
             if add_manual {
                 return handle_manual_url_entry(&agent, &goal, options.llm).await;
             }
-            
+
             return Ok(vec![]);
         }
-        
+
         println!("✓ Selected {} of {} servers", selections.len(), items.len());
 
         // Filter to selected items
-        let selected: Vec<_> = selections
-            .into_iter()
-            .map(|i| results[i].clone())
-            .collect();
-        
+        let selected: Vec<_> = selections.into_iter().map(|i| results[i].clone()).collect();
+
         // Check for conflicts with already approved or pending servers and prompt user
-        let queue = crate::discovery::ApprovalQueue::new(".");
+        let workspace_root = find_workspace_root();
+        let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
         let mut servers_to_queue = Vec::new();
-        
+
         for (result, score) in &selected {
             let approved = queue.list_approved()?;
             let pending = queue.list_pending()?;
-            
+
             // Check approved servers first
             let approved_conflict = approved.iter().find(|existing| {
-                existing.server_info.name == result.server_info.name ||
-                (!result.server_info.endpoint.is_empty() && 
-                 existing.server_info.endpoint == result.server_info.endpoint)
+                existing.server_info.name == result.server_info.name
+                    || (!result.server_info.endpoint.is_empty()
+                        && existing.server_info.endpoint == result.server_info.endpoint)
             });
-            
+
             if let Some(existing) = approved_conflict {
                 println!();
-                println!("⚠️  Server \"{}\" already exists in approved list", existing.server_info.name);
-                println!("   Current: v{}, approved on {}", 
+                println!(
+                    "⚠️  Server \"{}\" already exists in approved list",
+                    existing.server_info.name
+                );
+                println!(
+                    "   Current: v{}, approved on {}",
                     existing.version,
                     &existing.approved_at.to_rfc3339()[..10]
                 );
-                println!("   New discovery: \"{}\" ({})", result.server_info.name, result.server_info.endpoint);
+                println!(
+                    "   New discovery: \"{}\" ({})",
+                    result.server_info.name, result.server_info.endpoint
+                );
                 println!();
-                
+
                 let options = vec![
                     "Add to pending for re-approval (merge on approval)",
                     "Skip - Keep existing, don't add to pending",
                 ];
-                
+
                 let selection = Select::with_theme(&ColorfulTheme::default())
                     .with_prompt("What would you like to do?")
                     .items(&options)
                     .default(0)
                     .interact()
-                    .map_err(|e| rtfs::runtime::error::RuntimeError::Generic(
-                        format!("Selection error: {}", e)
-                    ))?;
-                
+                    .map_err(|e| {
+                        rtfs::runtime::error::RuntimeError::Generic(format!(
+                            "Selection error: {}",
+                            e
+                        ))
+                    })?;
+
                 if selection == 0 {
                     // Add to pending
                     servers_to_queue.push((result.clone(), *score));
@@ -206,39 +267,49 @@ pub async fn discover_by_goal_with_options(
                 }
                 continue;
             }
-            
+
             // Check pending servers
             let pending_conflict = pending.iter().find(|existing| {
-                existing.server_info.name == result.server_info.name ||
-                (!result.server_info.endpoint.is_empty() && 
-                 existing.server_info.endpoint == result.server_info.endpoint)
+                existing.server_info.name == result.server_info.name
+                    || (!result.server_info.endpoint.is_empty()
+                        && existing.server_info.endpoint == result.server_info.endpoint)
             });
-            
+
             if let Some(existing) = pending_conflict {
                 println!();
-                println!("⚠️  Server \"{}\" already exists in pending list", existing.server_info.name);
-                println!("   Current: queued on {}, expires on {}", 
+                println!(
+                    "⚠️  Server \"{}\" already exists in pending list",
+                    existing.server_info.name
+                );
+                println!(
+                    "   Current: queued on {}, expires on {}",
                     &existing.requested_at.to_rfc3339()[..10],
                     &existing.expires_at.to_rfc3339()[..10]
                 );
-                println!("   New discovery: \"{}\" ({})", result.server_info.name, result.server_info.endpoint);
+                println!(
+                    "   New discovery: \"{}\" ({})",
+                    result.server_info.name, result.server_info.endpoint
+                );
                 println!();
-                
+
                 let options = vec![
                     "Merge - Update existing pending entry (keeps existing ID)",
                     "Replace - Remove old entry and add new one",
                     "Skip - Keep existing pending entry",
                 ];
-                
+
                 let selection = Select::with_theme(&ColorfulTheme::default())
                     .with_prompt("What would you like to do?")
                     .items(&options)
                     .default(0)
                     .interact()
-                    .map_err(|e| rtfs::runtime::error::RuntimeError::Generic(
-                        format!("Selection error: {}", e)
-                    ))?;
-                
+                    .map_err(|e| {
+                        rtfs::runtime::error::RuntimeError::Generic(format!(
+                            "Selection error: {}",
+                            e
+                        ))
+                    })?;
+
                 if selection == 0 {
                     // Merge - add will automatically merge
                     servers_to_queue.push((result.clone(), *score));
@@ -254,19 +325,19 @@ pub async fn discover_by_goal_with_options(
                 servers_to_queue.push((result.clone(), *score));
             }
         }
-        
+
         if servers_to_queue.is_empty() {
             println!("⚠️  No servers to queue (all skipped or already approved)");
             return Ok(vec![]);
         }
-        
+
         // Queue servers to pending FIRST (before introspection)
         let mut queued_servers = Vec::new();
         for (result, score) in &servers_to_queue {
             let id = agent.queue_result(&goal, result.clone(), *score)?;
             queued_servers.push((id, result.clone()));
         }
-        
+
         // Ask if user wants to introspect tools
         println!();
         let introspect = Confirm::with_theme(&ColorfulTheme::default())
@@ -274,62 +345,79 @@ pub async fn discover_by_goal_with_options(
             .default(true)
             .interact()
             .unwrap_or(false);
-        
+
         if introspect {
             println!("\n🔍 Introspecting queued servers...\n");
             for (pending_id, result) in &queued_servers {
                 let name = &result.server_info.name;
-                
+
                 // Collect all endpoints to try (primary + alternatives)
                 let mut endpoints_to_try = vec![result.server_info.endpoint.clone()];
                 endpoints_to_try.extend(result.server_info.alternative_endpoints.clone());
-                
+
                 // Filter to only HTTP endpoints
                 endpoints_to_try.retain(|e| !e.is_empty() && e.starts_with("http"));
-                
+
                 if endpoints_to_try.is_empty() {
                     println!("⚠️  {} - No HTTP endpoint, skipping", name);
                     continue;
                 }
-                
+
                 // Show which endpoints we'll try
                 if endpoints_to_try.len() > 1 {
-                    println!("📡 Connecting to {} ({} endpoint(s) available)...", name, endpoints_to_try.len());
+                    println!(
+                        "📡 Connecting to {} ({} endpoint(s) available)...",
+                        name,
+                        endpoints_to_try.len()
+                    );
                 } else {
                     println!("📡 Connecting to {}...", name);
                 }
-                
+
                 let auth_env_var = result.server_info.auth_env_var.as_deref();
                 let mut introspection_success = false;
-                
+
                 // Try each endpoint until one succeeds
                 for (idx, endpoint) in endpoints_to_try.iter().enumerate() {
                     if idx > 0 {
-                        println!("   🔄 Trying alternative endpoint {} of {}...", idx + 1, endpoints_to_try.len());
+                        println!(
+                            "   🔄 Trying alternative endpoint {} of {}...",
+                            idx + 1,
+                            endpoints_to_try.len()
+                        );
                     }
-                    
-                    match crate::ops::server::introspect_server_by_url(endpoint, name, auth_env_var).await {
+
+                    match crate::ops::server::introspect_server_by_url(endpoint, name, auth_env_var)
+                        .await
+                    {
                         Ok(introspection) => {
                             if introspection.tools.is_empty() {
                                 println!("   ⚠️  No tools found");
                             } else {
                                 println!("   ✅ Found {} tools:", introspection.tools.len());
                                 for tool in introspection.tools.iter().take(10) {
-                                    let desc = tool.description.as_deref()
+                                    let desc = tool
+                                        .description
+                                        .as_deref()
                                         .map(|d| d.chars().take(50).collect::<String>())
                                         .unwrap_or_default();
                                     println!("      • {} - {}", tool.tool_name, desc);
                                 }
                                 if introspection.tools.len() > 10 {
-                                    println!("      ... and {} more", introspection.tools.len() - 10);
+                                    println!(
+                                        "      ... and {} more",
+                                        introspection.tools.len() - 10
+                                    );
                                 }
-                                
+
                                 // Save tools to RTFS file and link to pending entry
                                 if let Err(e) = crate::ops::server::save_discovered_tools(
                                     &introspection,
                                     &result.server_info,
                                     Some(pending_id),
-                                ).await {
+                                )
+                                .await
+                                {
                                     println!("   ⚠️  Failed to save capabilities: {}", e);
                                 } else {
                                     println!("   💾 Capabilities saved to RTFS file");
@@ -340,45 +428,69 @@ pub async fn discover_by_goal_with_options(
                         }
                         Err(e) => {
                             let error_msg = e.to_string();
-                            
+
                             // If this is the last endpoint, show the error
                             if idx == endpoints_to_try.len() - 1 {
                                 // Check if it's an auth failure
-                                if error_msg.contains("401") || error_msg.contains("Unauthorized") || error_msg.contains("not set") {
+                                if error_msg.contains("401")
+                                    || error_msg.contains("Unauthorized")
+                                    || error_msg.contains("not set")
+                                {
                                     println!("   ⚠️  Authentication required");
-                                    
+
                                     // Show expected env var
                                     if let Some(env_var) = auth_env_var {
-                                        println!("   📝 Expected environment variable: {}", env_var);
-                                        println!("   💡 Set it with: export {}=<your-token>", env_var);
-                                        
+                                        println!(
+                                            "   📝 Expected environment variable: {}",
+                                            env_var
+                                        );
+                                        println!(
+                                            "   💡 Set it with: export {}=<your-token>",
+                                            env_var
+                                        );
+
                                         // GitHub-specific hint
                                         if name.to_lowercase().contains("github") {
                                             println!("   💡 For GitHub, you can also use: GITHUB_TOKEN or GITHUB_PAT");
                                         }
-                                        
+
                                         // Ask if user wants to update the token and retry
                                         println!();
-                                        let retry = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                                            .with_prompt(&format!("Do you want to set {} and retry?", env_var))
-                                            .default(false)
-                                            .interact()
-                                            .unwrap_or(false);
-                                        
+                                        let retry = dialoguer::Confirm::with_theme(
+                                            &dialoguer::theme::ColorfulTheme::default(),
+                                        )
+                                        .with_prompt(&format!(
+                                            "Do you want to set {} and retry?",
+                                            env_var
+                                        ))
+                                        .default(false)
+                                        .interact()
+                                        .unwrap_or(false);
+
                                         if retry {
                                             // Prompt for token (hidden input)
-                                            let token = dialoguer::Password::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                                                .with_prompt(&format!("Enter token for {} (input hidden)", env_var))
-                                                .interact()
-                                                .ok();
-                                            
+                                            let token = dialoguer::Password::with_theme(
+                                                &dialoguer::theme::ColorfulTheme::default(),
+                                            )
+                                            .with_prompt(&format!(
+                                                "Enter token for {} (input hidden)",
+                                                env_var
+                                            ))
+                                            .interact()
+                                            .ok();
+
                                             if let Some(token) = token {
                                                 // Validate env_var name before setting (set_var can panic on invalid names)
-                                                let token_set = if env_var.is_empty() || env_var.contains('=') || env_var.contains('\0') {
+                                                let token_set = if env_var.is_empty()
+                                                    || env_var.contains('=')
+                                                    || env_var.contains('\0')
+                                                {
                                                     println!("   ⚠️  Invalid environment variable name: {}", env_var);
                                                     false
                                                 } else if token.contains('\0') {
-                                                    println!("   ⚠️  Token contains invalid characters");
+                                                    println!(
+                                                        "   ⚠️  Token contains invalid characters"
+                                                    );
                                                     false
                                                 } else {
                                                     // Safe to set: env_var is validated and token is from user input
@@ -390,7 +502,7 @@ pub async fn discover_by_goal_with_options(
                                                     println!("   ✓ Token set. Retrying...");
                                                     true
                                                 };
-                                                
+
                                                 // Only retry if token was successfully set
                                                 if token_set {
                                                     // Retry with new token
@@ -453,7 +565,10 @@ pub async fn discover_by_goal_with_options(
                             } else {
                                 // Not the last endpoint, just log and continue trying
                                 if endpoints_to_try.len() > 1 {
-                                    println!("   ⚠️  Failed: {} (trying next endpoint...)", error_msg);
+                                    println!(
+                                        "   ⚠️  Failed: {} (trying next endpoint...)",
+                                        error_msg
+                                    );
                                 } else {
                                     println!("   ❌ Failed: {}", error_msg);
                                 }
@@ -461,38 +576,43 @@ pub async fn discover_by_goal_with_options(
                         }
                     }
                 }
-                
+
                 // If all endpoints failed, show a summary
                 if !introspection_success && endpoints_to_try.len() > 1 {
-                    println!("   ❌ All {} endpoint(s) failed for {}", endpoints_to_try.len(), name);
+                    println!(
+                        "   ❌ All {} endpoint(s) failed for {}",
+                        endpoints_to_try.len(),
+                        name
+                    );
                 }
                 println!();
             }
         }
-        
+
         // Return queued IDs (already queued before introspection)
         return Ok(queued_servers.iter().map(|(id, _)| id.clone()).collect());
     }
-    
+
     // Non-interactive mode: check for conflicts and queue
-    let queue = crate::discovery::ApprovalQueue::new(".");
+    let workspace_root = find_workspace_root();
+    let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
     let approved = queue.list_approved()?;
     let mut servers_to_queue = Vec::new();
-    
+
     for (result, score) in &results {
         let conflict = approved.iter().find(|existing| {
-            existing.server_info.name == result.server_info.name ||
-            (!result.server_info.endpoint.is_empty() && 
-             existing.server_info.endpoint == result.server_info.endpoint)
+            existing.server_info.name == result.server_info.name
+                || (!result.server_info.endpoint.is_empty()
+                    && existing.server_info.endpoint == result.server_info.endpoint)
         });
-        
+
         if conflict.is_none() {
             // No conflict, add to pending
             servers_to_queue.push((result.clone(), *score));
         }
         // If conflict exists, skip silently in non-interactive mode
     }
-    
+
     // Queue selected results
     let mut queued_ids = Vec::new();
     for (result, score) in servers_to_queue {
@@ -523,7 +643,7 @@ async fn handle_manual_url_entry(
     llm_enabled: bool,
 ) -> RuntimeResult<Vec<String>> {
     let mut all_ids = Vec::new();
-    
+
     loop {
         // Ask what type of URL
         let url_types = vec![
@@ -531,24 +651,28 @@ async fn handle_manual_url_entry(
             "API Documentation page (requires --llm flag)",
             "Done - no more URLs to add",
         ];
-        
+
         let url_type_idx = Select::with_theme(&ColorfulTheme::default())
             .with_prompt("What type of URL are you providing?")
             .items(&url_types)
             .default(0)
             .interact()
-            .map_err(|e| rtfs::runtime::error::RuntimeError::Generic(format!("Selection error: {}", e)))?;
-        
+            .map_err(|e| {
+                rtfs::runtime::error::RuntimeError::Generic(format!("Selection error: {}", e))
+            })?;
+
         // Exit loop if user is done
         if url_type_idx == 2 {
             break;
         }
-        
+
         let url: String = dialoguer::Input::with_theme(&ColorfulTheme::default())
             .with_prompt("Enter URL")
             .interact_text()
-            .map_err(|e| rtfs::runtime::error::RuntimeError::Generic(format!("Input error: {}", e)))?;
-        
+            .map_err(|e| {
+                rtfs::runtime::error::RuntimeError::Generic(format!("Input error: {}", e))
+            })?;
+
         let ids = if url_type_idx == 0 {
             // MCP Server endpoint
             handle_mcp_url(agent, goal, &url).await?
@@ -556,15 +680,18 @@ async fn handle_manual_url_entry(
             // API Documentation page
             if !llm_enabled {
                 println!("⚠️  Documentation parsing requires the --llm flag.");
-                println!("   Run again with: ccos discover goal \"{}\" --interactive --llm", goal);
+                println!(
+                    "   Run again with: ccos discover goal \"{}\" --interactive --llm",
+                    goal
+                );
                 println!();
                 continue; // Let user try another URL type
             }
             handle_documentation_url(agent, goal, &url).await?
         };
-        
+
         all_ids.extend(ids);
-        
+
         // Ask if user wants to add more
         println!();
         let add_more = Confirm::with_theme(&ColorfulTheme::default())
@@ -572,18 +699,18 @@ async fn handle_manual_url_entry(
             .default(false)
             .interact()
             .unwrap_or(false);
-        
+
         if !add_more {
             break;
         }
         println!();
     }
-    
+
     if !all_ids.is_empty() {
         println!("\n✓ Queued {} server(s) for approval.", all_ids.len());
         println!("  • Use 'ccos approval pending' to review and approve.");
     }
-    
+
     Ok(all_ids)
 }
 
@@ -594,18 +721,23 @@ async fn handle_mcp_url(
     url: &str,
 ) -> RuntimeResult<Vec<String>> {
     println!("🔍 Introspecting MCP server at {}...", url);
-    
+
     // Derive server name from URL
-    let name_guess = url.split("://").nth(1).unwrap_or("unknown")
-        .split('/').next().unwrap_or("unknown")
+    let name_guess = url
+        .split("://")
+        .nth(1)
+        .unwrap_or("unknown")
+        .split('/')
+        .next()
+        .unwrap_or("unknown")
         .to_string();
-    
+
     match crate::ops::server::introspect_server_by_url(url, &name_guess, None).await {
         Ok(introspection) => {
             println!("   ✅ Introspection successful!");
             println!("   Server Name: {}", introspection.server_name);
             println!("   Tools Found: {}", introspection.tools.len());
-            
+
             // Create a synthetic RegistrySearchResult
             let result = crate::discovery::registry_search::RegistrySearchResult {
                 source: crate::discovery::approval_queue::DiscoverySource::Manual {
@@ -622,20 +754,22 @@ async fn handle_mcp_url(
                 match_score: 1.0,
                 alternative_endpoints: Vec::new(),
             };
-            
+
             let id = agent.queue_result(goal, result.clone(), 1.0)?;
-            
+
             // Save tools
             if let Err(e) = crate::ops::server::save_discovered_tools(
                 &introspection,
                 &result.server_info,
                 Some(&id),
-            ).await {
+            )
+            .await
+            {
                 println!("   ⚠️  Failed to save capabilities: {}", e);
             } else {
                 println!("   💾 Capabilities saved to RTFS file");
             }
-            
+
             Ok(vec![id])
         }
         Err(e) => {
@@ -653,7 +787,7 @@ async fn handle_documentation_url(
 ) -> RuntimeResult<Vec<String>> {
     println!("🔍 Fetching API documentation from {}...", url);
     println!("🤖 Using LLM to extract API endpoints...");
-    
+
     // Get LLM provider from arbiter (async)
     let llm_provider = match crate::arbiter::get_default_llm_provider().await {
         Some(provider) => provider,
@@ -663,29 +797,43 @@ async fn handle_documentation_url(
             return Ok(vec![]);
         }
     };
-    
+
     // Parse documentation with LLM
     let parser = crate::synthesis::introspection::llm_doc_parser::LlmDocParser::new();
-    
+
     // Extract domain from URL for context
-    let domain = url.split("://").nth(1).unwrap_or("unknown")
-        .split('/').next().unwrap_or("unknown")
+    let domain = url
+        .split("://")
+        .nth(1)
+        .unwrap_or("unknown")
+        .split('/')
+        .next()
+        .unwrap_or("unknown")
         .to_string();
-    
-    match parser.parse_from_url(url, &domain, llm_provider.as_ref()).await {
+
+    match parser
+        .parse_from_url(url, &domain, llm_provider.as_ref())
+        .await
+    {
         Ok(api_result) => {
             println!("   ✅ Documentation parsed successfully!");
-            println!("   API: {} v{}", api_result.api_title, api_result.api_version);
+            println!(
+                "   API: {} v{}",
+                api_result.api_title, api_result.api_version
+            );
             println!("   Base URL: {}", api_result.base_url);
             println!("   Endpoints found: {}", api_result.endpoints.len());
-            
+
             for endpoint in api_result.endpoints.iter().take(5) {
-                println!("      • {} {} - {}", endpoint.method, endpoint.path, endpoint.name);
+                println!(
+                    "      • {} {} - {}",
+                    endpoint.method, endpoint.path, endpoint.name
+                );
             }
             if api_result.endpoints.len() > 5 {
                 println!("      ... and {} more", api_result.endpoints.len() - 5);
             }
-            
+
             // Create a synthetic RegistrySearchResult for the API
             let result = crate::discovery::registry_search::RegistrySearchResult {
                 source: crate::discovery::approval_queue::DiscoverySource::Manual {
@@ -702,16 +850,16 @@ async fn handle_documentation_url(
                 match_score: 1.0,
                 alternative_endpoints: Vec::new(),
             };
-            
+
             let id = agent.queue_result(goal, result.clone(), 1.0)?;
-            
+
             // Save the parsed API as capabilities
             if let Err(e) = crate::ops::server::save_api_capabilities(&api_result, &id).await {
                 println!("   ⚠️  Failed to save capabilities: {}", e);
             } else {
                 println!("   💾 Capabilities saved to RTFS file");
             }
-            
+
             Ok(vec![id])
         }
         Err(e) => {

@@ -1,7 +1,7 @@
 use crate::capability_marketplace::types::CapabilityDiscovery;
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
-use crate::synthesis::mcp_introspector::MCPIntrospector;
 use crate::mcp::types::DiscoveredMCPTool;
+use crate::synthesis::mcp_introspector::MCPIntrospector;
 use async_trait::async_trait;
 use chrono::Utc;
 use rtfs::ast::{
@@ -96,7 +96,7 @@ pub struct RTFSModuleDefinition {
 }
 
 /// MCP Discovery Provider for discovering MCP servers and their tools
-/// 
+///
 /// This is a thin adapter implementing the `CapabilityDiscovery` trait
 /// that delegates to the unified `MCPDiscoveryService` for all discovery operations.
 pub struct MCPDiscoveryProvider {
@@ -248,7 +248,7 @@ impl MCPDiscoveryProvider {
     }
 
     /// Create a new MCP discovery provider
-    /// 
+    ///
     /// Internally creates an `MCPDiscoveryService` for all discovery operations.
     pub fn new(config: MCPServerConfig) -> RuntimeResult<Self> {
         // Build auth headers if token provided
@@ -260,7 +260,7 @@ impl MCPDiscoveryProvider {
 
         // Create the unified discovery service
         let discovery_service = std::sync::Arc::new(
-            crate::mcp::core::MCPDiscoveryService::with_auth_headers(auth_headers)
+            crate::mcp::core::MCPDiscoveryService::with_auth_headers(auth_headers),
         );
 
         Ok(Self {
@@ -270,7 +270,7 @@ impl MCPDiscoveryProvider {
     }
 
     /// Create a new MCP discovery provider with an existing discovery service
-    /// 
+    ///
     /// Useful when you want to share a discovery service across multiple providers.
     pub fn with_discovery_service(
         config: MCPServerConfig,
@@ -283,7 +283,7 @@ impl MCPDiscoveryProvider {
     }
 
     /// Discover tools from the MCP server
-    /// 
+    ///
     /// This method delegates to the unified `MCPDiscoveryService` for all discovery.
     pub async fn discover_tools(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
         let options = crate::mcp::types::DiscoveryOptions {
@@ -296,7 +296,10 @@ impl MCPDiscoveryProvider {
             ..Default::default()
         };
 
-        let discovered_tools = self.discovery_service.discover_tools(&self.config, &options).await?;
+        let discovered_tools = self
+            .discovery_service
+            .discover_tools(&self.config, &options)
+            .await?;
 
         // Convert to manifests
         let mut capabilities = Vec::new();
@@ -309,10 +312,13 @@ impl MCPDiscoveryProvider {
     }
 
     /// Discover resources from the MCP server
-    /// 
+    ///
     /// This method delegates to the unified `MCPDiscoveryService` for resource discovery.
     pub async fn discover_resources(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
-        let resources = self.discovery_service.discover_resources(&self.config).await?;
+        let resources = self
+            .discovery_service
+            .discover_resources(&self.config)
+            .await?;
 
         // Convert MCP resources to capability manifests
         let mut capabilities = Vec::new();
@@ -632,6 +638,9 @@ impl MCPDiscoveryProvider {
                                 MapKey::Keyword(Keyword("mcp_endpoint".to_string())),
                                 Expression::Literal(Literal::String(self.config.endpoint.clone())),
                             ),
+                            // Note: tool_name in metadata duplicates :name in the capability map,
+                            // but is kept for introspection/debugging to clearly identify the MCP tool.
+                            // The provider map also has tool_name, which is required for MCP protocol calls.
                             (
                                 MapKey::Keyword(Keyword("tool_name".to_string())),
                                 Expression::Literal(Literal::String(tool.name.clone())),
@@ -646,12 +655,8 @@ impl MCPDiscoveryProvider {
                                 MapKey::Keyword(Keyword("introspected_at".to_string())),
                                 Expression::Literal(Literal::String(Utc::now().to_rfc3339())),
                             ),
-                            (
-                                MapKey::Keyword(Keyword("ccos_effects".to_string())),
-                                Expression::Literal(Literal::String(Self::serialize_effects(
-                                    &effects,
-                                ))),
-                            ),
+                            // Note: ccos_effects removed - effects are already in the capability map
+                            // at the top level, so storing them again in metadata is redundant
                         ]
                         .into_iter()
                         .collect(),
@@ -678,8 +683,16 @@ impl MCPDiscoveryProvider {
         // Add input-schema and output-schema to the capability map itself
         let mut capability_map = match capability {
             Expression::Map(map) => map,
-            _ => return Err(RuntimeError::Generic("Expected capability to be a Map".to_string())),
+            _ => {
+                return Err(RuntimeError::Generic(
+                    "Expected capability to be a Map".to_string(),
+                ))
+            }
         };
+
+        // Track whether schemas were added to the capability map
+        let mut input_schema_added = false;
+        let mut output_schema_added = false;
 
         // Add input-schema to capability map
         if let Some(ref input_schema_expr) = input_schema {
@@ -691,6 +704,7 @@ impl MCPDiscoveryProvider {
                         MapKey::Keyword(Keyword("input-schema".to_string())),
                         expr.clone(),
                     );
+                    input_schema_added = true;
                 }
             }
         }
@@ -705,6 +719,7 @@ impl MCPDiscoveryProvider {
                         MapKey::Keyword(Keyword("output-schema".to_string())),
                         expr.clone(),
                     );
+                    output_schema_added = true;
                 }
             }
         } else {
@@ -713,12 +728,15 @@ impl MCPDiscoveryProvider {
                 MapKey::Keyword(Keyword("output-schema".to_string())),
                 Expression::Literal(Literal::Keyword(Keyword("any".to_string()))),
             );
+            output_schema_added = true;
         }
 
+        // If schemas were added to the capability map, set them to None in RTFSCapabilityDefinition
+        // to prevent duplication when saving (save_rtfs_capabilities will use the ones in the map)
         Ok(RTFSCapabilityDefinition {
             capability: Expression::Map(capability_map),
-            input_schema,
-            output_schema,
+            input_schema: if input_schema_added { None } else { input_schema },
+            output_schema: if output_schema_added { None } else { output_schema },
         })
     }
 
@@ -775,54 +793,54 @@ impl MCPDiscoveryProvider {
                 rtfs_content.push_str(",\n");
             }
             rtfs_content.push_str("      {\n");
-            
-            // Write capability map (which should now include input-schema and output-schema)
-            rtfs_content.push_str("        :capability ");
-            rtfs_content.push_str(&self.expression_to_rtfs_text(&capability.capability, 0));
-            rtfs_content.push_str(",\n");
 
-            // Also include schemas in the wrapper for backward compatibility
-            // Extract from capability map if present, otherwise use separate fields
-            let mut input_schema_text = None;
-            let mut output_schema_text = None;
+            // Check if schemas are already in the capability map to avoid duplication
+            // Use explicit iteration since HashMap key comparison may not work as expected
+            let mut input_schema_in_map = false;
+            let mut output_schema_in_map = false;
             
             if let Expression::Map(ref cap_map) = capability.capability {
-                let input_key = MapKey::Keyword(Keyword("input-schema".to_string()));
-                let output_key = MapKey::Keyword(Keyword("output-schema".to_string()));
-                
-                if let Some(input_expr) = cap_map.get(&input_key) {
-                    input_schema_text = Some(self.expression_to_rtfs_text(input_expr, 0));
+                for (key, _) in cap_map.iter() {
+                    if let MapKey::Keyword(kw) = key {
+                        if kw.0 == "input-schema" {
+                            input_schema_in_map = true;
+                        }
+                        if kw.0 == "output-schema" {
+                            output_schema_in_map = true;
+                        }
+                    }
                 }
-                if let Some(output_expr) = cap_map.get(&output_key) {
-                    output_schema_text = Some(self.expression_to_rtfs_text(output_expr, 0));
-                }
-            }
-            
-            // Write input-schema
-            if let Some(text) = input_schema_text {
-                rtfs_content.push_str("        :input-schema ");
-                rtfs_content.push_str(&text);
-                rtfs_content.push_str(",\n");
-            } else if let Some(input_schema) = &capability.input_schema {
-                rtfs_content.push_str("        :input-schema ");
-                rtfs_content.push_str(&self.type_expr_to_rtfs_text(input_schema));
-                rtfs_content.push_str(",\n");
-            } else {
-                rtfs_content.push_str("        :input-schema nil,\n");
             }
 
-            // Write output-schema (use :any instead of nil when missing)
-            if let Some(text) = output_schema_text {
-                rtfs_content.push_str("        :output-schema ");
-                rtfs_content.push_str(&text);
-            } else if let Some(output_schema) = &capability.output_schema {
-                rtfs_content.push_str("        :output-schema ");
-                rtfs_content.push_str(&self.type_expr_to_rtfs_text(output_schema));
+            // Write capability map (schemas are inside, skip wrapper fields)
+            rtfs_content.push_str("        :capability ");
+            rtfs_content.push_str(&self.expression_to_rtfs_text(&capability.capability, 0));
+
+            // Only write wrapper if the capability map is closed without a trailing comma
+            // and we're NOT writing any wrapper fields
+            if input_schema_in_map && output_schema_in_map {
+                // Schemas are in the map, no wrapper fields needed
+                rtfs_content.push_str("\n      }");
             } else {
-                // Use :any instead of nil when output schema is unknown
-                rtfs_content.push_str("        :output-schema :any");
+                // Need to add wrapper fields for backward compatibility
+                rtfs_content.push_str(",\n");
+                
+                if !input_schema_in_map {
+                    if let Some(input_schema) = &capability.input_schema {
+                        rtfs_content.push_str("        :input-schema ");
+                        rtfs_content.push_str(&self.type_expr_to_rtfs_text(input_schema));
+                        rtfs_content.push_str(",\n");
+                    }
+                }
+
+                if !output_schema_in_map {
+                    if let Some(output_schema) = &capability.output_schema {
+                        rtfs_content.push_str("        :output-schema ");
+                        rtfs_content.push_str(&self.type_expr_to_rtfs_text(output_schema));
+                    }
+                }
+                rtfs_content.push_str("\n      }");
             }
-            rtfs_content.push_str("\n      }");
         }
 
         rtfs_content.push_str("\n    ]\n");
@@ -1726,15 +1744,27 @@ impl MCPDiscoveryProvider {
                                     }
                                     metadata.insert(k.0.clone(), v.clone());
                                 }
-                                (MapKey::Keyword(k), Expression::Map(nested_map)) if k.0 == "openapi" => {
+                                (MapKey::Keyword(k), Expression::Map(nested_map))
+                                    if k.0 == "openapi" =>
+                                {
                                     // Extract base_url from nested openapi map
                                     for (nested_key, nested_value) in nested_map {
-                                        if let (MapKey::Keyword(nk), Expression::Literal(Literal::String(nv))) = (nested_key, nested_value) {
+                                        if let (
+                                            MapKey::Keyword(nk),
+                                            Expression::Literal(Literal::String(nv)),
+                                        ) = (nested_key, nested_value)
+                                        {
                                             if nk.0 == "base_url" {
-                                                metadata.insert("openapi_base_url".to_string(), nv.clone());
+                                                metadata.insert(
+                                                    "openapi_base_url".to_string(),
+                                                    nv.clone(),
+                                                );
                                                 metadata.insert("base_url".to_string(), nv.clone());
                                             } else {
-                                                metadata.insert(format!("openapi_{}", nk.0), nv.clone());
+                                                metadata.insert(
+                                                    format!("openapi_{}", nk.0),
+                                                    nv.clone(),
+                                                );
                                             }
                                         }
                                     }
@@ -1760,19 +1790,26 @@ impl MCPDiscoveryProvider {
         // Convert provider info
         // Check if OpenAPI metadata is present - if so, prefer OpenApiCapability
         // which properly handles query parameters and authentication
-        let has_openapi_metadata = metadata.contains_key("openapi_base_url") 
+        let has_openapi_metadata = metadata.contains_key("openapi_base_url")
             || metadata.contains_key("openapi_endpoint_path")
             || metadata.contains_key("openapi_endpoint_method");
-        
+
         let provider = if has_openapi_metadata {
             // Create OpenApiCapability from metadata - this properly handles query params
-            let base_url = metadata.get("openapi_base_url")
+            let base_url = metadata
+                .get("openapi_base_url")
                 .or_else(|| metadata.get("base_url"))
                 .cloned()
                 .unwrap_or_else(|| "https://api.example.com".to_string());
-            let endpoint_path = metadata.get("openapi_endpoint_path").cloned().unwrap_or_else(|| "/".to_string());
-            let endpoint_method = metadata.get("openapi_endpoint_method").cloned().unwrap_or_else(|| "GET".to_string());
-            
+            let endpoint_path = metadata
+                .get("openapi_endpoint_path")
+                .cloned()
+                .unwrap_or_else(|| "/".to_string());
+            let endpoint_method = metadata
+                .get("openapi_endpoint_method")
+                .cloned()
+                .unwrap_or_else(|| "GET".to_string());
+
             // Create a single operation from the endpoint metadata
             let operation = crate::capability_marketplace::types::OpenApiOperation {
                 operation_id: Some(name.clone()),
@@ -1781,7 +1818,7 @@ impl MCPDiscoveryProvider {
                 summary: Some(description.clone()),
                 description: None,
             };
-            
+
             // Check for auth - OpenWeatherMap uses query param "appid"
             let auth = Some(crate::capability_marketplace::types::OpenApiAuth {
                 auth_type: "apiKey".to_string(),
@@ -1790,7 +1827,7 @@ impl MCPDiscoveryProvider {
                 env_var_name: Some("OPENWEATHER_API_KEY".to_string()),
                 required: true,
             });
-            
+
             ProviderType::OpenApi(crate::capability_marketplace::types::OpenApiCapability {
                 base_url,
                 spec_url: None,
@@ -1801,13 +1838,18 @@ impl MCPDiscoveryProvider {
         } else if let Some(provider_map) = provider_info {
             // Check if this is a string provider (HTTP API) or MCP provider map
             if provider_map.len() == 1 {
-                if let Some((MapKey::Keyword(k), Expression::Literal(Literal::String(_provider_type)))) = provider_map.iter().next() {
+                if let Some((
+                    MapKey::Keyword(k),
+                    Expression::Literal(Literal::String(_provider_type)),
+                )) = provider_map.iter().next()
+                {
                     if k.0 == "provider_type" {
                         // This is a string provider - create Http provider from metadata
-                        let base_url = metadata.get("base_url")
+                        let base_url = metadata
+                            .get("base_url")
                             .cloned()
                             .unwrap_or_else(|| "https://api.example.com".to_string());
-                        
+
                         ProviderType::Http(crate::capability_marketplace::types::HttpCapability {
                             base_url,
                             timeout_ms: 30000,
@@ -1824,10 +1866,11 @@ impl MCPDiscoveryProvider {
             }
         } else {
             // No provider info - create Http provider as fallback
-            let base_url = metadata.get("base_url")
+            let base_url = metadata
+                .get("base_url")
                 .cloned()
                 .unwrap_or_else(|| "https://api.example.com".to_string());
-            
+
             ProviderType::Http(crate::capability_marketplace::types::HttpCapability {
                 base_url,
                 timeout_ms: 30000,

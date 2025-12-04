@@ -37,8 +37,8 @@ pub use type_validator::{TypeValidator, ValidationError, ValidationResult};
 pub use values::{Function, Value};
 
 use crate::ast::{DoExpr, Expression, Literal, TopLevel};
-use crate::parser;
 use crate::compiler::expander::MacroExpander;
+use crate::parser;
 // IrStrategy is re-exported below; avoid duplicate local import
 use crate::runtime::pure_host::create_pure_host;
 use std::sync::Arc;
@@ -132,7 +132,12 @@ impl Runtime {
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-            let evaluator = Evaluator::new(Arc::clone(&module_registry), security_context, host, crate::compiler::expander::MacroExpander::default());
+        let evaluator = Evaluator::new(
+            Arc::clone(&module_registry),
+            security_context,
+            host,
+            crate::compiler::expander::MacroExpander::default(),
+        );
         let strategy = Box::new(TreeWalkingStrategy::new(evaluator));
         Self::new(strategy)
     }
@@ -146,7 +151,12 @@ impl Runtime {
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-            let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host, crate::compiler::expander::MacroExpander::default());
+        let mut evaluator = Evaluator::new(
+            Arc::new(module_registry),
+            security_context,
+            host,
+            crate::compiler::expander::MacroExpander::default(),
+        );
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!(
@@ -171,7 +181,12 @@ impl Runtime {
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-            let mut evaluator = Evaluator::new(Arc::new(module_registry), security_context, host, crate::compiler::expander::MacroExpander::default());
+        let mut evaluator = Evaluator::new(
+            Arc::new(module_registry),
+            security_context,
+            host,
+            crate::compiler::expander::MacroExpander::default(),
+        );
         match evaluator.eval_toplevel(&parsed) {
             Ok(ExecutionOutcome::Complete(v)) => Ok(v),
             Ok(ExecutionOutcome::RequiresHost(hc)) => Err(RuntimeError::Generic(format!(
@@ -200,7 +215,12 @@ impl IrWithFallbackStrategy {
         let security_context = RuntimeContext::pure();
         let host = create_pure_host();
 
-    let evaluator = Evaluator::new(Arc::clone(&module_registry), security_context, host, crate::compiler::expander::MacroExpander::default());
+        let evaluator = Evaluator::new(
+            Arc::clone(&module_registry),
+            security_context,
+            host,
+            crate::compiler::expander::MacroExpander::default(),
+        );
         let ast_strategy = TreeWalkingStrategy::new(evaluator);
 
         Self {

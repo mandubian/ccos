@@ -1,10 +1,10 @@
 //! Approval queue for discovered servers
 
 use chrono::{DateTime, Utc};
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 use std::fs;
-use rtfs::runtime::error::{RuntimeResult, RuntimeError};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerInfo {
@@ -108,20 +108,20 @@ pub struct ApprovedDiscovery {
     pub domain_match: Vec<String>,
     pub risk_assessment: RiskAssessment,
     pub requesting_goal: Option<String>,
-    
+
     pub approved_at: DateTime<Utc>,
     pub approved_by: ApprovalAuthority,
     pub approval_reason: Option<String>,
-    
+
     // Capability files (RTFS files for non-MCP servers)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capability_files: Option<Vec<String>>,
-    
+
     // Version tracking (for future use - enables rollback, audit trail, gradual migration)
     // Default to 1 for existing entries, increment on updates
     #[serde(default = "default_version")]
     pub version: u32,
-    
+
     // Health tracking
     pub last_successful_call: Option<DateTime<Utc>>,
     pub consecutive_failures: u32,
@@ -167,7 +167,7 @@ pub struct RejectedDiscovery {
     pub domain_match: Vec<String>,
     pub risk_assessment: RiskAssessment,
     pub requesting_goal: Option<String>,
-    
+
     pub rejected_at: DateTime<Utc>,
     pub rejected_by: ApprovalAuthority,
     pub rejection_reason: String,
@@ -217,7 +217,7 @@ impl ApprovalQueue {
     }
 
     /// Suggest environment variable name for authentication token based on server name
-    /// 
+    ///
     /// Detects server type from name pattern:
     /// - Web APIs (names starting with "web/"): {NAMESPACE}_API_KEY (e.g., "web/api/openweathermap" -> "OPENWEATHER_API_KEY")
     /// - MCP servers (names containing "/mcp" or from MCP registry): {NAMESPACE}_MCP_TOKEN (e.g., "github/github-mcp" -> "GITHUB_MCP_TOKEN")
@@ -259,7 +259,7 @@ impl ApprovalQueue {
         };
 
         let normalized = namespace.replace('-', "_").to_uppercase();
-        
+
         if is_web_api {
             format!("{}_API_KEY", normalized)
         } else {
@@ -294,14 +294,21 @@ impl ApprovalQueue {
         for path in &paths {
             if !path.exists() {
                 fs::create_dir_all(path).map_err(|e| {
-                    RuntimeError::Generic(format!("Failed to create directory {}: {}", path.display(), e))
+                    RuntimeError::Generic(format!(
+                        "Failed to create directory {}: {}",
+                        path.display(),
+                        e
+                    ))
                 })?;
             }
         }
         Ok(())
     }
 
-    fn load_from_dir<T: for<'a> Deserialize<'a> + HasId>(&self, dir: &Path) -> RuntimeResult<Vec<T>> {
+    fn load_from_dir<T: for<'a> Deserialize<'a> + HasId>(
+        &self,
+        dir: &Path,
+    ) -> RuntimeResult<Vec<T>> {
         if !dir.exists() {
             return Ok(vec![]);
         }
@@ -334,7 +341,11 @@ impl ApprovalQueue {
                 let server_json = path.join("server.json");
                 if server_json.exists() {
                     let content = fs::read_to_string(&server_json).map_err(|e| {
-                        RuntimeError::Generic(format!("Failed to read file {}: {}", server_json.display(), e))
+                        RuntimeError::Generic(format!(
+                            "Failed to read file {}: {}",
+                            server_json.display(),
+                            e
+                        ))
                     })?;
                     match serde_json::from_str::<T>(&content) {
                         Ok(item) => items.push(item),
@@ -349,52 +360,75 @@ impl ApprovalQueue {
         Ok(items)
     }
 
-    fn save_to_dir<T: Serialize + HasId + HasName>(&self, dir: &Path, item: &T) -> RuntimeResult<()> {
+    fn save_to_dir<T: Serialize + HasId + HasName>(
+        &self,
+        dir: &Path,
+        item: &T,
+    ) -> RuntimeResult<()> {
         self.ensure_dirs()?;
-        
+
         let safe_name = crate::utils::fs::sanitize_filename(item.name());
         let server_dir = dir.join(&safe_name);
-        
+
         if !server_dir.exists() {
             fs::create_dir_all(&server_dir).map_err(|e| {
-                RuntimeError::Generic(format!("Failed to create server directory {}: {}", server_dir.display(), e))
+                RuntimeError::Generic(format!(
+                    "Failed to create server directory {}: {}",
+                    server_dir.display(),
+                    e
+                ))
             })?;
         }
-        
+
         let file_path = server_dir.join("server.json");
-        let content = serde_json::to_string_pretty(item).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to serialize item: {}", e))
-        })?;
+        let content = serde_json::to_string_pretty(item)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to serialize item: {}", e)))?;
 
         fs::write(&file_path, content).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to write file {}: {}", file_path.display(), e))
+            RuntimeError::Generic(format!(
+                "Failed to write file {}: {}",
+                file_path.display(),
+                e
+            ))
         })
     }
 
     fn remove_from_dir<T: HasId + HasName>(&self, dir: &Path, item: &T) -> RuntimeResult<()> {
         let safe_name = crate::utils::fs::sanitize_filename(item.name());
         let server_dir = dir.join(&safe_name);
-        
+
         if server_dir.exists() {
             fs::remove_dir_all(&server_dir).map_err(|e| {
-                RuntimeError::Generic(format!("Failed to remove directory {}: {}", server_dir.display(), e))
+                RuntimeError::Generic(format!(
+                    "Failed to remove directory {}: {}",
+                    server_dir.display(),
+                    e
+                ))
             })?;
         }
-        
+
         Ok(())
     }
 
     fn migrate_legacy_file<T: for<'a> Deserialize<'a> + Serialize + HasId + HasName + Clone>(
-        &self, 
-        legacy_path: &Path, 
+        &self,
+        legacy_path: &Path,
         target_dir: &Path,
-        wrapper_fn: fn(Vec<T>) -> T // Dummy wrapper not needed, we need to extract items
+        wrapper_fn: fn(Vec<T>) -> T, // Dummy wrapper not needed, we need to extract items
     ) -> RuntimeResult<()> {
         if legacy_path.exists() && legacy_path.is_file() {
-            println!("Migrating legacy file: {} -> {}", legacy_path.display(), target_dir.display());
-            
+            println!(
+                "Migrating legacy file: {} -> {}",
+                legacy_path.display(),
+                target_dir.display()
+            );
+
             let content = fs::read_to_string(legacy_path).map_err(|e| {
-                RuntimeError::Generic(format!("Failed to read legacy file {}: {}", legacy_path.display(), e))
+                RuntimeError::Generic(format!(
+                    "Failed to read legacy file {}: {}",
+                    legacy_path.display(),
+                    e
+                ))
             })?;
 
             // We need to parse the wrapper struct (e.g. ApprovalQueueState) to get items
@@ -406,9 +440,12 @@ impl ApprovalQueue {
             if let Some(items_array) = json.get("items").and_then(|v| v.as_array()) {
                 for item_val in items_array {
                     let item: T = serde_json::from_value(item_val.clone()).map_err(|e| {
-                        RuntimeError::Generic(format!("Failed to parse item from legacy JSON: {}", e))
+                        RuntimeError::Generic(format!(
+                            "Failed to parse item from legacy JSON: {}",
+                            e
+                        ))
                     })?;
-                    
+
                     self.save_to_dir(target_dir, &item)?;
                 }
             }
@@ -425,19 +462,23 @@ impl ApprovalQueue {
     fn load_pending(&self) -> RuntimeResult<ApprovalQueueState> {
         // Migration check
         let legacy_path = self.base_path.join("capabilities/servers/pending.json");
-        self.migrate_legacy_file::<PendingDiscovery>(&legacy_path, &self.pending_path(), |_| unimplemented!())?;
+        self.migrate_legacy_file::<PendingDiscovery>(
+            &legacy_path,
+            &self.pending_path(),
+            |_| unimplemented!(),
+        )?;
 
         let items = self.load_from_dir(&self.pending_path())?;
         Ok(ApprovalQueueState { items })
     }
 
     fn save_pending(&self, state: &ApprovalQueueState) -> RuntimeResult<()> {
-        // In the new model, we save items individually. 
+        // In the new model, we save items individually.
         // This method receives the full state, so we should save all items.
-        // However, this is inefficient if we just added one. 
+        // However, this is inefficient if we just added one.
         // But for now, to keep the API compatible, we'll iterate and save.
         // Optimally, we should change the API to save_pending_item(item).
-        
+
         for item in &state.items {
             self.save_to_dir(&self.pending_path(), item)?;
         }
@@ -446,7 +487,11 @@ impl ApprovalQueue {
 
     fn load_approved(&self) -> RuntimeResult<ApprovedQueueState> {
         let legacy_path = self.base_path.join("capabilities/servers/approved.json");
-        self.migrate_legacy_file::<ApprovedDiscovery>(&legacy_path, &self.approved_path(), |_| unimplemented!())?;
+        self.migrate_legacy_file::<ApprovedDiscovery>(
+            &legacy_path,
+            &self.approved_path(),
+            |_| unimplemented!(),
+        )?;
 
         let items = self.load_from_dir(&self.approved_path())?;
         Ok(ApprovedQueueState { items })
@@ -461,7 +506,11 @@ impl ApprovalQueue {
 
     fn load_rejected(&self) -> RuntimeResult<RejectedQueueState> {
         let legacy_path = self.base_path.join("capabilities/servers/rejected.json");
-        self.migrate_legacy_file::<RejectedDiscovery>(&legacy_path, &self.rejected_path(), |_| unimplemented!())?;
+        self.migrate_legacy_file::<RejectedDiscovery>(
+            &legacy_path,
+            &self.rejected_path(),
+            |_| unimplemented!(),
+        )?;
 
         let items = self.load_from_dir(&self.rejected_path())?;
         Ok(RejectedQueueState { items })
@@ -476,7 +525,11 @@ impl ApprovalQueue {
 
     fn load_timeout(&self) -> RuntimeResult<TimeoutQueueState> {
         let legacy_path = self.base_path.join("capabilities/servers/timeout.json");
-        self.migrate_legacy_file::<PendingDiscovery>(&legacy_path, &self.timeout_path(), |_| unimplemented!())?;
+        self.migrate_legacy_file::<PendingDiscovery>(
+            &legacy_path,
+            &self.timeout_path(),
+            |_| unimplemented!(),
+        )?;
 
         let items = self.load_from_dir(&self.timeout_path())?;
         Ok(TimeoutQueueState { items })
@@ -513,7 +566,7 @@ impl ApprovalQueue {
             timeout_state.items.extend(timed_out_items);
             self.save_timeout(&timeout_state)?;
         }
-        
+
         Ok(timed_out_ids)
     }
 
@@ -521,43 +574,50 @@ impl ApprovalQueue {
     /// Returns the ID of the entry (existing ID if duplicate, new ID if new)
     pub fn add(&self, discovery: PendingDiscovery) -> RuntimeResult<String> {
         let mut state = self.load_pending()?;
-        
+
         // Check if server is already approved - if so, move it from approved to pending
         let mut approved_state = self.load_approved()?;
         if let Some(approved_pos) = approved_state.items.iter().position(|item| {
-            item.server_info.name == discovery.server_info.name ||
-            (!discovery.server_info.endpoint.is_empty() && 
-             item.server_info.endpoint == discovery.server_info.endpoint)
+            item.server_info.name == discovery.server_info.name
+                || (!discovery.server_info.endpoint.is_empty()
+                    && item.server_info.endpoint == discovery.server_info.endpoint)
         }) {
             let approved_item = approved_state.items.remove(approved_pos);
             self.save_approved(&approved_state)?;
-            
+
             // Move capability files from approved/ to pending/
-            let server_id = approved_item.server_info.name.to_lowercase()
+            let server_id = approved_item
+                .server_info
+                .name
+                .to_lowercase()
                 .replace(" ", "_")
                 .replace("/", "_");
-            
-            let approved_dir = std::path::Path::new("capabilities/servers/approved").join(&server_id);
+
+            let approved_dir =
+                std::path::Path::new("capabilities/servers/approved").join(&server_id);
             let pending_dir = std::path::Path::new("capabilities/servers/pending").join(&server_id);
-            
+
             if approved_dir.exists() {
                 // Create pending directory if needed
                 if let Some(parent) = pending_dir.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                
+
                 // Remove existing pending dir if it exists
                 if pending_dir.exists() {
                     let _ = std::fs::remove_dir_all(&pending_dir);
                 }
-                
+
                 // Move from approved to pending
                 if let Err(e) = std::fs::rename(&approved_dir, &pending_dir) {
                     // Log but don't fail - capabilities can be re-introspected
-                    eprintln!("Warning: Failed to move capabilities from approved to pending: {}", e);
+                    eprintln!(
+                        "Warning: Failed to move capabilities from approved to pending: {}",
+                        e
+                    );
                 }
             }
-            
+
             // Update discovery with capabilities_path pointing to pending location
             // IMPORTANT: Preserve the approved item's ID to maintain continuity
             let mut updated_discovery = discovery.clone();
@@ -568,47 +628,50 @@ impl ApprovalQueue {
                 updated_discovery.server_info.capabilities_path = Some(new_path);
             } else {
                 // Set default path
-                let default_path = format!("capabilities/servers/pending/{}/capabilities.rtfs", server_id);
+                let default_path = format!(
+                    "capabilities/servers/pending/{}/capabilities.rtfs",
+                    server_id
+                );
                 if std::path::Path::new(&default_path).exists() {
                     updated_discovery.server_info.capabilities_path = Some(default_path);
                 }
             }
-            
+
             // Preserve other metadata from approved item (timestamps, etc.)
             // But update with new discovery information (source, domain_match, etc.)
             // The requested_at and expires_at are reset for the new pending entry
-            
+
             // Add to pending with preserved ID
             let id = updated_discovery.id.clone();
             state.items.push(updated_discovery);
             self.save_pending(&state)?;
             return Ok(id);
         }
-        
+
         // Check for duplicates in pending: same server name or endpoint
         let is_duplicate = state.items.iter().any(|item| {
-            item.server_info.name == discovery.server_info.name ||
-            (!discovery.server_info.endpoint.is_empty() && 
-             item.server_info.endpoint == discovery.server_info.endpoint)
+            item.server_info.name == discovery.server_info.name
+                || (!discovery.server_info.endpoint.is_empty()
+                    && item.server_info.endpoint == discovery.server_info.endpoint)
         });
-        
+
         if is_duplicate {
             // Update existing entry instead of adding duplicate
             if let Some(existing_pos) = state.items.iter().position(|item| {
-                item.server_info.name == discovery.server_info.name ||
-                (!discovery.server_info.endpoint.is_empty() && 
-                 item.server_info.endpoint == discovery.server_info.endpoint)
+                item.server_info.name == discovery.server_info.name
+                    || (!discovery.server_info.endpoint.is_empty()
+                        && item.server_info.endpoint == discovery.server_info.endpoint)
             }) {
                 // Merge: keep existing ID and timestamps, update other fields
                 let existing = &mut state.items[existing_pos];
                 let existing_id = existing.id.clone();
-                
+
                 // Update fields that might have changed
                 existing.source = discovery.source.clone();
                 existing.domain_match = discovery.domain_match.clone();
                 existing.risk_assessment = discovery.risk_assessment.clone();
                 existing.requesting_goal = discovery.requesting_goal.clone();
-                
+
                 // Update server info (merge capabilities_path if new one exists)
                 existing.server_info.description = discovery.server_info.description.clone();
                 existing.server_info.auth_env_var = discovery.server_info.auth_env_var.clone();
@@ -618,21 +681,22 @@ impl ApprovalQueue {
                 all_endpoints.sort();
                 all_endpoints.dedup();
                 existing.server_info.alternative_endpoints = all_endpoints;
-                
+
                 if discovery.server_info.capabilities_path.is_some() {
-                    existing.server_info.capabilities_path = discovery.server_info.capabilities_path.clone();
+                    existing.server_info.capabilities_path =
+                        discovery.server_info.capabilities_path.clone();
                 }
-                
+
                 // Extend expiration if new one is later
                 if discovery.expires_at > existing.expires_at {
                     existing.expires_at = discovery.expires_at;
                 }
-                
+
                 self.save_pending(&state)?;
                 return Ok(existing_id);
             }
         }
-        
+
         // New server, add it
         let id = discovery.id.clone();
         state.items.push(discovery);
@@ -674,14 +738,17 @@ impl ApprovalQueue {
 
     /// Check if a pending item would conflict with an existing approved server
     /// Returns the existing approved server if there's a conflict
-    pub fn check_approval_conflict(&self, pending_id: &str) -> RuntimeResult<Option<ApprovedDiscovery>> {
+    pub fn check_approval_conflict(
+        &self,
+        pending_id: &str,
+    ) -> RuntimeResult<Option<ApprovedDiscovery>> {
         let pending = self.get_pending(pending_id)?;
         if let Some(pending_item) = pending {
             let approved_state = self.load_approved()?;
             let conflict = approved_state.items.into_iter().find(|existing| {
-                existing.server_info.name == pending_item.server_info.name ||
-                (!pending_item.server_info.endpoint.is_empty() && 
-                 existing.server_info.endpoint == pending_item.server_info.endpoint)
+                existing.server_info.name == pending_item.server_info.name
+                    || (!pending_item.server_info.endpoint.is_empty()
+                        && existing.server_info.endpoint == pending_item.server_info.endpoint)
             });
             Ok(conflict)
         } else {
@@ -703,28 +770,54 @@ impl ApprovalQueue {
     }
 
     /// Update capability_files for an approved server
-    pub fn update_capability_files(&self, server_id: &str, files: Vec<String>) -> RuntimeResult<()> {
+    pub fn update_capability_files(
+        &self,
+        server_id: &str,
+        files: Vec<String>,
+    ) -> RuntimeResult<()> {
         let mut approved_state = self.load_approved()?;
-        if let Some(item) = approved_state.items.iter_mut().find(|item| item.id == server_id) {
+        if let Some(item) = approved_state
+            .items
+            .iter_mut()
+            .find(|item| item.id == server_id)
+        {
             item.capability_files = if files.is_empty() { None } else { Some(files) };
             self.save_approved(&approved_state)?;
             Ok(())
         } else {
-            Err(RuntimeError::Generic(format!("Approved server not found: {}", server_id)))
+            Err(RuntimeError::Generic(format!(
+                "Approved server not found: {}",
+                server_id
+            )))
         }
     }
 
     /// Add new capability files to an approved server (merge with existing)
-    pub fn add_capability_files_to_approved(&self, server_endpoint: &str, new_files: Vec<String>) -> RuntimeResult<()> {
+    pub fn add_capability_files_to_approved(
+        &self,
+        server_endpoint: &str,
+        new_files: Vec<String>,
+    ) -> RuntimeResult<()> {
         let mut approved_state = self.load_approved()?;
-        if let Some(item) = approved_state.items.iter_mut().find(|item| item.server_info.endpoint == server_endpoint) {
+        if let Some(item) = approved_state
+            .items
+            .iter_mut()
+            .find(|item| item.server_info.endpoint == server_endpoint)
+        {
             let mut existing_files = item.capability_files.clone().unwrap_or_default();
             existing_files.extend(new_files);
-            item.capability_files = if existing_files.is_empty() { None } else { Some(existing_files) };
+            item.capability_files = if existing_files.is_empty() {
+                None
+            } else {
+                Some(existing_files)
+            };
             self.save_approved(&approved_state)?;
             Ok(())
         } else {
-            Err(RuntimeError::Generic(format!("Approved server not found for endpoint: {}", server_endpoint)))
+            Err(RuntimeError::Generic(format!(
+                "Approved server not found for endpoint: {}",
+                server_endpoint
+            )))
         }
     }
 
@@ -732,76 +825,102 @@ impl ApprovalQueue {
         let mut pending_state = self.load_pending()?;
         if let Some(pos) = pending_state.items.iter().position(|item| item.id == id) {
             let mut item = pending_state.items.remove(pos);
-            
+
             // IMPORTANT: Move capability files BEFORE removing the pending directory
             // Otherwise remove_from_dir will delete the entire directory including capabilities.rtfs
-            
+
             let pending_dir = std::path::Path::new("capabilities/servers/pending");
             let approved_dir = std::path::Path::new("capabilities/servers/approved");
             std::fs::create_dir_all(approved_dir).map_err(|e| {
                 RuntimeError::Generic(format!("Failed to create approved directory: {}", e))
             })?;
-            
+
             let server_id = crate::utils::fs::sanitize_filename(&item.server_info.name);
             let pending_server_dir = pending_dir.join(&server_id);
             let approved_server_dir = approved_dir.join(&server_id);
-            
+
             let mut capability_files = Vec::new();
-            
+
             // Move capability files if they exist
             // Check both the directory and the capabilities_path field
-            let should_move = if let Some(ref capabilities_path) = item.server_info.capabilities_path {
-                // If capabilities_path is set, check if that file exists
-                std::path::Path::new(capabilities_path).exists()
-            } else {
-                // Otherwise check if the server directory exists
-                pending_server_dir.exists()
-            };
-            
+            let should_move =
+                if let Some(ref capabilities_path) = item.server_info.capabilities_path {
+                    // If capabilities_path is set, check if that file exists
+                    std::path::Path::new(capabilities_path).exists()
+                } else {
+                    // Otherwise check if the server directory exists
+                    pending_server_dir.exists()
+                };
+
             if should_move {
                 // Determine the source directory
                 // capabilities_path is like "capabilities/servers/pending/github_github-mcp/capabilities.rtfs"
                 // We want to move the entire directory "capabilities/servers/pending/github_github-mcp"
-                let source_dir = if let Some(ref capabilities_path) = item.server_info.capabilities_path {
-                    // Extract directory from capabilities_path
-                    std::path::Path::new(capabilities_path)
-                        .parent()
-                        .ok_or_else(|| RuntimeError::Generic("Invalid capabilities_path: no parent directory".to_string()))?
-                } else {
-                    &pending_server_dir
-                };
-                
+                let source_dir =
+                    if let Some(ref capabilities_path) = item.server_info.capabilities_path {
+                        // Extract directory from capabilities_path
+                        std::path::Path::new(capabilities_path)
+                            .parent()
+                            .ok_or_else(|| {
+                                RuntimeError::Generic(
+                                    "Invalid capabilities_path: no parent directory".to_string(),
+                                )
+                            })?
+                    } else {
+                        &pending_server_dir
+                    };
+
                 if source_dir.exists() {
                     if approved_server_dir.exists() {
                         // Remove existing approved directory to replace it
                         std::fs::remove_dir_all(&approved_server_dir).map_err(|e| {
-                            RuntimeError::Generic(format!("Failed to remove existing approved directory: {}", e))
+                            RuntimeError::Generic(format!(
+                                "Failed to remove existing approved directory: {}",
+                                e
+                            ))
                         })?;
                     }
-                    
+
                     // Move the entire directory (BEFORE removing from pending)
                     std::fs::rename(source_dir, &approved_server_dir).map_err(|e| {
-                        RuntimeError::Generic(format!("Failed to move capability directory from {} to {}: {}", 
-                            source_dir.display(), approved_server_dir.display(), e))
+                        RuntimeError::Generic(format!(
+                            "Failed to move capability directory from {} to {}: {}",
+                            source_dir.display(),
+                            approved_server_dir.display(),
+                            e
+                        ))
                     })?;
-                    
+
                     // Collect all RTFS file paths from the approved directory
                     if approved_server_dir.exists() {
                         if let Ok(entries) = std::fs::read_dir(&approved_server_dir) {
                             for entry in entries.flatten() {
                                 let path = entry.path();
-                                if path.is_file() && path.extension().map_or(false, |ext| ext == "rtfs") {
-                                    if let Ok(rel_path) = path.strip_prefix("capabilities/servers/approved") {
-                                        capability_files.push(rel_path.to_string_lossy().to_string());
+                                if path.is_file()
+                                    && path.extension().map_or(false, |ext| ext == "rtfs")
+                                {
+                                    if let Ok(rel_path) =
+                                        path.strip_prefix("capabilities/servers/approved")
+                                    {
+                                        capability_files
+                                            .push(rel_path.to_string_lossy().to_string());
                                     }
                                 } else if path.is_dir() {
                                     // Recursively find RTFS files in subdirectories
                                     if let Ok(sub_entries) = std::fs::read_dir(&path) {
                                         for sub_entry in sub_entries.flatten() {
                                             let sub_path = sub_entry.path();
-                                            if sub_path.is_file() && sub_path.extension().map_or(false, |ext| ext == "rtfs") {
-                                                if let Ok(rel_path) = sub_path.strip_prefix("capabilities/servers/approved") {
-                                                    capability_files.push(rel_path.to_string_lossy().to_string());
+                                            if sub_path.is_file()
+                                                && sub_path
+                                                    .extension()
+                                                    .map_or(false, |ext| ext == "rtfs")
+                                            {
+                                                if let Ok(rel_path) = sub_path
+                                                    .strip_prefix("capabilities/servers/approved")
+                                                {
+                                                    capability_files.push(
+                                                        rel_path.to_string_lossy().to_string(),
+                                                    );
                                                 }
                                             }
                                         }
@@ -810,7 +929,7 @@ impl ApprovalQueue {
                             }
                         }
                     }
-                    
+
                     // Update capabilities_path in server_info to point to approved location
                     if let Some(ref old_path) = item.server_info.capabilities_path {
                         // Replace "pending" with "approved" in the path
@@ -818,18 +937,21 @@ impl ApprovalQueue {
                         item.server_info.capabilities_path = Some(new_path);
                     } else {
                         // If no capabilities_path was set, set it now based on the moved location
-                        let default_path = format!("capabilities/servers/approved/{}/capabilities.rtfs", server_id);
+                        let default_path = format!(
+                            "capabilities/servers/approved/{}/capabilities.rtfs",
+                            server_id
+                        );
                         if std::path::Path::new(&default_path).exists() {
                             item.server_info.capabilities_path = Some(default_path);
                         }
                     }
                 }
             }
-            
+
             // NOW remove from pending (after moving capabilities)
             // Since we moved the directory, remove_from_dir will just try to remove a non-existent directory, which is fine
             let _ = self.remove_from_dir(&self.pending_path(), &item);
-            
+
             let approved = ApprovedDiscovery {
                 id: item.id,
                 source: item.source,
@@ -840,34 +962,38 @@ impl ApprovalQueue {
                 approved_at: Utc::now(),
                 approved_by: ApprovalAuthority::User("cli_user".to_string()), // Default for CLI
                 approval_reason: reason,
-                capability_files: if capability_files.is_empty() { None } else { Some(capability_files) },
+                capability_files: if capability_files.is_empty() {
+                    None
+                } else {
+                    Some(capability_files)
+                },
                 version: 1, // Initial version
                 last_successful_call: None,
                 consecutive_failures: 0,
                 total_calls: 0,
                 total_errors: 0,
             };
-            
+
             // Check if server already exists in approved (by name or endpoint)
             // We need to load approved state again because it might have changed
             // But actually we just want to save the new one.
             // If it exists, save_to_dir will overwrite the server.json file
             // But we should check to preserve stats if possible.
-            
+
             let mut approved_state = self.load_approved()?;
             let existing_pos = approved_state.items.iter().position(|existing| {
-                existing.server_info.name == approved.server_info.name ||
-                (!approved.server_info.endpoint.is_empty() && 
-                 existing.server_info.endpoint == approved.server_info.endpoint)
+                existing.server_info.name == approved.server_info.name
+                    || (!approved.server_info.endpoint.is_empty()
+                        && existing.server_info.endpoint == approved.server_info.endpoint)
             });
-            
+
             let final_approved = if let Some(pos) = existing_pos {
                 // Update existing entry - merge capabilities, keep stats
                 let mut existing = approved_state.items[pos].clone();
-                
+
                 // Increment version on update
                 existing.version += 1;
-                
+
                 // Update server info
                 existing.server_info = approved.server_info;
                 existing.source = approved.source;
@@ -876,7 +1002,7 @@ impl ApprovalQueue {
                 existing.requesting_goal = approved.requesting_goal;
                 existing.approved_at = approved.approved_at; // Update approval time
                 existing.approval_reason = approved.approval_reason;
-                
+
                 // Merge capability files (add new ones, keep existing)
                 if let Some(new_files) = approved.capability_files {
                     let mut all_files = existing.capability_files.clone().unwrap_or_default();
@@ -887,19 +1013,22 @@ impl ApprovalQueue {
                     }
                     existing.capability_files = Some(all_files);
                 }
-                
+
                 // Keep usage stats from existing entry
                 existing
             } else {
                 // New server
                 approved
             };
-            
+
             self.save_to_dir(&self.approved_path(), &final_approved)?;
-            
+
             Ok(())
         } else {
-            Err(RuntimeError::Generic(format!("Discovery not found: {}", id)))
+            Err(RuntimeError::Generic(format!(
+                "Discovery not found: {}",
+                id
+            )))
         }
     }
 
@@ -908,7 +1037,7 @@ impl ApprovalQueue {
         if let Some(pos) = pending_state.items.iter().position(|item| item.id == id) {
             let item = pending_state.items.remove(pos);
             self.remove_from_dir(&self.pending_path(), &item)?;
-            
+
             let rejected = RejectedDiscovery {
                 id: item.id,
                 source: item.source,
@@ -920,21 +1049,28 @@ impl ApprovalQueue {
                 rejected_by: ApprovalAuthority::User("cli_user".to_string()), // Default for CLI
                 rejection_reason: reason,
             };
-            
+
             self.save_to_dir(&self.rejected_path(), &rejected)?;
-            
+
             Ok(())
         } else {
-            Err(RuntimeError::Generic(format!("Discovery not found: {}", id)))
+            Err(RuntimeError::Generic(format!(
+                "Discovery not found: {}",
+                id
+            )))
         }
     }
 
     pub fn dismiss_server(&self, id: &str, reason: String) -> RuntimeResult<()> {
         let mut approved_state = self.load_approved()?;
-        if let Some(pos) = approved_state.items.iter().position(|item| item.id == id || item.server_info.name == id) {
+        if let Some(pos) = approved_state
+            .items
+            .iter()
+            .position(|item| item.id == id || item.server_info.name == id)
+        {
             let item = approved_state.items.remove(pos);
             self.remove_from_dir(&self.approved_path(), &item)?;
-            
+
             let rejected = RejectedDiscovery {
                 id: item.id,
                 source: item.source,
@@ -946,21 +1082,28 @@ impl ApprovalQueue {
                 rejected_by: ApprovalAuthority::User("cli_user".to_string()),
                 rejection_reason: format!("Dismissed: {}", reason),
             };
-            
+
             self.save_to_dir(&self.rejected_path(), &rejected)?;
-            
+
             Ok(())
         } else {
-            Err(RuntimeError::Generic(format!("Server not found in approved list: {}", id)))
+            Err(RuntimeError::Generic(format!(
+                "Server not found in approved list: {}",
+                id
+            )))
         }
     }
 
     pub fn retry_server(&self, id: &str) -> RuntimeResult<()> {
         let mut rejected_state = self.load_rejected()?;
-        if let Some(pos) = rejected_state.items.iter().position(|item| item.id == id || item.server_info.name == id) {
+        if let Some(pos) = rejected_state
+            .items
+            .iter()
+            .position(|item| item.id == id || item.server_info.name == id)
+        {
             let item = rejected_state.items.remove(pos);
             self.remove_from_dir(&self.rejected_path(), &item)?;
-            
+
             let approved = ApprovedDiscovery {
                 id: item.id,
                 source: item.source,
@@ -972,18 +1115,21 @@ impl ApprovalQueue {
                 approved_by: ApprovalAuthority::User("cli_user".to_string()),
                 approval_reason: Some("Manually retried".to_string()),
                 capability_files: None, // Retried servers don't have capability files yet
-                version: 1, // Initial version for retried servers
+                version: 1,             // Initial version for retried servers
                 last_successful_call: None,
                 consecutive_failures: 0,
                 total_calls: 0,
                 total_errors: 0,
             };
-            
+
             self.save_to_dir(&self.approved_path(), &approved)?;
-            
+
             Ok(())
         } else {
-            Err(RuntimeError::Generic(format!("Server not found in rejected/dismissed list: {}", id)))
+            Err(RuntimeError::Generic(format!(
+                "Server not found in rejected/dismissed list: {}",
+                id
+            )))
         }
     }
 }

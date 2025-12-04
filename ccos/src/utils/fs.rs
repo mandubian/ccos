@@ -44,10 +44,15 @@ mod tests {
         assert_eq!(sanitize_filename("valid_name"), "valid_name");
         assert_eq!(sanitize_filename("invalid/name"), "invalid_name");
         assert_eq!(sanitize_filename("name with spaces"), "name_with_spaces");
-        assert_eq!(sanitize_filename("multiple__underscores"), "multiple_underscores");
-        assert_eq!(sanitize_filename("github.com/user/repo"), "github.com_user_repo");
+        assert_eq!(
+            sanitize_filename("multiple__underscores"),
+            "multiple_underscores"
+        );
+        assert_eq!(
+            sanitize_filename("github.com/user/repo"),
+            "github.com_user_repo"
+        );
         assert_eq!(sanitize_filename("!@#$%^&*()"), "");
         assert_eq!(sanitize_filename("foo/bar/baz"), "foo_bar_baz");
     }
 }
-

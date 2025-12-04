@@ -13,4 +13,4 @@ pub mod openapi_importer;
 // Re-export commonly used types
 pub use graphql_importer::{GraphQLImporter, GraphQLOperation, GraphQLSchema};
 pub use http_wrapper::{HTTPAPIInfo, HTTPEndpoint, HTTPWrapper};
-pub use openapi_importer::{OpenAPIImporter, OpenAPIOperation, OpenAPIInfo};
+pub use openapi_importer::{OpenAPIImporter, OpenAPIInfo, OpenAPIOperation};

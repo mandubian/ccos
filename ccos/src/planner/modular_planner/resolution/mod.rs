@@ -257,9 +257,29 @@ impl ResolutionStrategy for CompositeResolution {
 
     async fn list_available_tools(&self, domain_hints: Option<&[DomainHint]>) -> Vec<ToolSummary> {
         let mut all_tools = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
+        
         for strategy in &self.strategies {
             let tools = strategy.list_available_tools(domain_hints).await;
-            all_tools.extend(tools);
+            for tool in tools {
+                // Deduplicate by tool name to avoid showing the same capability multiple times
+                // Prefer the version with the full ID (contains '/' or more dots) over shortened versions
+                if seen_names.contains(&tool.name) {
+                    // Check if this is a "better" version (more specific ID)
+                    if let Some(existing_idx) = all_tools.iter().position(|t: &ToolSummary| t.name == tool.name) {
+                        let existing = &all_tools[existing_idx];
+                        // Prefer the one with more path separators (fuller ID)
+                        let existing_seps = existing.name.matches('/').count() + existing.name.matches('.').count();
+                        let new_seps = tool.name.matches('/').count() + tool.name.matches('.').count();
+                        if new_seps > existing_seps {
+                            all_tools[existing_idx] = tool;
+                        }
+                    }
+                } else {
+                    seen_names.insert(tool.name.clone());
+                    all_tools.push(tool);
+                }
+            }
         }
         all_tools
     }

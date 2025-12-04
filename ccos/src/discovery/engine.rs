@@ -912,9 +912,7 @@ impl DiscoveryEngine {
         for server in servers.iter() {
             // Try to get server URL from remotes first, then check for environment variable overrides
             let mut server_url = server.remotes.as_ref().and_then(|remotes| {
-                crate::mcp::registry::MCPRegistryClient::select_best_remote_url(
-                    remotes,
-                )
+                crate::mcp::registry::MCPRegistryClient::select_best_remote_url(remotes)
             });
 
             // For servers without remotes (stdio-based), check for environment variable overrides
@@ -1989,7 +1987,9 @@ impl DiscoveryEngine {
         match expr {
             rtfs::ast::TypeExpr::Map { entries, .. } => {
                 for entry in entries {
-                    let param_name = value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()));
+                    let param_name = value_conversion::map_key_to_string(
+                        &rtfs::ast::MapKey::Keyword(entry.key.clone()),
+                    );
                     // Check if this parameter has constraints or enum values
                     let ty = &*entry.value_type;
                     // For enum types, extract the values
@@ -2001,7 +2001,9 @@ impl DiscoveryEngine {
                                     match lit {
                                         rtfs::ast::Literal::String(s) => Some(s.clone()),
                                         rtfs::ast::Literal::Keyword(k) => {
-                                            Some(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(k.clone())))
+                                            Some(value_conversion::map_key_to_string(
+                                                &rtfs::ast::MapKey::Keyword(k.clone()),
+                                            ))
                                         }
                                         _ => None,
                                     }
@@ -2269,9 +2271,14 @@ impl DiscoveryEngine {
 
     fn schema_bindings(schema: Option<&rtfs::ast::TypeExpr>) -> Vec<String> {
         match schema {
-            Some(rtfs::ast::TypeExpr::Map { entries, .. }) => {
-                entries.iter().map(|entry| value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()))).collect()
-            }
+            Some(rtfs::ast::TypeExpr::Map { entries, .. }) => entries
+                .iter()
+                .map(|entry| {
+                    value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(
+                        entry.key.clone(),
+                    ))
+                })
+                .collect(),
             _ => Vec::new(),
         }
     }
@@ -2284,7 +2291,9 @@ impl DiscoveryEngine {
             rtfs::ast::TypeExpr::Map { entries, .. } => {
                 for entry in entries {
                     // Extract keyword name (remove the ':' prefix if present)
-                    let param_name = value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone()));
+                    let param_name = value_conversion::map_key_to_string(
+                        &rtfs::ast::MapKey::Keyword(entry.key.clone()),
+                    );
                     params.push(param_name);
                 }
             }
@@ -2938,7 +2947,9 @@ fn eh_collect_schema_keys(schema: &rtfs::ast::TypeExpr, out: &mut Vec<String>) {
     match schema {
         rtfs::ast::TypeExpr::Map { entries, .. } => {
             for entry in entries {
-                out.push(value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(entry.key.clone())));
+                out.push(value_conversion::map_key_to_string(
+                    &rtfs::ast::MapKey::Keyword(entry.key.clone()),
+                ));
             }
         }
         rtfs::ast::TypeExpr::Vector(inner) | rtfs::ast::TypeExpr::Optional(inner) => {

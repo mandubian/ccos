@@ -71,7 +71,9 @@ impl IrStrategy {
 impl RuntimeStrategy for IrStrategy {
     fn run(&mut self, program: &Expression) -> Result<ExecutionOutcome, RuntimeError> {
         // Expand macros before IR conversion
-        let expanded_program = self.macro_expander.expand(program, 0)
+        let expanded_program = self
+            .macro_expander
+            .expand(program, 0)
             .map_err(|e| RuntimeError::Generic(format!("Macro expansion error: {}", e)))?;
 
         let mut converter = IrConverter::with_module_registry(&self.module_registry);

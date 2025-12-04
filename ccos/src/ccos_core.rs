@@ -359,52 +359,193 @@ impl CCOS {
 
         // Always create delegating arbiter - this is now the primary arbiter
         let delegating_arbiter = {
-            // Determine model - use stub as fallback if no explicit model is provided
-            let model = std::env::var("CCOS_DELEGATING_MODEL")
-                .unwrap_or_else(|_| "stub".to_string());
+            // Try to extract LLM config from agent config first
+            let llm_config = if let Some(llm_profiles) = &agent_config.llm_profiles {
+                // Use default profile or first available profile
+                let profile_name = llm_profiles
+                    .default
+                    .clone()
+                    .or_else(|| llm_profiles.profiles.first().map(|p| p.name.clone()));
+                
+                if let Some(name) = profile_name {
+                    if let Some(profile) = crate::examples_common::builder::find_llm_profile(
+                        agent_config.as_ref(),
+                        &name,
+                    ) {
+                        // Resolve API key from env var or inline
+                        let api_key = profile
+                            .api_key
+                            .clone()
+                            .or_else(|| {
+                                profile
+                                    .api_key_env
+                                    .as_ref()
+                                    .and_then(|env| std::env::var(env).ok())
+                            });
 
-            // Determine API configuration - use stub if no API keys are available
-            let (api_key, base_url) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-                let base = std::env::var("CCOS_LLM_BASE_URL")
-                    .ok()
-                    .or_else(|| Some("https://openrouter.ai/api/v1".to_string()));
-                (Some(key), base)
-            } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-                (Some(key), None)
-            } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-                (Some(key), std::env::var("CCOS_LLM_BASE_URL").ok())
+                        let provider_type = match profile.provider.to_lowercase().as_str() {
+                            "openai" | "openrouter" => {
+                                crate::arbiter::arbiter_config::LlmProviderType::OpenAI
+                            }
+                            "anthropic" | "claude" => {
+                                crate::arbiter::arbiter_config::LlmProviderType::Anthropic
+                            }
+                            "local" | "ollama" => {
+                                crate::arbiter::arbiter_config::LlmProviderType::Local
+                            }
+                            "stub" | "test" => {
+                                crate::arbiter::arbiter_config::LlmProviderType::Stub
+                            }
+                            _ => crate::arbiter::arbiter_config::LlmProviderType::OpenAI,
+                        };
+
+                        crate::arbiter::arbiter_config::LlmConfig {
+                            provider_type,
+                            model: profile.model,
+                            api_key,
+                            base_url: profile.base_url,
+                            max_tokens: profile.max_tokens.or(Some(1000)),
+                            temperature: profile.temperature.or(Some(0.7)),
+                            timeout_seconds: Some(30),
+                            prompts: None,
+                            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+                        }
+                    } else {
+                        // Profile not found, fall through to env var logic
+                        let model = std::env::var("CCOS_DELEGATING_MODEL")
+                            .unwrap_or_else(|_| "stub".to_string());
+                        let (api_key, base_url) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+                            let base = std::env::var("CCOS_LLM_BASE_URL")
+                                .ok()
+                                .or_else(|| Some("https://openrouter.ai/api/v1".to_string()));
+                            (Some(key), base)
+                        } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+                            (Some(key), None)
+                        } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+                            (Some(key), std::env::var("CCOS_LLM_BASE_URL").ok())
+                        } else {
+                            (None, std::env::var("CCOS_LLM_BASE_URL").ok())
+                        };
+                        let provider_hint = std::env::var("CCOS_LLM_PROVIDER_HINT")
+                            .unwrap_or_else(|_| String::from(""));
+                        let provider_type = if provider_hint.eq_ignore_ascii_case("stub")
+                            || model == "stub-model"
+                            || model == "deterministic-stub-model"
+                            || model == "stub"
+                            || api_key.is_none()
+                        {
+                            crate::arbiter::arbiter_config::LlmProviderType::Stub
+                        } else if provider_hint.eq_ignore_ascii_case("anthropic") {
+                            crate::arbiter::arbiter_config::LlmProviderType::Anthropic
+                        } else if provider_hint.eq_ignore_ascii_case("local") {
+                            crate::arbiter::arbiter_config::LlmProviderType::Local
+                        } else {
+                            crate::arbiter::arbiter_config::LlmProviderType::OpenAI
+                        };
+                        crate::arbiter::arbiter_config::LlmConfig {
+                            provider_type,
+                            model,
+                            api_key,
+                            base_url,
+                            max_tokens: Some(1000),
+                            temperature: Some(0.7),
+                            timeout_seconds: Some(30),
+                            prompts: None,
+                            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+                        }
+                    }
+                } else {
+                    // No profile name, fall through to env var logic
+                    let model = std::env::var("CCOS_DELEGATING_MODEL")
+                        .unwrap_or_else(|_| "stub".to_string());
+                    let (api_key, base_url) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+                        let base = std::env::var("CCOS_LLM_BASE_URL")
+                            .ok()
+                            .or_else(|| Some("https://openrouter.ai/api/v1".to_string()));
+                        (Some(key), base)
+                    } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+                        (Some(key), None)
+                    } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+                        (Some(key), std::env::var("CCOS_LLM_BASE_URL").ok())
+                    } else {
+                        (None, std::env::var("CCOS_LLM_BASE_URL").ok())
+                    };
+                    let provider_hint = std::env::var("CCOS_LLM_PROVIDER_HINT")
+                        .unwrap_or_else(|_| String::from(""));
+                    let provider_type = if provider_hint.eq_ignore_ascii_case("stub")
+                        || model == "stub-model"
+                        || model == "deterministic-stub-model"
+                        || model == "stub"
+                        || api_key.is_none()
+                    {
+                        crate::arbiter::arbiter_config::LlmProviderType::Stub
+                    } else if provider_hint.eq_ignore_ascii_case("anthropic") {
+                        crate::arbiter::arbiter_config::LlmProviderType::Anthropic
+                    } else if provider_hint.eq_ignore_ascii_case("local") {
+                        crate::arbiter::arbiter_config::LlmProviderType::Local
+                    } else {
+                        crate::arbiter::arbiter_config::LlmProviderType::OpenAI
+                    };
+                    crate::arbiter::arbiter_config::LlmConfig {
+                        provider_type,
+                        model,
+                        api_key,
+                        base_url,
+                        max_tokens: Some(1000),
+                        temperature: Some(0.7),
+                        timeout_seconds: Some(30),
+                        prompts: None,
+                        retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+                    }
+                }
             } else {
-                (None, std::env::var("CCOS_LLM_BASE_URL").ok())
-            };
+                // No llm_profiles in agent config, fall back to environment variables
+                let model =
+                    std::env::var("CCOS_DELEGATING_MODEL").unwrap_or_else(|_| "stub".to_string());
 
-            // Create LLM config for delegating arbiter
-            let provider_hint =
-                std::env::var("CCOS_LLM_PROVIDER_HINT").unwrap_or_else(|_| String::from(""));
-            let provider_type = if provider_hint.eq_ignore_ascii_case("stub")
-                || model == "stub-model"
-                || model == "deterministic-stub-model"
-                || model == "stub"
-                || api_key.is_none()
-            {
-                crate::arbiter::arbiter_config::LlmProviderType::Stub
-            } else if provider_hint.eq_ignore_ascii_case("anthropic") {
-                crate::arbiter::arbiter_config::LlmProviderType::Anthropic
-            } else if provider_hint.eq_ignore_ascii_case("local") {
-                crate::arbiter::arbiter_config::LlmProviderType::Local
-            } else {
-                crate::arbiter::arbiter_config::LlmProviderType::OpenAI
-            };
+                // Determine API configuration - use stub if no API keys are available
+                let (api_key, base_url) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+                    let base = std::env::var("CCOS_LLM_BASE_URL")
+                        .ok()
+                        .or_else(|| Some("https://openrouter.ai/api/v1".to_string()));
+                    (Some(key), base)
+                } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+                    (Some(key), None)
+                } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+                    (Some(key), std::env::var("CCOS_LLM_BASE_URL").ok())
+                } else {
+                    (None, std::env::var("CCOS_LLM_BASE_URL").ok())
+                };
 
-            let llm_config = crate::arbiter::arbiter_config::LlmConfig {
-                provider_type,
-                model,
-                api_key,
-                base_url,
-                max_tokens: Some(1000),
-                temperature: Some(0.7),
-                timeout_seconds: Some(30),
-                prompts: None,
-                retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+                // Create LLM config for delegating arbiter
+                let provider_hint =
+                    std::env::var("CCOS_LLM_PROVIDER_HINT").unwrap_or_else(|_| String::from(""));
+                let provider_type = if provider_hint.eq_ignore_ascii_case("stub")
+                    || model == "stub-model"
+                    || model == "deterministic-stub-model"
+                    || model == "stub"
+                    || api_key.is_none()
+                {
+                    crate::arbiter::arbiter_config::LlmProviderType::Stub
+                } else if provider_hint.eq_ignore_ascii_case("anthropic") {
+                    crate::arbiter::arbiter_config::LlmProviderType::Anthropic
+                } else if provider_hint.eq_ignore_ascii_case("local") {
+                    crate::arbiter::arbiter_config::LlmProviderType::Local
+                } else {
+                    crate::arbiter::arbiter_config::LlmProviderType::OpenAI
+                };
+
+                crate::arbiter::arbiter_config::LlmConfig {
+                    provider_type,
+                    model,
+                    api_key,
+                    base_url,
+                    max_tokens: Some(1000),
+                    temperature: Some(0.7),
+                    timeout_seconds: Some(30),
+                    prompts: None,
+                    retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+                }
             };
 
             // Allow examples or environment to override retry config for the LLM provider.
@@ -831,7 +972,8 @@ impl CCOS {
         // 1. Arbiter: Generate a plan from the natural language request.
         // Use delegating arbiter to produce a plan via its engine API
         use crate::arbiter::ArbiterEngine;
-        let intent = self.arbiter
+        let intent = self
+            .arbiter
             .natural_language_to_intent(natural_language_request, None)
             .await?;
 
@@ -880,10 +1022,12 @@ impl CCOS {
         }
 
         let proposed_plan = self.arbiter.intent_to_plan(&intent).await?;
-        self.emit_debug(|| format!(
+        self.emit_debug(|| {
+            format!(
             "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
             proposed_plan.plan_id, intent.intent_id, current_ts()
-        ));
+        )
+        });
 
         // 1.5 Preflight capability validation (M3)
         self.emit_debug(|| {
@@ -934,8 +1078,7 @@ impl CCOS {
                             Value::String(agent_id.clone()),
                         );
                         meta.insert("success".to_string(), Value::Boolean(result.success));
-                        let _ =
-                            chain.record_delegation_event(&stored.intent_id, "completed", meta);
+                        let _ = chain.record_delegation_event(&stored.intent_id, "completed", meta);
                     }
                     // Feedback update (rolling average) via registry
                     // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
@@ -978,7 +1121,8 @@ impl CCOS {
 
         // Plan generation - using delegating arbiter directly
         use crate::arbiter::ArbiterEngine;
-        let intent = self.arbiter
+        let intent = self
+            .arbiter
             .natural_language_to_intent(natural_language_request, None)
             .await?;
         if let Ok(mut ig) = self.intent_graph.lock() {
@@ -1021,10 +1165,12 @@ impl CCOS {
             ig.store_intent(storable_intent)?;
         }
         let proposed_plan = self.arbiter.intent_to_plan(&intent).await?;
-        self.emit_debug(|| format!(
+        self.emit_debug(|| {
+            format!(
             "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
             proposed_plan.plan_id, intent.intent_id, current_ts()
-        ));
+        )
+        });
 
         self.emit_debug(|| {
             format!(
@@ -1071,8 +1217,7 @@ impl CCOS {
                             Value::String(agent_id.clone()),
                         );
                         meta.insert("success".to_string(), Value::Boolean(result.success));
-                        let _ =
-                            chain.record_delegation_event(&stored.intent_id, "completed", meta);
+                        let _ = chain.record_delegation_event(&stored.intent_id, "completed", meta);
                     }
                     // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
                     // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
@@ -1107,7 +1252,8 @@ impl CCOS {
         // 1. Arbiter: Generate a plan from the natural language request.
         // Use delegating arbiter to produce a plan via its engine API
         use crate::arbiter::ArbiterEngine;
-        let intent = self.arbiter
+        let intent = self
+            .arbiter
             .natural_language_to_intent(natural_language_request, arbiter_context.cloned())
             .await?;
 

@@ -1,14 +1,14 @@
-use crate::cli::CliContext;
-use crate::cli::OutputFormatter;
-use crate::cli::OutputFormat;
-use clap::Args;
-use rtfs::runtime::error::{RuntimeResult, RuntimeError};
-use crate::capability_marketplace::CapabilityMarketplace;
 use crate::capabilities::registry::CapabilityRegistry;
+use crate::capability_marketplace::CapabilityMarketplace;
+use crate::cli::CliContext;
+use crate::cli::OutputFormat;
+use crate::cli::OutputFormatter;
+use crate::utils::value_conversion;
+use clap::Args;
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde_json::Value;
-use crate::utils::value_conversion;
 
 #[derive(Args)]
 pub struct CallArgs {
@@ -20,10 +20,7 @@ pub struct CallArgs {
     pub args: Vec<String>,
 }
 
-pub async fn execute(
-    ctx: &mut CliContext,
-    args: CallArgs,
-) -> RuntimeResult<()> {
+pub async fn execute(ctx: &mut CliContext, args: CallArgs) -> RuntimeResult<()> {
     let formatter = OutputFormatter::new(ctx.output_format);
 
     // Initialize marketplace
@@ -34,9 +31,14 @@ pub async fn execute(
     let approved_dir = std::path::Path::new("capabilities/servers/approved");
     if approved_dir.exists() {
         ctx.status("Loading capabilities from approved servers...");
-        let count = marketplace.import_capabilities_from_rtfs_dir_recursive(approved_dir).await?;
+        let count = marketplace
+            .import_capabilities_from_rtfs_dir_recursive(approved_dir)
+            .await?;
         if count > 0 {
-            ctx.status(&format!("Loaded {} capabilities from approved servers", count));
+            ctx.status(&format!(
+                "Loaded {} capabilities from approved servers",
+                count
+            ));
         } else {
             ctx.status("Warning: No capabilities loaded from approved servers");
         }
@@ -51,7 +53,10 @@ pub async fn execute(
 
     ctx.status(&format!("Calling capability: {}", args.capability_id));
     if ctx.verbose {
-        ctx.status(&format!("Input: {}", serde_json::to_string_pretty(&input_value).unwrap_or_default()));
+        ctx.status(&format!(
+            "Input: {}",
+            serde_json::to_string_pretty(&input_value).unwrap_or_default()
+        ));
     }
 
     // Execute capability
@@ -59,7 +64,7 @@ pub async fn execute(
     // json_to_rtfs_value returns a generic Value, not Result, based on common patterns.
     // Wait, the error said it returns Result.
     let rtfs_input = value_conversion::json_to_rtfs_value(&input_value);
-    
+
     // Check if it's a Result or not. The error said: found `&Result<...>`
     // So I need to handle it.
     let rtfs_input = match rtfs_input {
@@ -67,17 +72,26 @@ pub async fn execute(
         Err(e) => return Err(RuntimeError::Generic(format!("Conversion failed: {}", e))),
     };
 
-    match marketplace.execute_capability(&args.capability_id, &rtfs_input).await {
+    match marketplace
+        .execute_capability(&args.capability_id, &rtfs_input)
+        .await
+    {
         Ok(result) => {
             let json_result = value_conversion::rtfs_value_to_json(&result)?;
             match ctx.output_format {
                 OutputFormat::Json => {
-                    println!("{}", serde_json::to_string_pretty(&json_result).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json_result).unwrap_or_default()
+                    );
                 }
                 _ => {
                     formatter.success("Execution successful");
                     formatter.section("Result");
-                    println!("{}", serde_json::to_string_pretty(&json_result).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json_result).unwrap_or_default()
+                    );
                 }
             }
         }
@@ -119,10 +133,12 @@ fn parse_args(args: &[String]) -> RuntimeResult<Value> {
             };
             map.insert(normalized_key, value);
         } else {
-             return Err(RuntimeError::Generic(format!("Invalid argument format: '{}'. Use key=value format (e.g., q=London)", arg)));
+            return Err(RuntimeError::Generic(format!(
+                "Invalid argument format: '{}'. Use key=value format (e.g., q=London)",
+                arg
+            )));
         }
     }
 
     Ok(Value::Object(map))
 }
-

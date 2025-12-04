@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     std::env::set_var("CCOS_AUTO_RESOLUTION_ENABLED", "true");
     std::env::set_var("CCOS_RUNTIME_DETECTION_ENABLED", "true");
     // We want to test the fallback flow, but still simulate approval for the demo
-    std::env::set_var("CCOS_HUMAN_APPROVAL_REQUIRED", "false"); 
+    std::env::set_var("CCOS_HUMAN_APPROVAL_REQUIRED", "false");
     std::env::set_var("CCOS_MCP_REGISTRY_ENABLED", "true");
     std::env::set_var("CCOS_OUTPUT_SCHEMA_INTROSPECTION_ENABLED", "true");
     std::env::set_var("CCOS_QUIET_RESOLVER", "true"); // Reduce noise
@@ -49,13 +49,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("\n🧪 Test Case: Complex Missing Capability");
     // Using a capability ID that implies complex logic not easily synthesizable via simple pure RTFS
     let cap_id = "custom.advanced_analysis.market_sentiment_predictor";
-    println!("Testing capability '{}' that definitely doesn't exist", cap_id);
+    println!(
+        "Testing capability '{}' that definitely doesn't exist",
+        cap_id
+    );
 
     // Create a test intent
     let test_intent = SubIntent::new(
         "Predict market sentiment based on complex aggregated data",
         IntentType::DataTransform {
-            transform: ccos::planner::modular_planner::types::TransformType::Other("map".to_string()),
+            transform: ccos::planner::modular_planner::types::TransformType::Other(
+                "map".to_string(),
+            ),
         },
     )
     .with_domain(DomainHint::Custom("financial_analysis".to_string()))
@@ -95,7 +100,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     (println "Predicted Sentiment:" sentiment)
                     sentiment)))
         "#;
-    let plan_rtfs = plan_rtfs_template.replace("custom.advanced_analysis.market_sentiment_predictor", cap_id);
+    let plan_rtfs = plan_rtfs_template.replace(
+        "custom.advanced_analysis.market_sentiment_predictor",
+        cap_id,
+    );
 
     let plan = ccos::types::Plan {
         plan_id: "interactive-missing-cap-test".to_string(),
@@ -118,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !first_success {
         println!("✅ Plan failed as expected (Capability not found).");
         println!("   Trap should have queued it for resolution.");
-        
+
         // Manually trigger queueing if the automatic trap didn't catch it in this specific test setup
         // (In a full real run, the trap catches it, but here we explicitly ensure it's queued for the test logic)
         if let Some(resolver) = &ccos.missing_capability_resolver {
@@ -128,37 +136,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "Predict market sentiment based on complex aggregated data".to_string(),
             );
             // Hint that we want LLM resolution if pure RTFS fails
-            detection_context.insert("resolution_strategy".to_string(), "llm_synthesis".to_string());
-            
+            detection_context.insert(
+                "resolution_strategy".to_string(),
+                "llm_synthesis".to_string(),
+            );
+
             if let Err(err) =
                 resolver.handle_missing_capability(cap_id.to_string(), vec![], detection_context)
             {
-                 // Ignore if already queued
-                 if !err.to_string().contains("already pending") {
+                // Ignore if already queued
+                if !err.to_string().contains("already pending") {
                     eprintln!("⚠️  Failed to queue missing capability: {}", err);
-                 }
+                }
             }
         }
     }
 
     // 6. Drive resolution loop
     println!("\n🔁 Driving resolution loop (Simulating async background process)...");
-    // We run for a few iterations. 
+    // We run for a few iterations.
     // In a real interactive mode, this would block waiting for user input or LLM response.
     // For this test, we observe the state transitions.
-    
+
     for i in 0..5 {
         println!("   Resolution cycle {}...", i + 1);
         if let Err(e) = resolution_loop.process_pending_resolutions().await {
             eprintln!("Resolution loop error: {}", e);
         }
-        
+
         if let Some(resolver) = &ccos.missing_capability_resolver {
             let pending = resolver.list_pending_capabilities();
             if !pending.is_empty() {
-                 println!("   Still pending: {:?}", pending);
+                println!("   Still pending: {:?}", pending);
             } else {
-                 println!("   Queue empty (Resolution completed or failed permanently)");
+                println!("   Queue empty (Resolution completed or failed permanently)");
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -168,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(cap) = marketplace.get_capability(cap_id).await {
         println!("✅ Capability '{}' was resolved and created!", cap_id);
         println!("   Description: {}", cap.description);
-        
+
         // 8. Execute plan again (should succeed)
         println!("\n🚀 Executing Plan (Attempt 2 - Should Succeed)...");
         let result2 = ccos.validate_and_execute_plan(plan, &context).await?;
@@ -184,4 +195,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     Ok(())
 }
-

@@ -187,17 +187,54 @@ impl CatalogResolution {
         let suggested_tool_name = intent.extracted_params.get("_suggested_tool");
 
         if let Some(suggested_tool) = suggested_tool_name {
-            // Try direct lookup by suggested tool name/ID
-            let possible_ids = vec![
-                suggested_tool.clone(),
-                format!("mcp.github.{}", suggested_tool),
-                format!("ccos.{}", suggested_tool),
-                // Also try with data namespace for data processing capabilities
-                format!(
-                    "ccos.data.{}",
-                    suggested_tool.to_lowercase().replace(" ", "_")
-                ),
+            // Extract tool name from various formats:
+            // - "mcp.github.search_issues" -> "search_issues"
+            // - "search_issues" -> "search_issues"
+            // - "mcp.github/github-mcp.search_issues" -> "search_issues"
+            let tool_name = suggested_tool
+                .split('.')
+                .last()
+                .unwrap_or(suggested_tool)
+                .split('/')
+                .last()
+                .unwrap_or(suggested_tool)
+                .to_string();
+
+            // Try direct lookup by suggested tool name/ID with various formats
+            let mut possible_ids = vec![
+                suggested_tool.clone(), // Try exact match first
             ];
+
+            // Generic MCP format handling: extract server name if present
+            if suggested_tool.starts_with("mcp.") {
+                // Extract server name from patterns like:
+                // - "mcp.github.search_issues" -> "github"
+                // - "mcp.github/github-mcp.search_issues" -> "github"
+                let server_name = suggested_tool
+                    .strip_prefix("mcp.")
+                    .and_then(|s| s.split('.').next().or_else(|| s.split('/').next()))
+                    .unwrap_or("")
+                    .to_string();
+
+                if !server_name.is_empty() {
+                    // Try various MCP capability ID formats generically:
+                    // - mcp.{server}/{server}-mcp.{tool}
+                    // - mcp.{server}/{server}-mcp/{tool}
+                    // - mcp.{server}/{tool}
+                    // - mcp.{server}.{tool}
+                    possible_ids.push(format!("mcp.{}/{}-mcp.{}", server_name, server_name, tool_name));
+                    possible_ids.push(format!("mcp.{}/{}-mcp/{}", server_name, server_name, tool_name));
+                    possible_ids.push(format!("mcp.{}/{}", server_name, tool_name));
+                    possible_ids.push(format!("mcp.{}.{}", server_name, tool_name));
+                }
+            }
+
+            // Try CCOS namespaces
+            possible_ids.push(format!("ccos.{}", suggested_tool));
+            possible_ids.push(format!(
+                "ccos.data.{}",
+                tool_name.to_lowercase().replace(" ", "_")
+            ));
 
             for possible_id in &possible_ids {
                 if let Some(cap) = self.catalog.get_capability(possible_id).await {
@@ -209,18 +246,46 @@ impl CatalogResolution {
                         .collect();
 
                     if self.validate_and_adapt(intent, &cap, &mut arguments) {
+                        log::debug!(
+                            "[catalog] Found capability by ID pattern: {} -> {}",
+                            suggested_tool,
+                            cap.id
+                        );
                         return Some((cap, 0.95, arguments)); // High confidence for direct match
+                    }
+                }
+            }
+
+            // Try searching by tool name in capability IDs (for MCP capabilities)
+            let all_caps = self.catalog.list_capabilities(None).await;
+            for cap in &all_caps {
+                // Check if capability ID ends with the tool name
+                if cap.id.ends_with(&tool_name) || cap.id.contains(&format!(".{}", tool_name)) {
+                    let mut arguments: std::collections::HashMap<String, String> = intent
+                        .extracted_params
+                        .iter()
+                        .filter(|(k, _)| !k.starts_with('_'))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+
+                    if self.validate_and_adapt(intent, cap, &mut arguments) {
+                        log::debug!(
+                            "[catalog] Found capability by tool name in ID: {} -> {}",
+                            suggested_tool,
+                            cap.id
+                        );
+                        return Some((cap.clone(), 0.90, arguments));
                     }
                 }
             }
 
             // Try searching by display name as fallback (in case LLM used "Sort Data" instead of "ccos.data.sort")
             let suggested_lower = suggested_tool.to_lowercase();
-            let all_caps = self.catalog.list_capabilities(None).await;
-            for cap in all_caps {
+            for cap in &all_caps {
                 if cap.name.to_lowercase() == suggested_lower
                     || cap.name.to_lowercase().replace(" ", "_")
                         == suggested_lower.replace(" ", "_")
+                    || cap.name.to_lowercase() == tool_name.to_lowercase()
                 {
                     let mut arguments: std::collections::HashMap<String, String> = intent
                         .extracted_params
@@ -229,13 +294,13 @@ impl CatalogResolution {
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
 
-                    if self.validate_and_adapt(intent, &cap, &mut arguments) {
+                    if self.validate_and_adapt(intent, cap, &mut arguments) {
                         log::debug!(
                             "[catalog] Found capability by display name: {} -> {}",
                             suggested_tool,
                             cap.id
                         );
-                        return Some((cap, 0.90, arguments)); // Slightly lower confidence for name match
+                        return Some((cap.clone(), 0.90, arguments)); // Slightly lower confidence for name match
                     }
                 }
             }
@@ -842,8 +907,10 @@ impl ResolutionStrategy for CatalogResolution {
         unique_caps
             .into_iter()
             .map(|cap| {
-                // Infer domain from capability name/description
-                let domain = DomainHint::infer_from_text(&cap.description)
+                // Infer domain from capability ID, name, and description
+                // Check ID first since MCP capabilities have domain info in IDs (e.g., "mcp.github/...")
+                let domain = DomainHint::infer_from_text(&cap.id)
+                    .or_else(|| DomainHint::infer_from_text(&cap.description))
                     .or_else(|| DomainHint::infer_from_text(&cap.name))
                     .unwrap_or(DomainHint::Generic);
 

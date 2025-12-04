@@ -17,8 +17,8 @@ use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 
-use crate::capability_marketplace::types::CapabilityProvenance;
 use super::orchestrator::Orchestrator;
+use crate::capability_marketplace::types::CapabilityProvenance;
 
 use super::intent_graph::IntentGraph;
 use super::types::Intent; // for delegation validation
@@ -54,7 +54,8 @@ impl Default for Constitution {
         let rules = vec![
             ConstitutionRule {
                 id: "cli-agent-restrictions".to_string(),
-                description: "Agents cannot modify system configuration without human approval".to_string(),
+                description: "Agents cannot modify system configuration without human approval"
+                    .to_string(),
                 match_pattern: "ccos.cli.config.*".to_string(),
                 action: RuleAction::RequireHumanApproval,
             },
@@ -227,7 +228,11 @@ impl GovernanceKernel {
     }
 
     /// Validates the plan against the rules of the system's Constitution.
-    fn validate_against_constitution(&self, plan: &Plan, execution_mode: &str) -> RuntimeResult<()> {
+    fn validate_against_constitution(
+        &self,
+        plan: &Plan,
+        execution_mode: &str,
+    ) -> RuntimeResult<()> {
         // Check required capabilities against rules
         for capability_id in &plan.capabilities_required {
             for rule in &self.constitution.rules {
@@ -243,7 +248,7 @@ impl GovernanceKernel {
                             // If rule requires approval, execution mode must support it
                             // Modes "require-approval", "safe-only" (if deemed unsafe), and "dry-run" are acceptable.
                             // "full" mode is rejected if approval is required.
-                            
+
                             if execution_mode == "full" {
                                 return Err(RuntimeError::Generic(format!(
                                     "Plan requires human approval for capability '{}' (rule '{}'), but execution mode is 'full'. Use 'require-approval' mode.",
@@ -271,7 +276,7 @@ impl GovernanceKernel {
         }
         Ok(())
     }
-    
+
     /// Helper to check if an ID matches a pattern
     /// Supports simpler patterns:
     /// - "exact.match"
@@ -282,7 +287,7 @@ impl GovernanceKernel {
         if pattern == "*" {
             return true;
         }
-        
+
         if let Some(prefix) = pattern.strip_suffix('*') {
             if let Some(suffix) = prefix.strip_prefix('*') {
                 // "*contains*"
@@ -291,12 +296,12 @@ impl GovernanceKernel {
             // "prefix*"
             return id.starts_with(prefix);
         }
-        
+
         if let Some(suffix) = pattern.strip_prefix('*') {
             // "*suffix"
             return id.ends_with(suffix);
         }
-        
+
         id == pattern
     }
 
@@ -410,21 +415,15 @@ impl GovernanceKernel {
         // CLI capability patterns
         if id_lower.starts_with("ccos.cli.") {
             // Critical: system modification
-            if id_lower.contains("config.init")
-                || id_lower.contains("governance.constitution")
-            {
+            if id_lower.contains("config.init") || id_lower.contains("governance.constitution") {
                 return "critical".to_string();
             }
             // High: destructive or trust-modifying
-            if id_lower.contains("remove")
-                || id_lower.contains("approve")
-            {
+            if id_lower.contains("remove") || id_lower.contains("approve") {
                 return "high".to_string();
             }
             // Medium: state-changing but safe
-            if id_lower.contains("add")
-                || id_lower.contains("reject")
-                || id_lower.contains("call")
+            if id_lower.contains("add") || id_lower.contains("reject") || id_lower.contains("call")
             {
                 return "medium".to_string();
             }
@@ -548,17 +547,17 @@ impl GovernanceKernel {
     ) -> RuntimeResult<ExecutionResult> {
         // First validate that the root intent exists and can be executed
         let intent_id = root_intent_id.to_string();
-        
+
         // Get the root intent from the graph
         let graph = self
             .intent_graph
             .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
-        
-        let root_intent = graph
-            .get_intent(&intent_id)
-            .ok_or_else(|| RuntimeError::Generic(format!("Intent not found: {}", root_intent_id)))?;
-        
+
+        let root_intent = graph.get_intent(&intent_id).ok_or_else(|| {
+            RuntimeError::Generic(format!("Intent not found: {}", root_intent_id))
+        })?;
+
         drop(graph);
 
         // Get all child intents for this root intent
@@ -578,7 +577,9 @@ impl GovernanceKernel {
         for child_intent in children {
             if let Some(child_plan) = self.get_plan_for_intent(&child_intent.intent_id)? {
                 // Execute each child plan through governance
-                let child_result = self.validate_and_execute(child_plan, &enhanced_context).await?;
+                let child_result = self
+                    .validate_and_execute(child_plan, &enhanced_context)
+                    .await?;
                 let exported = self.extract_exported_variables(&child_result);
                 enhanced_context.cross_plan_params.extend(exported);
                 child_results.push((child_intent.intent_id.clone(), child_result));
@@ -588,7 +589,10 @@ impl GovernanceKernel {
         // Execute root plan if it exists
         let mut root_result = None;
         if let Some(root_plan) = self.get_plan_for_intent(root_intent_id)? {
-            root_result = Some(self.validate_and_execute(root_plan, &enhanced_context).await?);
+            root_result = Some(
+                self.validate_and_execute(root_plan, &enhanced_context)
+                    .await?,
+            );
         }
 
         // Build result summary
@@ -639,9 +643,9 @@ impl GovernanceKernel {
         // Get plans associated with this intent from the orchestrator's plan archive
         // Use the governance-accessible method
         let plan_archive = self.orchestrator.get_plan_archive();
-        
+
         let archivable_plans = plan_archive.get_plans_for_intent(&intent_id.to_string());
-        
+
         if let Some(archivable_plan) = archivable_plans.first() {
             Ok(Some(Self::archivable_plan_to_plan(archivable_plan)))
         } else {
@@ -650,16 +654,14 @@ impl GovernanceKernel {
     }
 
     /// Helper function to convert ArchivablePlan to Plan (duplicated from orchestrator for governance use)
-    fn archivable_plan_to_plan(
-        archivable_plan: &super::archivable_types::ArchivablePlan,
-    ) -> Plan {
-        use rtfs::runtime::values::Value as RtfsValue;
+    fn archivable_plan_to_plan(archivable_plan: &super::archivable_types::ArchivablePlan) -> Plan {
         use rtfs::parser::parse_expression;
         use rtfs::runtime::evaluator::Evaluator;
         use rtfs::runtime::execution_outcome::ExecutionOutcome;
         use rtfs::runtime::module_runtime::ModuleRegistry;
         use rtfs::runtime::pure_host::create_pure_host;
         use rtfs::runtime::security::RuntimeContext;
+        use rtfs::runtime::values::Value as RtfsValue;
         use serde_json::Value as JsonValue;
 
         // Helper function to parse RTFS or JSON strings
@@ -668,16 +670,18 @@ impl GovernanceKernel {
                 let module_registry = ModuleRegistry::new();
                 let security_context = RuntimeContext::pure();
                 let host = create_pure_host();
-                let evaluator =
-                    Evaluator::new(std::sync::Arc::new(module_registry), security_context, host, rtfs::compiler::expander::MacroExpander::default());
+                let evaluator = Evaluator::new(
+                    std::sync::Arc::new(module_registry),
+                    security_context,
+                    host,
+                    rtfs::compiler::expander::MacroExpander::default(),
+                );
 
                 match evaluator.evaluate(&expr) {
                     Ok(ExecutionOutcome::Complete(value)) => Some(value),
-                    _ => {
-                        serde_json::from_str::<JsonValue>(value_str)
-                            .ok()
-                            .map(convert_json_value)
-                    }
+                    _ => serde_json::from_str::<JsonValue>(value_str)
+                        .ok()
+                        .map(convert_json_value),
                 }
             } else {
                 serde_json::from_str::<JsonValue>(value_str)
@@ -758,8 +762,14 @@ impl GovernanceKernel {
                 .iter()
                 .filter_map(|(k, v)| deserialize_value(v).map(|val| (k.clone(), val)))
                 .collect(),
-            input_schema: archivable_plan.input_schema.as_ref().and_then(|s| deserialize_value(s)),
-            output_schema: archivable_plan.output_schema.as_ref().and_then(|s| deserialize_value(s)),
+            input_schema: archivable_plan
+                .input_schema
+                .as_ref()
+                .and_then(|s| deserialize_value(s)),
+            output_schema: archivable_plan
+                .output_schema
+                .as_ref()
+                .and_then(|s| deserialize_value(s)),
             policies: archivable_plan
                 .policies
                 .iter()

@@ -170,23 +170,26 @@ impl NativeCapabilityProvider {
         // For now, we'll create a simple handler that can call RTFS functions
 
         let rtfs_fn = rtfs_function.clone();
-        let handler = Arc::new(move |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-            let inputs = inputs.clone();
-            let rtfs_fn = rtfs_fn.clone();
-            async move {
-                // In a real implementation, this would:
-                // 1. Parse the RTFS function
-                // 2. Create an execution context
-                // 3. Call the RTFS evaluator with the inputs
-                // 4. Return the result
+        let handler = Arc::new(
+            move |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+                let inputs = inputs.clone();
+                let rtfs_fn = rtfs_fn.clone();
+                async move {
+                    // In a real implementation, this would:
+                    // 1. Parse the RTFS function
+                    // 2. Create an execution context
+                    // 3. Call the RTFS evaluator with the inputs
+                    // 4. Return the result
 
-                // For now, return a placeholder result
-                Ok(Value::String(format!(
-                    "RTFS function {} called with {:?}",
-                    rtfs_fn, inputs
-                )))
-            }.boxed()
-        });
+                    // For now, return a placeholder result
+                    Ok(Value::String(format!(
+                        "RTFS function {} called with {:?}",
+                        rtfs_fn, inputs
+                    )))
+                }
+                .boxed()
+            },
+        );
 
         let capability = NativeCapability {
             handler,
@@ -213,16 +216,19 @@ impl NativeCapabilityProvider {
         security_level: String,
     ) -> RuntimeResult<()> {
         let rtfs_fn = rtfs_function.clone();
-        let handler = Arc::new(move |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-            let inputs = inputs.clone();
-            let rtfs_fn = rtfs_fn.clone();
-            async move {
-                Ok(Value::String(format!(
-                    "RTFS function {} called with {:?}",
-                    rtfs_fn, inputs
-                )))
-            }.boxed()
-        });
+        let handler = Arc::new(
+            move |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+                let inputs = inputs.clone();
+                let rtfs_fn = rtfs_fn.clone();
+                async move {
+                    Ok(Value::String(format!(
+                        "RTFS function {} called with {:?}",
+                        rtfs_fn, inputs
+                    )))
+                }
+                .boxed()
+            },
+        );
 
         let mut metadata = HashMap::new();
         metadata.insert("name".to_string(), name);
@@ -290,19 +296,19 @@ impl CapabilityProvider for NativeCapabilityProvider {
     ) -> RuntimeResult<Value> {
         if let Some(capability) = self.capabilities.get(capability_id) {
             let future = (capability.handler)(inputs);
-            
+
             // Handle async execution from potentially sync context
             match tokio::runtime::Handle::try_current() {
                 Ok(handle) => {
                     // We are in a runtime
-                    tokio::task::block_in_place(|| {
-                        handle.block_on(future)
-                    })
-                },
+                    tokio::task::block_in_place(|| handle.block_on(future))
+                }
                 Err(_) => {
                     // We are not in a runtime, create one
                     tokio::runtime::Runtime::new()
-                        .map_err(|e| RuntimeError::Generic(format!("Failed to create runtime: {}", e)))?
+                        .map_err(|e| {
+                            RuntimeError::Generic(format!("Failed to create runtime: {}", e))
+                        })?
                         .block_on(future)
                 }
             }
@@ -427,18 +433,22 @@ fn get_bool_param(inputs: &Value, key: &str, default: bool) -> bool {
 // Server capabilities
 
 fn create_server_list_capability() -> NativeCapability {
-    let handler = Arc::new(|_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        async move {
-            match ops::server::list_servers().await {
-                Ok(output) => {
-                    let json = serde_json::to_string(&output)
-                        .map_err(|e| RuntimeError::Generic(format!("Serialization error: {}", e)))?;
-                    Ok(Value::String(json))
+    let handler = Arc::new(
+        |_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            async move {
+                match ops::server::list_servers().await {
+                    Ok(output) => {
+                        let json = serde_json::to_string(&output).map_err(|e| {
+                            RuntimeError::Generic(format!("Serialization error: {}", e))
+                        })?;
+                        Ok(Value::String(json))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -448,18 +458,21 @@ fn create_server_list_capability() -> NativeCapability {
 }
 
 fn create_server_add_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let url = get_string_param(&inputs, "url")?;
-            let name = get_optional_string_param(&inputs, "name");
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let url = get_string_param(&inputs, "url")?;
+                let name = get_optional_string_param(&inputs, "name");
 
-            match ops::server::add_server(url, name).await {
-                Ok(server_id) => Ok(Value::String(server_id)),
-                Err(e) => Err(e),
+                match ops::server::add_server(url, name).await {
+                    Ok(server_id) => Ok(Value::String(server_id)),
+                    Err(e) => Err(e),
+                }
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -469,17 +482,20 @@ fn create_server_add_capability() -> NativeCapability {
 }
 
 fn create_server_remove_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let name = get_string_param(&inputs, "name")?;
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let name = get_string_param(&inputs, "name")?;
 
-            match ops::server::remove_server(name).await {
-                Ok(_) => Ok(Value::String("Server removed successfully".to_string())),
-                Err(e) => Err(e),
+                match ops::server::remove_server(name).await {
+                    Ok(_) => Ok(Value::String("Server removed successfully".to_string())),
+                    Err(e) => Err(e),
+                }
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -489,21 +505,25 @@ fn create_server_remove_capability() -> NativeCapability {
 }
 
 fn create_server_health_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let name = get_optional_string_param(&inputs, "name");
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let name = get_optional_string_param(&inputs, "name");
 
-            match ops::server::server_health(name).await {
-                Ok(health_info) => {
-                    let json = serde_json::to_string(&health_info)
-                        .map_err(|e| RuntimeError::Generic(format!("Serialization error: {}", e)))?;
-                    Ok(Value::String(json))
+                match ops::server::server_health(name).await {
+                    Ok(health_info) => {
+                        let json = serde_json::to_string(&health_info).map_err(|e| {
+                            RuntimeError::Generic(format!("Serialization error: {}", e))
+                        })?;
+                        Ok(Value::String(json))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -513,24 +533,28 @@ fn create_server_health_capability() -> NativeCapability {
 }
 
 fn create_server_search_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let query = get_string_param(&inputs, "query")?;
-            let capability = get_optional_string_param(&inputs, "capability");
-            let llm = get_bool_param(&inputs, "llm", false);
-            let llm_model = get_optional_string_param(&inputs, "llm_model");
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let query = get_string_param(&inputs, "query")?;
+                let capability = get_optional_string_param(&inputs, "capability");
+                let llm = get_bool_param(&inputs, "llm", false);
+                let llm_model = get_optional_string_param(&inputs, "llm_model");
 
-            match ops::server::search_servers(query, capability, llm, llm_model).await {
-                Ok(search_results) => {
-                    let json = serde_json::to_string(&search_results)
-                        .map_err(|e| RuntimeError::Generic(format!("Serialization error: {}", e)))?;
-                    Ok(Value::String(json))
+                match ops::server::search_servers(query, capability, llm, llm_model).await {
+                    Ok(search_results) => {
+                        let json = serde_json::to_string(&search_results).map_err(|e| {
+                            RuntimeError::Generic(format!("Serialization error: {}", e))
+                        })?;
+                        Ok(Value::String(json))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -542,24 +566,28 @@ fn create_server_search_capability() -> NativeCapability {
 // Discovery capabilities
 
 fn create_discovery_goal_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let goal = match inputs {
-                Value::String(s) => s.clone(),
-                _ => get_string_param(&inputs, "goal")?,
-            };
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let goal = match inputs {
+                    Value::String(s) => s.clone(),
+                    _ => get_string_param(&inputs, "goal")?,
+                };
 
-            match ops::discover::discover_by_goal(goal).await {
-                Ok(discovery_results) => {
-                    let json = serde_json::to_string(&discovery_results)
-                        .map_err(|e| RuntimeError::Generic(format!("Serialization error: {}", e)))?;
-                    Ok(Value::String(json))
+                match ops::discover::discover_by_goal(goal).await {
+                    Ok(discovery_results) => {
+                        let json = serde_json::to_string(&discovery_results).map_err(|e| {
+                            RuntimeError::Generic(format!("Serialization error: {}", e))
+                        })?;
+                        Ok(Value::String(json))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -569,24 +597,28 @@ fn create_discovery_goal_capability() -> NativeCapability {
 }
 
 fn create_discovery_search_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let query = match inputs {
-                Value::String(s) => s.clone(),
-                _ => get_string_param(&inputs, "query")?,
-            };
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let query = match inputs {
+                    Value::String(s) => s.clone(),
+                    _ => get_string_param(&inputs, "query")?,
+                };
 
-            match ops::discover::search_catalog(query).await {
-                Ok(search_results) => {
-                    let json = serde_json::to_string(&search_results)
-                        .map_err(|e| RuntimeError::Generic(format!("Serialization error: {}", e)))?;
-                    Ok(Value::String(json))
+                match ops::discover::search_catalog(query).await {
+                    Ok(search_results) => {
+                        let json = serde_json::to_string(&search_results).map_err(|e| {
+                            RuntimeError::Generic(format!("Serialization error: {}", e))
+                        })?;
+                        Ok(Value::String(json))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -596,20 +628,23 @@ fn create_discovery_search_capability() -> NativeCapability {
 }
 
 fn create_discovery_inspect_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let id = match inputs {
-                Value::String(s) => s.clone(),
-                _ => get_string_param(&inputs, "id")?,
-            };
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let id = match inputs {
+                    Value::String(s) => s.clone(),
+                    _ => get_string_param(&inputs, "id")?,
+                };
 
-            match ops::discover::inspect_capability(id).await {
-                Ok(details) => Ok(Value::String(details)),
-                Err(e) => Err(e),
+                match ops::discover::inspect_capability(id).await {
+                    Ok(details) => Ok(Value::String(details)),
+                    Err(e) => Err(e),
+                }
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -621,18 +656,22 @@ fn create_discovery_inspect_capability() -> NativeCapability {
 // Approval capabilities
 
 fn create_approval_pending_capability() -> NativeCapability {
-    let handler = Arc::new(|_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        async move {
-            match ops::approval::list_pending().await {
-                Ok(output) => {
-                    let json = serde_json::to_string(&output)
-                        .map_err(|e| RuntimeError::Generic(format!("Serialization error: {}", e)))?;
-                    Ok(Value::String(json))
+    let handler = Arc::new(
+        |_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            async move {
+                match ops::approval::list_pending().await {
+                    Ok(output) => {
+                        let json = serde_json::to_string(&output).map_err(|e| {
+                            RuntimeError::Generic(format!("Serialization error: {}", e))
+                        })?;
+                        Ok(Value::String(json))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -642,23 +681,26 @@ fn create_approval_pending_capability() -> NativeCapability {
 }
 
 fn create_approval_approve_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let (id, reason) = match inputs {
-                Value::String(s) => (s.clone(), None),
-                _ => (
-                    get_string_param(&inputs, "id")?,
-                    get_string_param(&inputs, "reason").ok()
-                ),
-            };
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let (id, reason) = match inputs {
+                    Value::String(s) => (s.clone(), None),
+                    _ => (
+                        get_string_param(&inputs, "id")?,
+                        get_string_param(&inputs, "reason").ok(),
+                    ),
+                };
 
-            match ops::approval::approve_discovery(id, reason).await {
-                Ok(_) => Ok(Value::String("Approval successful".to_string())),
-                Err(e) => Err(e),
+                match ops::approval::approve_discovery(id, reason).await {
+                    Ok(_) => Ok(Value::String("Approval successful".to_string())),
+                    Err(e) => Err(e),
+                }
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -668,23 +710,27 @@ fn create_approval_approve_capability() -> NativeCapability {
 }
 
 fn create_approval_reject_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let (id, reason) = match inputs {
-                Value::String(s) => (s.clone(), "Rejected via capability".to_string()),
-                _ => (
-                    get_string_param(&inputs, "id")?,
-                    get_string_param(&inputs, "reason").unwrap_or_else(|_| "Rejected via capability".to_string())
-                ),
-            };
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let (id, reason) = match inputs {
+                    Value::String(s) => (s.clone(), "Rejected via capability".to_string()),
+                    _ => (
+                        get_string_param(&inputs, "id")?,
+                        get_string_param(&inputs, "reason")
+                            .unwrap_or_else(|_| "Rejected via capability".to_string()),
+                    ),
+                };
 
-            match ops::approval::reject_discovery(id, reason).await {
-                Ok(_) => Ok(Value::String("Rejection successful".to_string())),
-                Err(e) => Err(e),
+                match ops::approval::reject_discovery(id, reason).await {
+                    Ok(_) => Ok(Value::String("Rejection successful".to_string())),
+                    Err(e) => Err(e),
+                }
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -694,18 +740,22 @@ fn create_approval_reject_capability() -> NativeCapability {
 }
 
 fn create_approval_timeout_capability() -> NativeCapability {
-    let handler = Arc::new(|_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        async move {
-            match ops::approval::list_timeout().await {
-                Ok(output) => {
-                    let json = serde_json::to_string(&output)
-                        .map_err(|e| RuntimeError::Generic(format!("Serialization error: {}", e)))?;
-                    Ok(Value::String(json))
+    let handler = Arc::new(
+        |_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            async move {
+                match ops::approval::list_timeout().await {
+                    Ok(output) => {
+                        let json = serde_json::to_string(&output).map_err(|e| {
+                            RuntimeError::Generic(format!("Serialization error: {}", e))
+                        })?;
+                        Ok(Value::String(json))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -717,26 +767,30 @@ fn create_approval_timeout_capability() -> NativeCapability {
 // Config capabilities
 
 fn create_config_show_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let config_path = match inputs {
-                Value::String(s) => std::path::PathBuf::from(s),
-                _ => get_optional_string_param(&inputs, "config_path")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| std::path::PathBuf::from("agent_config.toml")),
-            };
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let config_path = match inputs {
+                    Value::String(s) => std::path::PathBuf::from(s),
+                    _ => get_optional_string_param(&inputs, "config_path")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| std::path::PathBuf::from("agent_config.toml")),
+                };
 
-            match ops::config::show_config(config_path).await {
-                Ok(config_info) => {
-                    let json = serde_json::to_string(&config_info)
-                        .map_err(|e| RuntimeError::Generic(format!("Serialization error: {}", e)))?;
-                    Ok(Value::String(json))
+                match ops::config::show_config(config_path).await {
+                    Ok(config_info) => {
+                        let json = serde_json::to_string(&config_info).map_err(|e| {
+                            RuntimeError::Generic(format!("Serialization error: {}", e))
+                        })?;
+                        Ok(Value::String(json))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -746,26 +800,30 @@ fn create_config_show_capability() -> NativeCapability {
 }
 
 fn create_config_validate_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let config_path = match inputs {
-                Value::String(s) => std::path::PathBuf::from(s),
-                _ => get_optional_string_param(&inputs, "config_path")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| std::path::PathBuf::from("agent_config.toml")),
-            };
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let config_path = match inputs {
+                    Value::String(s) => std::path::PathBuf::from(s),
+                    _ => get_optional_string_param(&inputs, "config_path")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| std::path::PathBuf::from("agent_config.toml")),
+                };
 
-            match ops::config::validate_config(config_path).await {
-                Ok(config_info) => {
-                    let json = serde_json::to_string(&config_info)
-                        .map_err(|e| RuntimeError::Generic(format!("Serialization error: {}", e)))?;
-                    Ok(Value::String(json))
+                match ops::config::validate_config(config_path).await {
+                    Ok(config_info) => {
+                        let json = serde_json::to_string(&config_info).map_err(|e| {
+                            RuntimeError::Generic(format!("Serialization error: {}", e))
+                        })?;
+                        Ok(Value::String(json))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -775,20 +833,23 @@ fn create_config_validate_capability() -> NativeCapability {
 }
 
 fn create_config_init_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let output_path = get_optional_string_param(&inputs, "output")
-                .unwrap_or_else(|| "agent_config.toml".to_string());
-            let _force = get_bool_param(&inputs, "force", false);
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let output_path = get_optional_string_param(&inputs, "output")
+                    .unwrap_or_else(|| "agent_config.toml".to_string());
+                let _force = get_bool_param(&inputs, "force", false);
 
-            // For now, just return success - actual init logic is in CLI
-            Ok(Value::String(format!(
-                "Config initialization requested for: {}",
-                output_path
-            )))
-        }.boxed()
-    });
+                // For now, just return success - actual init logic is in CLI
+                Ok(Value::String(format!(
+                    "Config initialization requested for: {}",
+                    output_path
+                )))
+            }
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -800,20 +861,23 @@ fn create_config_init_capability() -> NativeCapability {
 // Governance capabilities
 
 fn create_governance_check_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let action = match inputs {
-                Value::String(s) => s.clone(),
-                _ => get_string_param(&inputs, "action")?,
-            };
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let action = match inputs {
+                    Value::String(s) => s.clone(),
+                    _ => get_string_param(&inputs, "action")?,
+                };
 
-            match ops::governance::check_action(action).await {
-                Ok(allowed) => Ok(Value::Boolean(allowed)),
-                Err(e) => Err(e),
+                match ops::governance::check_action(action).await {
+                    Ok(allowed) => Ok(Value::Boolean(allowed)),
+                    Err(e) => Err(e),
+                }
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -823,14 +887,17 @@ fn create_governance_check_capability() -> NativeCapability {
 }
 
 fn create_governance_audit_capability() -> NativeCapability {
-    let handler = Arc::new(|_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        async move {
-            match ops::governance::view_audit().await {
-                Ok(audit_trail) => Ok(Value::String(audit_trail)),
-                Err(e) => Err(e),
+    let handler = Arc::new(
+        |_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            async move {
+                match ops::governance::view_audit().await {
+                    Ok(audit_trail) => Ok(Value::String(audit_trail)),
+                    Err(e) => Err(e),
+                }
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -840,14 +907,17 @@ fn create_governance_audit_capability() -> NativeCapability {
 }
 
 fn create_governance_constitution_capability() -> NativeCapability {
-    let handler = Arc::new(|_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        async move {
-            match ops::governance::view_constitution().await {
-                Ok(constitution) => Ok(Value::String(constitution)),
-                Err(e) => Err(e),
+    let handler = Arc::new(
+        |_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            async move {
+                match ops::governance::view_constitution().await {
+                    Ok(constitution) => Ok(Value::String(constitution)),
+                    Err(e) => Err(e),
+                }
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -859,30 +929,35 @@ fn create_governance_constitution_capability() -> NativeCapability {
 // Plan capabilities
 
 fn create_plan_create_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let goal = match inputs {
-                Value::String(s) => s.clone(),
-                _ => get_string_param(&inputs, "goal")?,
-            };
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let goal = match inputs {
+                    Value::String(s) => s.clone(),
+                    _ => get_string_param(&inputs, "goal")?,
+                };
 
-            // Use spawn_blocking to run in a separate thread with its own runtime
-            // This ensures Send requirements are met
-            let goal_clone = goal.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                let rt = tokio::runtime::Runtime::new()
-                    .map_err(|e| RuntimeError::Generic(format!("Failed to create runtime: {}", e)))?;
-                rt.block_on(ops::plan::create_plan(goal_clone))
-            }).await;
-            
-            match result {
-                Ok(Ok(plan)) => Ok(Value::String(plan)),
-                Ok(Err(e)) => Err(e),
-                Err(e) => Err(RuntimeError::Generic(format!("Task join error: {}", e))),
+                // Use spawn_blocking to run in a separate thread with its own runtime
+                // This ensures Send requirements are met
+                let goal_clone = goal.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to create runtime: {}", e))
+                    })?;
+                    rt.block_on(ops::plan::create_plan(goal_clone))
+                })
+                .await;
+
+                match result {
+                    Ok(Ok(plan)) => Ok(Value::String(plan)),
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => Err(RuntimeError::Generic(format!("Task join error: {}", e))),
+                }
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -892,30 +967,35 @@ fn create_plan_create_capability() -> NativeCapability {
 }
 
 fn create_plan_execute_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let plan = match inputs {
-                Value::String(s) => s.clone(),
-                _ => get_string_param(&inputs, "plan")?,
-            };
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let plan = match inputs {
+                    Value::String(s) => s.clone(),
+                    _ => get_string_param(&inputs, "plan")?,
+                };
 
-            // Use spawn_blocking to run in a separate thread with its own runtime
-            // This ensures Send requirements are met
-            let plan_clone = plan.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                let rt = tokio::runtime::Runtime::new()
-                    .map_err(|e| RuntimeError::Generic(format!("Failed to create runtime: {}", e)))?;
-                rt.block_on(ops::plan::execute_plan(plan_clone))
-            }).await;
-            
-            match result {
-                Ok(Ok(result)) => Ok(Value::String(result)),
-                Ok(Err(e)) => Err(e),
-                Err(e) => Err(RuntimeError::Generic(format!("Task join error: {}", e))),
+                // Use spawn_blocking to run in a separate thread with its own runtime
+                // This ensures Send requirements are met
+                let plan_clone = plan.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let rt = tokio::runtime::Runtime::new().map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to create runtime: {}", e))
+                    })?;
+                    rt.block_on(ops::plan::execute_plan(plan_clone))
+                })
+                .await;
+
+                match result {
+                    Ok(Ok(result)) => Ok(Value::String(result)),
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => Err(RuntimeError::Generic(format!("Task join error: {}", e))),
+                }
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -925,20 +1005,23 @@ fn create_plan_execute_capability() -> NativeCapability {
 }
 
 fn create_plan_validate_capability() -> NativeCapability {
-    let handler = Arc::new(|inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-        let inputs = inputs.clone();
-        async move {
-            let plan = match inputs {
-                Value::String(s) => s.clone(),
-                _ => get_string_param(&inputs, "plan")?,
-            };
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let plan = match inputs {
+                    Value::String(s) => s.clone(),
+                    _ => get_string_param(&inputs, "plan")?,
+                };
 
-            match ops::plan::validate_plan(plan).await {
-                Ok(valid) => Ok(Value::Boolean(valid)),
-                Err(e) => Err(e),
+                match ops::plan::validate_plan(plan).await {
+                    Ok(valid) => Ok(Value::Boolean(valid)),
+                    Err(e) => Err(e),
+                }
             }
-        }.boxed()
-    });
+            .boxed()
+        },
+    );
 
     NativeCapability {
         handler,
@@ -955,16 +1038,16 @@ mod tests {
     #[tokio::test]
     async fn test_native_provider_integration() {
         let provider = NativeCapabilityProvider::new();
-        
+
         // Test listing capabilities
         let capabilities = provider.list_capabilities();
         assert!(!capabilities.is_empty());
         assert!(capabilities.iter().any(|c| c == "ccos.cli.server.list"));
-        
+
         // Test executing a capability (config show)
         // We use config show because it's safe and doesn't require complex inputs
         let inputs = Value::Map(HashMap::new());
-        
+
         // Execute capability via async executor path (emulating ExecutorVariant)
         if let Some(capability) = provider.get_capability("ccos.cli.config.show") {
             let result = (capability.handler)(&inputs).await;
@@ -973,7 +1056,7 @@ mod tests {
             match value {
                 Value::String(s) => {
                     assert!(s.contains("config_path"));
-                },
+                }
                 _ => panic!("Expected string result"),
             }
         } else {

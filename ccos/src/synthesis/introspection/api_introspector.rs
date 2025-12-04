@@ -1302,12 +1302,16 @@ impl APIIntrospector {
             .get("endpoint_method")
             .map(|s| s.as_str())
             .unwrap_or("GET");
-        
+
         let requires_auth = introspection.auth_requirements.required;
         let auth_location = &introspection.auth_requirements.auth_location;
         let auth_param_name = &introspection.auth_requirements.auth_param_name;
-        let auth_env_var = introspection.auth_requirements.env_var_name.as_deref().unwrap_or("API_KEY");
-        
+        let auth_env_var = introspection
+            .auth_requirements
+            .env_var_name
+            .as_deref()
+            .unwrap_or("API_KEY");
+
         // Build query parameters from input schema
         // Only include parameters that are present and non-nil
         let mut query_params = Vec::new();
@@ -1323,12 +1327,15 @@ impl APIIntrospector {
                 }
             }
         }
-        
+
         // Add auth parameter if needed
         if requires_auth {
             match auth_location.as_str() {
                 "query" => {
-                    query_params.push(format!("(str \"{}\" \"=\" (get env \"{}\"))", auth_param_name, auth_env_var));
+                    query_params.push(format!(
+                        "(str \"{}\" \"=\" (get env \"{}\"))",
+                        auth_param_name, auth_env_var
+                    ));
                 }
                 "header" => {
                     // Will be added to headers
@@ -1336,7 +1343,7 @@ impl APIIntrospector {
                 _ => {}
             }
         }
-        
+
         // Build query string: filter out empty strings and join with &
         // Use a helper function to filter and join
         let query_str = if query_params.is_empty() {
@@ -1348,25 +1355,34 @@ impl APIIntrospector {
                 query_params.join(" ")
             )
         };
-        
+
         // Build headers
         let mut header_entries = vec!["\"Content-Type\" \"application/json\"".to_string()];
         if requires_auth && auth_location == "header" {
             if auth_param_name == "Authorization" {
-                header_entries.push(format!("(str \"Authorization\" \" \" (str \"Bearer \" (get env \"{}\")))", auth_env_var));
+                header_entries.push(format!(
+                    "(str \"Authorization\" \" \" (str \"Bearer \" (get env \"{}\")))",
+                    auth_env_var
+                ));
             } else {
-                header_entries.push(format!("(str \"{}\" \" \" (get env \"{}\"))", auth_param_name, auth_env_var));
+                header_entries.push(format!(
+                    "(str \"{}\" \" \" (get env \"{}\"))",
+                    auth_param_name, auth_env_var
+                ));
             }
         }
         let headers_str = format!("(hash-map {})", header_entries.join(" "));
-        
+
         // Build URL
         let url_str = if query_params.is_empty() {
             format!("(str \"{}\" \"{}\")", base_url, endpoint_path)
         } else {
-            format!("(str \"{}\" \"{}\" \"?\" {})", base_url, endpoint_path, query_str)
+            format!(
+                "(str \"{}\" \"{}\" \"?\" {})",
+                base_url, endpoint_path, query_str
+            )
         };
-        
+
         // Generate implementation
         format!(
             r#"(do
@@ -1382,11 +1398,7 @@ impl APIIntrospector {
           :url url
           :headers headers
           :body body)))"#,
-            base_url,
-            endpoint_path,
-            endpoint_method,
-            url_str,
-            headers_str
+            base_url, endpoint_path, endpoint_method, url_str, headers_str
         )
     }
 

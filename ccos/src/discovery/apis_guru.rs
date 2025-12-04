@@ -92,50 +92,59 @@ impl ApisGuruClient {
         // APIs.guru doesn't have a search endpoint, so we list all APIs and filter
         // In production, you might want to cache this or use a different approach
         let all_apis = self.list_all_apis().await?;
-        
+
         let query_lower = query.to_lowercase();
         let query_words: Vec<&str> = query_lower.split_whitespace().collect();
-        
+
         let mut results = Vec::new();
-        
+
         for (api_name, api) in all_apis {
             // Get info from preferred version or first available version
-            let version_info = api.preferred
+            let version_info = api
+                .preferred
                 .as_ref()
                 .and_then(|pref| api.versions.get(pref))
                 .or_else(|| api.versions.values().next());
-            
+
             if let Some(version) = version_info {
                 let title_lower = version.info.title.to_lowercase();
-                let provider_lower = version.info.provider_name.as_ref()
+                let provider_lower = version
+                    .info
+                    .provider_name
+                    .as_ref()
                     .map(|p| p.to_lowercase())
                     .unwrap_or_default();
-                
-                let desc_lower = version.info.description.as_ref()
+
+                let desc_lower = version
+                    .info
+                    .description
+                    .as_ref()
                     .map(|d| d.to_lowercase())
                     .unwrap_or_default();
-                
+
                 // Match if query appears in title, description, or provider name
-                let full_match = title_lower.contains(&query_lower) 
+                let full_match = title_lower.contains(&query_lower)
                     || desc_lower.contains(&query_lower)
                     || provider_lower.contains(&query_lower);
-                
+
                 // Or if all query words are present
                 let all_words_match = if query_words.len() > 1 {
                     query_words.iter().all(|word| {
-                        title_lower.contains(word) 
+                        title_lower.contains(word)
                             || desc_lower.contains(word)
                             || provider_lower.contains(word)
                     })
                 } else {
                     false
                 };
-                
+
                 if full_match || all_words_match {
                     // Use swaggerUrl or swaggerYamlUrl as the OpenAPI spec URL
-                    let openapi_url = version.swagger_url.clone()
+                    let openapi_url = version
+                        .swagger_url
+                        .clone()
                         .or(version.swagger_yaml_url.clone());
-                    
+
                     results.push(ApisGuruSearchResult {
                         name: api_name.clone(),
                         title: version.info.title.clone(),
@@ -147,14 +156,14 @@ impl ApisGuruClient {
                 }
             }
         }
-        
+
         Ok(results)
     }
 
     /// List all APIs from APIs.guru
     async fn list_all_apis(&self) -> RuntimeResult<HashMap<String, ApisGuruApi>> {
         let url = format!("{}/v2/list.json", self.base_url);
-        
+
         let response = self
             .client
             .get(&url)
@@ -162,9 +171,7 @@ impl ApisGuruClient {
             .timeout(std::time::Duration::from_secs(30))
             .send()
             .await
-            .map_err(|e| {
-                RuntimeError::Generic(format!("Failed to fetch APIs.guru list: {}", e))
-            })?;
+            .map_err(|e| RuntimeError::Generic(format!("Failed to fetch APIs.guru list: {}", e)))?;
 
         if !response.status().is_success() {
             return Err(RuntimeError::Generic(format!(
@@ -181,7 +188,7 @@ impl ApisGuruClient {
         // The response is a JSON object where keys are API names and values are API objects
         // The API objects don't have a 'name' field - the name is the key
         let mut apis = HashMap::new();
-        
+
         if let Some(obj) = json.as_object() {
             let mut parse_errors = 0;
             for (api_name, api_value) in obj {
@@ -195,23 +202,28 @@ impl ApisGuruClient {
                     Err(e) => {
                         // Only log first few errors to avoid spam
                         if parse_errors < 3 {
-                            eprintln!("Warning: Failed to parse API '{}' from APIs.guru: {}", api_name, e);
+                            eprintln!(
+                                "Warning: Failed to parse API '{}' from APIs.guru: {}",
+                                api_name, e
+                            );
                         }
                         parse_errors += 1;
                     }
                 }
             }
-            
+
             if parse_errors > 0 {
-                eprintln!("Note: {} APIs failed to parse (showing first 3 errors)", parse_errors);
+                eprintln!(
+                    "Note: {} APIs failed to parse (showing first 3 errors)",
+                    parse_errors
+                );
             }
         } else {
             return Err(RuntimeError::Generic(
-                "APIs.guru response is not a JSON object".to_string()
+                "APIs.guru response is not a JSON object".to_string(),
             ));
         }
 
         Ok(apis)
     }
 }
-

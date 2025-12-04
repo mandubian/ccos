@@ -346,7 +346,7 @@ mod tests {
     fn test_canonical_capability_schema_validation() {
         use rtfs::ast::MapKey;
         use rtfs::runtime::values::Value;
-        
+
         let mut cap_map = HashMap::new();
         cap_map.insert(
             MapKey::String(":id".to_string()),

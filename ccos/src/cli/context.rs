@@ -1,6 +1,8 @@
 //! CLI context - shared state and services for all commands
 
-use crate::arbiter::llm_provider::{LlmProvider, LlmProviderConfig, LlmProviderFactory, LlmProviderType};
+use crate::arbiter::llm_provider::{
+    LlmProvider, LlmProviderConfig, LlmProviderFactory, LlmProviderType,
+};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::mcp::core::MCPDiscoveryService;
 use rtfs::config::types::AgentConfig;
@@ -88,7 +90,9 @@ impl CliContext {
 
         // Check LLM profiles if needed
         if let Some(ref profiles) = self.config.llm_profiles {
-            if profiles.profiles.is_empty() && profiles.model_sets.as_ref().map_or(true, |s| s.is_empty()) {
+            if profiles.profiles.is_empty()
+                && profiles.model_sets.as_ref().map_or(true, |s| s.is_empty())
+            {
                 warnings.push("No LLM profiles or model sets configured".to_string());
             }
         } else {
@@ -144,7 +148,10 @@ impl CliContext {
 
     /// Create an LLM provider from the agent configuration
     /// Uses the default profile from llm_profiles (supports both explicit profiles and model_sets)
-    pub async fn create_llm_provider(&self, model_override: Option<String>) -> RuntimeResult<Arc<dyn LlmProvider>> {
+    pub async fn create_llm_provider(
+        &self,
+        model_override: Option<String>,
+    ) -> RuntimeResult<Arc<dyn LlmProvider>> {
         // Try to get from config's llm_profiles
         if let Some(ref profiles) = self.config.llm_profiles {
             // Determine which profile name to use
@@ -183,7 +190,8 @@ impl CliContext {
             };
 
             // Get API key from env var or inline
-            let api_key = profile.api_key_env
+            let api_key = profile
+                .api_key_env
                 .as_ref()
                 .and_then(|env_var| std::env::var(env_var).ok())
                 .or_else(|| profile.api_key.clone());
@@ -252,7 +260,10 @@ impl CliContext {
     /// Create LLM provider from environment variables (fallback)
     /// Note: This should only be called if llm_profiles are not configured.
     /// It will return an error to ensure users configure llm_profiles in agent_config.toml
-    async fn create_llm_provider_from_env(&self, _model: Option<String>) -> RuntimeResult<Arc<dyn LlmProvider>> {
+    async fn create_llm_provider_from_env(
+        &self,
+        _model: Option<String>,
+    ) -> RuntimeResult<Arc<dyn LlmProvider>> {
         Err(RuntimeError::Generic(
             "No LLM configuration found. Please configure llm_profiles in agent_config.toml with your LLM provider settings.".to_string()
         ))

@@ -48,14 +48,17 @@ pub enum DiscoverCommand {
     },
 }
 
-pub async fn execute(
-    ctx: &mut CliContext,
-    command: DiscoverCommand,
-) -> RuntimeResult<()> {
+pub async fn execute(ctx: &mut CliContext, command: DiscoverCommand) -> RuntimeResult<()> {
     let formatter = OutputFormatter::new(ctx.output_format);
 
     match command {
-        DiscoverCommand::Goal { goal, interactive, top, threshold, llm } => {
+        DiscoverCommand::Goal {
+            goal,
+            interactive,
+            top,
+            threshold,
+            llm,
+        } => {
             ctx.status(&format!("Discovering capabilities for goal: {}", goal));
 
             let options = DiscoverOptions {
@@ -65,7 +68,8 @@ pub async fn execute(
                 llm,
             };
 
-            let queued_ids = crate::ops::discover::discover_by_goal_with_options(goal, options).await?;
+            let queued_ids =
+                crate::ops::discover::discover_by_goal_with_options(goal, options).await?;
 
             if queued_ids.is_empty() {
                 formatter.warning("No servers found matching criteria.");
@@ -83,7 +87,9 @@ pub async fn execute(
                 ctx.status(&format!("Filter: {}", f));
             }
             formatter.warning("Server capability discovery not yet implemented");
-            formatter.list_item("This will connect to the server and list available tools/capabilities.");
+            formatter.list_item(
+                "This will connect to the server and list available tools/capabilities.",
+            );
             formatter.list_item("See: https://github.com/mandubian/ccos/issues/172");
         }
         DiscoverCommand::List => {

@@ -19,7 +19,6 @@ use rtfs::ast::{Keyword, MapTypeEntry, PrimitiveType, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 
-
 /// Extracted endpoint from LLM parsing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedEndpoint {
@@ -275,11 +274,10 @@ Respond with ONLY the JSON object, no additional text."#,
 
         // Try to find JSON within markdown code fences
         if let Some(start) = trimmed.find("```json") {
-            if let Some(end) = trimmed[start..].find("```\n").or_else(|| {
-                trimmed[start..]
-                    .rfind("```")
-                    .filter(|&pos| pos > 7)
-            }) {
+            if let Some(end) = trimmed[start..]
+                .find("```\n")
+                .or_else(|| trimmed[start..].rfind("```").filter(|&pos| pos > 7))
+            {
                 let json_start = start + 7; // Skip "```json"
                 let actual_end = if trimmed[json_start..].starts_with('\n') {
                     start + end

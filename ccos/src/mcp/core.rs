@@ -12,18 +12,18 @@
 //! - Caching support for discovered tools
 //! - Rate limiting and retry policies
 
-use crate::mcp::discovery_session::{MCPSessionManager, MCPServerInfo};
-use crate::mcp::registry::MCPRegistryClient;
-use crate::mcp::types::*;
-use crate::mcp::cache::MCPCache;
-use crate::mcp::rate_limiter::{RateLimiter, RetryContext};
+use crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery;
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogService, CatalogSource};
-use crate::planner::modular_planner::types::DomainHint;
-use crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery;
-use crate::synthesis::mcp_introspector::MCPIntrospector;
 use crate::discovery::{ApprovalQueue, ApprovedDiscovery};
+use crate::mcp::cache::MCPCache;
+use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
+use crate::mcp::rate_limiter::{RateLimiter, RetryContext};
+use crate::mcp::registry::MCPRegistryClient;
+use crate::mcp::types::*;
+use crate::planner::modular_planner::types::DomainHint;
+use crate::synthesis::mcp_introspector::MCPIntrospector;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,7 +60,7 @@ impl MCPDiscoveryService {
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()), // Fallback if builder fails
         );
-        
+
         Self {
             http_client: Arc::clone(&http_client),
             session_manager: Arc::new(MCPSessionManager::with_client(http_client, None)),
@@ -86,7 +86,7 @@ impl MCPDiscoveryService {
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()), // Fallback if builder fails
         );
-        
+
         Self {
             http_client: Arc::clone(&http_client),
             session_manager: Arc::new(MCPSessionManager::with_client(http_client, auth_headers)),
@@ -130,46 +130,77 @@ impl MCPDiscoveryService {
                 Ok(approved) => {
                     eprintln!("📋 Loaded {} approved server(s) from queue", approved.len());
                     log::debug!("Loaded {} approved server(s) from queue", approved.len());
-                    
+
                     // Try to find matching approved server
                     let approved_server = approved.iter().find(|s| {
                         // Match by name (handle slashes vs underscores) or endpoint
-                        let server_name_normalized = server_config.name.replace("/", "_").replace(" ", "_").to_lowercase();
-                        let approved_name_normalized = s.server_info.name.replace("/", "_").replace(" ", "_").to_lowercase();
-                        let matches = server_name_normalized == approved_name_normalized 
-                            || s.server_info.name == server_config.name 
+                        let server_name_normalized = server_config
+                            .name
+                            .replace("/", "_")
+                            .replace(" ", "_")
+                            .to_lowercase();
+                        let approved_name_normalized = s
+                            .server_info
+                            .name
+                            .replace("/", "_")
+                            .replace(" ", "_")
+                            .to_lowercase();
+                        let matches = server_name_normalized == approved_name_normalized
+                            || s.server_info.name == server_config.name
                             || s.server_info.endpoint == server_config.endpoint;
                         if matches {
-                            eprintln!("✅ Found approved server match: {} (normalized: {})", s.server_info.name, approved_name_normalized);
-                            log::debug!("Found approved server match: {} (normalized: {})", s.server_info.name, approved_name_normalized);
+                            eprintln!(
+                                "✅ Found approved server match: {} (normalized: {})",
+                                s.server_info.name, approved_name_normalized
+                            );
+                            log::debug!(
+                                "Found approved server match: {} (normalized: {})",
+                                s.server_info.name,
+                                approved_name_normalized
+                            );
                         }
                         matches
                     });
-                    
+
                     if let Some(approved_server) = approved_server {
                         // Try to load capability files - use from approved.json if available, otherwise discover from directory
-                        let mut files_to_load = if let Some(ref files) = approved_server.capability_files {
-                            if !files.is_empty() {
-                                files.clone()
+                        let mut files_to_load =
+                            if let Some(ref files) = approved_server.capability_files {
+                                if !files.is_empty() {
+                                    files.clone()
+                                } else {
+                                    Vec::new()
+                                }
                             } else {
                                 Vec::new()
-                            }
-                        } else {
-                            Vec::new()
-                        };
-                        
+                            };
+
                         // If capability_files is not set or empty, try to discover files from directory
                         if files_to_load.is_empty() {
-                            let server_id = approved_server.server_info.name.to_lowercase().replace(" ", "_").replace("/", "_");
-                            let approved_dir = std::path::Path::new("capabilities/servers/approved").join(&server_id);
-                            
+                            let server_id = approved_server
+                                .server_info
+                                .name
+                                .to_lowercase()
+                                .replace(" ", "_")
+                                .replace("/", "_");
+                            let approved_dir =
+                                std::path::Path::new("capabilities/servers/approved")
+                                    .join(&server_id);
+
                             if approved_dir.exists() {
                                 // Recursively collect RTFS files from directory
-                                Self::collect_rtfs_files_recursive(&approved_dir, "capabilities/servers/approved", &mut files_to_load);
-                                
+                                Self::collect_rtfs_files_recursive(
+                                    &approved_dir,
+                                    "capabilities/servers/approved",
+                                    &mut files_to_load,
+                                );
+
                                 if !files_to_load.is_empty() {
                                     // Update approved.json with found files (best effort)
-                                    let _ = self.update_approved_capability_files(&approved_server.id, &files_to_load);
+                                    let _ = self.update_approved_capability_files(
+                                        &approved_server.id,
+                                        &files_to_load,
+                                    );
                                 } else {
                                     // Keep going to MCP discovery if no files found
                                     eprintln!("⚠️  No RTFS capability files found for approved server: {} (searched in {})",
@@ -179,15 +210,29 @@ impl MCPDiscoveryService {
                                 }
                             }
                         }
-                        
+
                         if !files_to_load.is_empty() {
                             // Load RTFS capability files instead of connecting via MCP
-                            eprintln!("🔄 Loading RTFS capabilities for approved server: {}", approved_server.server_info.name);
-                            log::info!("Loading RTFS capabilities for approved server: {}", approved_server.server_info.name);
-                            return self.load_rtfs_capabilities_from_approved(approved_server, &files_to_load).await;
+                            eprintln!(
+                                "🔄 Loading RTFS capabilities for approved server: {}",
+                                approved_server.server_info.name
+                            );
+                            log::info!(
+                                "Loading RTFS capabilities for approved server: {}",
+                                approved_server.server_info.name
+                            );
+                            return self
+                                .load_rtfs_capabilities_from_approved(
+                                    approved_server,
+                                    &files_to_load,
+                                )
+                                .await;
                         }
                     } else {
-                        eprintln!("ℹ️  No approved server match found for: {} (will try MCP)", server_config.name);
+                        eprintln!(
+                            "ℹ️  No approved server match found for: {} (will try MCP)",
+                            server_config.name
+                        );
                         log::debug!("No approved server match found for: {}", server_config.name);
                     }
                 }
@@ -199,7 +244,7 @@ impl MCPDiscoveryService {
         } else {
             eprintln!("ℹ️  Ignoring approved files (forced discovery)");
         }
-        
+
         // Check cache first if enabled
         if options.use_cache {
             if let Some(cached_tools) = self.cache.get(server_config) {
@@ -209,8 +254,11 @@ impl MCPDiscoveryService {
 
         // Apply rate limiting if enabled
         if options.rate_limit.enabled {
-            self.rate_limiter.set_server_config(&server_config.endpoint, options.rate_limit.clone());
-            self.rate_limiter.acquire_async(&server_config.endpoint).await;
+            self.rate_limiter
+                .set_server_config(&server_config.endpoint, options.rate_limit.clone());
+            self.rate_limiter
+                .acquire_async(&server_config.endpoint)
+                .await;
         }
 
         // Set up retry context
@@ -226,7 +274,7 @@ impl MCPDiscoveryService {
                 Err(e) => {
                     // Check if we should retry
                     let should_retry = self.is_retryable_error(&e, &options.retry_policy);
-                    
+
                     if should_retry {
                         if let Some(delay) = retry_ctx.next_attempt(Some(e.to_string())) {
                             log::warn!(
@@ -237,15 +285,17 @@ impl MCPDiscoveryService {
                                 e
                             );
                             tokio::time::sleep(delay).await;
-                            
+
                             // Re-acquire rate limit token for retry
                             if options.rate_limit.enabled {
-                                self.rate_limiter.acquire_async(&server_config.endpoint).await;
+                                self.rate_limiter
+                                    .acquire_async(&server_config.endpoint)
+                                    .await;
                             }
                             continue;
                         }
                     }
-                    
+
                     // No more retries or non-retryable error
                     return Err(e);
                 }
@@ -254,14 +304,21 @@ impl MCPDiscoveryService {
     }
 
     /// Check if an error is retryable based on the retry policy
-    fn is_retryable_error(&self, error: &RuntimeError, policy: &crate::mcp::rate_limiter::RetryPolicy) -> bool {
+    fn is_retryable_error(
+        &self,
+        error: &RuntimeError,
+        policy: &crate::mcp::rate_limiter::RetryPolicy,
+    ) -> bool {
         let error_str = error.to_string().to_lowercase();
-        
+
         // Check for rate limiting (429)
-        if error_str.contains("429") || error_str.contains("too many requests") || error_str.contains("rate limit") {
+        if error_str.contains("429")
+            || error_str.contains("too many requests")
+            || error_str.contains("rate limit")
+        {
             return policy.should_retry_status(429);
         }
-        
+
         // Check for server errors
         if error_str.contains("500") || error_str.contains("internal server error") {
             return policy.should_retry_status(500);
@@ -275,17 +332,24 @@ impl MCPDiscoveryService {
         if error_str.contains("504") || error_str.contains("gateway timeout") {
             return policy.should_retry_status(504);
         }
-        
+
         // Check for network errors (transient)
-        if error_str.contains("timeout") || error_str.contains("connection") || error_str.contains("network") {
+        if error_str.contains("timeout")
+            || error_str.contains("connection")
+            || error_str.contains("network")
+        {
             return true;
         }
-        
+
         false
     }
 
     /// Recursively collect RTFS files from a directory
-    fn collect_rtfs_files_recursive(dir: &std::path::Path, base_path: &str, files: &mut Vec<String>) {
+    fn collect_rtfs_files_recursive(
+        dir: &std::path::Path,
+        base_path: &str,
+        files: &mut Vec<String>,
+    ) {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -302,10 +366,21 @@ impl MCPDiscoveryService {
     }
 
     /// Update capability_files in approved.json (helper method)
-    fn update_approved_capability_files(&self, server_id: &str, files: &[String]) -> RuntimeResult<()> {
+    fn update_approved_capability_files(
+        &self,
+        server_id: &str,
+        files: &[String],
+    ) -> RuntimeResult<()> {
         // Best-effort update - don't fail discovery if this fails
-        if let Err(e) = self.approval_queue.update_capability_files(server_id, files.to_vec()) {
-            log::warn!("Failed to update capability_files for server {}: {}", server_id, e);
+        if let Err(e) = self
+            .approval_queue
+            .update_capability_files(server_id, files.to_vec())
+        {
+            log::warn!(
+                "Failed to update capability_files for server {}: {}",
+                server_id,
+                e
+            );
         }
         Ok(())
     }
@@ -317,15 +392,19 @@ impl MCPDiscoveryService {
         capability_files: &[String],
     ) -> RuntimeResult<Vec<DiscoveredMCPTool>> {
         use crate::capability_marketplace::mcp_discovery::MCPDiscoveryProvider;
-        
+
         let mut discovered_tools = Vec::new();
         let mut errors = Vec::new();
-        
-        eprintln!("📂 Loading {} capability file(s) for approved server: {}", capability_files.len(), approved_server.server_info.name);
-        
+
+        eprintln!(
+            "📂 Loading {} capability file(s) for approved server: {}",
+            capability_files.len(),
+            approved_server.server_info.name
+        );
+
         for file_path in capability_files {
             let full_path = std::path::Path::new("capabilities/servers/approved").join(file_path);
-            
+
             if !full_path.exists() {
                 let err_msg = format!("Capability file not found: {}", full_path.display());
                 eprintln!("⚠️  {}", err_msg);
@@ -333,21 +412,31 @@ impl MCPDiscoveryService {
                 errors.push(err_msg);
                 continue;
             }
-            
+
             eprintln!("📄 Loading RTFS file: {}", full_path.display());
             log::debug!("Loading RTFS file: {}", full_path.display());
-            
-            let parser = MCPDiscoveryProvider::new(MCPServerConfig::default())
-                .map_err(|e| RuntimeError::Generic(format!("Failed to initialize RTFS parser: {}", e)))?;
-            
+
+            let parser = MCPDiscoveryProvider::new(MCPServerConfig::default()).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to initialize RTFS parser: {}", e))
+            })?;
+
             match parser.load_rtfs_capabilities(full_path.to_str().unwrap()) {
                 Ok(module) => {
-                    eprintln!("✅ Parsed RTFS module with {} capabilities", module.capabilities.len());
-                    log::debug!("Parsed RTFS module with {} capabilities", module.capabilities.len());
+                    eprintln!(
+                        "✅ Parsed RTFS module with {} capabilities",
+                        module.capabilities.len()
+                    );
+                    log::debug!(
+                        "Parsed RTFS module with {} capabilities",
+                        module.capabilities.len()
+                    );
                     for (idx, cap_def) in module.capabilities.iter().enumerate() {
                         match parser.rtfs_to_capability_manifest(cap_def) {
                             Ok(manifest) => {
-                                eprintln!("✅ Successfully converted capability: {}", manifest.name);
+                                eprintln!(
+                                    "✅ Successfully converted capability: {}",
+                                    manifest.name
+                                );
                                 log::debug!("Successfully converted capability: {}", manifest.name);
                                 // Convert CapabilityManifest to DiscoveredMCPTool
                                 let tool = DiscoveredMCPTool {
@@ -360,7 +449,12 @@ impl MCPDiscoveryService {
                                 discovered_tools.push(tool);
                             }
                             Err(e) => {
-                                let err_msg = format!("Failed to convert RTFS capability #{} in {}: {}", idx + 1, full_path.display(), e);
+                                let err_msg = format!(
+                                    "Failed to convert RTFS capability #{} in {}: {}",
+                                    idx + 1,
+                                    full_path.display(),
+                                    e
+                                );
                                 eprintln!("❌ {}", err_msg);
                                 log::warn!("{}", err_msg);
                                 errors.push(err_msg);
@@ -369,14 +463,15 @@ impl MCPDiscoveryService {
                     }
                 }
                 Err(e) => {
-                    let err_msg = format!("Failed to load RTFS file {}: {}", full_path.display(), e);
+                    let err_msg =
+                        format!("Failed to load RTFS file {}: {}", full_path.display(), e);
                     eprintln!("❌ {}", err_msg);
                     log::warn!("{}", err_msg);
                     errors.push(err_msg);
                 }
             }
         }
-        
+
         if discovered_tools.is_empty() {
             let error_summary = if errors.is_empty() {
                 "No capabilities found in files".to_string()
@@ -385,13 +480,20 @@ impl MCPDiscoveryService {
             };
             return Err(RuntimeError::Generic(format!(
                 "No valid capabilities found in approved files for server: {}\n{}",
-                approved_server.server_info.name,
-                error_summary
+                approved_server.server_info.name, error_summary
             )));
         }
-        
-        eprintln!("✅ Successfully loaded {} capability(ies) from approved server: {}", discovered_tools.len(), approved_server.server_info.name);
-        log::info!("Successfully loaded {} capability(ies) from approved server: {}", discovered_tools.len(), approved_server.server_info.name);
+
+        eprintln!(
+            "✅ Successfully loaded {} capability(ies) from approved server: {}",
+            discovered_tools.len(),
+            approved_server.server_info.name
+        );
+        log::info!(
+            "Successfully loaded {} capability(ies) from approved server: {}",
+            discovered_tools.len(),
+            approved_server.server_info.name
+        );
         Ok(discovered_tools)
     }
 
@@ -417,7 +519,7 @@ impl MCPDiscoveryService {
             };
             let normalized_namespace = namespace.replace('-', "_").to_uppercase();
             let server_specific_var = format!("{}_MCP_TOKEN", normalized_namespace);
-            
+
             let token = std::env::var(&server_specific_var)
                 .ok()
                 .or_else(|| {
@@ -431,7 +533,7 @@ impl MCPDiscoveryService {
                     }
                 })
                 .or_else(|| std::env::var("MCP_AUTH_TOKEN").ok());
-            
+
             if let Some(token) = token {
                 if !token.is_empty() {
                     let mut headers = HashMap::new();
@@ -498,12 +600,13 @@ impl MCPDiscoveryService {
                 .map(|s| s.to_string());
 
             // Convert input schema
-            let (input_schema, input_schema_json) = if let Some(schema) = tool_json.get("inputSchema") {
-                let type_expr = MCPIntrospector::type_expr_from_json_schema(schema)?;
-                (Some(type_expr), Some(schema.clone()))
-            } else {
-                (None, None)
-            };
+            let (input_schema, input_schema_json) =
+                if let Some(schema) = tool_json.get("inputSchema") {
+                    let type_expr = MCPIntrospector::type_expr_from_json_schema(schema)?;
+                    (Some(type_expr), Some(schema.clone()))
+                } else {
+                    (None, None)
+                };
 
             discovered_tools.push(DiscoveredMCPTool {
                 tool_name,
@@ -519,21 +622,32 @@ impl MCPDiscoveryService {
         // Only run if both introspect_output_schemas is true AND lazy_output_schemas is false
         let should_introspect = options.introspect_output_schemas && !options.lazy_output_schemas;
         if should_introspect && auth_headers.is_some() {
-            log::info!("🔍 Introspecting output schemas for {} tools...", discovered_tools.len());
-            
+            log::info!(
+                "🔍 Introspecting output schemas for {} tools...",
+                discovered_tools.len()
+            );
+
             for tool in &mut discovered_tools {
-                match self.introspector.introspect_output_schema(
-                    tool,
-                    &server_config.endpoint,
-                    &server_config.name,
-                    auth_headers.clone(),
-                    None, // No input overrides
-                ).await {
+                match self
+                    .introspector
+                    .introspect_output_schema(
+                        tool,
+                        &server_config.endpoint,
+                        &server_config.name,
+                        auth_headers.clone(),
+                        None, // No input overrides
+                    )
+                    .await
+                {
                     Ok((schema, _sample)) => {
                         tool.output_schema = schema;
                     }
                     Err(e) => {
-                        log::warn!("Failed to introspect output schema for {}: {}", tool.tool_name, e);
+                        log::warn!(
+                            "Failed to introspect output schema for {}: {}",
+                            tool.tool_name,
+                            e
+                        );
                     }
                 }
             }
@@ -592,7 +706,9 @@ impl MCPDiscoveryService {
             .get("result")
             .and_then(|r| r.get("resources"))
             .and_then(|t| t.as_array())
-            .ok_or_else(|| RuntimeError::Generic("Invalid MCP resources/list response".to_string()))?;
+            .ok_or_else(|| {
+                RuntimeError::Generic("Invalid MCP resources/list response".to_string())
+            })?;
 
         Ok(resources_array.clone())
     }
@@ -624,10 +740,9 @@ impl MCPDiscoveryService {
         manifest.output_schema = tool.output_schema.clone();
 
         // Add metadata
-        manifest.metadata.insert(
-            "mcp_server_name".to_string(),
-            server_config.name.clone(),
-        );
+        manifest
+            .metadata
+            .insert("mcp_server_name".to_string(), server_config.name.clone());
         manifest.metadata.insert(
             "mcp_server_endpoint".to_string(),
             server_config.endpoint.clone(),
@@ -644,10 +759,7 @@ impl MCPDiscoveryService {
     }
 
     /// Register a discovered capability in marketplace and catalog
-    pub async fn register_capability(
-        &self,
-        manifest: &CapabilityManifest,
-    ) -> RuntimeResult<()> {
+    pub async fn register_capability(&self, manifest: &CapabilityManifest) -> RuntimeResult<()> {
         // Register or update in marketplace if available
         if let Some(ref marketplace) = self.marketplace {
             // Use update_capability to handle version comparison
@@ -669,10 +781,14 @@ impl MCPDiscoveryService {
                     // The capability won't be updated, but discovery continues
                     log::warn!(
                         "Failed to update capability {}: {}. Skipping update.",
-                        manifest.id, e
+                        manifest.id,
+                        e
                     );
                     // Still try to register as new if it doesn't exist
-                    if let Err(reg_err) = marketplace.register_capability_manifest(manifest.clone()).await {
+                    if let Err(reg_err) = marketplace
+                        .register_capability_manifest(manifest.clone())
+                        .await
+                    {
                         log::warn!("Also failed to register as new: {}", reg_err);
                     }
                 }
@@ -699,10 +815,19 @@ impl MCPDiscoveryService {
         let is_approved_with_files = {
             if let Ok(approved) = self.approval_queue.list_approved() {
                 if let Some(approved_server) = approved.iter().find(|s| {
-                    let server_name_normalized = server_config.name.replace("/", "_").replace(" ", "_").to_lowercase();
-                    let approved_name_normalized = s.server_info.name.replace("/", "_").replace(" ", "_").to_lowercase();
-                    server_name_normalized == approved_name_normalized 
-                        || s.server_info.name == server_config.name 
+                    let server_name_normalized = server_config
+                        .name
+                        .replace("/", "_")
+                        .replace(" ", "_")
+                        .to_lowercase();
+                    let approved_name_normalized = s
+                        .server_info
+                        .name
+                        .replace("/", "_")
+                        .replace(" ", "_")
+                        .to_lowercase();
+                    server_name_normalized == approved_name_normalized
+                        || s.server_info.name == server_config.name
                         || s.server_info.endpoint == server_config.endpoint
                 }) {
                     // Check if it has capability files
@@ -710,8 +835,14 @@ impl MCPDiscoveryService {
                         !files.is_empty()
                     } else {
                         // Check if directory exists
-                        let server_id = approved_server.server_info.name.to_lowercase().replace(" ", "_").replace("/", "_");
-                        let approved_dir = std::path::Path::new("capabilities/servers/approved").join(&server_id);
+                        let server_id = approved_server
+                            .server_info
+                            .name
+                            .to_lowercase()
+                            .replace(" ", "_")
+                            .replace("/", "_");
+                        let approved_dir =
+                            std::path::Path::new("capabilities/servers/approved").join(&server_id);
                         approved_dir.exists()
                     }
                 } else {
@@ -753,12 +884,14 @@ impl MCPDiscoveryService {
                 }
             }
         }
-        
+
         // Also check if RTFS export file already exists (only if not loading from approved files)
         let export_file_exists = if is_approved_with_files {
             false // Don't check - we're loading from approved files, skip export
         } else {
-            let export_dir = options.export_directory.as_ref()
+            let export_dir = options
+                .export_directory
+                .as_ref()
                 .map(|s| {
                     let path = std::path::PathBuf::from(s);
                     if path.is_absolute() {
@@ -798,7 +931,10 @@ impl MCPDiscoveryService {
             eprintln!();
             eprintln!("⚠️  Warning: Some capabilities were already discovered:");
             if !existing_capabilities.is_empty() {
-                eprintln!("   • {} capability(ies) already registered in marketplace:", existing_capabilities.len());
+                eprintln!(
+                    "   • {} capability(ies) already registered in marketplace:",
+                    existing_capabilities.len()
+                );
                 for cap_id in &existing_capabilities {
                     eprintln!("     - {}", cap_id);
                 }
@@ -807,16 +943,20 @@ impl MCPDiscoveryService {
                 eprintln!("   • RTFS export file already exists for this server");
             }
             eprintln!();
-            
+
             // Ask for confirmation before proceeding
             print!("Continue and overwrite? (y/n): ");
             use std::io::{self, Write};
-            io::stdout().flush().map_err(|e| RuntimeError::Generic(format!("Failed to flush stdout: {}", e)))?;
-            
+            io::stdout()
+                .flush()
+                .map_err(|e| RuntimeError::Generic(format!("Failed to flush stdout: {}", e)))?;
+
             let mut confirm = String::new();
-            io::stdin().read_line(&mut confirm).map_err(|e| RuntimeError::Generic(format!("Failed to read input: {}", e)))?;
+            io::stdin()
+                .read_line(&mut confirm)
+                .map_err(|e| RuntimeError::Generic(format!("Failed to read input: {}", e)))?;
             let confirm = confirm.trim().to_lowercase();
-            
+
             if confirm != "y" && confirm != "yes" {
                 eprintln!("   Skipping registration and export.");
                 return Ok(manifests); // Return manifests but don't register/export
@@ -832,7 +972,8 @@ impl MCPDiscoveryService {
 
         // Export to RTFS if requested (only if user confirmed)
         if options.export_to_rtfs {
-            self.export_server_capabilities_to_rtfs(server_config, &manifests, options).await?;
+            self.export_server_capabilities_to_rtfs(server_config, &manifests, options)
+                .await?;
         }
 
         Ok(manifests)
@@ -845,12 +986,14 @@ impl MCPDiscoveryService {
         manifests: &[CapabilityManifest],
         options: &DiscoveryOptions,
     ) -> RuntimeResult<()> {
-        use std::path::PathBuf;
         use std::fs;
+        use std::path::PathBuf;
 
         // Determine export directory
         // Use absolute path or relative to current working directory
-        let export_dir = options.export_directory.as_ref()
+        let export_dir = options
+            .export_directory
+            .as_ref()
             .map(|s| {
                 let path = PathBuf::from(s);
                 if path.is_absolute() {
@@ -891,12 +1034,15 @@ impl MCPDiscoveryService {
 
         // Export to single module file: capabilities/discovered/mcp/<server_name>/capabilities.rtfs
         let module_file = server_dir.join("capabilities.rtfs");
-        
+
         // Create RTFS module with only the discovered capabilities from this server
         let mut rtfs_content = String::new();
         rtfs_content.push_str(";; CCOS MCP Capabilities Module\n");
         rtfs_content.push_str(&format!(";; Generated at: {}\n", chrono::Utc::now()));
-        rtfs_content.push_str(&format!(";; Server: {} ({})\n\n", server_config.name, server_config.endpoint));
+        rtfs_content.push_str(&format!(
+            ";; Server: {} ({})\n\n",
+            server_config.name, server_config.endpoint
+        ));
         rtfs_content.push_str("(do\n");
 
         for manifest in manifests {
@@ -920,7 +1066,11 @@ impl MCPDiscoveryService {
         fs::write(&module_file, rtfs_content).map_err(|e| {
             RuntimeError::Generic(format!("Failed to write RTFS module file: {}", e))
         })?;
-        println!("  💾 Exported {} capabilities to {}", manifests.len(), module_file.display());
+        println!(
+            "  💾 Exported {} capabilities to {}",
+            manifests.len(),
+            module_file.display()
+        );
 
         Ok(())
     }
@@ -952,23 +1102,25 @@ impl MCPDiscoveryService {
     /// List all known servers (from config and approval queue)
     pub fn list_known_servers(&self) -> Vec<MCPServerConfig> {
         let mut servers = self.config_discovery.get_all_server_configs();
-        
+
         // Add approved servers from queue
         if let Ok(approved) = self.approval_queue.list_approved() {
             for server in approved {
                 // Check for duplicates (by name or endpoint)
-                if !servers.iter().any(|s| s.name == server.server_info.name || s.endpoint == server.server_info.endpoint) {
+                if !servers.iter().any(|s| {
+                    s.name == server.server_info.name || s.endpoint == server.server_info.endpoint
+                }) {
                     servers.push(MCPServerConfig {
                         name: server.server_info.name,
                         endpoint: server.server_info.endpoint,
-                        auth_token: None, // Will fallback to env vars if needed
+                        auth_token: None,    // Will fallback to env vars if needed
                         timeout_seconds: 30, // Default
                         protocol_version: "2024-11-05".to_string(), // Default
                     });
                 }
             }
         }
-        
+
         servers
     }
 
@@ -996,14 +1148,22 @@ impl MCPDiscoveryService {
 
         // Search the registry
         log::info!("🔍 Searching MCP registry for '{}'...", capability_query);
-        let servers = self.registry_client.search_servers(capability_query).await?;
+        let servers = self
+            .registry_client
+            .search_servers(capability_query)
+            .await?;
 
         // Cache results
         if use_cache {
-            self.cache.store_registry_search(capability_query, servers.clone());
+            self.cache
+                .store_registry_search(capability_query, servers.clone());
         }
 
-        log::info!("📦 Found {} servers matching '{}'", servers.len(), capability_query);
+        log::info!(
+            "📦 Found {} servers matching '{}'",
+            servers.len(),
+            capability_query
+        );
         Ok(servers)
     }
 
@@ -1026,10 +1186,10 @@ impl MCPDiscoveryService {
             // Check if server name hints at having this capability
             let server_name_lower = server.name.to_lowercase();
             let capability_lower = capability_name.to_lowercase();
-            
+
             // Simple heuristic: server name contains capability keywords
-            if server_name_lower.contains(&capability_lower) 
-                || capability_lower.contains(&server_name_lower) 
+            if server_name_lower.contains(&capability_lower)
+                || capability_lower.contains(&server_name_lower)
             {
                 found_servers.push(server);
             }
@@ -1037,15 +1197,18 @@ impl MCPDiscoveryService {
 
         // If we found local servers, return them first
         if !found_servers.is_empty() {
-            log::debug!("Found {} local servers for '{}'", found_servers.len(), capability_name);
+            log::debug!(
+                "Found {} local servers for '{}'",
+                found_servers.len(),
+                capability_name
+            );
             return Ok(found_servers);
         }
 
         // Fall back to registry search
-        let registry_servers = self.search_registry_for_capability(
-            capability_name,
-            options.use_cache,
-        ).await?;
+        let registry_servers = self
+            .search_registry_for_capability(capability_name, options.use_cache)
+            .await?;
 
         // Convert registry servers to MCPServerConfig
         for registry_server in registry_servers {
@@ -1063,8 +1226,9 @@ impl MCPDiscoveryService {
         server: &crate::mcp::registry::McpServer,
     ) -> Option<MCPServerConfig> {
         // Try to get a usable endpoint from remotes
-        let endpoint = server.remotes.as_ref()
-            .and_then(|remotes| crate::mcp::registry::MCPRegistryClient::select_best_remote_url(remotes))?;
+        let endpoint = server.remotes.as_ref().and_then(|remotes| {
+            crate::mcp::registry::MCPRegistryClient::select_best_remote_url(remotes)
+        })?;
 
         Some(MCPServerConfig {
             name: server.name.clone(),
@@ -1089,8 +1253,10 @@ impl MCPDiscoveryService {
         capability_query: &str,
         options: &DiscoveryOptions,
     ) -> RuntimeResult<Vec<(MCPServerConfig, Vec<DiscoveredMCPTool>)>> {
-        let servers = self.find_servers_for_capability(capability_query, options).await?;
-        
+        let servers = self
+            .find_servers_for_capability(capability_query, options)
+            .await?;
+
         if servers.is_empty() {
             return Ok(Vec::new());
         }
@@ -1116,8 +1282,11 @@ impl MCPDiscoveryService {
             let handle = tokio::spawn(async move {
                 // Acquire permit (blocks if max_parallel discoveries are in progress)
                 let _permit = permit.acquire().await.unwrap();
-                
-                match service.discover_tools(&server_config_clone, &options_clone).await {
+
+                match service
+                    .discover_tools(&server_config_clone, &options_clone)
+                    .await
+                {
                     Ok(tools) => {
                         if !tools.is_empty() {
                             log::info!(
@@ -1181,9 +1350,9 @@ impl MCPDiscoveryService {
             session_manager: Arc::clone(&self.session_manager),
             registry_client: MCPRegistryClient::new(), // Registry client is stateless
             config_discovery: LocalConfigMcpDiscovery::new(), // Config discovery is stateless
-            approval_queue: ApprovalQueue::new("."), // Approval queue is stateless (file-based)
-            introspector: MCPIntrospector::new(), // Introspector is stateless
-            cache: Arc::clone(&self.cache), // Share cache
+            approval_queue: ApprovalQueue::new("."),   // Approval queue is stateless (file-based)
+            introspector: MCPIntrospector::new(),      // Introspector is stateless
+            cache: Arc::clone(&self.cache),            // Share cache
             rate_limiter: Arc::clone(&self.rate_limiter), // Share rate limiter
             marketplace: self.marketplace.as_ref().map(Arc::clone),
             catalog: self.catalog.as_ref().map(Arc::clone),
@@ -1248,13 +1417,18 @@ impl MCPDiscoveryService {
 
             let handle = tokio::spawn(async move {
                 let _permit = permit.acquire().await.unwrap();
-                
-                match service.discover_tools(&server_config_clone, &options_clone).await {
-                    Ok(tools) => {
-                        Ok((server_config_clone.name.clone(), tools.len()))
-                    }
+
+                match service
+                    .discover_tools(&server_config_clone, &options_clone)
+                    .await
+                {
+                    Ok(tools) => Ok((server_config_clone.name.clone(), tools.len())),
                     Err(e) => {
-                        log::debug!("Cache warming failed for '{}': {}", server_config_clone.name, e);
+                        log::debug!(
+                            "Cache warming failed for '{}': {}",
+                            server_config_clone.name,
+                            e
+                        );
                         Err((server_config_clone.name.clone(), e))
                     }
                 }
@@ -1276,7 +1450,11 @@ impl MCPDiscoveryService {
                 Ok(Ok((server_name, tool_count))) => {
                     stats.successful += 1;
                     stats.cached_tools += tool_count;
-                    log::debug!("✅ Cache warmed for '{}': {} tools", server_name, tool_count);
+                    log::debug!(
+                        "✅ Cache warmed for '{}': {} tools",
+                        server_name,
+                        tool_count
+                    );
                 }
                 Ok(Err((server_name, _))) => {
                     stats.failed += 1;
@@ -1341,4 +1519,3 @@ impl Default for MCPDiscoveryService {
         Self::new()
     }
 }
-

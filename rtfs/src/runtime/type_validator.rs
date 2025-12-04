@@ -378,7 +378,9 @@ impl TypeValidator {
             (Value::Symbol(_), TypeExpr::Primitive(PrimitiveType::Symbol)) => Ok(()),
 
             // Function types - bare :fn accepts any function
-            (Value::Function(_), TypeExpr::Primitive(PrimitiveType::Custom(kw))) if kw.0 == "fn" => {
+            (Value::Function(_), TypeExpr::Primitive(PrimitiveType::Custom(kw)))
+                if kw.0 == "fn" =>
+            {
                 Ok(())
             }
 
@@ -465,7 +467,9 @@ impl TypeValidator {
             (Value::Symbol(_), TypeExpr::Primitive(PrimitiveType::Symbol)) => Ok(()),
 
             // Function types - bare :fn accepts any function
-            (Value::Function(_), TypeExpr::Primitive(PrimitiveType::Custom(kw))) if kw.0 == "fn" => {
+            (Value::Function(_), TypeExpr::Primitive(PrimitiveType::Custom(kw)))
+                if kw.0 == "fn" =>
+            {
                 Ok(())
             }
 

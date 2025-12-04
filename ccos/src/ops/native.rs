@@ -2,9 +2,9 @@
 //!
 //! This module contains operations for native capabilities (ccos.cli.*).
 
+use crate::capabilities::provider::CapabilityProvider;
 use crate::capability_marketplace::types::{CapabilityManifest, ProviderType};
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::capabilities::provider::CapabilityProvider;
 use rtfs::runtime::error::RuntimeResult;
 
 /// Register all native capabilities (ccos.cli.*) to the marketplace
@@ -15,7 +15,7 @@ pub async fn register_native_capabilities(
     // We instantiate the provider to get the descriptors and implementations
     let native_provider = crate::capabilities::NativeCapabilityProvider::new();
     let descriptors = CapabilityProvider::list_capabilities(&native_provider);
-    
+
     for descriptor in descriptors {
         if let Some(native_cap) = native_provider.get_capability(&descriptor.id) {
             let manifest = CapabilityManifest {
@@ -24,11 +24,16 @@ pub async fn register_native_capabilities(
                 description: descriptor.description.clone(),
                 provider: ProviderType::Native(native_cap.clone()),
                 version: "1.0.0".to_string(),
-                input_schema: None, // TODO: Extract from descriptor
+                input_schema: None,  // TODO: Extract from descriptor
                 output_schema: None, // TODO: Extract from descriptor
                 attestation: None,
                 provenance: None,
-                permissions: descriptor.security_requirements.permissions.iter().map(|p| format!("{:?}", p)).collect(),
+                permissions: descriptor
+                    .security_requirements
+                    .permissions
+                    .iter()
+                    .map(|p| format!("{:?}", p))
+                    .collect(),
                 effects: vec![],
                 metadata: descriptor.metadata.clone(),
                 agent_metadata: None,
@@ -38,7 +43,6 @@ pub async fn register_native_capabilities(
             marketplace.register_capability_manifest(manifest).await?;
         }
     }
-    
+
     Ok(())
 }
-

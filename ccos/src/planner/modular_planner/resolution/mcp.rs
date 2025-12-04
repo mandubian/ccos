@@ -18,9 +18,9 @@ use crate::planner::modular_planner::types::{
 
 // Imports for RuntimeMcpDiscovery
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::synthesis::mcp_introspector::MCPIntrospector;
-use crate::mcp::types::DiscoveredMCPTool;
 use crate::mcp::registry::MCPRegistryClient;
+use crate::mcp::types::DiscoveredMCPTool;
+use crate::synthesis::mcp_introspector::MCPIntrospector;
 
 /// MCP server info
 #[derive(Debug, Clone)]
@@ -59,7 +59,7 @@ use crate::catalog::CatalogService;
 use crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery;
 
 /// Runtime implementation of McpDiscovery using real MCP servers
-/// 
+///
 /// This implementation always uses the unified `MCPDiscoveryService` for all
 /// discovery operations, providing consistent behavior with caching, rate limiting, etc.
 pub struct RuntimeMcpDiscovery {
@@ -74,9 +74,7 @@ pub struct RuntimeMcpDiscovery {
 }
 
 impl RuntimeMcpDiscovery {
-    pub fn new(
-        marketplace: Arc<CapabilityMarketplace>,
-    ) -> Self {
+    pub fn new(marketplace: Arc<CapabilityMarketplace>) -> Self {
         Self {
             registry_client: MCPRegistryClient::new(),
             marketplace,
@@ -140,7 +138,11 @@ impl McpDiscovery for RuntimeMcpDiscovery {
             ..Default::default()
         };
 
-        match self.discovery_service.discover_tools(&config, &options).await {
+        match self
+            .discovery_service
+            .discover_tools(&config, &options)
+            .await
+        {
             Ok(discovered_tools) => {
                 let tools = discovered_tools
                     .into_iter()
@@ -179,7 +181,9 @@ impl McpDiscovery for RuntimeMcpDiscovery {
         };
 
         // Use discovery service to create manifest
-        let manifest = self.discovery_service.tool_to_manifest(&discovered_tool, &config);
+        let manifest = self
+            .discovery_service
+            .tool_to_manifest(&discovered_tool, &config);
 
         // Register using discovery service (handles marketplace + catalog)
         self.discovery_service
