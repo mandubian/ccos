@@ -7,10 +7,9 @@
 //! - `repair_plan`: Attempts to fix a failing plan using LLM
 
 use crate::arbiter::llm_provider::{LlmProviderConfig, LlmProviderFactory, LlmProviderType};
-use crate::arbiter::plan_generation::{LlmRtfsPlanGenerationProvider, PlanGenerationProvider};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::capabilities::registry::CapabilityRegistry;
-use crate::types::{Intent, Plan, PlanBody};
+use crate::types::Plan;
 use crate::CCOS;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::security::RuntimeContext;
@@ -69,13 +68,7 @@ pub async fn create_plan_with_options(
     // 1. Configure LLM Provider from environment
     let config = get_llm_config_from_env()?;
     
-    // 2. Initialize provider
-    let provider = LlmRtfsPlanGenerationProvider::new(config);
-    
-    // 3. Create Intent from goal
-    let intent = Intent::new(goal.clone());
-    
-    // 4. Create marketplace with native capabilities for validation
+    // 2. Create marketplace with native capabilities
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let causal_chain = Arc::new(Mutex::new(crate::causal_chain::CausalChain::new()?));
     let marketplace = Arc::new(CapabilityMarketplace::with_causal_chain_and_debug_callback(
@@ -84,18 +77,22 @@ pub async fn create_plan_with_options(
         None,
     ));
     
-    // Register native capabilities for validation
+    // Register native capabilities
     crate::ops::native::register_native_capabilities(&marketplace).await?;
     
-    // 5. Generate plan
-    println!("🧠 Generating plan for goal: \"{}\"...", intent.goal);
-    let result = provider.generate_plan(&intent, marketplace.clone()).await?;
+    // 3. Load approved MCP server capabilities
+    load_approved_capabilities(&marketplace).await?;
     
-    // 6. Extract RTFS
-    let rtfs_code = match result.plan.body {
-        PlanBody::Rtfs(code) => code,
-        _ => return Err(RuntimeError::Generic("Generated plan is not RTFS".to_string())),
-    };
+    // 4. Get available capabilities for the prompt
+    let capabilities = marketplace.list_capabilities().await;
+    let capability_descriptions = format_capabilities_for_prompt(&capabilities);
+    
+    // 5. Generate plan using capability-aware prompt
+    println!("🧠 Generating plan for goal: \"{}\"...", goal);
+    let rtfs_code = generate_capability_aware_plan(&goal, &capability_descriptions, &config).await?;
+    
+    // 6. Print the generated plan
+    println!("{}", rtfs_code);
     
     // 7. Validate capabilities (unless skipped)
     let (validation_issues, all_resolved, unresolved) = if !options.skip_validation {
@@ -103,6 +100,15 @@ pub async fn create_plan_with_options(
     } else {
         (vec![], true, vec![])
     };
+    
+    // 7. Display validation issues
+    if !validation_issues.is_empty() {
+        println!("\n⚠️  {} capability(ies) not found:", validation_issues.len());
+        for issue in &validation_issues {
+            println!("   • {}", issue.replace("Capability not found: ", ""));
+        }
+        println!();
+    }
     
     // 8. Save to file if requested
     if let Some(path) = &options.save_to {
@@ -116,13 +122,6 @@ pub async fn create_plan_with_options(
     if options.dry_run {
         println!("\n📋 Generated Plan (dry-run):\n");
         println!("{}", rtfs_code);
-        
-        if !validation_issues.is_empty() {
-            println!("\n⚠️  Validation Issues:");
-            for issue in &validation_issues {
-                println!("   • {}", issue);
-            }
-        }
     }
     
     Ok(CreatePlanResult {
@@ -509,3 +508,91 @@ fn extract_rtfs_from_response(response: &str) -> Option<String> {
     
     None
 }
+
+/// Format capabilities for inclusion in LLM prompt
+fn format_capabilities_for_prompt(capabilities: &[crate::capability_marketplace::types::CapabilityManifest]) -> String {
+    if capabilities.is_empty() {
+        return "No capabilities are currently registered. You may need to use basic RTFS operations only.".to_string();
+    }
+    
+    let mut output = String::new();
+    output.push_str("Available capabilities:\n");
+    
+    for cap in capabilities {
+        output.push_str(&format!("- {} : {}\n", cap.id, cap.description));
+    }
+    
+    output
+}
+
+/// Generate a plan using capability-aware LLM prompt
+async fn generate_capability_aware_plan(
+    goal: &str,
+    capability_descriptions: &str,
+    config: &LlmProviderConfig,
+) -> RuntimeResult<String> {
+    let provider = LlmProviderFactory::create_provider(config.clone()).await?;
+    
+    let system_prompt = format!(r#"You are an RTFS plan generator. Generate executable RTFS code for the user's goal.
+
+RTFS Syntax Rules:
+- Use prefix notation with parentheses: (function arg1 arg2)
+- Maps use curly braces with keyword keys: {{:key1 value1 :key2 value2}}
+- NO commas in maps or lists
+- Strings use double quotes: "string"
+- Keywords start with colon: :keyword
+- Call capabilities using: (call :capability.id {{:param value}})
+
+{}
+
+IMPORTANT:
+- ONLY use capabilities from the list above
+- If a capability doesn't exist, explain what's missing in a comment
+- For GitHub operations, use MCP server capabilities if available (e.g., github.list_issues)
+- Return ONLY the RTFS code, no explanations
+
+Output format: A single RTFS expression starting with (do ...) or (plan ...)"#, capability_descriptions);
+
+    let user_prompt = format!("Generate an RTFS plan for: {}", goal);
+    
+    let response = provider.generate_text(&format!("{}\n\n{}", system_prompt, user_prompt)).await?;
+    
+    // Extract RTFS from response
+    extract_rtfs_from_response(&response).ok_or_else(|| {
+        RuntimeError::Generic(format!("Failed to extract RTFS from LLM response: {}", response))
+    })
+}
+
+/// Load capabilities from approved MCP servers
+/// 
+/// Uses the marketplace's built-in import_capabilities_from_rtfs_dir_recursive
+/// to load capabilities from the approved servers directory.
+async fn load_approved_capabilities(
+    marketplace: &Arc<CapabilityMarketplace>,
+) -> RuntimeResult<()> {
+    // Try multiple potential locations for the approved servers directory
+    let potential_paths = [
+        std::path::PathBuf::from("capabilities/servers/approved"),
+        std::path::PathBuf::from("../capabilities/servers/approved"),
+    ];
+    
+    let approved_dir = potential_paths.iter().find(|p| p.exists());
+    
+    let approved_dir = match approved_dir {
+        Some(path) => path,
+        None => {
+            log::debug!("No approved servers directory found");
+            return Ok(());
+        }
+    };
+    
+    // Use the marketplace's built-in method to recursively import RTFS capabilities
+    let loaded = marketplace.import_capabilities_from_rtfs_dir_recursive(approved_dir).await?;
+    
+    if loaded > 0 {
+        println!("📦 Loaded {} capabilities from approved servers", loaded);
+    }
+    
+    Ok(())
+}
+
