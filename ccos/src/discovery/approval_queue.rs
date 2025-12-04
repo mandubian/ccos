@@ -829,8 +829,8 @@ impl ApprovalQueue {
             // IMPORTANT: Move capability files BEFORE removing the pending directory
             // Otherwise remove_from_dir will delete the entire directory including capabilities.rtfs
 
-            let pending_dir = std::path::Path::new("capabilities/servers/pending");
-            let approved_dir = std::path::Path::new("capabilities/servers/approved");
+            let pending_dir = self.pending_path();
+            let approved_dir = self.approved_path();
             std::fs::create_dir_all(approved_dir).map_err(|e| {
                 RuntimeError::Generic(format!("Failed to create approved directory: {}", e))
             })?;
@@ -845,8 +845,14 @@ impl ApprovalQueue {
             // Check both the directory and the capabilities_path field
             let should_move =
                 if let Some(ref capabilities_path) = item.server_info.capabilities_path {
-                    // If capabilities_path is set, check if that file exists
-                    std::path::Path::new(capabilities_path).exists()
+                    // If capabilities_path is set, check if that file exists (absolute or relative)
+                    let path = std::path::Path::new(capabilities_path);
+                    let path = if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        self.base_path.join(path)
+                    };
+                    path.exists()
                 } else {
                     // Otherwise check if the server directory exists
                     pending_server_dir.exists()
@@ -856,19 +862,22 @@ impl ApprovalQueue {
                 // Determine the source directory
                 // capabilities_path is like "capabilities/servers/pending/github_github-mcp/capabilities.rtfs"
                 // We want to move the entire directory "capabilities/servers/pending/github_github-mcp"
-                let source_dir =
-                    if let Some(ref capabilities_path) = item.server_info.capabilities_path {
-                        // Extract directory from capabilities_path
-                        std::path::Path::new(capabilities_path)
-                            .parent()
-                            .ok_or_else(|| {
-                                RuntimeError::Generic(
-                                    "Invalid capabilities_path: no parent directory".to_string(),
-                                )
-                            })?
+                let source_dir = if let Some(ref capabilities_path) = item.server_info.capabilities_path {
+                    // Extract directory from capabilities_path (absolute or relative)
+                    let path = std::path::Path::new(capabilities_path);
+                    let absolute = if path.is_absolute() {
+                        path.to_path_buf()
                     } else {
-                        &pending_server_dir
+                        self.base_path.join(path)
                     };
+                    absolute.parent().ok_or_else(|| {
+                        RuntimeError::Generic(
+                            "Invalid capabilities_path: no parent directory".to_string(),
+                        )
+                    })?
+                } else {
+                    &pending_server_dir
+                };
 
                 if source_dir.exists() {
                     if approved_server_dir.exists() {
