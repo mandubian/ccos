@@ -510,16 +510,25 @@ fn extract_rtfs_from_response(response: &str) -> Option<String> {
 }
 
 /// Format capabilities for inclusion in LLM prompt
+/// Includes capability ID, description, and input schema for better plan generation
 fn format_capabilities_for_prompt(capabilities: &[crate::capability_marketplace::types::CapabilityManifest]) -> String {
     if capabilities.is_empty() {
         return "No capabilities are currently registered. You may need to use basic RTFS operations only.".to_string();
     }
     
     let mut output = String::new();
-    output.push_str("Available capabilities:\n");
+    output.push_str("Available capabilities:\n\n");
     
     for cap in capabilities {
-        output.push_str(&format!("- {} : {}\n", cap.id, cap.description));
+        output.push_str(&format!("## {}\n", cap.id));
+        output.push_str(&format!("Description: {}\n", cap.description));
+        
+        // Include input schema if available (formatted as RTFS type for LLM comprehension)
+        if let Some(schema) = &cap.input_schema {
+            output.push_str(&format!("Input schema: {}\n", schema));
+        }
+        
+        output.push('\n');
     }
     
     output
