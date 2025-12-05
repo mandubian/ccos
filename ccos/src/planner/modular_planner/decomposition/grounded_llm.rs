@@ -160,7 +160,8 @@ impl GroundedLlmDecomposition {
 
         format!(
             r#"<tool name="{}" description="{}" input_schema='{}'/>"#,
-            tool.name,
+            // Use fully qualified id so the LLM returns executable capability ids
+            tool.id,
             tool.description.replace('"', "'"), // Escape quotes in description
             schema_str
         )
@@ -187,9 +188,18 @@ impl GroundedLlmDecomposition {
         let params_hint = if context.pre_extracted_params.is_empty() {
             String::new()
         } else {
+            let mut lines = Vec::new();
+            for (k, v) in context.pre_extracted_params.iter() {
+                lines.push(format!("{}: {}", k, v));
+            }
+            let joined = lines.join("\n");
             format!(
-                "\n\nAlready extracted parameters: {:?}",
-                context.pre_extracted_params
+                r#"
+
+Grounded data (prefer using this instead of asking user):
+{}
+RULE: If grounded data covers what you need, use data_transform/output. Only ask user if required params are truly missing or ambiguous. Prefer the most recent result for outputs when relevant."#,
+                joined
             )
         };
 
@@ -202,7 +212,11 @@ RULES:
 1. Examine the available tools above - each has a name, description, and input_schema.
 2. For each step, if a tool matches, set "tool" to the exact tool name.
 3. Extract parameters from the goal that match the tool's input_schema.
-4. If no tool matches exactly, use intent_type "api_call" or "data_transform" without a tool.
+4. Avoid intent_type "user_input" unless critical parameters are missing or ambiguous. Do NOT ask the user just to reformat or summarize; prefer data_transform/output with existing data.
+5. If no tool matches exactly, use intent_type "api_call" or "data_transform" without a tool.
+6. When data is already available, produce an "output" step (e.g., with ccos.io.println) instead of asking the user.
+7. Use CONCRETE values, not placeholders. For dates, use ISO 8601 format (YYYY-MM-DD). Today is {today}.
+8. For "weekly" or "last 7 days", calculate the actual date: {week_ago}.
 
 INTENT TYPES:
 - "user_input": Ask the user for missing information
@@ -229,7 +243,9 @@ Respond with ONLY valid JSON:
 "#,
             tools_list = tools_list,
             goal = goal,
-            params_hint = params_hint
+            params_hint = params_hint,
+            today = chrono::Utc::now().format("%Y-%m-%d"),
+            week_ago = (chrono::Utc::now() - chrono::Duration::days(7)).format("%Y-%m-%d"),
         )
     }
 }

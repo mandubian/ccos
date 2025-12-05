@@ -53,9 +53,15 @@ impl SafeCapabilityExecutor {
 
         // If no effects declared, check if it's a known safe pattern
         if manifest.effects.is_empty() {
-            // MCP list/search/get operations are typically safe
-            let safe_patterns = ["list_", "search_", "get_", ".list", ".search", ".get"];
-            return safe_patterns.iter().any(|p| capability_id.contains(p));
+            // MCP patterns: list_, search_, get_
+            let mcp_safe_patterns = ["list_", "search_", "get_", ".list", ".search", ".get"];
+            // Core CCOS patterns: ccos.data.*, ccos.io.println, ccos.echo
+            let ccos_safe_prefixes = ["ccos.data.", "ccos.echo", "ccos.io.println", "ccos.io.log"];
+            
+            let is_mcp_safe = mcp_safe_patterns.iter().any(|p| capability_id.contains(p));
+            let is_ccos_safe = ccos_safe_prefixes.iter().any(|p| capability_id.starts_with(p));
+            
+            return is_mcp_safe || is_ccos_safe;
         }
 
         // Check effects against allowlist
@@ -116,10 +122,16 @@ impl SafeCapabilityExecutor {
                 }
             }
         } else {
-            // No effects declared - check safe patterns for MCP capabilities
-            let safe_patterns = ["list_", "search_", "get_", ".list", ".search", ".get"];
-            let is_safe_pattern = safe_patterns.iter().any(|p| capability_id.contains(p));
-            if !is_safe_pattern {
+            // No effects declared - check safe patterns
+            // MCP patterns: list_, search_, get_
+            // Core CCOS patterns: ccos.data.*, ccos.io.println, ccos.echo
+            let mcp_safe_patterns = ["list_", "search_", "get_", ".list", ".search", ".get"];
+            let ccos_safe_prefixes = ["ccos.data.", "ccos.echo", "ccos.io.println", "ccos.io.log"];
+            
+            let is_mcp_safe = mcp_safe_patterns.iter().any(|p| capability_id.contains(p));
+            let is_ccos_safe = ccos_safe_prefixes.iter().any(|p| capability_id.starts_with(p));
+            
+            if !is_mcp_safe && !is_ccos_safe {
                 log::debug!(
                     "Safe exec blocked for {} (no effects declared and not a safe pattern)",
                     capability_id
