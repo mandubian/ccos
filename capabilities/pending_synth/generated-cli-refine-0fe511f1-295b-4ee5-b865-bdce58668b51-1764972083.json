@@ -1,0 +1,8 @@
+{
+  "capability_id": "generated/cli:refine-0fe511f1-295b-4ee5-b865-bdce58668b51",
+  "description": "Format summary with counts and grouped issues",
+  "source_intent": "Format summary with counts and grouped issues",
+  "notes": "Planner could not resolve; queued for reification",
+  "status": "needs_impl",
+  "created_at": "2025-12-05T22:01:23.086577654+00:00"
+}

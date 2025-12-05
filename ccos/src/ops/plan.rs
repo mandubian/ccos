@@ -12,6 +12,7 @@ use crate::capability_marketplace::CapabilityMarketplace;
 use crate::examples_common::builder::load_agent_config;
 use crate::mcp::core::MCPDiscoveryService;
 use crate::planner::modular_planner::decomposition::llm_adapter::CcosLlmAdapter;
+use crate::planner::modular_planner::decomposition::hybrid::HybridConfig;
 use crate::planner::modular_planner::decomposition::{HybridDecomposition, PatternDecomposition};
 use crate::planner::modular_planner::resolution::mcp::RuntimeMcpDiscovery;
 use crate::planner::modular_planner::resolution::{
@@ -24,11 +25,31 @@ use crate::CCOS;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::security::RuntimeContext;
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+fn maybe_set_capability_storage_from_config(config_path: &str) {
+    // Respect explicit env override
+    if std::env::var("CCOS_CAPABILITY_STORAGE").is_ok() {
+        return;
+    }
+
+    if let Ok(contents) = fs::read_to_string(config_path) {
+        if let Ok(value) = toml::from_str::<toml::Value>(&contents) {
+            if let Some(dir) = value
+                .get("mcp_discovery")
+                .and_then(|v| v.get("export_directory"))
+                .and_then(|v| v.as_str())
+            {
+                std::env::set_var("CCOS_CAPABILITY_STORAGE", dir);
+            }
+        }
+    }
+}
+
 /// Options for plan creation
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CreatePlanOptions {
     /// Don't execute, just show the plan
     pub dry_run: bool,
@@ -38,6 +59,29 @@ pub struct CreatePlanOptions {
     pub verbose: bool,
     /// Skip capability validation
     pub skip_validation: bool,
+    /// Enable safe execution during planning
+    pub enable_safe_exec: bool,
+    /// Allow grounding data to be pushed into runtime context
+    pub allow_grounding_context: bool,
+    /// Seed grounding params
+    pub grounding_params: std::collections::HashMap<String, String>,
+    /// Force LLM decomposition (skip pattern path)
+    pub force_llm: bool,
+}
+
+impl Default for CreatePlanOptions {
+    fn default() -> Self {
+        Self {
+            dry_run: false,
+            save_to: None,
+            verbose: false,
+            skip_validation: false,
+            enable_safe_exec: false,
+            allow_grounding_context: true,
+            grounding_params: std::collections::HashMap::new(),
+            force_llm: false,
+        }
+    }
 }
 
 /// Options for plan execution
@@ -79,6 +123,7 @@ pub async fn create_plan_with_options(
     let llm_config = get_llm_config_from_env()?;
 
     // Load agent config from config file (if available)
+    maybe_set_capability_storage_from_config("config/agent_config.toml");
     let agent_config = load_agent_config("config/agent_config.toml").ok();
 
     // Initialize full CCOS runtime so we have catalog, marketplace and governance wired.
@@ -104,7 +149,8 @@ pub async fn create_plan_with_options(
     configure_mcp_session_pool(&marketplace).await?;
 
     // Build modular planner with hybrid decomposition + catalog/MCP resolution.
-    let mut planner = build_cli_modular_planner(ccos.clone(), &llm_config, options.verbose).await?;
+    let mut planner =
+        build_cli_modular_planner(ccos.clone(), &llm_config, options.verbose, &options).await?;
 
     let plan_result = planner
         .plan(&goal)
@@ -172,6 +218,7 @@ async fn build_cli_modular_planner(
     ccos: Arc<CCOS>,
     llm_config: &LlmProviderConfig,
     verbose: bool,
+    options: &CreatePlanOptions,
 ) -> RuntimeResult<ModularPlanner> {
     let intent_graph = ccos.get_intent_graph();
 
@@ -203,7 +250,14 @@ async fn build_cli_modular_planner(
     {
         Ok(provider) => {
             let adapter = Arc::new(CcosLlmAdapter::new(provider));
-            Box::new(HybridDecomposition::new().with_llm(adapter))
+            let mut hybrid = HybridDecomposition::new().with_llm(adapter);
+            if options.force_llm {
+                hybrid = hybrid.with_config(HybridConfig {
+                    force_llm: true,
+                    ..HybridConfig::default()
+                });
+            }
+            Box::new(hybrid)
         }
         Err(e) => {
             println!(
@@ -219,13 +273,26 @@ async fn build_cli_modular_planner(
         verbose_llm: verbose,
         show_prompt: verbose,
         eager_discovery: true,
+        enable_safe_exec: options.enable_safe_exec,
+        allow_grounding_context: options.allow_grounding_context,
+        initial_grounding_params: options.grounding_params.clone(),
+        hybrid_config: Some(HybridConfig {
+            force_llm: options.force_llm,
+            ..HybridConfig::default()
+        }),
         ..PlannerConfig::default()
     };
 
-    Ok(
+    let mut planner =
         ModularPlanner::new(decomposition, Box::new(composite_resolution), intent_graph)
-            .with_config(config),
-    )
+            .with_config(config);
+
+    if options.enable_safe_exec {
+        planner = planner.with_safe_executor(ccos.get_capability_marketplace());
+        println!("🛡️  Safe exec enabled: executor wired to marketplace");
+    }
+
+    Ok(planner)
 }
 
 fn mcp_auth_headers() -> Option<HashMap<String, String>> {
@@ -559,14 +626,19 @@ fn extract_capabilities_from_rtfs(rtfs_code: &str) -> HashSet<String> {
     for line in rtfs_code.lines() {
         let trimmed = line.trim();
         if let Some(call_idx) = trimmed.find("(call ") {
-            let after_call = &trimmed[call_idx + 6..];
+        let after_call = &trimmed[call_idx + 6..];
             // Extract the capability ID (starts with : or is a symbol)
-            let cap_id: String = after_call
-                .chars()
-                .take_while(|c| !c.is_whitespace() && *c != ')' && *c != '{')
-                .collect();
-            if !cap_id.is_empty() {
-                capabilities.insert(cap_id.trim_start_matches(':').to_string());
+        let raw_cap: String = after_call
+            .chars()
+            .take_while(|c| !c.is_whitespace() && *c != ')' && *c != '{')
+            .collect();
+        if !raw_cap.is_empty() {
+            // Handle either symbols (:ccos.io.println) or quoted strings ("ccos.io.println")
+            let cap_id = raw_cap
+                .trim_start_matches(':')
+                .trim_matches('"')
+                .to_string();
+            capabilities.insert(cap_id);
             }
         }
     }

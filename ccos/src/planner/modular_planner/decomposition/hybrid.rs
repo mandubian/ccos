@@ -13,6 +13,7 @@ use super::{DecompositionContext, DecompositionError, DecompositionResult, Decom
 use crate::planner::modular_planner::types::ToolSummary;
 
 /// Hybrid decomposition strategy configuration
+#[derive(Debug, Clone)]
 pub struct HybridConfig {
     /// Minimum confidence threshold to accept pattern match
     pub pattern_confidence_threshold: f64,
@@ -20,6 +21,8 @@ pub struct HybridConfig {
     pub prefer_grounded: bool,
     /// Maximum tools to consider for grounded decomposition
     pub max_grounded_tools: usize,
+    /// Force LLM path (skip patterns)
+    pub force_llm: bool,
 }
 
 impl Default for HybridConfig {
@@ -28,6 +31,7 @@ impl Default for HybridConfig {
             pattern_confidence_threshold: 0.7,
             prefer_grounded: true,
             max_grounded_tools: 0, // 0 = unlimited (like real MCP behavior)
+            force_llm: false,
         }
     }
 }
@@ -125,9 +129,15 @@ impl DecompositionStrategy for HybridDecomposition {
         // 1. Try pattern matching first
         let pattern_confidence = self.pattern.can_handle(goal);
 
-        if pattern_confidence >= self.config.pattern_confidence_threshold {
+        if !self.config.force_llm && pattern_confidence >= self.config.pattern_confidence_threshold {
             match self.pattern.decompose(goal, available_tools, context).await {
                 Ok(result) => {
+                    if context.show_prompt || context.verbose_llm {
+                        println!(
+                            "ℹ️  Using pattern decomposition (no LLM prompt). Confidence {:.2}",
+                            result.confidence
+                        );
+                    }
                     log::debug!(
                         "[hybrid] Pattern matched with confidence {:.2}: {}",
                         result.confidence,

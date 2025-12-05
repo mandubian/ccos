@@ -15,7 +15,7 @@ use rtfs::ast::MapKey;
 use rtfs::runtime::security::{RuntimeContext, SecurityAuthorizer};
 
 /// Allowlist of effects that are considered safe for opportunistic execution.
-const SAFE_EFFECTS: &[&str] = &[":network", ":compute", ":read"];
+const SAFE_EFFECTS: &[&str] = &[":network", ":compute", ":read", ":output"];
 
 /// Denylist of effects that block safe execution.
 const UNSAFE_EFFECTS: &[&str] = &[":filesystem", ":system", ":write", ":delete"];
@@ -51,17 +51,16 @@ impl SafeCapabilityExecutor {
             None => return false,
         };
 
-        // If no effects declared, check if it's a known safe pattern
+        // If no effects declared, check if it's a known safe MCP pattern
+        // (MCP capabilities may not have effects metadata until introspected)
         if manifest.effects.is_empty() {
             // MCP patterns: list_, search_, get_
             let mcp_safe_patterns = ["list_", "search_", "get_", ".list", ".search", ".get"];
-            // Core CCOS patterns: ccos.data.*, ccos.io.println, ccos.echo
-            let ccos_safe_prefixes = ["ccos.data.", "ccos.echo", "ccos.io.println", "ccos.io.log"];
             
             let is_mcp_safe = mcp_safe_patterns.iter().any(|p| capability_id.contains(p));
-            let is_ccos_safe = ccos_safe_prefixes.iter().any(|p| capability_id.starts_with(p));
             
-            return is_mcp_safe || is_ccos_safe;
+            // If no effects and not an MCP safe pattern, we can't determine safety
+            return is_mcp_safe;
         }
 
         // Check effects against allowlist

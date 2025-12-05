@@ -2,6 +2,14 @@ use crate::cli::CliContext;
 use crate::ops::plan::{CreatePlanOptions, ExecutePlanOptions};
 use clap::Subcommand;
 use rtfs::runtime::error::RuntimeResult;
+use std::collections::HashMap;
+
+fn parse_key_val(s: &str) -> Result<(String, String), String> {
+    let pos = s
+        .find('=')
+        .ok_or_else(|| "expected KEY=VALUE format".to_string())?;
+    Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
+}
 
 #[derive(Subcommand)]
 pub enum PlanCommand {
@@ -25,6 +33,22 @@ pub enum PlanCommand {
         /// Skip capability validation
         #[arg(long)]
         skip_validation: bool,
+
+        /// Execute low-risk capabilities during planning to ground prompts
+        #[arg(long)]
+        enable_safe_exec: bool,
+
+        /// Disable pushing grounded snippets into runtime context for prompts
+        #[arg(long = "no-grounding-context", action = clap::ArgAction::SetFalse, default_value_t = true)]
+        allow_grounding_context: bool,
+
+        /// Seed grounding parameters (repeatable, KEY=VALUE)
+        #[arg(long = "ground", value_name = "KEY=VALUE", value_parser = parse_key_val)]
+        grounding_param: Vec<(String, String)>,
+
+        /// Force LLM decomposition (skip pattern path)
+        #[arg(long)]
+        force_llm: bool,
     },
 
     /// Execute a plan
@@ -56,12 +80,20 @@ pub async fn execute(_ctx: &mut CliContext, command: PlanCommand) -> RuntimeResu
             save,
             verbose,
             skip_validation,
+        enable_safe_exec,
+        allow_grounding_context,
+        grounding_param,
+        force_llm,
         } => {
             let options = CreatePlanOptions {
                 dry_run,
                 save_to: save,
                 verbose,
                 skip_validation,
+            enable_safe_exec,
+            allow_grounding_context,
+            grounding_params: grounding_param.into_iter().collect(),
+            force_llm,
             };
             let result = crate::ops::plan::create_plan_with_options(goal, options).await?;
 

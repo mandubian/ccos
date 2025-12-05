@@ -59,15 +59,20 @@ impl LocalConfigMcpDiscovery {
     fn parse_server_entry(&self, entry: &serde_json::Value) -> Option<MCPServerConfig> {
         let server = entry.get("server")?;
 
-        // Extract name from matches (first pattern) or generate default
-        let name = entry
-            .get("matches")
-            .and_then(|m| m.as_array())
-            .and_then(|m| m.first())
-            .and_then(|p| p.as_str())
-            .map(|s| s.trim_end_matches(".*").trim_end_matches('*'))
-            .unwrap_or("unknown_mcp_server")
-            .to_string();
+        // Prefer explicit server.name when present, otherwise fall back to first match pattern
+        let name = server
+            .get("name")
+            .and_then(|n| n.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                entry
+                    .get("matches")
+                    .and_then(|m| m.as_array())
+                    .and_then(|m| m.first())
+                    .and_then(|p| p.as_str())
+                    .map(|s| s.trim_end_matches(".*").trim_end_matches('*').to_string())
+            })
+            .unwrap_or_else(|| "unknown_mcp_server".to_string());
 
         let remotes = server.get("remotes").and_then(|r| r.as_array())?;
 
@@ -158,7 +163,7 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
                 use_cache: true,
                 register_in_marketplace: true, // Register in marketplace
                 export_to_rtfs: true,          // Export to RTFS files
-                export_directory: Some("../capabilities/discovered".to_string()),
+                export_directory: Some("capabilities/discovered".to_string()),
                 auth_headers: config.auth_token.as_ref().map(|token| {
                     let mut headers = std::collections::HashMap::new();
                     headers.insert("Authorization".to_string(), format!("Bearer {}", token));

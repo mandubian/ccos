@@ -37,13 +37,15 @@
 
 pub mod decomposition;
 pub mod orchestrator;
+pub mod safe_executor;
 pub mod resolution;
 pub mod types;
 
 // Re-exports
 pub use decomposition::{
     DecompositionContext, DecompositionError, DecompositionStrategy, EmbeddingProvider,
-    GroundedLlmDecomposition, HybridDecomposition, IntentFirstDecomposition, PatternDecomposition,
+    GroundedLlmDecomposition, HybridConfig, HybridDecomposition, IntentFirstDecomposition,
+    PatternDecomposition,
 };
 
 pub use resolution::{

@@ -948,9 +948,9 @@ impl ResolutionStrategy for CatalogResolution {
                     .as_ref()
                     .and_then(|s| serde_json::from_str(s).ok());
 
-                // IMPORTANT: Use cap.id as the tool name so LLM returns the correct identifier
                 ToolSummary {
-                    name: cap.id, // Use ID, not display name
+                    id: cap.id.clone(),
+                    name: cap.name.clone(),
                     description: cap.description,
                     domain,
                     action,

@@ -1,10 +1,8 @@
 use super::types::*;
 use crate::utils::value_conversion;
 use async_trait::async_trait;
-use futures::StreamExt;
 use regex::Regex;
 use reqwest;
-use reqwest_eventsource::{Event, EventSource};
 use rtfs::ast::MapKey;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
@@ -315,89 +313,6 @@ impl CapabilityExecutor for MCPExecutor {
                 request_builder = request_builder.header("Mcp-Session-Id", sid);
             }
 
-            let handle_tool_response =
-                |tool_response: serde_json::Value| -> RuntimeResult<Value> {
-                    if let Some(error) = tool_response.get("error") {
-                        return Err(RuntimeError::Generic(format!(
-                            "MCP tool execution failed: {:?}",
-                            error
-                        )));
-                    }
-                    if let Some(result) = tool_response.get("result") {
-                        if let Some(content) = result.get("content") {
-                            // Prefer structured RTFS over raw JSON-in-string
-                            if let Some(arr) = content.as_array() {
-                                if let Some(first) = arr.first() {
-                                    if first
-                                        .get("type")
-                                        .and_then(|v| v.as_str())
-                                        .map(|t| t.eq_ignore_ascii_case("text"))
-                                        .unwrap_or(false)
-                                    {
-                                        if let Some(text) = first.get("text").and_then(|v| v.as_str())
-                                        {
-                                            if let Ok(parsed) =
-                                                serde_json::from_str::<serde_json::Value>(text)
-                                            {
-                                                return CapabilityMarketplace::json_to_rtfs_value(
-                                                    &parsed,
-                                                )
-                                                .or_else(|_| {
-                                                    CapabilityMarketplace::json_to_rtfs_value(
-                                                        content,
-                                                    )
-                                                });
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            CapabilityMarketplace::json_to_rtfs_value(content)
-                        } else {
-                            CapabilityMarketplace::json_to_rtfs_value(result)
-                        }
-                    } else {
-                        Err(RuntimeError::Generic(
-                            "No result in MCP tool response".to_string(),
-                        ))
-                    }
-                };
-
-            // Prefer streaming consumption when available to avoid partial SSE bodies.
-            if let Some(es_builder) = request_builder.try_clone() {
-                match EventSource::new(es_builder.json(&tool_request)) {
-                    Ok(mut event_source) => {
-                        while let Some(event) = event_source.next().await {
-                            match event {
-                                Ok(Event::Open) => continue,
-                                Ok(Event::Message(msg)) => {
-                                    if msg.data.trim().is_empty() {
-                                        continue;
-                                    }
-                                    event_source.close();
-                                    return match serde_json::from_str::<serde_json::Value>(&msg.data)
-                                    {
-                                        Ok(v) => handle_tool_response(v),
-                                        Err(e) => Err(RuntimeError::Generic(format!(
-                                            "Failed to parse SSE data: {} (data: {})",
-                                            e,
-                                            &msg.data[..msg.data.len().min(200)]
-                                        ))),
-                                    };
-                                }
-                                Err(_err) => {
-                                    event_source.close();
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        // Fall back to HTTP body parsing below
-                    }
-                }
-            }
-
             let response = request_builder
                 .json(&tool_request)
                 .timeout(std::time::Duration::from_millis(mcp.timeout_ms))
@@ -408,15 +323,29 @@ impl CapabilityExecutor for MCPExecutor {
             // Check status code first
             let status = response.status();
 
+            // Check content type to handle SSE vs JSON
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+
+            log::debug!(
+                "MCP tool response: status={}, content-type={}",
+                status,
+                content_type
+            );
+
             // Read the body as text first for debugging
             let body_text = response.text().await.map_err(|e| {
                 RuntimeError::Generic(format!("Failed to read response body: {}", e))
             })?;
-            let _ = std::fs::write("mcp_last_body.txt", &body_text);
+
             if body_text.is_empty() {
                 return Err(RuntimeError::Generic(format!(
                     "MCP tool execution returned empty response (status={}, content-type={})",
-                    status, "unknown"
+                    status, content_type
                 )));
             }
 
@@ -435,142 +364,71 @@ impl CapabilityExecutor for MCPExecutor {
             // Helper to extract last `data: ...` JSON chunk from SSE-like bodies, including multi-line data
             fn extract_sse_data(body: &str) -> Option<String> {
                 let mut candidates: Vec<String> = Vec::new();
-                let mut current = String::new();
-                let mut in_data_block = false;
-
-                for raw_line in body.lines() {
-                    let line = raw_line.trim_end_matches(['\r', '\n']);
-                    let trimmed_line = line.trim_start();
-
-                    if let Some(rest) = trimmed_line.strip_prefix("data:") {
-                        // Allow multi-line data blocks; join them with newlines per SSE spec.
-                        let data = rest.trim_start();
-                        if !in_data_block {
-                            current.clear();
-                            in_data_block = true;
-                        }
-                        if !current.is_empty() {
-                            current.push('\n');
-                        }
-                        current.push_str(data);
+                let mut collecting = false;
+                let mut buf = String::new();
+                for line in body.lines() {
+                    let line = line.trim_end_matches(['\r', '\n']);
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        // Start new data block
+                        buf.clear();
+                        buf.push_str(data.trim());
+                        collecting = true;
                         continue;
                     }
-
-                    // Blank line or new event boundary flushes the current data block.
-                    if trimmed_line.is_empty() || trimmed_line.starts_with("event:") {
-                        if in_data_block && !current.is_empty() {
-                            candidates.push(current.clone());
-                            current.clear();
-                        }
-                        in_data_block = false;
-                    }
-                }
-
-                if in_data_block && !current.is_empty() {
-                    candidates.push(current);
-                }
-
-                if candidates.is_empty() {
-                    if let Some(idx) = body.rfind("data:") {
-                        let tail = body[idx + "data:".len()..].trim_start();
-                        let tail_until_boundary = tail
-                            .lines()
-                            .take_while(|line| {
-                                let trimmed = line.trim_start();
-                                !trimmed.is_empty() && !trimmed.starts_with("event:")
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        if !tail_until_boundary.is_empty() {
-                            candidates.push(tail_until_boundary);
+                    if collecting {
+                        // Accumulate until blank line ends the event
+                        if line.trim().is_empty() {
+                            candidates.push(buf.clone());
+                            collecting = false;
+                        } else {
+                            buf.push_str(line.trim());
                         }
                     }
                 }
-
-                if candidates.is_empty() {
-                    if let Some(start_idx) = body.find(|c| c == '{' || c == '[') {
-                        if let Some(end_idx) = body.rfind(|c| c == '}' || c == ']') {
-                            if end_idx >= start_idx {
-                                let slice = body[start_idx..=end_idx].trim();
-                                if !slice.is_empty() {
-                                    candidates.push(slice.to_string());
-                                }
-                            }
-                        }
-                    }
+                if collecting && !buf.is_empty() {
+                    candidates.push(buf);
                 }
-
-                for candidate in candidates.into_iter().rev() {
-                    let trimmed = candidate.trim_start();
-                    if trimmed.starts_with('{') || trimmed.starts_with('[') {
-                        if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
-                            return Some(candidate);
-                        }
-                    }
-                }
-                None
+                // Prefer the last JSON-looking candidate
+                candidates
+                    .into_iter()
+                    .rev()
+                    .find(|s| s.trim_start().starts_with('{') || s.trim_start().starts_with('['))
             }
 
-            let sse_candidate = {
-                // Fast path: take the substring after the last "data:" marker if present.
-                if let Some(idx) = body_text.rfind("data:") {
-                    let tail = body_text[idx + "data:".len()..].trim();
-                    if !tail.is_empty() {
-                        Some(tail.to_string())
-                    } else {
-                        extract_sse_data(&body_text)
+            let tool_response: serde_json::Value = if content_type.contains("text/event-stream") {
+                // Parse SSE response - extract the last data line
+                // SSE format: "data: {...}\n\n"
+                if let Some(data) = extract_sse_data(&body_text) {
+                    match serde_json::from_str(&data) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Err(RuntimeError::Generic(format!(
+                                "Failed to parse SSE data: {} (data: {})",
+                                e,
+                                &data[..data.len().min(200)]
+                            )))
+                        }
                     }
                 } else {
-                    extract_sse_data(&body_text)
-                }
-            };
-
-            let tool_response: serde_json::Value = if let Some(data) = sse_candidate {
-                match serde_json::from_str(&data) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        return Err(RuntimeError::Generic(format!(
-                            "Failed to parse SSE data: {} (data: {})",
-                            e,
-                            &data[..data.len().min(200)]
-                        )))
-                    }
+                    return Err(RuntimeError::Generic(
+                        "No data found in SSE response".to_string(),
+                    ));
                 }
             } else {
-                // Parse as regular JSON as a last resort
+                // Parse as regular JSON, but fall back to SSE-like envelopes even if content-type is wrong
                 match serde_json::from_str(&body_text) {
                     Ok(v) => v,
                     Err(primary_err) => {
-                        // Try trimming SSE prefixes
-                        let cleaned = body_text
-                            .replace("event: message", "")
-                            .replace("data:", "")
-                            .trim()
-                            .to_string();
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&cleaned) {
-                            v
-                        } else if let Some(start_idx) =
-                            body_text.find(|c| c == '{' || c == '[')
-                        {
-                            if let Some(end_idx) =
-                                body_text.rfind(|c| c == '}' || c == ']')
-                            {
-                                let slice = body_text[start_idx..=end_idx].trim();
-                                serde_json::from_str(slice).map_err(|secondary_err| {
-                                    RuntimeError::Generic(format!(
-                                        "Failed to parse tool response (primary: {}; slice: {}; body: {})",
-                                        primary_err,
-                                        secondary_err,
-                                        &body_text[..body_text.len().min(200)]
-                                    ))
-                                })?
-                            } else {
-                                return Err(RuntimeError::Generic(format!(
-                                    "Failed to parse tool response: {} (body: {})",
+                        // Fallback: try to extract last data: line if body looks like SSE
+                        if let Some(data) = extract_sse_data(&body_text) {
+                            serde_json::from_str(&data).map_err(|e| {
+                                RuntimeError::Generic(format!(
+                                    "Failed to parse tool response (primary: {}; SSE fallback: {} ; body: {})",
                                     primary_err,
+                                    e,
                                     &body_text[..body_text.len().min(200)]
-                                )));
-                            }
+                                ))
+                            })?
                         } else {
                             return Err(RuntimeError::Generic(format!(
                                 "Failed to parse tool response: {} (body: {})",
@@ -581,7 +439,23 @@ impl CapabilityExecutor for MCPExecutor {
                     }
                 }
             };
-            handle_tool_response(tool_response)
+            if let Some(error) = tool_response.get("error") {
+                return Err(RuntimeError::Generic(format!(
+                    "MCP tool execution failed: {:?}",
+                    error
+                )));
+            }
+            if let Some(result) = tool_response.get("result") {
+                if let Some(content) = result.get("content") {
+                    CapabilityMarketplace::json_to_rtfs_value(content)
+                } else {
+                    CapabilityMarketplace::json_to_rtfs_value(result)
+                }
+            } else {
+                Err(RuntimeError::Generic(
+                    "No result in MCP tool response".to_string(),
+                ))
+            }
         } else {
             Err(RuntimeError::Generic(
                 "Invalid provider type for MCP executor".to_string(),

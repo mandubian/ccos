@@ -271,10 +271,16 @@ impl MCPSessionManager {
             )));
         }
 
-        response
-            .json()
-            .await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse MCP response: {}", e)))
+        let body_text = response.text().await.map_err(|e| {
+            RuntimeError::Generic(format!("Failed to read MCP response: {}", e))
+        })?;
+        serde_json::from_str(&body_text).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to parse MCP response: {} (body: {})",
+                e,
+                &body_text[..body_text.len().min(200)]
+            ))
+        })
     }
 
     /// Terminate an MCP session gracefully

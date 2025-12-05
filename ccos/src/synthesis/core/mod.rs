@@ -11,6 +11,7 @@ pub mod feature_flags;
 pub mod missing_capability_resolver;
 pub mod missing_capability_strategies;
 pub mod schema_serializer;
+pub mod synth_or_enqueue;
 
 // Re-export commonly used types
 pub use feature_flags::{
