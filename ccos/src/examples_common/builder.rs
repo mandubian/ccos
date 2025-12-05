@@ -335,6 +335,8 @@ impl ModularPlannerBuilder {
                             pattern_confidence_threshold: 2.0,
                             prefer_grounded: true,
                             max_grounded_tools: 20,
+                            force_llm: true,
+                            ..HybridConfig::default()
                         });
                     }
 
@@ -457,6 +459,10 @@ impl ModularPlannerBuilder {
             show_prompt: self.show_prompt,
             confirm_llm: self.confirm_llm,
             eager_discovery: true,
+            enable_safe_exec: false,
+            initial_grounding_params: HashMap::new(),
+            allow_grounding_context: true,
+            hybrid_config: Some(HybridConfig::default()),
         };
 
         let planner = ModularPlanner::new(

@@ -279,7 +279,12 @@ impl CachedToolInfo {
             ApiAction::Other(self.name.clone())
         };
 
+        // Prefer fully-qualified capability id (manifest-style) for deduplication, keep name as short display
+        // Manifest ids for MCP tools are of the form: mcp.{server_name}.{tool_name}
+        let fq_id: String = format!("mcp.{}.{}", self.server_name, self.name);
+
         ToolSummary {
+            id: fq_id,
             name: self.name.clone(),
             description: self.description.clone(),
             domain,

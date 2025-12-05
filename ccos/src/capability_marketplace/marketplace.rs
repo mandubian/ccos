@@ -758,6 +758,19 @@ impl CapabilityMarketplace {
         description: String,
         handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync>,
     ) -> RuntimeResult<()> {
+        self.register_local_capability_with_effects(id, name, description, handler, vec![])
+            .await
+    }
+
+    /// Register a local capability with explicit effects
+    pub async fn register_local_capability_with_effects(
+        &self,
+        id: String,
+        name: String,
+        description: String,
+        handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync>,
+        effects: Vec<String>,
+    ) -> RuntimeResult<()> {
         let provenance = CapabilityProvenance {
             source: "local".to_string(),
             version: Some("1.0.0".to_string()),
@@ -777,7 +790,7 @@ impl CapabilityMarketplace {
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
-            effects: vec![],
+            effects,
             metadata: HashMap::new(),
             agent_metadata: None,
             domains: Vec::new(),
@@ -1739,16 +1752,25 @@ impl CapabilityMarketplace {
         &self,
         id: &str,
         inputs: &Value,
-        _metadata: Option<&rtfs::runtime::execution_outcome::CallMetadata>,
+        metadata: Option<&rtfs::runtime::execution_outcome::CallMetadata>,
     ) -> RuntimeResult<Value> {
-        // For now, delegate to the existing method
-        // TODO: Use metadata for enhanced execution context
-        self.execute_capability(id, inputs).await
+        // Delegate to the existing method, but preserve metadata for missing-capability context
+        // so downstream resolvers can see any grounding/context hints.
+        self.execute_capability_with_metadata(id, inputs, metadata).await
     }
 
     // execute_effect_request removed - unified into execute_capability_enhanced
 
     pub async fn execute_capability(&self, id: &str, inputs: &Value) -> RuntimeResult<Value> {
+        self.execute_capability_with_metadata(id, inputs, None).await
+    }
+
+    async fn execute_capability_with_metadata(
+        &self,
+        id: &str,
+        inputs: &Value,
+        metadata: Option<&rtfs::runtime::execution_outcome::CallMetadata>,
+    ) -> RuntimeResult<Value> {
         // Validate capability access according to isolation policy
         self.validate_capability_access(id)?;
 
@@ -1801,6 +1823,13 @@ impl CapabilityMarketplace {
                 if let Some(resolver) = registry.get_missing_capability_resolver() {
                     let mut context = std::collections::HashMap::new();
                     context.insert("source".to_string(), "marketplace_miss".to_string());
+                    if let Some(meta) = metadata {
+                        for (k, v) in &meta.context {
+                            // Truncate to avoid prompt bloat
+                            let trimmed: String = v.chars().take(400).collect();
+                            context.insert(k.clone(), if trimmed.len() < v.len() { format!("{}... [truncated]", trimmed) } else { trimmed });
+                        }
+                    }
 
                     // Extract args for context if possible (best effort)
                     let args = match inputs {
@@ -2580,7 +2609,7 @@ impl CapabilityMarketplace {
             .unwrap_or_else(|| {
                 std::env::var("CCOS_CAPABILITY_STORAGE")
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| std::path::PathBuf::from("../capabilities/discovered"))
+                    .unwrap_or_else(|_| std::path::PathBuf::from("capabilities/discovered"))
             });
 
         if !dir.exists() {
@@ -2659,21 +2688,6 @@ impl CapabilityMarketplace {
                     .and_then(|s| s.to_str())
                     .map_or(true, |ext| ext != "rtfs")
                 {
-                    continue;
-                }
-
-                // Skip directory listing files (capabilities.rtfs) - these are not individual capabilities
-                if path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map_or(false, |name| name == "capabilities.rtfs")
-                {
-                    if let Some(cb) = &self.debug_callback {
-                        cb(format!(
-                            "Skipping directory listing file: {}",
-                            path.display()
-                        ));
-                    }
                     continue;
                 }
 

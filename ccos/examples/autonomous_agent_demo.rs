@@ -2745,6 +2745,8 @@ async fn run_modular_planner(
         show_prompt: false,
         confirm_llm: false,
         eager_discovery: true,
+        allow_grounding_context: true,
+        ..PlannerConfig::default()
     };
 
     let mut planner = ModularPlanner::new(

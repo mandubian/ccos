@@ -13,9 +13,9 @@ pub async fn register_default_capabilities(
     // This function is extracted from the stdlib to keep stdlib focused on
     // language-level functions. Implementation preserved from original file.
 
-    // Register ccos.echo capability
+    // Register ccos.echo capability - pure compute, safe for grounding
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_effects(
             "ccos.echo".to_string(),
             "Echo Capability".to_string(),
             "Echoes the input value back".to_string(),
@@ -89,13 +89,14 @@ pub async fn register_default_capabilities(
                     }),
                 }
             }),
+            vec![":compute".to_string()], // Safe effect - pure data transformation
         )
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.echo: {:?}", e)))?;
 
-    // Register ccos.math.add capability
+    // Register ccos.math.add capability - pure compute, safe for grounding
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_effects(
             "ccos.math.add".to_string(),
             "Math Add Capability".to_string(),
             "Adds numeric values".to_string(),
@@ -113,7 +114,7 @@ pub async fn register_default_capabilities(
                                     let mut sum = 0i64;
                                     for arg in args {
                                         match arg {
-                                            Value::Integer(i) => sum += *i,
+                                            Value::Integer(i) => sum += i,
                                             _ => {
                                                 return Err(RuntimeError::TypeError {
                                                     expected: "integer".to_string(),
@@ -139,7 +140,7 @@ pub async fn register_default_capabilities(
 
                             for val in map.values() {
                                 if let Value::Integer(i) = val {
-                                    sum += *i;
+                                    sum += i;
                                     found_int = true;
                                 }
                             }
@@ -158,7 +159,7 @@ pub async fn register_default_capabilities(
                         let mut sum = 0i64;
                         for arg in args {
                             match arg {
-                                Value::Integer(i) => sum += *i,
+                                Value::Integer(i) => sum += i,
                                 _ => {
                                     return Err(RuntimeError::TypeError {
                                         expected: "integer".to_string(),
@@ -177,13 +178,15 @@ pub async fn register_default_capabilities(
                     }),
                 }
             }),
+            vec![":compute".to_string()], // Safe effect - pure computation
         )
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.math.add: {:?}", e)))?;
 
     // Register ccos.user.ask capability (interactive user input - reads from stdin)
+    // Effect: :interactive - NOT safe for grounding (requires human interaction)
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_effects(
             "ccos.user.ask".to_string(),
             "User Ask Capability".to_string(),
             "Prompts the user for input and reads from stdin".to_string(),
@@ -270,13 +273,15 @@ pub async fn register_default_capabilities(
                 let answer = line.trim().to_string();
                 Ok(Value::String(answer))
             }),
+            vec![":interactive".to_string()], // NOT safe for automated execution
         )
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.user.ask: {:?}", e)))?;
 
     // Register ccos.io.println capability (used by RTFS stdlib println)
+    // Effect: :output - safe for grounding (just prints to console)
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_effects(
             "ccos.io.println".to_string(),
             "Print Line Capability".to_string(),
             "Prints a line to stdout".to_string(),
@@ -361,6 +366,7 @@ pub async fn register_default_capabilities(
                 println!("{}", message);
                 Ok(Value::Nil)
             }),
+            vec![":output".to_string()], // Safe effect - console output only
         )
         .await
         .map_err(|e| {
@@ -368,8 +374,9 @@ pub async fn register_default_capabilities(
         })?;
 
     // Register ccos.io.log capability (used by RTFS stdlib log)
+    // Effect: :output - safe for grounding (just logs to console)
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_effects(
             "ccos.io.log".to_string(),
             "Log Capability".to_string(),
             "Logs a message".to_string(),
@@ -435,6 +442,7 @@ pub async fn register_default_capabilities(
                 println!("[CCOS-LOG] {}", message);
                 Ok(Value::Nil)
             }),
+            vec![":output".to_string()], // Safe effect - console output only
         )
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.io.log: {:?}", e)))?;

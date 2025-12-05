@@ -9,7 +9,7 @@ mod intent_first;
 mod pattern;
 
 pub use grounded_llm::{cosine_similarity, EmbeddingProvider, GroundedLlmDecomposition};
-pub use hybrid::HybridDecomposition;
+pub use hybrid::{HybridConfig, HybridDecomposition};
 pub use intent_first::IntentFirstDecomposition;
 pub use pattern::PatternDecomposition;
 

@@ -86,9 +86,18 @@ fn build_decomposition_prompt(goal: &str, context: &DecompositionContext) -> Str
     let params_hint = if context.pre_extracted_params.is_empty() {
         String::new()
     } else {
+        let mut lines = Vec::new();
+        for (k, v) in context.pre_extracted_params.iter() {
+            lines.push(format!("{}: {}", k, v));
+        }
+        let joined = lines.join("\n");
         format!(
-            "\n\nAlready extracted parameters: {:?}",
-            context.pre_extracted_params
+            r#"
+
+Grounded data (prefer using this instead of asking user):
+{}
+RULE: If grounded data covers what you need, use data_transform/output. Only ask user if required params are truly missing or ambiguous. Prefer the most recent result for outputs when relevant."#,
+            joined
         )
     };
 

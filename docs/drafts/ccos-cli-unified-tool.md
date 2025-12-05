@@ -212,6 +212,7 @@ Fully integrated planning and execution pipeline, enabling natural language to e
 2. **Governance Control**: The Governance Kernel controls which CLI operations agents can invoke based on security levels and constitution rules.
 3. **Dynamic Registration**: Newly-discovered capabilities become immediately callable without restart.
 4. **Unified Interface**: Same operations available via CLI (humans) and RTFS (agents).
+5. **Planning/Synthesis roadmap**: see `docs/drafts/iterative-planner-synthesis-plan.md` (iterative refinement, safe grounding, synthesis-or-queue, adapters).
 
 #### Implementation Steps
 

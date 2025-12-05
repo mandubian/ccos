@@ -280,8 +280,61 @@ impl MCPSessionHandler {
             })
         })?;
 
-        let json: serde_json::Value = serde_json::from_str(&body_text)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse MCP response: {}", e)))?;
+        fn extract_sse_data(body: &str) -> Option<String> {
+            let mut candidates: Vec<String> = Vec::new();
+            let mut current = String::new();
+            let mut in_data = false;
+            for line in body.lines() {
+                let trimmed = line.trim_end_matches(['\r', '\n']).trim_start();
+                if let Some(rest) = trimmed.strip_prefix("data:") {
+                    if !in_data {
+                        current.clear();
+                        in_data = true;
+                    }
+                    if !current.is_empty() {
+                        current.push('\n');
+                    }
+                    current.push_str(rest.trim_start());
+                    continue;
+                }
+                if trimmed.is_empty() || trimmed.starts_with("event:") {
+                    if in_data && !current.is_empty() {
+                        candidates.push(current.clone());
+                        current.clear();
+                    }
+                    in_data = false;
+                }
+            }
+            if in_data && !current.is_empty() {
+                candidates.push(current);
+            }
+            for cand in candidates.into_iter().rev() {
+                let trimmed = cand.trim_start();
+                if (trimmed.starts_with('{') || trimmed.starts_with('['))
+                    && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+                {
+                    return Some(cand);
+                }
+            }
+            None
+        }
+
+        let json: serde_json::Value = match extract_sse_data(&body_text) {
+            Some(data) => serde_json::from_str(&data).map_err(|e| {
+                RuntimeError::Generic(format!(
+                    "Failed to parse MCP response: {} (data: {})",
+                    e,
+                    &data[..data.len().min(200)]
+                ))
+            })?,
+            None => serde_json::from_str(&body_text).map_err(|e| {
+                RuntimeError::Generic(format!(
+                    "Failed to parse MCP response: {} (body: {})",
+                    e,
+                    &body_text[..body_text.len().min(200)]
+                ))
+            })?,
+        };
 
         // Extract result from JSON-RPC response
         if let Some(result) = json.get("result") {

@@ -831,7 +831,7 @@ impl ApprovalQueue {
 
             let pending_dir = self.pending_path();
             let approved_dir = self.approved_path();
-            std::fs::create_dir_all(approved_dir).map_err(|e| {
+            std::fs::create_dir_all(&approved_dir).map_err(|e| {
                 RuntimeError::Generic(format!("Failed to create approved directory: {}", e))
             })?;
 
@@ -862,7 +862,7 @@ impl ApprovalQueue {
                 // Determine the source directory
                 // capabilities_path is like "capabilities/servers/pending/github_github-mcp/capabilities.rtfs"
                 // We want to move the entire directory "capabilities/servers/pending/github_github-mcp"
-                let source_dir = if let Some(ref capabilities_path) = item.server_info.capabilities_path {
+                let source_dir: std::path::PathBuf = if let Some(ref capabilities_path) = item.server_info.capabilities_path {
                     // Extract directory from capabilities_path (absolute or relative)
                     let path = std::path::Path::new(capabilities_path);
                     let absolute = if path.is_absolute() {
@@ -870,13 +870,16 @@ impl ApprovalQueue {
                     } else {
                         self.base_path.join(path)
                     };
-                    absolute.parent().ok_or_else(|| {
-                        RuntimeError::Generic(
-                            "Invalid capabilities_path: no parent directory".to_string(),
-                        )
-                    })?
+                    absolute
+                        .parent()
+                        .ok_or_else(|| {
+                            RuntimeError::Generic(
+                                "Invalid capabilities_path: no parent directory".to_string(),
+                            )
+                        })?
+                        .to_path_buf()
                 } else {
-                    &pending_server_dir
+                    pending_server_dir.clone()
                 };
 
                 if source_dir.exists() {
@@ -891,7 +894,7 @@ impl ApprovalQueue {
                     }
 
                     // Move the entire directory (BEFORE removing from pending)
-                    std::fs::rename(source_dir, &approved_server_dir).map_err(|e| {
+                    std::fs::rename(&source_dir, &approved_server_dir).map_err(|e| {
                         RuntimeError::Generic(format!(
                             "Failed to move capability directory from {} to {}: {}",
                             source_dir.display(),

@@ -790,7 +790,7 @@ impl MCPDiscoveryProvider {
         // Add each capability
         for (i, capability) in capabilities.iter().enumerate() {
             if i > 0 {
-                rtfs_content.push_str(",\n");
+                rtfs_content.push_str("\n");
             }
             rtfs_content.push_str("      {\n");
 
@@ -823,13 +823,13 @@ impl MCPDiscoveryProvider {
                 rtfs_content.push_str("\n      }");
             } else {
                 // Need to add wrapper fields for backward compatibility
-                rtfs_content.push_str(",\n");
+                rtfs_content.push_str("\n");
                 
                 if !input_schema_in_map {
                     if let Some(input_schema) = &capability.input_schema {
                         rtfs_content.push_str("        :input-schema ");
                         rtfs_content.push_str(&self.type_expr_to_rtfs_text(input_schema));
-                        rtfs_content.push_str(",\n");
+                        rtfs_content.push_str("\n");
                     }
                 }
 

@@ -3,12 +3,15 @@
 //! The concrete implementation of the `HostInterface` that connects the RTFS runtime
 //! to the CCOS stateful components like the Causal Chain and Capability Marketplace.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::causal_chain::CausalChain;
 use crate::types::{Action, ActionType, ExecutionResult};
+use crate::utils::value_conversion::{map_key_to_string, rtfs_value_to_json};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+use rtfs::runtime::execution_outcome::CallMetadata;
 use rtfs::runtime::host_interface::HostInterface;
 use rtfs::runtime::security::{default_effects_for_capability, RuntimeContext};
 use rtfs::runtime::values::Value;
@@ -21,6 +24,7 @@ struct HostPlanContext {
     plan_id: String,
     intent_ids: Vec<String>,
     parent_action_id: String,
+    step_context: HashMap<String, Value>,
 }
 
 /// The RuntimeHost is the bridge between the pure RTFS runtime and the stateful CCOS world.
@@ -165,6 +169,21 @@ impl RuntimeHost {
             MapKey::String("inputs_hash".to_string()),
             Value::String(hash),
         );
+        if !plan_ctx_owned.step_context.is_empty() {
+            let step_map: std::collections::HashMap<MapKey, Value> = plan_ctx_owned
+                .step_context
+                .iter()
+                .map(|(k, v)| (MapKey::String(k.clone()), v.clone()))
+                .collect();
+            map.insert(MapKey::String("step_context".to_string()), Value::Map(step_map.clone()));
+
+            // Also flatten step context into top-level entries for prompt builders
+            for (k, v) in step_map {
+                if let Value::String(s) = v {
+                    map.insert(MapKey::String(k.to_string()), Value::String(s));
+                }
+            }
+        }
 
         // Apply step override key filtering if present
         if let Ok(ov) = self.step_exposure_override.lock() {
@@ -191,6 +210,7 @@ impl RuntimeHost {
                 plan_id,
                 intent_ids,
                 parent_action_id,
+                step_context: HashMap::new(),
             });
         }
     }
@@ -239,12 +259,44 @@ impl RuntimeHost {
                 plan_id: "auto-generated-plan".to_string(),
                 intent_ids: vec!["auto-intent".to_string()],
                 parent_action_id: "0".to_string(),
+                step_context: HashMap::new(),
             });
         }
 
         Err(RuntimeError::Generic(
             "FATAL: Host method called without a valid execution context".to_string(),
         ))
+    }
+
+    fn build_call_metadata(&self, snapshot: &Value) -> CallMetadata {
+        let mut metadata = CallMetadata::new();
+        let mut ctx_map = std::collections::HashMap::new();
+
+        if let Value::Map(m) = snapshot {
+            for (k, v) in m {
+                let key = map_key_to_string(k);
+                let val = match v {
+                    Value::String(s) => s.clone(),
+                    _ => {
+                        if let Ok(json) = rtfs_value_to_json(v) {
+                            serde_json::to_string(&json).unwrap_or_else(|_| format!("{:?}", v))
+                        } else {
+                            format!("{:?}", v)
+                        }
+                    }
+                };
+                let capped: String = val.chars().take(800).collect();
+                let capped = if capped.len() < val.len() {
+                    format!("{}... [truncated]", capped)
+                } else {
+                    capped
+                };
+                ctx_map.insert(key, capped);
+            }
+        }
+
+        metadata.context = ctx_map;
+        metadata
     }
 }
 
@@ -289,13 +341,19 @@ impl HostInterface for RuntimeHost {
             MapKey::Keyword(rtfs::ast::Keyword("args".to_string())),
             Value::List(args.to_vec()),
         );
-        if let Some(snapshot) = self.build_context_snapshot(name, args, name) {
+        let snapshot = self.build_context_snapshot(name, args, name);
+        if let Some(snapshot_value) = snapshot.clone() {
             call_map.insert(
                 MapKey::Keyword(rtfs::ast::Keyword("context".to_string())),
-                snapshot,
+                snapshot_value,
             );
         }
         let capability_args = Value::Map(call_map);
+
+        // Prepare CallMetadata with flattened context (including grounding:* from step_context)
+        let call_metadata: Option<CallMetadata> = snapshot
+            .as_ref()
+            .map(|snap| self.build_call_metadata(snap));
 
         // 2. Check execution mode and security level for dry-run simulation
         let execution_mode = self.get_execution_mode();
@@ -361,12 +419,14 @@ impl HostInterface for RuntimeHost {
         let args_owned: Vec<Value> = args.to_vec();
         let marketplace = self.capability_marketplace.clone();
         let runtime_handle = tokio::runtime::Handle::try_current().ok();
+        let call_metadata_owned = call_metadata.clone();
 
         let result = std::thread::spawn(move || {
             let fut = async move {
                 let args_value = Value::List(args_owned);
+                let meta_ref = call_metadata_owned.as_ref();
                 marketplace
-                    .execute_capability(&name_owned, &args_value)
+                    .execute_capability_enhanced(&name_owned, &args_value, meta_ref)
                     .await
             };
 
@@ -474,6 +534,15 @@ impl HostInterface for RuntimeHost {
         }
     }
 
+    fn set_step_context_value(&self, key: String, value: Value) -> RuntimeResult<()> {
+        if let Ok(mut guard) = self.execution_context.lock() {
+            if let Some(ctx) = guard.as_mut() {
+                ctx.step_context.insert(key, value);
+            }
+        }
+        Ok(())
+    }
+
     fn clear_step_exposure_override(&self) {
         if let Ok(mut ov) = self.step_exposure_override.lock() {
             let _ = ov.pop();
@@ -482,6 +551,9 @@ impl HostInterface for RuntimeHost {
 
     fn get_context_value(&self, key: &str) -> Option<Value> {
         let ctx = self.execution_context.lock().ok()?.clone()?;
+        if let Some(val) = ctx.step_context.get(key) {
+            return Some(val.clone());
+        }
         match key {
             // Primary identifiers
             "plan-id" => Some(Value::String(ctx.plan_id.clone())),

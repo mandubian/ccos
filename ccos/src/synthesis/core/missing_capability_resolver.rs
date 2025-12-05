@@ -1912,9 +1912,25 @@ impl MissingCapabilityResolver {
             let mut pairs: Vec<String> = request
                 .context
                 .iter()
-                .map(|(k, v)| format!("  - {} = {}", k, v))
+                .map(|(k, v)| {
+                    let truncated: String = v.chars().take(400).collect();
+                    let val = if truncated.len() < v.len() {
+                        format!("{}... [truncated]", truncated)
+                    } else {
+                        truncated
+                    };
+                    format!("  - {} = {}", k, val)
+                })
                 .collect();
             pairs.sort();
+            // Surface grounding:* first if present
+            pairs.sort_by_key(|line| {
+                if line.contains("grounding:") {
+                    0
+                } else {
+                    1
+                }
+            });
             format!("Execution context:\n{}", pairs.join("\n"))
         };
 

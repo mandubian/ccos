@@ -304,6 +304,9 @@ impl DomainHint {
 /// Used when providing LLM with available tools without full schemas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSummary {
+    /// Stable identifier (prefer fully qualified capability id)
+    pub id: String,
+
     /// Tool name (e.g., "list_issues")
     pub name: String,
 
@@ -322,6 +325,10 @@ pub struct ToolSummary {
 }
 
 impl ToolSummary {
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
     pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
         let name_str = name.into();
         let desc_str = description.into();
@@ -344,6 +351,7 @@ impl ToolSummary {
         };
 
         Self {
+            id: name_str.clone(),
             name: name_str,
             description: desc_str,
             domain: DomainHint::Generic,

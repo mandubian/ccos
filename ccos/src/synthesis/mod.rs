@@ -26,6 +26,7 @@ pub mod introspection;
 pub mod primitives;
 pub mod registration;
 pub mod runtime;
+pub mod queue;
 
 // Standalone modules (not moved)
 pub mod status;
@@ -78,6 +79,12 @@ pub use runtime::web_search_discovery;
 // Re-export commonly used items for convenience
 pub use dialogue::preference_schema::*;
 pub use dialogue::preference_schema::{extract_with_metrics, ParamType};
+
+// Queue helpers
+pub use queue::{SynthQueue, SynthQueueItem, SynthQueueStatus};
+
+// Synth enqueue helpers
+pub use core::synth_or_enqueue::enqueue_missing_capability_placeholder;
 pub use dialogue::skill_extractor::*;
 pub use status::*;
 

@@ -6,9 +6,9 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> RuntimeResult<()> {
-    // ccos.data.filter
+    // ccos.data.filter - pure compute capability, safe for grounding
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_effects(
             "ccos.data.filter".to_string(),
             "Filter Data".to_string(),
             "Filters a list of objects based on exact match criteria. Params: data (list), criteria (map)".to_string(),
@@ -44,13 +44,14 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                     Ok(Value::List(items.clone()))
                 }
             }),
+            vec![":compute".to_string()], // Safe effect - pure data transformation
         )
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.data.filter: {:?}", e)))?;
 
-    // ccos.data.sort
+    // ccos.data.sort - pure compute capability, safe for grounding
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_effects(
             "ccos.data.sort".to_string(),
             "Sort Data".to_string(),
             "Sorts a list of objects. Params: data (list), key (string), order (string: 'asc'|'desc')".to_string(),
@@ -102,13 +103,14 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                 
                 Ok(Value::List(sorted))
             }),
+            vec![":compute".to_string()], // Safe effect - pure data transformation
         )
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.data.sort: {:?}", e)))?;
 
-    // ccos.data.select (limit/take)
+    // ccos.data.select (limit/take) - pure compute capability, safe for grounding
     marketplace
-        .register_local_capability(
+        .register_local_capability_with_effects(
             "ccos.data.select".to_string(),
             "Select Data".to_string(),
             "Selects items from a list. Params: data (list), count (int)".to_string(),
@@ -143,6 +145,7 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                     Ok(Value::List(selected))
                 }
             }),
+            vec![":compute".to_string()], // Safe effect - pure data transformation
         )
         .await
         .map_err(|e| {
