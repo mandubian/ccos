@@ -1004,12 +1004,12 @@ impl CapabilityMarketplace {
             event_data.extend(additional);
         }
 
-        // Log the audit event using callback or fallback to stderr
+        // Log the audit event using callback or fallback to debug log
         let audit_message = format!("CAPABILITY_AUDIT: {:?}", event_data);
         if let Some(callback) = &self.debug_callback {
             callback(audit_message);
         } else {
-            eprintln!("{}", audit_message);
+            log::debug!("{}", audit_message);
         }
 
         // Record in Causal Chain if available
