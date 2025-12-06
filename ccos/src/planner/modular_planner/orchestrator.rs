@@ -130,6 +130,15 @@ fn generated_capability_id_from_description(desc: &str) -> String {
     format!("generated/{}-{:016x}", slug, hash)
 }
 
+/// Attempt a single inline RTFS-only synthesis for missing data/output intents.
+/// Currently a stub: returns None to fall back to enqueue.
+fn attempt_inline_rtfs_synth(_sub_intent: &SubIntent) -> Option<String> {
+    // TODO: wire to PureRtfsGenerationStrategy or a lightweight RTFS template
+    // and register the generated capability in the marketplace. For now, this
+    // stub indicates no synth available.
+    None
+}
+
 /// Errors that can occur during planning
 #[derive(Debug, Error)]
 pub enum PlannerError {
@@ -648,22 +657,27 @@ impl ModularPlanner {
                         let capability_id =
                             generated_capability_id_from_description(&sub_intent.description);
 
-                        let _ = enqueue_missing_capability_placeholder(
-                            capability_id,
-                            sub_intent.description.clone(),
-                            None, // input_schema
-                            None, // output_schema
-                            example_input.clone(),
-                            None, // example_output
-                            Some(sub_intent.description.clone()),
-                            Some(format!(
-                                "Planner could not resolve; queued for reification. Last grounding sample: {}",
-                                example_input
-                                    .as_ref()
-                                    .map(|v| truncate_grounding(&v.to_string()))
-                                    .unwrap_or_else(|| "n/a".to_string())
-                            )),
-                        );
+                        // Single synth attempt (stub; currently falls through to enqueue)
+                        let synth_generated = attempt_inline_rtfs_synth(&sub_intent);
+
+                        if synth_generated.is_none() {
+                            let _ = enqueue_missing_capability_placeholder(
+                                capability_id,
+                                sub_intent.description.clone(),
+                                None, // input_schema
+                                None, // output_schema
+                                example_input.clone(),
+                                None, // example_output
+                                Some(sub_intent.description.clone()),
+                                Some(format!(
+                                    "Planner could not resolve; queued for reification. Last grounding sample: {}",
+                                    example_input
+                                        .as_ref()
+                                        .map(|v| truncate_grounding(&v.to_string()))
+                                        .unwrap_or_else(|| "n/a".to_string())
+                                )),
+                            );
+                        }
                     }
 
                     let fallback = self.create_fallback_resolution(&sub_intent, &e);

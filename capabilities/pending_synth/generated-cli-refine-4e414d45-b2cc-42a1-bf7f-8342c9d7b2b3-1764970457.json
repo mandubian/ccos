@@ -1,8 +1,0 @@
-{
-  "capability_id": "generated/cli:refine-4e414d45-b2cc-42a1-bf7f-8342c9d7b2b3",
-  "description": "Group issues by their label values",
-  "source_intent": "Group issues by their label values",
-  "notes": "Planner could not resolve; queued for reification",
-  "status": "needs_impl",
-  "created_at": "2025-12-05T21:34:17.540541535+00:00"
-}
