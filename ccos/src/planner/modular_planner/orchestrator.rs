@@ -544,6 +544,23 @@ impl ModularPlanner {
             .store_intents_in_graph(goal, &decomp_result.sub_intents, &mut trace)
             .await?;
 
+        // Print Intent Graph
+        println!("\n╭──────────────────────────────────────────────────────────────────────────────");
+        println!("│ 🧭 Intent Graph");
+        println!("╰──────────────────────────────────────────────────────────────────────────────");
+        println!("ROOT: {}", goal);
+        for (i, sub_intent) in decomp_result.sub_intents.iter().enumerate() {
+            let id = intent_ids.get(i).map(|s| s.as_str()).unwrap_or("?");
+            println!("  ├─ [{}] {}", i, sub_intent.description);
+            println!("  │    ID: {}", id);
+            println!("  │    Type: {:?}", sub_intent.intent_type);
+            println!("  │    Dependencies: {:?}", sub_intent.dependencies);
+            if !sub_intent.extracted_params.is_empty() {
+                println!("  │    Params: {:?}", sub_intent.extracted_params);
+            }
+        }
+        println!("");
+
         // 3. Resolve each intent to a capability (without execution)
         let mut resolutions = HashMap::new();
         let resolution_context = ResolutionContext::new();
