@@ -1443,7 +1443,9 @@ impl ModularPlanner {
         // Compute topological order based on dependencies
         let order = self.topological_sort(sub_intents);
         
-        println!("\n🔄 Safe execution pass ({} steps in dependency order)", order.len());
+        println!("\n╭──────────────────────────────────────────────────────────────────────────────");
+        println!("│ 🔄 Safe Execution Pass ({} steps in dependency order)", order.len());
+        println!("╰──────────────────────────────────────────────────────────────────────────────");
         
         // Store execution results by step index
         let mut step_results: HashMap<usize, Value> = HashMap::new();
@@ -1477,15 +1479,13 @@ impl ModularPlanner {
                 None
             };
             
-            println!(
-                "   [{}/{}] {} (cap: {}, deps: {:?}, has_prev: {})",
-                step_idx + 1,
-                sub_intents.len(),
-                sub_intent.description.chars().take(50).collect::<String>(),
-                cap_id,
-                sub_intent.dependencies,
-                previous_result.is_some()
-            );
+            println!("\n▶️  Step {}/{}: {}", step_idx + 1, sub_intents.len(), sub_intent.description);
+            println!("   ├─ Intent ID: {}", intent_id);
+            println!("   ├─ Capability: {}", cap_id);
+            println!("   ├─ Dependencies: {:?}", sub_intent.dependencies);
+            if previous_result.is_some() {
+                println!("   ├─ Input: Received _previous_result from upstream");
+            }
             
             // Execute the step with dependency data
             match self.maybe_execute_and_ground(executor, sub_intent, resolved, previous_result).await {
@@ -1497,8 +1497,9 @@ impl ModularPlanner {
                         capability: format!("{} (executed)", cap_id),
                     });
                     
-                    println!("      ✅ Result captured: {}", 
-                        grounded_text.chars().take(100).collect::<String>());
+                    println!("   ╰─ ✅ Result Captured ({} chars): {}", 
+                        grounded_text.len(),
+                        grounded_text.chars().take(100).collect::<String>().replace("\n", " "));
                     
                     // Store for downstream steps
                     step_results.insert(step_idx, result);
@@ -1517,16 +1518,16 @@ impl ModularPlanner {
                     );
                 }
                 Ok(None) => {
-                    println!("      ⏭️ Skipped (not safe or not available)");
+                    println!("   ╰─ ⏭️  Skipped (Not safe to execute or no manifest)");
                 }
                 Err(e) => {
-                    println!("      ❌ Error: {}", e);
+                    println!("   ╰─ ❌ Error: {}", e);
                     // Continue with other steps
                 }
             }
         }
         
-        println!("✅ Safe execution pass complete ({} results captured)\n", step_results.len());
+        println!("\n✅ Safe execution pass complete ({} results captured)\n", step_results.len());
         
         Ok(())
     }
