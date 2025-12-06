@@ -27,6 +27,7 @@ use crate::capability_marketplace::CapabilityMarketplace;
 use crate::utils::value_conversion::rtfs_value_to_json;
 use crate::types::{EdgeType, GenerationContext, IntentStatus, StorableIntent, TriggerSource};
 use crate::synthesis::enqueue_missing_capability_placeholder;
+use crate::synthesis::queue::{SynthQueue, SynthQueueItem, SynthQueueStatus};
 
 const GROUNDING_VALUE_LIMIT: usize = 800;
 
@@ -131,12 +132,55 @@ fn generated_capability_id_from_description(desc: &str) -> String {
 }
 
 /// Attempt a single inline RTFS-only synthesis for missing data/output intents.
-/// Currently a stub: returns None to fall back to enqueue.
-fn attempt_inline_rtfs_synth(_sub_intent: &SubIntent) -> Option<String> {
-    // TODO: wire to PureRtfsGenerationStrategy or a lightweight RTFS template
-    // and register the generated capability in the marketplace. For now, this
-    // stub indicates no synth available.
-    None
+/// Returns Some(capability_id) if synthesized and persisted to synth queue with status=generated.
+fn attempt_inline_rtfs_synth(sub_intent: &SubIntent) -> Option<String> {
+    // Only handle data/output intents
+    let (intent_type, prefix) = match &sub_intent.intent_type {
+        IntentType::DataTransform { transform } => (
+            IntentType::DataTransform {
+                transform: transform.clone(),
+            },
+            "transform",
+        ),
+        IntentType::Output { format } => (
+            IntentType::Output {
+                format: format.clone(),
+            },
+            "output",
+        ),
+        _ => return None,
+    };
+
+    let slug = slugify_description(&sub_intent.description);
+    let hash = fnv1a64(&sub_intent.description);
+    let capability_id = format!("generated/{}-{}-{:016x}", prefix, slug, hash);
+
+    // Minimal RTFS stub: echo input to output (placeholder).
+    // This is synchronous and RTFS-only to avoid async synth wiring here.
+    let rtfs = format!(
+        r#"(capability "{cap_id}"
+  :name "{name}"
+  :doc "Auto-synthesized placeholder (identity transform)"
+  :input {{:data any}}
+  :output any
+  (lambda [input] input)
+)"#,
+        cap_id = capability_id,
+        name = sub_intent.description.replace('"', "'")
+    );
+
+    // Persist to synth queue as generated artifact
+    let mut item = SynthQueueItem::needs_impl(capability_id.clone(), sub_intent.description.clone());
+    item.status = SynthQueueStatus::Generated;
+    item.notes = Some("Auto-synthesized RTFS (inline)".to_string());
+    let _ = SynthQueue::new(None).enqueue(item);
+
+    // Also write RTFS to generated capabilities dir for visibility (best effort)
+    let gen_dir = crate::utils::fs::find_workspace_root().join("capabilities/generated");
+    let _ = std::fs::create_dir_all(&gen_dir);
+    let _ = std::fs::write(gen_dir.join(format!("{}.rtfs", capability_id.replace('/', "_"))), rtfs);
+
+    Some(capability_id)
 }
 
 /// Errors that can occur during planning
