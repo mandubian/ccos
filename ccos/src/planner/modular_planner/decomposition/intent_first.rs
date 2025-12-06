@@ -48,7 +48,7 @@ impl DecompositionStrategy for IntentFirstDecomposition {
     async fn decompose(
         &self,
         goal: &str,
-        _available_tools: Option<&[ToolSummary]>,
+        available_tools: Option<&[ToolSummary]>,
         context: &DecompositionContext,
     ) -> Result<DecompositionResult, DecompositionError> {
         if context.is_at_max_depth() {
@@ -57,7 +57,7 @@ impl DecompositionStrategy for IntentFirstDecomposition {
             ));
         }
 
-        let prompt = build_decomposition_prompt(goal, context);
+        let prompt = build_decomposition_prompt(goal, context, available_tools);
 
         // DEBUG: Print prompt
         println!("\n🤖 LLM Prompt (IntentFirst):\n--------------------------------------------------\n{}\n--------------------------------------------------", prompt);
@@ -82,7 +82,11 @@ impl DecompositionStrategy for IntentFirstDecomposition {
 // LLM Prompt Construction
 // ============================================================================
 
-fn build_decomposition_prompt(goal: &str, context: &DecompositionContext) -> String {
+fn build_decomposition_prompt(
+    goal: &str,
+    context: &DecompositionContext,
+    available_tools: Option<&[ToolSummary]>,
+) -> String {
     let params_hint = if context.pre_extracted_params.is_empty() {
         String::new()
     } else {
@@ -99,6 +103,45 @@ Grounded data (prefer using this instead of asking user):
 RULE: If grounded data covers what you need, use data_transform/output. Only ask user if required params are truly missing or ambiguous. Prefer the most recent result for outputs when relevant."#,
             joined
         )
+    };
+
+    let tool_hint = if let Some(tools) = available_tools {
+        let max_tools = 10;
+        let rendered: Vec<String> = tools
+            .iter()
+            .take(max_tools)
+            .map(|t| {
+                let action = format!("{:?}", t.action);
+                let schema_keys = t
+                    .input_schema
+                    .as_ref()
+                    .and_then(|s| s.get("properties"))
+                    .and_then(|p| p.as_object())
+                    .map(|obj| {
+                        let keys: Vec<String> =
+                            obj.keys().take(6).cloned().collect();
+                        keys.join(", ")
+                    })
+                    .unwrap_or_else(|| "unknown".to_string());
+                format!(
+                    "- id: {} | action: {} | desc: {} | params: {}",
+                    t.id, action, t.description, schema_keys
+                )
+            })
+            .collect();
+
+        if rendered.is_empty() {
+            String::new()
+        } else {
+            format!(
+                r#"
+AVAILABLE TOOLS (use only if they fit naturally; otherwise propose abstract steps):
+{}"#,
+                rendered.join("\n")
+            )
+        }
+    } else {
+        String::new()
     };
 
     format!(
@@ -119,6 +162,7 @@ INTENT TYPES (use these exactly):
 
 GOAL: "{goal}"
 {params_hint}
+{tool_hint}
 
 Respond with ONLY a JSON object in this exact format:
 {{
@@ -132,27 +176,6 @@ Respond with ONLY a JSON object in this exact format:
     }}
   ],
   "domain": "github|slack|filesystem|database|web|generic"  // inferred domain
-}}
-
-Example for "list issues in mandubian/ccos but ask me for page size":
-{{
-  "steps": [
-    {{
-      "description": "Ask user for desired page size",
-      "intent_type": "user_input",
-      "action": null,
-      "depends_on": [],
-      "params": {{"prompt_topic": "page size"}}
-    }},
-    {{
-      "description": "List issues from repository",
-      "intent_type": "api_call",
-      "action": "list",
-      "depends_on": [0],
-      "params": {{"owner": "mandubian", "repo": "ccos", "resource": "issues"}}
-    }}
-  ],
-  "domain": "github"
 }}
 "#,
         goal = goal,

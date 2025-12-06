@@ -5,7 +5,7 @@
 //! in the IntentGraph.
 
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -19,7 +19,7 @@ use super::resolution::{
     CompositeResolution, ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability,
 };
 use super::types::ToolSummary;
-use super::types::{DomainHint, IntentType, SubIntent};
+use super::types::{ApiAction, DomainHint, IntentType, SubIntent};
 use super::safe_executor::SafeCapabilityExecutor;
 use crate::intent_graph::storage::Edge;
 use crate::intent_graph::IntentGraph;
@@ -287,15 +287,15 @@ impl ModularPlanner {
         // If the intent is about data transformation or output, we might synthesize it
         match &sub_intent.intent_type {
             IntentType::DataTransform { .. } | IntentType::Output { .. } => {
-                // These could potentially be synthesized with RTFS
+                // Prefer synth-or-enqueue for data/output intents; avoid prompting the user.
                 log::info!(
-                    "Could potentially synthesize capability for: {}",
+                    "Queuing missing data/output capability for synth/enqueue: {}",
                     sub_intent.description
                 );
                 ResolvedCapability::NeedsReferral {
                     reason: format!("No capability found: {}", error),
                     suggested_action: format!(
-                        "Consider synthesizing RTFS for data transform: {}",
+                        "Synth-or-enqueue a capability for: {}",
                         sub_intent.description
                     ),
                 }
@@ -365,10 +365,39 @@ impl ModularPlanner {
                 println!("   🎯 Inferred domains: {:?}", domain_hints);
             }
 
-            let tools = self
+            let mut tools = self
                 .resolution
                 .list_available_tools(Some(&domain_hints))
                 .await;
+
+            // Heuristic: surface likely-useful transformers/formatters and canonical CRUD/search tools first.
+            // This keeps the top-N hint list meaningful for the LLM.
+            fn tool_rank(t: &ToolSummary) -> i32 {
+                let name_lc = t.name.to_lowercase();
+                let id_lc = t.id.to_lowercase();
+                let action_bonus = match t.action {
+                    ApiAction::Search | ApiAction::List | ApiAction::Get => 3,
+                    ApiAction::Create | ApiAction::Update | ApiAction::Delete => 1,
+                    _ => 0,
+                };
+                let transform_bonus = if name_lc.contains("format")
+                    || name_lc.contains("filter")
+                    || name_lc.contains("sort")
+                    || name_lc.contains("select")
+                    || id_lc.contains("format")
+                    || id_lc.contains("filter")
+                    || id_lc.contains("sort")
+                    || id_lc.contains("select")
+                {
+                    2
+                } else {
+                    0
+                };
+                action_bonus + transform_bonus
+            }
+
+            // Stable sort by rank desc to preserve original discovery order within ranks.
+            tools.sort_by(|a, b| tool_rank(b).cmp(&tool_rank(a)));
 
             if !tools.is_empty() {
                 println!(
@@ -429,7 +458,12 @@ impl ModularPlanner {
         let mut resolutions = HashMap::new();
         let resolution_context = ResolutionContext::new();
 
-        // Working queue for intents to resolve/refine
+        // Track which intents have already been refined to avoid infinite refinement loops
+        let mut refined_attempts: HashSet<String> = HashSet::new();
+
+        let goal_snapshot = goal.to_string();
+
+        // Working queue for intents to resolve/refine (stack order preserved)
         let mut intent_queue: Vec<(usize, SubIntent)> =
             decomp_result.sub_intents.iter().cloned().enumerate().collect();
 
@@ -454,51 +488,107 @@ impl ModularPlanner {
                     resolutions.insert(intent_id.clone(), resolved.clone());
                 }
                 Err(e) => {
-                    // If we still have depth budget, try to refine/decompose this sub-intent
+                    // If we still have depth budget and haven't already refined this intent, try a focused refinement.
                     let current_depth = self.config.max_depth.saturating_sub(1);
-                    if current_depth > 0 {
-                        // Decompose the failing sub-intent
-                        let refine_ctx = DecompositionContext::new()
-                            .with_max_depth(current_depth)
-                            .with_verbose_llm(self.config.verbose_llm)
-                            .with_show_prompt(self.config.show_prompt)
-                            .with_confirm_llm(self.config.confirm_llm);
-                        let mut refine_ctx = refine_ctx;
-                        for (k, v) in grounding_params.iter() {
-                            refine_ctx.pre_extracted_params.insert(k.clone(), v.clone());
-                        }
-
-                        match self
-                            .decomposition
-                            .decompose(&sub_intent.description, None, &refine_ctx)
-                            .await
-                        {
-                            Ok(refine_result) if !refine_result.sub_intents.is_empty() => {
-                                // Store refined intents in graph, link as children, and enqueue them
-                                let (refined_ids, _refined_subs) = self
-                                    .store_refined_intents(
-                                        intent_id,
-                                        &sub_intent,
-                                        &refine_result.sub_intents,
-                                        &mut trace,
-                                    )
-                                    .await?;
-
-                                // Enqueue for resolution
-                                for (rid, rsub) in refined_ids.into_iter().zip(refine_result.sub_intents.into_iter()) {
-                                    // maintain mapping in intent_ids/resolutions
-                                    intent_ids.push(rid.clone());
-                                    intent_queue.push((intent_ids.len() - 1, rsub.clone()));
-                                    // Placeholder to preserve order in resolutions map
-                                    resolutions.insert(rid, ResolvedCapability::NeedsReferral {
-                                        reason: "Pending refinement resolution".to_string(),
-                                        suggested_action: "Continue resolving refined intents".to_string(),
-                                    });
-                                }
-                                continue;
+                    if current_depth > 0 && !refined_attempts.contains(intent_id) {
+                        // Skip refinement for simple non-composite intents
+                        let is_simple = matches!(
+                            sub_intent.intent_type,
+                            IntentType::ApiCall { .. }
+                                | IntentType::DataTransform { .. }
+                                | IntentType::Output { .. }
+                        );
+                        let desc_lc = sub_intent.description.to_lowercase();
+                        let goal_lc = goal_snapshot.to_lowercase();
+                        let is_same_as_goal = desc_lc == goal_lc || goal_lc.contains(&desc_lc);
+                        let has_params = !sub_intent.extracted_params.is_empty();
+                        if !is_simple || (!has_params && !is_same_as_goal) {
+                            refined_attempts.insert(intent_id.clone());
+                            let refine_ctx = DecompositionContext::new()
+                                .with_max_depth(current_depth)
+                                .with_verbose_llm(self.config.verbose_llm)
+                                .with_show_prompt(self.config.show_prompt)
+                                .with_confirm_llm(self.config.confirm_llm);
+                            let mut refine_ctx = refine_ctx;
+                            for (k, v) in grounding_params.iter() {
+                                refine_ctx.pre_extracted_params.insert(k.clone(), v.clone());
                             }
-                            _ => {
-                                // Fall through to fallback if refinement failed
+
+                            // Build a focused refinement goal: only refine this intent
+                            // Include resolved siblings and grounded previews as context
+                            let resolved_summary: Vec<String> = intent_ids
+                                .iter()
+                                .zip(decomp_result.sub_intents.iter())
+                                .filter_map(|(rid, si)| {
+                                    resolutions
+                                        .get(rid)
+                                        .and_then(|r| r.capability_id())
+                                        .map(|cid| format!("{} -> {}", si.description, cid))
+                                })
+                                .collect();
+                            let resolved_preview = truncate_grounding(
+                                &resolved_summary
+                                    .iter()
+                                    .take(5)
+                                    .cloned()
+                                    .collect::<Vec<_>>()
+                                    .join(" | "),
+                            );
+                            let grounded_preview_text = grounding_params
+                                .get("latest_result")
+                                .map(|s| truncate_grounding(s))
+                                .unwrap_or_else(|| "none".to_string());
+
+                            let domain_hint = sub_intent
+                                .domain_hint
+                                .as_ref()
+                                .map(|d| format!("{:?}", d))
+                                .unwrap_or_else(|| "unknown".to_string());
+
+                            let refine_goal = format!(
+                                "[refine-only]\nGoal: {}\nDomain: {}\nTarget intent: desc=\"{}\", type={:?}, deps={:?}, params={:?}\nResolved steps: {}\nGrounded output: {}\nInstructions: Refine ONLY this intent into 1-3 sub-steps that fit the existing pipeline; keep previous steps; do NOT repeat the original goal; avoid recreating already resolved intents.",
+                                truncate_grounding(&goal_snapshot),
+                                domain_hint,
+                                sub_intent.description,
+                                sub_intent.intent_type,
+                                sub_intent.dependencies,
+                                sub_intent.extracted_params,
+                                resolved_preview,
+                                grounded_preview_text
+                            );
+
+                            match self
+                                .decomposition
+                                .decompose(&refine_goal, None, &refine_ctx)
+                                .await
+                            {
+                                Ok(refine_result) if !refine_result.sub_intents.is_empty() => {
+                                    // Store refined intents in graph, link as children, and enqueue them
+                                    let (refined_ids, _refined_subs) = self
+                                        .store_refined_intents(
+                                            intent_id,
+                                            &sub_intent,
+                                            &refine_result.sub_intents,
+                                            &mut trace,
+                                        )
+                                        .await?;
+
+                                    // Enqueue for resolution
+                                    for (rid, rsub) in refined_ids.into_iter().zip(refine_result.sub_intents.into_iter()) {
+                                        // maintain mapping in intent_ids/resolutions
+                                        intent_ids.push(rid.clone());
+                                        intent_queue.push((intent_ids.len() - 1, rsub.clone()));
+                                        // Placeholder to preserve order in resolutions map
+                                        resolutions.insert(rid, ResolvedCapability::NeedsReferral {
+                                            reason: "Pending refinement resolution".to_string(),
+                                            suggested_action: "Continue resolving refined intents".to_string(),
+                                        });
+                                    }
+                                    continue;
+                                }
+                                _ => {
+                                    // Fall through to fallback if refinement failed
+                                }
                             }
                         }
                     }
@@ -514,15 +604,25 @@ impl ModularPlanner {
                         sub_intent.intent_type,
                         IntentType::DataTransform { .. } | IntentType::Output { .. }
                     ) {
+                        let example_input = grounding_params
+                            .get("latest_result")
+                            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+
                         let _ = enqueue_missing_capability_placeholder(
                             format!("generated/{}", intent_id),
                             sub_intent.description.clone(),
-                            None,
-                            None,
-                            None,
-                            None,
+                            None, // input_schema
+                            None, // output_schema
+                            example_input.clone(),
+                            None, // example_output
                             Some(sub_intent.description.clone()),
-                            Some("Planner could not resolve; queued for reification".to_string()),
+                            Some(format!(
+                                "Planner could not resolve; queued for reification. Last grounding sample: {}",
+                                example_input
+                                    .as_ref()
+                                    .map(|v| truncate_grounding(&v.to_string()))
+                                    .unwrap_or_else(|| "n/a".to_string())
+                            )),
                         );
                     }
 
@@ -535,6 +635,7 @@ impl ModularPlanner {
         // 4. Safe execution pass: execute in topological order with data flow
         if self.config.enable_safe_exec {
             if let Some(executor) = &self.safe_executor {
+                println!("🔄 [safe-exec] starting dependency-ordered pass");
                 self.execute_safe_in_order(
                     executor,
                     &decomp_result.sub_intents,
@@ -542,7 +643,9 @@ impl ModularPlanner {
                     &resolutions,
                     &mut grounding_params,
                     &mut trace,
-                ).await?;
+                )
+                .await?;
+                println!("✅ [safe-exec] pass completed");
             } else {
                 println!("⚠️ Safe exec enabled but no executor configured");
             }
@@ -1191,8 +1294,20 @@ impl ModularPlanner {
             }
         }
 
-        let params = &sub_intent.extracted_params;
-        match executor.execute_if_safe(cap_id, params, previous_result).await {
+        // Build params, threading previous_result into map if present and serializing it to JSON string.
+        let mut params = sub_intent.extracted_params.clone();
+        if let Some(prev) = previous_result {
+            if let Ok(prev_json) = rtfs_value_to_json(prev) {
+                if let Ok(s) = serde_json::to_string(&prev_json) {
+                    params.insert("_previous_result".to_string(), s);
+                }
+            }
+        }
+
+        match executor
+            .execute_if_safe(cap_id, &params, previous_result)
+            .await
+        {
             Ok(Some(val)) => Ok(Some(val)),
             Ok(None) => {
                 log::debug!(
@@ -1319,7 +1434,7 @@ impl ModularPlanner {
     }
     
     /// Compute topological order of sub-intents based on their dependencies.
-    /// Uses Kahn's algorithm for topological sorting.
+    /// Uses a stable Kahn's algorithm (preserves original order among roots).
     fn topological_sort(&self, sub_intents: &[SubIntent]) -> Vec<usize> {
         let n = sub_intents.len();
         if n == 0 {
@@ -1337,22 +1452,28 @@ impl ModularPlanner {
             }
         }
         
-        // Start with nodes that have no dependencies (in-degree 0)
-        let mut queue: Vec<usize> = (0..n)
-            .filter(|&i| sub_intents[i].dependencies.is_empty())
-            .collect();
-        
+        // Start with nodes that have no dependencies (in-degree 0), preserve index order
+        let mut queue: VecDeque<usize> = VecDeque::new();
+        let mut enqueued = vec![false; n];
+        for i in 0..n {
+            if sub_intents[i].dependencies.is_empty() {
+                queue.push_back(i);
+                enqueued[i] = true;
+            }
+        }
+
         let mut result = Vec::with_capacity(n);
         
-        while let Some(node) = queue.pop() {
+        while let Some(node) = queue.pop_front() {
             result.push(node);
             
             // For each node that depends on this one, decrease in-degree
             for (idx, intent) in sub_intents.iter().enumerate() {
                 if intent.dependencies.contains(&node) {
                     in_degree[idx] = in_degree[idx].saturating_sub(1);
-                    if in_degree[idx] == 0 && !result.contains(&idx) && !queue.contains(&idx) {
-                        queue.push(idx);
+                    if in_degree[idx] == 0 && !enqueued[idx] {
+                        queue.push_back(idx);
+                        enqueued[idx] = true;
                     }
                 }
             }

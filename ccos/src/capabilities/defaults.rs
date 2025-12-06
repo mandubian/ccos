@@ -286,7 +286,7 @@ pub async fn register_default_capabilities(
             "Print Line Capability".to_string(),
             "Prints a line to stdout".to_string(),
             Arc::new(|input| {
-                let message = match input {
+                let mut message = match input {
                     Value::Map(map) => {
                         let args_val = map
                             .get(&MapKey::Keyword(Keyword("args".to_string())))
@@ -363,6 +363,13 @@ pub async fn register_default_capabilities(
                         .join(" "),
                     other => format!("{}", other),
                 };
+                // Truncate very large outputs to avoid flooding logs/console
+                const MAX_CHARS: usize = 4000;
+                if message.len() > MAX_CHARS {
+                    let total = message.len();
+                    message.truncate(MAX_CHARS);
+                    message.push_str(&format!("... [truncated, total {} chars]", total));
+                }
                 println!("{}", message);
                 Ok(Value::Nil)
             }),
