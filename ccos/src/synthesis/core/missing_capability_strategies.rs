@@ -221,7 +221,11 @@ impl PureRtfsGenerationStrategy {
 
     /// Infer capability type from capability ID
     fn infer_capability_type(capability_id: &str) -> Option<IntentType> {
-        let last_segment = capability_id.split('.').last().unwrap_or(capability_id);
+        // Split by . or / to handle paths
+        let last_segment = capability_id
+            .split(|c| c == '.' || c == '/')
+            .last()
+            .unwrap_or(capability_id);
 
         if last_segment.starts_with("filter_")
             || last_segment.starts_with("sort_")

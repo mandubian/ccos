@@ -28,6 +28,10 @@ use crate::utils::value_conversion::rtfs_value_to_json;
 use crate::types::{EdgeType, GenerationContext, IntentStatus, StorableIntent, TriggerSource};
 use crate::synthesis::enqueue_missing_capability_placeholder;
 use crate::synthesis::queue::{SynthQueue, SynthQueueItem, SynthQueueStatus};
+use crate::synthesis::core::missing_capability_strategies::{
+    MissingCapabilityStrategyConfig, PureRtfsGenerationStrategy,
+};
+use crate::synthesis::core::missing_capability_resolver::MissingCapabilityRequest;
 
 const GROUNDING_VALUE_LIMIT: usize = 800;
 
@@ -133,41 +137,62 @@ fn generated_capability_id_from_description(desc: &str) -> String {
 
 /// Attempt a single inline RTFS-only synthesis for missing data/output intents.
 /// Returns Some(capability_id) if synthesized and persisted to synth queue with status=generated.
-fn attempt_inline_rtfs_synth(sub_intent: &SubIntent) -> Option<String> {
+async fn attempt_inline_rtfs_synth(sub_intent: &SubIntent) -> Option<String> {
     // Only handle data/output intents
     let (intent_type, prefix) = match &sub_intent.intent_type {
         IntentType::DataTransform { transform } => (
             IntentType::DataTransform {
                 transform: transform.clone(),
             },
-            "transform",
+            "transform_", // Use underscore for strategy detection
         ),
         IntentType::Output { format } => (
             IntentType::Output {
                 format: format.clone(),
             },
-            "output",
+            "output_", // Use underscore for strategy detection
         ),
         _ => return None,
     };
 
     let slug = slugify_description(&sub_intent.description);
     let hash = fnv1a64(&sub_intent.description);
-    let capability_id = format!("generated/{}-{}-{:016x}", prefix, slug, hash);
+    let capability_id = format!("generated/{}{}-{:016x}", prefix, slug, hash);
 
-    // Minimal RTFS stub: echo input to output (placeholder).
-    // This is synchronous and RTFS-only to avoid async synth wiring here.
-    let rtfs = format!(
-        r#"(capability "{cap_id}"
-  :name "{name}"
-  :doc "Auto-synthesized placeholder (identity transform)"
-  :input {{:data any}}
-  :output any
-  (lambda [input] input)
-)"#,
-        cap_id = capability_id,
-        name = sub_intent.description.replace('"', "'")
-    );
+    // Try to synthesize using PureRtfsGenerationStrategy
+    let config = MissingCapabilityStrategyConfig {
+        enable_pure_rtfs: true,
+        enable_user_interaction: false,
+        enable_external_llm: false,
+        enable_service_discovery: false,
+        ..Default::default()
+    };
+    let strategy = PureRtfsGenerationStrategy::new(config);
+
+    // Build context from params
+    let mut context = HashMap::new();
+    for (k, v) in &sub_intent.extracted_params {
+        context.insert(k.clone(), v.clone());
+    }
+    context.insert("description".to_string(), sub_intent.description.clone());
+
+    let request = MissingCapabilityRequest {
+        capability_id: capability_id.clone(),
+        context,
+        attempt_count: 0,
+        arguments: vec![],
+        requested_at: SystemTime::now(),
+    };
+
+    let rtfs_code = match strategy.generate_pure_rtfs_implementation(&request).await {
+        Ok(code) => code,
+        Err(e) => {
+            log::warn!("Inline synthesis failed for {}: {}", capability_id, e);
+            // Fallback to placeholder if strategy fails, or just return None to let it be enqueued?
+            // User complained about "no code" placeholder. If real synth fails, maybe better to fail over to NeedsImpl.
+            return None;
+        }
+    };
 
     // Persist to synth queue as generated artifact
     let mut item = SynthQueueItem::needs_impl(capability_id.clone(), sub_intent.description.clone());
@@ -178,7 +203,7 @@ fn attempt_inline_rtfs_synth(sub_intent: &SubIntent) -> Option<String> {
     // Also write RTFS to generated capabilities dir for visibility (best effort)
     let gen_dir = crate::utils::fs::find_workspace_root().join("capabilities/generated");
     let _ = std::fs::create_dir_all(&gen_dir);
-    let _ = std::fs::write(gen_dir.join(format!("{}.rtfs", capability_id.replace('/', "_"))), rtfs);
+    let _ = std::fs::write(gen_dir.join(format!("{}.rtfs", capability_id.replace('/', "_"))), rtfs_code);
 
     Some(capability_id)
 }
@@ -719,7 +744,7 @@ impl ModularPlanner {
                             generated_capability_id_from_description(&sub_intent.description);
 
                         // Single synth attempt (stub; currently falls through to enqueue)
-                        let synth_generated = attempt_inline_rtfs_synth(&sub_intent);
+                        let synth_generated = attempt_inline_rtfs_synth(&sub_intent).await;
 
                         if synth_generated.is_none() {
                             let _ = enqueue_missing_capability_placeholder(
