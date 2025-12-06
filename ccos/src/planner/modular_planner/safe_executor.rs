@@ -187,7 +187,7 @@ impl SafeCapabilityExecutor {
             .await?;
         if let Ok(json) = crate::utils::value_conversion::rtfs_value_to_json(&result) {
             if let Ok(s) = serde_json::to_string(&json) {
-                log::info!(
+                log::debug!(
                     "Safe exec result for {} (truncated): {}",
                     capability_id,
                     s.chars().take(400).collect::<String>()
