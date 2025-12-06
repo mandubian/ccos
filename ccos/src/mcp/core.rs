@@ -184,9 +184,24 @@ impl MCPDiscoveryService {
                                 .to_lowercase()
                                 .replace(" ", "_")
                                 .replace("/", "_");
-                            let approved_dir =
-                                std::path::Path::new("capabilities/servers/approved")
-                                    .join(&server_id);
+                            let approved_roots = [
+                                std::path::Path::new("capabilities/servers/approved").to_path_buf(),
+                                std::path::Path::new("../capabilities/servers/approved")
+                                    .to_path_buf(),
+                            ];
+                            let approved_dir = approved_roots
+                                .iter()
+                                .find(|p| p.join(&server_id).exists())
+                                .map(|p| p.join(&server_id))
+                                .unwrap_or_else(|| {
+                                    approved_roots
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or_else(|| std::path::PathBuf::from(
+                                            "capabilities/servers/approved",
+                                        ))
+                                        .join(&server_id)
+                                });
 
                             if approved_dir.exists() {
                                 // Recursively collect RTFS files from directory
@@ -403,8 +418,35 @@ impl MCPDiscoveryService {
             approved_server.server_info.name
         );
 
+        let approved_roots = [
+            std::path::Path::new("capabilities/servers/approved").to_path_buf(),
+            std::path::Path::new("../capabilities/servers/approved").to_path_buf(),
+        ];
+
         for file_path in capability_files {
-            let full_path = std::path::Path::new("capabilities/servers/approved").join(file_path);
+            let full_path = if std::path::Path::new(file_path).is_absolute() {
+                std::path::PathBuf::from(file_path)
+            } else {
+                approved_roots
+                    .iter()
+                    .find_map(|root| {
+                        let candidate = root.join(file_path);
+                        if candidate.exists() {
+                            Some(candidate)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        approved_roots
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                std::path::PathBuf::from("capabilities/servers/approved")
+                            })
+                            .join(file_path)
+                    })
+            };
 
             if !full_path.exists() {
                 let err_msg = format!("Capability file not found: {}", full_path.display());
@@ -842,9 +884,13 @@ impl MCPDiscoveryService {
                             .to_lowercase()
                             .replace(" ", "_")
                             .replace("/", "_");
-                        let approved_dir =
-                            std::path::Path::new("capabilities/servers/approved").join(&server_id);
-                        approved_dir.exists()
+                        let approved_roots = [
+                            std::path::Path::new("capabilities/servers/approved").to_path_buf(),
+                            std::path::Path::new("../capabilities/servers/approved").to_path_buf(),
+                        ];
+                        approved_roots
+                            .iter()
+                            .any(|root| root.join(&server_id).exists())
                     }
                 } else {
                     false

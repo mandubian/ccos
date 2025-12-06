@@ -158,6 +158,15 @@ impl SafeCapabilityExecutor {
         // Build Value::Map from params, injecting _previous_result if available
         let mut map = std::collections::HashMap::new();
         for (k, v) in params {
+            // If this param is _previous_result and looks like JSON, parse to RTFS Value
+            if k == "_previous_result" {
+                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(v) {
+                    if let Ok(rtfs_val) = crate::utils::value_conversion::json_to_rtfs_value(&json_val) {
+                        map.insert(MapKey::String(k.clone()), rtfs_val);
+                        continue;
+                    }
+                }
+            }
             map.insert(MapKey::String(k.clone()), Value::String(v.clone()));
         }
         
