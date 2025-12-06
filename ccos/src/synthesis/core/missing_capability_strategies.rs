@@ -295,17 +295,34 @@ impl PureRtfsGenerationStrategy {
         transform: TransformType,
         _domain: &DomainHint,
     ) -> Result<String, ResolutionError> {
-        let transform_name: String = match transform {
-            TransformType::Filter => "filter".to_string(),
-            TransformType::Sort => "sort".to_string(),
-            TransformType::GroupBy => "group-by".to_string(),
-            TransformType::Count => "count".to_string(),
-            TransformType::Aggregate => "aggregate".to_string(),
-            TransformType::Format => "format".to_string(),
-            TransformType::Extract => "extract".to_string(),
-            TransformType::Parse => "parse".to_string(),
-            TransformType::Validate => "validate".to_string(),
-            TransformType::Other(name) => name,
+        let (transform_name, is_standard) = match transform {
+            TransformType::Filter => ("filter".to_string(), true),
+            TransformType::Sort => ("sort".to_string(), true),
+            TransformType::GroupBy => ("group-by".to_string(), true),
+            TransformType::Count => ("count".to_string(), true),
+            TransformType::Aggregate => ("aggregate".to_string(), true),
+            TransformType::Format => ("format".to_string(), true),
+            TransformType::Extract => ("extract".to_string(), true),
+            TransformType::Parse => ("parse".to_string(), true),
+            TransformType::Validate => ("validate".to_string(), true),
+            TransformType::Other(name) => (name, false),
+        };
+
+        let implementation_body = if is_standard {
+            format!(
+                r#"(let [data (get input :data) predicate (get input :predicate)]
+        (if (and (vector? data) (fn? predicate))
+          ({} predicate data)
+          []))"#,
+                transform_name
+            )
+        } else {
+            format!(
+                r#"(do
+        (println "Mock implementation for custom transform: {}")
+        (get input :data))"#,
+                transform_name
+            )
         };
 
         let rtfs_code = format!(
@@ -320,15 +337,11 @@ impl PureRtfsGenerationStrategy {
   :output-schema :vector
   :implementation
     (fn [input]
-      (let [data (get input :data) predicate (get input :predicate)]
-        (if (and (vector? data) (fn? predicate))
-          ({transform} predicate data)
-          []))))
-)"#,
+      {body}))"#,
             cap_id = capability_id,
             cap_name = capability_id.split('.').last().unwrap_or(capability_id),
             desc = description,
-            transform = transform_name
+            body = implementation_body
         );
 
         Ok(rtfs_code)
