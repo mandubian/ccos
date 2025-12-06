@@ -93,6 +93,43 @@ fn grounding_preview(value: &rtfs::runtime::values::Value) -> String {
     value_preview(value)
 }
 
+fn slugify_description(desc: &str) -> String {
+    let mut slug = String::with_capacity(desc.len());
+    let mut last_dash = false;
+    for c in desc.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c);
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "generated".to_string()
+    } else {
+        slug
+    }
+}
+
+fn fnv1a64(s: &str) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = OFFSET_BASIS;
+    for b in s.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+fn generated_capability_id_from_description(desc: &str) -> String {
+    let slug = slugify_description(desc);
+    let hash = fnv1a64(desc);
+    format!("generated/{}-{:016x}", slug, hash)
+}
+
 /// Errors that can occur during planning
 #[derive(Debug, Error)]
 pub enum PlannerError {
@@ -608,8 +645,11 @@ impl ModularPlanner {
                             .get("latest_result")
                             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
 
+                        let capability_id =
+                            generated_capability_id_from_description(&sub_intent.description);
+
                         let _ = enqueue_missing_capability_placeholder(
-                            format!("generated/{}", intent_id),
+                            capability_id,
                             sub_intent.description.clone(),
                             None, // input_schema
                             None, // output_schema
