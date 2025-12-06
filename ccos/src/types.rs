@@ -63,6 +63,8 @@ pub enum PlanStatus {
     Paused,
     Aborted,
     Archived,
+    /// Plan relies on capabilities that are not yet implemented/synthesized
+    PendingSynthesis,
 }
 
 /// Defines the relationship between two Intents.

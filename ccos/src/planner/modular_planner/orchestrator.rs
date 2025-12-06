@@ -25,7 +25,8 @@ use crate::intent_graph::storage::Edge;
 use crate::intent_graph::IntentGraph;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::utils::value_conversion::rtfs_value_to_json;
-use crate::types::{EdgeType, GenerationContext, IntentStatus, StorableIntent, TriggerSource};
+use crate::plan_archive::PlanArchive;
+use crate::types::{EdgeType, GenerationContext, IntentStatus, Plan, PlanStatus, StorableIntent, TriggerSource};
 use crate::synthesis::enqueue_missing_capability_placeholder;
 use crate::synthesis::queue::{SynthQueue, SynthQueueItem, SynthQueueStatus};
 use crate::synthesis::core::missing_capability_strategies::{
@@ -139,7 +140,7 @@ fn generated_capability_id_from_description(desc: &str) -> String {
 /// Returns Some(capability_id) if synthesized and persisted to synth queue with status=generated.
 async fn attempt_inline_rtfs_synth(sub_intent: &SubIntent) -> Option<String> {
     // Only handle data/output intents
-    let (intent_type, prefix) = match &sub_intent.intent_type {
+    let (_intent_type, prefix) = match &sub_intent.intent_type {
         IntentType::DataTransform { transform } => (
             IntentType::DataTransform {
                 transform: transform.clone(),
@@ -798,6 +799,70 @@ impl ModularPlanner {
             &resolutions,
             &grounding_params,
         )?;
+
+        // Determine plan status
+        let has_pending_synth = resolutions.values().any(|r| {
+            // Check for NeedsReferral with synth suggestion
+            if let ResolvedCapability::NeedsReferral { suggested_action, .. } = r {
+                if suggested_action.contains("Synth-or-enqueue") {
+                    return true;
+                }
+            }
+            
+            // Check for usage of generated (placeholder) capabilities
+            if let Some(id) = r.capability_id() {
+                if id.starts_with("generated/") {
+                    return true;
+                }
+            }
+            
+            false
+        });
+
+        // Store plan in PlanArchive
+        let mut plan_status = PlanStatus::Draft;
+        if has_pending_synth {
+            plan_status = PlanStatus::PendingSynthesis;
+        }
+
+        // We need a way to access PlanArchive here. For now, we'll construct one if we can get the path,
+        // but ideally it should be passed in.
+        // Assuming we are in CLI/runtime context where we can access storage.
+        // For this step, we will rely on the fact that PlanArchive is usually initialized from config.
+        // But orchestrator doesn't have direct access to CCOS instance or PlanArchive.
+        // We might need to inject PlanArchive into ModularPlanner.
+
+        // TODO: Inject PlanArchive into ModularPlanner properly.
+        // For now, if we have persist_intents enabled, we likely want to persist the plan too.
+        // We will create a transient PlanArchive pointing to default location if possible,
+        // or just skip if we can't easily get it without refactoring everything.
+        // Given the request is "Save generated RTFS plan... and associated to the intent graph",
+        // we should try to do it.
+
+        if self.config.persist_intents {
+             // Locate workspace root to find plan storage
+             let root = crate::utils::fs::find_workspace_root();
+             let plan_storage_path = root.join("storage/plans");
+             if let Ok(_) = std::fs::create_dir_all(&plan_storage_path) {
+                 if let Ok(archive) = PlanArchive::with_file_storage(plan_storage_path) {
+                     let mut plan = Plan::new_rtfs(rtfs_plan.clone(), intent_ids.clone());
+                     plan.status = plan_status;
+                     plan.name = Some(goal.to_string());
+                     
+                     // Add metadata
+                     plan.metadata.insert("goal".to_string(), rtfs::runtime::values::Value::String(goal.to_string()));
+                     
+                     match archive.archive_plan(&plan) {
+                         Ok(hash) => {
+                             println!("💾 Plan archived with status {:?}: {}", plan.status, hash);
+                         }
+                         Err(e) => {
+                             log::warn!("Failed to archive plan: {}", e);
+                         }
+                     }
+                 }
+             }
+        }
 
         Ok(PlanResult {
             root_intent_id: root_id,

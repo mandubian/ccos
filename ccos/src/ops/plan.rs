@@ -142,6 +142,7 @@ pub async fn create_plan_with_options(
     // Ensure native CLI capabilities plus approved MCP capabilities are registered.
     crate::ops::native::register_native_capabilities(&marketplace).await?;
     load_approved_capabilities(&marketplace).await?;
+    load_generated_capabilities(&marketplace).await?;
 
     // Keep catalog in sync so planner queries see the latest capabilities.
     ccos.get_catalog().ingest_marketplace(&marketplace).await;
@@ -718,6 +719,36 @@ async fn load_approved_capabilities(marketplace: &Arc<CapabilityMarketplace>) ->
 
     if loaded > 0 {
         println!("📦 Loaded {} capabilities from approved servers", loaded);
+    }
+
+    Ok(())
+}
+
+/// Load generated capabilities
+async fn load_generated_capabilities(marketplace: &Arc<CapabilityMarketplace>) -> RuntimeResult<()> {
+    // Try multiple potential locations for the generated capabilities directory
+    let potential_paths = [
+        std::path::PathBuf::from("capabilities/generated"),
+        std::path::PathBuf::from("../capabilities/generated"),
+    ];
+
+    let gen_dir = potential_paths.iter().find(|p| p.exists());
+
+    let gen_dir = match gen_dir {
+        Some(path) => path,
+        None => {
+            log::debug!("No generated capabilities directory found");
+            return Ok(());
+        }
+    };
+
+    // Use the marketplace's built-in method to recursively import RTFS capabilities
+    let loaded = marketplace
+        .import_capabilities_from_rtfs_dir_recursive(gen_dir)
+        .await?;
+
+    if loaded > 0 {
+        println!("✨ Loaded {} generated capabilities", loaded);
     }
 
     Ok(())
