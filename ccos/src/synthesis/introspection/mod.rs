@@ -14,6 +14,8 @@ pub mod auth_injector;
 pub mod known_apis;
 pub mod llm_doc_parser;
 pub mod mcp_introspector;
+pub mod schema_inferrer;
+pub mod schema_refiner;
 
 // Re-export commonly used types
 pub use api_introspector::{

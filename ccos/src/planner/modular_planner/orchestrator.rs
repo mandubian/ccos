@@ -1606,7 +1606,37 @@ impl ModularPlanner {
             .execute_if_safe(cap_id, &params, previous_result)
             .await
         {
-            Ok(Some(val)) => Ok(Some(val)),
+            Ok(Some(val)) => {
+                // Post-execution schema introspection for synthesized capabilities
+                if cap_id.starts_with("generated/") {
+                    use crate::synthesis::introspection::schema_refiner;
+                    let result = schema_refiner::infer_output_schema_from_result(
+                        cap_id, &val, None, // Could pass declared schema if available
+                    );
+                    if result.was_updated {
+                        if let Some(path) = schema_refiner::find_capability_file(cap_id) {
+                            match schema_refiner::update_capability_output_schema(
+                                &path,
+                                &result.inferred_output_schema,
+                            ) {
+                                Ok(true) => {
+                                    log::info!(
+                                        "📊 Schema refined for {}: {} → {}",
+                                        cap_id,
+                                        result.original_output_schema,
+                                        result.inferred_output_schema
+                                    );
+                                }
+                                Ok(false) => {}
+                                Err(e) => {
+                                    log::warn!("Failed to update schema for {}: {}", cap_id, e);
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(Some(val))
+            }
             Ok(None) => {
                 log::debug!(
                     "Safe exec skipped for {} (not allowed or no manifest); params keys={:?}",
