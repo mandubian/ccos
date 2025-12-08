@@ -80,6 +80,29 @@ max_repair_attempts = 2
 # Uses a lower quality/faster model for validation tasks
 validation_profile = "openrouter_free:balanced_gfl"
 
+# AI Self-Programming Configuration
+# Controls autonomous capability creation and modification
+[self_programming]
+# Enable self-programming features (decompose, resolve, synthesize)
+enabled = true
+# Trust level (0-4): 0=all approval, 1=introspect ok, 2=transforms ok, 3=synth ok, 4=full
+# Level 0: ALL self-modification requires approval (recommended for start)
+# Level 1: Read-only introspection auto-approved
+# Level 2: Pure data transforms auto-approved
+# Level 3: Capability synthesis auto-approved (with rollback)
+# Level 4: Full autonomy (use with extreme caution)
+trust_level = 0
+# Maximum synthesis attempts per session before requiring approval
+max_synthesis_per_session = 10
+# Maximum recursion depth for goal decomposition
+max_decomposition_depth = 5
+# Require explicit approval for capability registration (enforced at trust_level < 3)
+require_approval_for_registration = true
+# Enable capability versioning for rollback support
+enable_versioning = true
+# Auto-rollback on execution failure
+auto_rollback_on_failure = true
+
 # MCP Discovery Configuration
 [mcp_discovery]
 # Enable output schema introspection (calls tools with safe inputs)

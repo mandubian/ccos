@@ -58,6 +58,9 @@ pub struct AgentConfig {
     /// Storage paths configuration
     #[serde(default)]
     pub storage: StoragePathsConfig,
+    /// AI Self-Programming configuration (trust levels, approval gates)
+    #[serde(default)]
+    pub self_programming: SelfProgrammingConfig,
 }
 
 /// Storage paths configuration for capability directories
@@ -112,6 +115,94 @@ impl Default for StoragePathsConfig {
             pending_synth_subdir: default_pending_synth_subdir(),
         }
     }
+}
+
+/// AI Self-Programming configuration for autonomous capability evolution
+/// Controls trust levels, approval gates, and safety boundaries
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SelfProgrammingConfig {
+    /// Enable self-programming features (decompose, resolve, synthesize)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Trust level (0-4):
+    /// 0 = ALL self-modification requires approval (recommended for start)
+    /// 1 = Read-only introspection auto-approved
+    /// 2 = Pure data transforms auto-approved
+    /// 3 = Capability synthesis auto-approved (with rollback)
+    /// 4 = Full autonomy (use with extreme caution)
+    #[serde(default)]
+    pub trust_level: u8,
+    /// Maximum synthesis attempts per session before requiring approval
+    #[serde(default = "default_max_synthesis")]
+    pub max_synthesis_per_session: u32,
+    /// Maximum recursion depth for goal decomposition
+    #[serde(default = "default_max_decomposition_depth")]
+    pub max_decomposition_depth: u32,
+    /// Require explicit approval for capability registration (enforced at trust_level < 3)
+    #[serde(default = "default_true")]
+    pub require_approval_for_registration: bool,
+    /// Enable capability versioning for rollback support
+    #[serde(default = "default_true")]
+    pub enable_versioning: bool,
+    /// Auto-rollback on execution failure
+    #[serde(default = "default_true")]
+    pub auto_rollback_on_failure: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_max_synthesis() -> u32 {
+    10
+}
+
+fn default_max_decomposition_depth() -> u32 {
+    5
+}
+
+impl Default for SelfProgrammingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            trust_level: 0, // Start with full approval required
+            max_synthesis_per_session: 10,
+            max_decomposition_depth: 5,
+            require_approval_for_registration: true,
+            enable_versioning: true,
+            auto_rollback_on_failure: true,
+        }
+    }
+}
+
+impl SelfProgrammingConfig {
+    /// Check if the given action type is auto-approved at the current trust level
+    pub fn is_auto_approved(&self, action: SelfProgrammingAction) -> bool {
+        match action {
+            SelfProgrammingAction::Introspect => self.trust_level >= 1,
+            SelfProgrammingAction::Transform => self.trust_level >= 2,
+            SelfProgrammingAction::Synthesize => self.trust_level >= 3,
+            SelfProgrammingAction::Register => {
+                !self.require_approval_for_registration || self.trust_level >= 3
+            }
+            SelfProgrammingAction::Execute => self.trust_level >= 4,
+        }
+    }
+}
+
+/// Types of self-programming actions for approval checking
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SelfProgrammingAction {
+    /// Read-only introspection (plan traces, capability listing)
+    Introspect,
+    /// Pure data transformation (no side effects)
+    Transform,
+    /// Capability synthesis (creating new capabilities)
+    Synthesize,
+    /// Capability registration (adding to marketplace)
+    Register,
+    /// Capability execution (running synthesized code)
+    Execute,
 }
 
 /// A named LLM model profile that can be selected at runtime
@@ -691,6 +782,7 @@ impl Default for AgentConfig {
             catalog: CatalogConfig::default(),
             missing_capabilities: MissingCapabilityRuntimeConfig::default(),
             storage: StoragePathsConfig::default(),
+            self_programming: SelfProgrammingConfig::default(),
         }
     }
 }
