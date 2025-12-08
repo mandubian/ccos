@@ -260,10 +260,15 @@ RULES:
 5. If no tool matches exactly, use intent_type "api_call" or "data_transform" without a tool.
    - IMPORTANT: Do NOT force a tool match if the tool's description doesn't fit the goal.
    - It is BETTER to leave "tool" as null than to pick a wrong tool.
-   - If you need a capability that isn't in the list (e.g., "group_by", "summarize"), use "tool": null.
-6. When data is already available, produce an "output" step (e.g., with ccos.io.println) instead of asking the user.
-7. Use CONCRETE values, not placeholders. For dates, use ISO 8601 format (YYYY-MM-DD). Today is {today}.
-8. For "weekly" or "last 7 days", calculate the actual date: {week_ago}.
+   - If you need a capability that isn't in the list (e.g., "group_by", "summarize", "aggregate"), use "tool": null.
+6. **NO DUPLICATE TOOLS**: Each tool should typically appear ONCE in the plan.
+   - API tools (like list_issues, search, get_*) ONLY fetch data - they do NOT transform it.
+   - If the goal requires fetching then transforming (e.g., "fetch issues then group by label"), use TWO steps:
+     a) Step 1: API call with the fetch tool (list_issues)
+     b) Step 2: data_transform with "tool": null for the transformation (grouping, aggregation, etc.)
+7. When data is already available, produce an "output" step (e.g., with ccos.io.println) instead of asking the user.
+8. Use CONCRETE values, not placeholders. For dates, use ISO 8601 format (YYYY-MM-DD). Today is {today}.
+9. For "weekly" or "last 7 days", calculate the actual date: {week_ago}.
 
 INTENT TYPES:
 - "user_input": Ask the user for missing information
