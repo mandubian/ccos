@@ -1323,4 +1323,129 @@ mod tests {
         assert_eq!(default_config.min_threshold, Some(0.3));
         assert_eq!(default_config.max_threshold, Some(0.9));
     }
+
+    // --- SelfProgrammingConfig Tests ---
+
+    #[test]
+    fn test_self_programming_config_default() {
+        let config = SelfProgrammingConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.trust_level, 0); // Default is most restrictive
+        assert_eq!(config.max_synthesis_per_session, 10);
+        assert_eq!(config.max_decomposition_depth, 5);
+        assert!(config.require_approval_for_registration);
+        assert!(config.enable_versioning);
+        assert!(config.auto_rollback_on_failure);
+    }
+
+    #[test]
+    fn test_self_programming_trust_level_0() {
+        let config = SelfProgrammingConfig {
+            trust_level: 0,
+            ..Default::default()
+        };
+
+        // At level 0, NOTHING is auto-approved
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Introspect));
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Transform));
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Synthesize));
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Register));
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Execute));
+    }
+
+    #[test]
+    fn test_self_programming_trust_level_1() {
+        let config = SelfProgrammingConfig {
+            trust_level: 1,
+            ..Default::default()
+        };
+
+        // Level 1: Only introspection auto-approved
+        assert!(config.is_auto_approved(SelfProgrammingAction::Introspect));
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Transform));
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Synthesize));
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Register));
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Execute));
+    }
+
+    #[test]
+    fn test_self_programming_trust_level_2() {
+        let config = SelfProgrammingConfig {
+            trust_level: 2,
+            ..Default::default()
+        };
+
+        // Level 2: Introspection + Transform
+        assert!(config.is_auto_approved(SelfProgrammingAction::Introspect));
+        assert!(config.is_auto_approved(SelfProgrammingAction::Transform));
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Synthesize));
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Register)); // require_approval_for_registration=true
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Execute));
+    }
+
+    #[test]
+    fn test_self_programming_trust_level_3() {
+        let config = SelfProgrammingConfig {
+            trust_level: 3,
+            ..Default::default()
+        };
+
+        // Level 3: Introspection + Transform + Synthesize + Register
+        assert!(config.is_auto_approved(SelfProgrammingAction::Introspect));
+        assert!(config.is_auto_approved(SelfProgrammingAction::Transform));
+        assert!(config.is_auto_approved(SelfProgrammingAction::Synthesize));
+        assert!(config.is_auto_approved(SelfProgrammingAction::Register));
+        assert!(!config.is_auto_approved(SelfProgrammingAction::Execute));
+    }
+
+    #[test]
+    fn test_self_programming_trust_level_4_full_autonomy() {
+        let config = SelfProgrammingConfig {
+            trust_level: 4,
+            ..Default::default()
+        };
+
+        // Level 4: Full autonomy - everything auto-approved
+        assert!(config.is_auto_approved(SelfProgrammingAction::Introspect));
+        assert!(config.is_auto_approved(SelfProgrammingAction::Transform));
+        assert!(config.is_auto_approved(SelfProgrammingAction::Synthesize));
+        assert!(config.is_auto_approved(SelfProgrammingAction::Register));
+        assert!(config.is_auto_approved(SelfProgrammingAction::Execute));
+    }
+
+    #[test]
+    fn test_self_programming_registration_requires_approval_flag() {
+        // Test that require_approval_for_registration works independently
+        let config_with_approval = SelfProgrammingConfig {
+            trust_level: 2,
+            require_approval_for_registration: true,
+            ..Default::default()
+        };
+        assert!(!config_with_approval.is_auto_approved(SelfProgrammingAction::Register));
+
+        let config_without_approval = SelfProgrammingConfig {
+            trust_level: 2,
+            require_approval_for_registration: false,
+            ..Default::default()
+        };
+        assert!(config_without_approval.is_auto_approved(SelfProgrammingAction::Register));
+    }
+
+    #[test]
+    fn test_self_programming_config_serialization() {
+        let config = SelfProgrammingConfig {
+            enabled: true,
+            trust_level: 2,
+            max_synthesis_per_session: 20,
+            max_decomposition_depth: 3,
+            require_approval_for_registration: false,
+            enable_versioning: true,
+            auto_rollback_on_failure: false,
+        };
+
+        let serialized = serde_json::to_string(&config).unwrap();
+        let deserialized: SelfProgrammingConfig = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(config, deserialized);
+    }
 }
