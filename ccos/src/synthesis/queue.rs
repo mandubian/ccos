@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::utils::fs::find_workspace_root;
+use crate::utils::fs::get_workspace_root;
 
 /// Status of a queued synthesis artifact.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,7 +77,7 @@ pub struct SynthQueue {
 impl SynthQueue {
     /// Create a new queue at the provided path or the default under workspace root.
     pub fn new(base_dir: Option<PathBuf>) -> Self {
-        let default_dir = find_workspace_root().join("capabilities/pending_synth");
+        let default_dir = get_workspace_root().join("storage/pending_synth");
         Self {
             base_dir: base_dir.unwrap_or(default_dir),
         }
@@ -123,8 +123,3 @@ impl SynthQueue {
             .collect()
     }
 }
-
-
-
-
-

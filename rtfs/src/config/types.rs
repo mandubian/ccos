@@ -77,6 +77,9 @@ pub struct StoragePathsConfig {
     /// Subdirectory for approved server capabilities within capabilities_dir
     #[serde(default = "default_servers_approved_subdir")]
     pub servers_approved_subdir: String,
+    /// Subdirectory for pending synthesis queue (relative to storage root)
+    #[serde(default = "default_pending_synth_subdir")]
+    pub pending_synth_subdir: String,
 }
 
 fn default_capabilities_dir() -> String {
@@ -95,6 +98,10 @@ fn default_servers_approved_subdir() -> String {
     "servers/approved".to_string()
 }
 
+fn default_pending_synth_subdir() -> String {
+    "storage/pending_synth".to_string()
+}
+
 impl Default for StoragePathsConfig {
     fn default() -> Self {
         Self {
@@ -102,6 +109,7 @@ impl Default for StoragePathsConfig {
             discovered_subdir: default_discovered_subdir(),
             generated_subdir: default_generated_subdir(),
             servers_approved_subdir: default_servers_approved_subdir(),
+            pending_synth_subdir: default_pending_synth_subdir(),
         }
     }
 }
