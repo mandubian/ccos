@@ -69,9 +69,9 @@ servers_approved_subdir = "servers/approved"
 # Controls schema and plan validation using LLM
 [validation]
 # Enable LLM schema validation for inferred schemas
-enable_schema_validation = false
+enable_schema_validation = true
 # Enable LLM plan validation (schema compatibility, dependencies)
-enable_plan_validation = false
+enable_plan_validation = true
 # Enable auto-repair on validation failures
 enable_auto_repair = true
 # Max auto-repair attempts before queuing for external review
