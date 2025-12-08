@@ -96,6 +96,56 @@ impl ValidationResult {
     }
 }
 
+/// Get an LLM provider based on ValidationConfig.
+/// Uses the config's validation_model if specified, otherwise falls back to default.
+async fn get_validation_provider(
+    config: &ValidationConfig,
+) -> Option<Box<dyn crate::arbiter::llm_provider::LlmProvider + Send + Sync>> {
+    use crate::arbiter::llm_provider::{LlmProviderConfig, LlmProviderFactory, LlmProviderType};
+
+    // If a specific validation model is configured, create a provider for it
+    if let Some(model) = &config.validation_model {
+        // Determine provider type from model name
+        let (provider_type, api_key_var) = if model.starts_with("gpt-") || model.starts_with("o1") {
+            (LlmProviderType::OpenAI, "OPENAI_API_KEY")
+        } else if model.starts_with("claude-") {
+            (LlmProviderType::Anthropic, "ANTHROPIC_API_KEY")
+        } else if model.contains("/") {
+            // OpenRouter format: provider/model
+            (LlmProviderType::OpenAI, "OPENROUTER_API_KEY")
+        } else {
+            // Default to OpenAI-compatible
+            (LlmProviderType::OpenAI, "OPENAI_API_KEY")
+        };
+
+        if let Ok(api_key) = std::env::var(api_key_var) {
+            let base_url = if api_key_var == "OPENROUTER_API_KEY" {
+                Some("https://openrouter.ai/api/v1".to_string())
+            } else {
+                std::env::var(format!("{}_BASE_URL", api_key_var.replace("_API_KEY", ""))).ok()
+            };
+
+            let provider_config = LlmProviderConfig {
+                provider_type,
+                model: model.clone(),
+                api_key: Some(api_key),
+                base_url,
+                max_tokens: Some(4096),
+                temperature: Some(0.3), // Lower temperature for validation
+                timeout_seconds: None,
+                retry_config: Default::default(),
+            };
+
+            if let Ok(provider) = LlmProviderFactory::create_provider(provider_config).await {
+                return Some(provider);
+            }
+        }
+    }
+
+    // Fall back to default provider
+    crate::arbiter::get_default_llm_provider().await
+}
+
 /// Validate an inferred schema using LLM.
 ///
 /// # Arguments
@@ -103,15 +153,63 @@ impl ValidationResult {
 /// - `capability_description`: Description of what the capability does
 /// - `sample_output`: Optional sample output that was used to infer the schema
 pub async fn validate_schema(
-    _schema: &str,
-    _capability_description: &str,
-    _sample_output: Option<&str>,
-    _config: &ValidationConfig,
+    schema: &str,
+    capability_description: &str,
+    sample_output: Option<&str>,
+    config: &ValidationConfig,
 ) -> Result<ValidationResult, String> {
-    // TODO: Implement LLM call for schema validation
-    // For now, return valid to allow the pipeline to work
-    log::debug!("Schema validation not yet implemented, returning valid");
-    Ok(ValidationResult::valid())
+    // Get LLM provider based on config
+    let provider = match get_validation_provider(config).await {
+        Some(p) => p,
+        None => {
+            log::debug!("No LLM provider available, skipping schema validation");
+            return Ok(ValidationResult::valid());
+        }
+    };
+
+    let sample_section = sample_output
+        .map(|s| {
+            format!(
+                "\n\nSample output that was used to infer this schema:\n```\n{}\n```",
+                s
+            )
+        })
+        .unwrap_or_default();
+
+    let prompt = format!(
+        r#"You are validating an RTFS schema that was inferred from runtime output.
+
+Capability description: {}
+
+Inferred schema:
+```
+{}
+```{}
+
+Analyze this schema and determine:
+1. Is the schema correctly generalized? (e.g., should `int?` be `float?` for numeric values)
+2. Are there any obvious errors or improvements?
+3. Does the schema match what the capability description suggests?
+
+Respond in JSON format:
+{{
+  "is_valid": true/false,
+  "errors": ["error message 1", "error message 2"],
+  "suggestions": ["suggestion 1", "suggestion 2"],
+  "corrected_schema": "[:map ...]" // only if corrections are needed
+}}
+
+Respond with ONLY the JSON, no additional text."#,
+        capability_description, schema, sample_section
+    );
+
+    match provider.generate_text(&prompt).await {
+        Ok(response) => parse_validation_response(&response),
+        Err(e) => {
+            log::warn!("LLM schema validation failed: {}", e);
+            Ok(ValidationResult::valid()) // Fail open
+        }
+    }
 }
 
 /// Validate a generated RTFS plan.
@@ -121,15 +219,66 @@ pub async fn validate_schema(
 /// - `resolutions`: Map of intent IDs to resolved capabilities
 /// - `context`: Additional context about the plan goal
 pub async fn validate_plan(
-    _plan: &str,
-    _resolutions: &HashMap<String, String>,
-    _context: &str,
-    _config: &ValidationConfig,
+    plan: &str,
+    resolutions: &HashMap<String, String>,
+    context: &str,
+    config: &ValidationConfig,
 ) -> Result<ValidationResult, String> {
-    // TODO: Implement LLM call for plan validation
-    // For now, return valid to allow the pipeline to work
-    log::debug!("Plan validation not yet implemented, returning valid");
-    Ok(ValidationResult::valid())
+    // Get LLM provider based on config
+    let provider = match get_validation_provider(config).await {
+        Some(p) => p,
+        None => {
+            log::debug!("No LLM provider available, skipping plan validation");
+            return Ok(ValidationResult::valid());
+        }
+    };
+
+    let resolutions_str = resolutions
+        .iter()
+        .map(|(k, v)| format!("  {} → {}", k, v))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let prompt = format!(
+        r#"You are validating an RTFS plan for correctness.
+
+Goal/Context: {}
+
+Plan:
+```rtfs
+{}
+```
+
+Capability resolutions:
+{}
+
+Validate:
+1. Schema compatibility: Does each step's output match the next step's input requirements?
+2. Dependencies: Are `depends_on` references correct (no cycles, valid indices)?
+3. Parameters: Are all required parameters provided or derivable from previous steps?
+4. Calls: Does the plan only call available capabilities from the resolutions?
+
+Respond in JSON format:
+{{
+  "is_valid": true/false,
+  "errors": [
+    {{"type": "schema_mismatch", "message": "...", "location": "step_2"}},
+    {{"type": "missing_param", "message": "...", "location": "step_3"}}
+  ],
+  "suggestions": ["suggestion 1"]
+}}
+
+Respond with ONLY the JSON, no additional text."#,
+        context, plan, resolutions_str
+    );
+
+    match provider.generate_text(&prompt).await {
+        Ok(response) => parse_validation_response(&response),
+        Err(e) => {
+            log::warn!("LLM plan validation failed: {}", e);
+            Ok(ValidationResult::valid()) // Fail open
+        }
+    }
 }
 
 /// Try to auto-repair a plan based on validation errors.
@@ -140,7 +289,7 @@ pub async fn validate_plan(
 /// - `attempt`: Current repair attempt (1-indexed)
 pub async fn auto_repair_plan(
     plan: &str,
-    _errors: &[ValidationError],
+    errors: &[ValidationError],
     attempt: usize,
     config: &ValidationConfig,
 ) -> Result<Option<String>, String> {
@@ -152,14 +301,148 @@ pub async fn auto_repair_plan(
         return Ok(None);
     }
 
-    // TODO: Implement LLM-based auto-repair
-    // For now, return None to trigger queue escalation
-    log::debug!(
-        "Auto-repair not yet implemented, attempt {}/{}",
-        attempt,
-        config.max_repair_attempts
+    // Get LLM provider based on config
+    let provider = match get_validation_provider(config).await {
+        Some(p) => p,
+        None => {
+            log::debug!("No LLM provider available, cannot auto-repair");
+            return Ok(None);
+        }
+    };
+
+    let errors_str = errors
+        .iter()
+        .map(|e| format!("- [{}] {}", format!("{:?}", e.error_type), e.message))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let prompt = format!(
+        r#"You are repairing an RTFS plan that has validation errors.
+
+Original plan:
+```rtfs
+{}
+```
+
+Validation errors:
+{}
+
+Repair attempt: {} of {}
+
+Fix the errors while preserving the plan's intent. Common fixes:
+- Schema mismatches: Adjust data transformations
+- Missing params: Add let bindings or extract from previous results
+- Dependency issues: Reorder steps or fix depends_on indices
+
+Respond with ONLY the corrected RTFS plan code, no explanations."#,
+        plan, errors_str, attempt, config.max_repair_attempts
     );
-    Ok(Some(plan.to_string()))
+
+    match provider.generate_text(&prompt).await {
+        Ok(response) => {
+            let repaired = extract_rtfs_code(&response);
+            if repaired.contains("(capability")
+                || repaired.contains("(do")
+                || repaired.contains("(let")
+            {
+                log::info!("Auto-repair attempt {} succeeded", attempt);
+                Ok(Some(repaired))
+            } else {
+                log::warn!("Auto-repair produced invalid response");
+                Ok(None)
+            }
+        }
+        Err(e) => {
+            log::warn!("LLM auto-repair failed: {}", e);
+            Ok(None)
+        }
+    }
+}
+
+/// Parse LLM validation response JSON
+fn parse_validation_response(response: &str) -> Result<ValidationResult, String> {
+    // Extract JSON from response (may be wrapped in markdown code block)
+    let json_str = if let Some(start) = response.find('{') {
+        if let Some(end) = response.rfind('}') {
+            &response[start..=end]
+        } else {
+            response
+        }
+    } else {
+        response
+    };
+
+    #[derive(serde::Deserialize)]
+    struct LlmValidationResponse {
+        is_valid: bool,
+        #[serde(default)]
+        errors: Vec<LlmError>,
+        #[serde(default)]
+        suggestions: Vec<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct LlmError {
+        #[serde(default, rename = "type")]
+        error_type: Option<String>,
+        message: String,
+        #[serde(default)]
+        location: Option<String>,
+    }
+
+    match serde_json::from_str::<LlmValidationResponse>(json_str) {
+        Ok(parsed) => {
+            let errors: Vec<ValidationError> = parsed
+                .errors
+                .iter()
+                .map(|e| ValidationError {
+                    error_type: match e.error_type.as_deref() {
+                        Some("schema_mismatch") => ValidationErrorType::SchemaMismatch,
+                        Some("missing_param") => ValidationErrorType::MissingParameter,
+                        Some("invalid_dependency") => ValidationErrorType::InvalidDependency,
+                        Some("cyclic_dependency") => ValidationErrorType::CyclicDependency,
+                        Some("unavailable_capability") => {
+                            ValidationErrorType::UnavailableCapability
+                        }
+                        Some("type_incompatibility") => ValidationErrorType::TypeIncompatibility,
+                        _ => ValidationErrorType::Other,
+                    },
+                    message: e.message.clone(),
+                    location: e.location.clone(),
+                    suggested_fix: None,
+                })
+                .collect();
+
+            Ok(ValidationResult {
+                is_valid: parsed.is_valid,
+                errors,
+                suggestions: parsed.suggestions,
+            })
+        }
+        Err(e) => {
+            log::debug!("Failed to parse validation response: {}", e);
+            Ok(ValidationResult::valid()) // Fail open on parse errors
+        }
+    }
+}
+
+/// Extract RTFS code from LLM response
+fn extract_rtfs_code(response: &str) -> String {
+    // Check for markdown code block
+    if let Some(start) = response.find("```rtfs") {
+        if let Some(end) = response[start + 7..].find("```") {
+            return response[start + 7..start + 7 + end].trim().to_string();
+        }
+    }
+    if let Some(start) = response.find("```") {
+        if let Some(end) = response[start + 3..].find("```") {
+            return response[start + 3..start + 3 + end].trim().to_string();
+        }
+        // If it starts with ``` but doesn't have a closing one, assume the rest is code
+        return response[start + 3..].trim().to_string();
+    }
+    // Return as-is if no code block found
+    response.trim().to_string()
 }
 
 #[cfg(test)]
