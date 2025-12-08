@@ -21,6 +21,7 @@ use rtfs::runtime::error::RuntimeResult;
 // ===== Modular Submodules =====
 pub mod core;
 pub mod dialogue;
+pub mod governance_events;
 pub mod importers;
 pub mod introspection;
 pub mod primitives;
