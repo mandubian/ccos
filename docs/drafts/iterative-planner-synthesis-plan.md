@@ -1,8 +1,23 @@
 # Iterative Planner: Refinement, Grounding, Synthesis, and Adapters
 
-Status: draft  
+Status: **In Progress** (Core features implemented, refinements ongoing)  
 Owners: CLI planning stream  
-Scope: planner/runtime (no code changes yet)
+Scope: planner/runtime
+
+## Implementation Progress (2025-12-08)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Decompose + resolve | ✅ Done | Modular planner with catalog + MCP resolution |
+| Opportunistic safe-exec | ✅ Done | Executes read-only steps, captures output samples |
+| Grounded LLM decomposition | ✅ Done | `DecompositionContext` passes parent intent, siblings, data sources to LLM |
+| Iterative refinement | ✅ Done | Sub-intent refinement with bounded depth |
+| Synthesis-or-enqueue | ✅ Done | `PureRtfsGenerationStrategy` + `SynthQueue` for fallback |
+| Inline RTFS adapters | ✅ Done | `SchemaBridge` detects MCP content patterns, generates `(parse-json ...)` adapters |
+| Storage path config | ✅ Done | `StoragePathsConfig` in `agent_config.toml`; `pending_synth` under `storage/` |
+| Precise synthesis schemas | 🔄 Partial | Input schemas often precise, output schemas sometimes `:any` (deferred) |
+| Metadata samples | 🔄 Deferred | LLM prompt updated, but a posteriori introspection preferred |
+
 
 ## Goals
 - Reduce reliance on `ccos.user.ask` for formatting/transform steps.
@@ -53,9 +68,18 @@ Scope: planner/runtime (no code changes yet)
 - Backtracking: intentionally deferred for now. If we see frequent “wrong tool chosen” failures, add a limited backtracking mode (one alternate per intent, capped breadth/depth) with a heuristic scorer.
 
 ## Suggested Tasks (high level)
-- Add “safe-to-run” exec pass + context injection.
-- Add iterative refinement loop on unresolved intents (bounded).
-- Expose `synthesize_or_enqueue` helper in synthesis layer; retry resolution on success.
-- Implement synth queue artifact writer + basic reifier hook.
-- Add adapter synthesis path for mismatched I/O (optional but valuable).
+- [x] Add "safe-to-run" exec pass + context injection.
+- [x] Add iterative refinement loop on unresolved intents (bounded).
+- [x] Expose `synthesize_or_enqueue` helper in synthesis layer; retry resolution on success.
+- [x] Implement synth queue artifact writer + basic reifier hook.
+- [x] Add adapter synthesis path for mismatched I/O (inline RTFS adapters).
+- [ ] (Deferred) A posteriori output schema introspection.
+- [ ] (Deferred) Generate metadata samples from runtime execution.
 
+## Key Files Changed
+- `ccos/src/planner/modular_planner/orchestrator.rs`: Grounded decomposition, safe-exec, inline adapter insertion.
+- `ccos/src/planner/modular_planner/decomposition/mod.rs`: `DecompositionContext` with parent/sibling/data source fields.
+- `ccos/src/planner/adapters/schema_bridge.rs`: MCP content pattern detection and RTFS adapter generation.
+- `ccos/src/synthesis/core/missing_capability_resolver.rs`: LLM synthesis integration, immediate use of resolved capabilities.
+- `ccos/src/synthesis/queue.rs`: `SynthQueue` for needs_impl artifacts.
+- `assets/prompts/arbiter/capability_synthesis/v1/`: Updated prompts for precise schemas.
