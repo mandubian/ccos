@@ -535,7 +535,7 @@ impl CatalogResolution {
             // Check for match in capability name (exact or singular/plural or substring)
             let name_match = cap_object_nouns.iter().any(|cw| {
                 let cw_lower = cw.to_lowercase();
-                cw_lower == word_lower || 
+                cw_lower == word_lower ||
                 cw_lower == format!("{}s", word_lower) ||
                 word_lower == format!("{}s", cw_lower) ||
                 cw_lower == format!("{}es", word_lower) ||

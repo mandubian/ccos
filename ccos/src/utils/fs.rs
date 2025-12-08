@@ -94,6 +94,48 @@ pub fn resolve_workspace_path(path: &str) -> PathBuf {
     }
 }
 
+/// Resolve the default plan archive path with environment overrides.
+///
+/// Resolution order:
+/// 1. `CCOS_PLAN_ARCHIVE_PATH` (absolute or workspace-relative)
+/// 2. `CCOS_STORAGE_ROOT` + `/plans`
+/// 3. `<workspace>/storage/plans` if present
+/// 4. `<workspace>/demo_storage/plans` if present
+/// 5. Fallback to `<workspace>/storage/plans`
+pub fn default_plan_archive_path() -> PathBuf {
+    if let Ok(path) = std::env::var("CCOS_PLAN_ARCHIVE_PATH") {
+        let p = PathBuf::from(&path);
+        return if p.is_absolute() {
+            p
+        } else {
+            resolve_workspace_path(&path)
+        };
+    }
+
+    if let Ok(root) = std::env::var("CCOS_STORAGE_ROOT") {
+        let base = PathBuf::from(&root);
+        let base = if base.is_absolute() {
+            base
+        } else {
+            resolve_workspace_path(&root)
+        };
+        return base.join("plans");
+    }
+
+    let workspace_root = get_workspace_root();
+    let storage_path = workspace_root.join("storage/plans");
+    if storage_path.exists() {
+        return storage_path;
+    }
+
+    let demo_path = workspace_root.join("demo_storage/plans");
+    if demo_path.exists() {
+        return demo_path;
+    }
+
+    storage_path
+}
+
 /// Legacy alias for backward compatibility. Prefer `get_workspace_root()`.
 #[deprecated(since = "0.2.0", note = "Use get_workspace_root() instead")]
 pub fn find_workspace_root() -> PathBuf {

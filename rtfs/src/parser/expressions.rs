@@ -151,7 +151,7 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
                             // This looks like a special form but was parsed as a list
                             // Check if it has the required arguments for the special form
                             let remaining_args = &inner_pairs[1..];
-                            
+
                             // For fn, if, def, let - these require specific syntax
                             match symbol_name.as_str() {
                                 "fn" => {

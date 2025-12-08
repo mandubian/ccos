@@ -238,7 +238,7 @@ impl DefaultGoalCoverageAnalyzer {
                             .as_ref()
                             .map(|n| n.contains(&expected_value_str))
                             .unwrap_or(false);
-                        
+
                         // Debug logging for filter requirement checks
                         eprintln!("🔍 FILTER CHECK: Step '{}' (capability: {:?}), expected: '{}', inputs: {:?}, expression: {:?}, notes: {:?}, input_matches: {}, expression_matches: {}, notes_matches: {}",
                             step.id,
@@ -251,7 +251,7 @@ impl DefaultGoalCoverageAnalyzer {
                             expression_matches,
                             notes_matches
                         );
-                        
+
                         input_matches || expression_matches || notes_matches
                     } else {
                         true

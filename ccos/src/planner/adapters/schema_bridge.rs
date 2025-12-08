@@ -277,7 +277,7 @@ mod tests {
 
         let bridge = SchemaBridge::detect(None, Some(&target), Some(&sample));
 
-        assert!(matches!(bridge.kind, AdapterKind::FieldExtract { field } if field == "issues"));
+        assert!(matches!(&bridge.kind, AdapterKind::FieldExtract { field } if field == "issues"));
         assert_eq!(bridge.generate_rtfs_expr("step_1"), "(get :issues step_1)");
     }
 

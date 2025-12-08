@@ -560,7 +560,9 @@ impl ContinuousResolutionLoop {
 
                     // Save to disk - use workspace root
                     use crate::utils::fs::find_workspace_root;
-                    let output_dir = find_workspace_root().join("capabilities").join("discovered");
+                    let output_dir = find_workspace_root()
+                        .join("capabilities")
+                        .join("discovered");
                     std::fs::create_dir_all(output_dir.join("mcp")).ok();
 
                     let path = introspector.save_capability_to_rtfs(

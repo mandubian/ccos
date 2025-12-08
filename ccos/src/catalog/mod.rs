@@ -292,6 +292,18 @@ impl CatalogService {
         self.insert_entry(entry);
     }
 
+    /// Remove a plan entry from the catalog (used when deleting archived plans)
+    pub fn remove_plan(&self, plan_id: &str) {
+        {
+            let mut entries = self.entries.write().unwrap();
+            entries.remove(plan_id);
+        }
+        {
+            let mut embeddings = self.embedding_index.write().unwrap();
+            embeddings.retain(|(id, _)| id != plan_id);
+        }
+    }
+
     /// Re-index all capabilities currently present in the marketplace
     pub async fn ingest_marketplace(&self, marketplace: &CapabilityMarketplace) {
         let manifests = marketplace.list_capabilities().await;
@@ -550,9 +562,8 @@ fn extract_schema_fields(schema: Option<&TypeExpr>) -> Vec<String> {
                 return_type,
             } => {
                 for param in param_types {
-                    if let rtfs::ast::ParamType::Simple(inner) = param {
-                        walk(inner, acc);
-                    }
+                    let rtfs::ast::ParamType::Simple(inner) = param;
+                    walk(inner, acc);
                 }
                 if let Some(var) = variadic_param_type {
                     walk(var, acc);

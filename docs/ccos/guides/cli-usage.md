@@ -178,6 +178,29 @@ ccos call my.capability --args '{"key": "value"}'
 ccos call github.create_issue --dry-run --title "Test"
 ```
 
+### plan - Planning and archives
+
+Generate, inspect, execute, and manage RTFS plans.
+
+```bash
+# Create a plan from a goal (archives to storage)
+ccos plan create "Send weekly status email" --save plan.rtfs
+
+# List archived plans (matches id, name, or goal)
+ccos plan list
+ccos plan list --filter email
+
+# Execute a plan by ID, name hint, path, or raw RTFS
+ccos plan execute plan-1234
+ccos plan execute "Send weekly status email"
+
+# Validate syntax and capability availability
+ccos plan validate plan-1234
+
+# Delete an archived plan
+ccos plan delete plan-1234
+```
+
 ### rtfs - RTFS Operations
 
 Evaluate and run RTFS code.

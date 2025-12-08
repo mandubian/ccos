@@ -277,6 +277,57 @@ impl PlanArchive {
         let plan_index = self.plan_id_index.lock().unwrap();
         plan_index.contains_key(plan_id)
     }
+
+    /// Delete a plan and update indices. Returns true if a plan was removed.
+    pub fn delete_plan(&self, plan_id: &PlanId) -> Result<bool, String> {
+        let hash_opt = {
+            let mut plan_index = self
+                .plan_id_index
+                .lock()
+                .map_err(|_| "plan index lock poisoned".to_string())?;
+            plan_index.remove(plan_id)
+        };
+
+        let Some(hash) = hash_opt else {
+            return Ok(false);
+        };
+
+        // Remove from storage
+        match &self.storage {
+            PlanArchiveStorage::InMemory(archive) => archive.delete(&hash)?,
+            PlanArchiveStorage::File(archive) => {
+                <IndexedArchive<ArchivablePlan, FileArchive> as ContentAddressableArchive<
+                    ArchivablePlan,
+                >>::delete(archive, &hash)?
+            }
+        }
+
+        // Clean intent index
+        {
+            let mut intent_index = self
+                .intent_id_index
+                .lock()
+                .map_err(|_| "intent index lock poisoned".to_string())?;
+            for hashes in intent_index.values_mut() {
+                hashes.retain(|h| h != &hash);
+            }
+            intent_index.retain(|_, hashes| !hashes.is_empty());
+        }
+
+        // Persist index sidecars if file-backed
+        if let PlanArchiveStorage::File(f) = &self.storage {
+            if let Err(e) = f.try_persist_indices() {
+                eprintln!("⚠️ Failed to persist plan indices via storage: {}", e);
+            }
+        }
+
+        // Remove from catalog if attached
+        if let Some(catalog) = self.catalog.lock().unwrap().clone() {
+            catalog.remove_plan(plan_id);
+        }
+
+        Ok(true)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -430,6 +481,25 @@ mod tests {
         );
         let retrieved = archive2.get_plan_by_id(&pid).expect("plan present");
         assert_eq!(retrieved.plan_id, pid);
+    }
+
+    #[test]
+    fn test_delete_plan_removes_indices() {
+        let archive = PlanArchive::new();
+        let plan = create_test_plan();
+        let plan_id = plan.plan_id.clone();
+        let intent_id = plan.intent_ids[0].clone();
+
+        archive.archive_plan(&plan).unwrap();
+        assert!(archive.contains_plan(&plan_id));
+        assert_eq!(archive.get_plans_for_intent(&intent_id).len(), 1);
+        assert_eq!(archive.list_plan_ids().len(), 1);
+
+        let deleted = archive.delete_plan(&plan_id).unwrap();
+        assert!(deleted);
+        assert!(!archive.contains_plan(&plan_id));
+        assert!(archive.get_plans_for_intent(&intent_id).is_empty());
+        assert!(archive.list_plan_ids().is_empty());
     }
 
     #[test]

@@ -46,7 +46,7 @@ impl RegistrySearcher {
                             .filter_map(|r| {
                                 let remote_type = r.r#type.to_ascii_lowercase();
                                 let url = r.url.trim();
-                                if !url.is_empty() && (remote_type == "http" || remote_type == "https" 
+                                if !url.is_empty() && (remote_type == "http" || remote_type == "https"
                                     || url.starts_with("http://") || url.starts_with("https://")) {
                                     Some(url.to_string())
                                 } else {
@@ -54,17 +54,17 @@ impl RegistrySearcher {
                                 }
                             })
                             .collect();
-                        
+
                         // Select best as primary, rest as alternatives
                         let primary = MCPRegistryClient::select_best_remote_url(remotes).unwrap_or_default();
                         let mut alternatives = all_http_remotes;
                         alternatives.retain(|url| url != &primary);
-                        
+
                         (primary, alternatives)
                     } else {
                         (String::new(), Vec::new())
                     };
-                    
+
                     RegistrySearchResult {
                         source: DiscoverySource::McpRegistry { name: server.name.clone() },
                         server_info: ServerInfo {
@@ -183,7 +183,7 @@ impl RegistrySearcher {
                 let url_lower = result.url.to_lowercase();
                 let title_lower = result.title.to_lowercase();
                 let snippet_lower = result.snippet.to_lowercase();
-                
+
                 let is_mcp_server = url_lower.contains("/mcp")
                     || url_lower.contains("mcp://")
                     || url_lower.contains("modelcontextprotocol")
@@ -192,7 +192,7 @@ impl RegistrySearcher {
                     || title_lower.contains("model context protocol")
                     || snippet_lower.contains("mcp server")
                     || snippet_lower.contains("model context protocol");
-                
+
                 let is_openapi_spec = url_lower.contains("openapi")
                     || url_lower.contains("swagger")
                     || url_lower.ends_with(".json") && (url_lower.contains("api") || url_lower.contains("spec"))
@@ -201,12 +201,12 @@ impl RegistrySearcher {
                     || title_lower.contains("openapi")
                     || title_lower.contains("swagger")
                     || result.result_type == "openapi_spec";
-                
+
                 let is_api_doc = result.result_type == "api_doc"
                     || url_lower.contains("/api")
                     || url_lower.contains("/docs")
                     || title_lower.contains("api documentation");
-                
+
                 // Include MCP servers, OpenAPI specs, and API documentation
                 if is_mcp_server || is_openapi_spec || is_api_doc {
                     // Extract server name from URL domain or title
@@ -221,7 +221,7 @@ impl RegistrySearcher {
                             .unwrap_or(if is_mcp_server { "web-mcp" } else { "web-api" })
                             .to_string()
                     };
-                    
+
                     // Determine server type for better naming
                     let server_type = if is_mcp_server {
                         "mcp"
@@ -230,16 +230,16 @@ impl RegistrySearcher {
                     } else {
                         "api"
                     };
-                    
+
                     // Sanitize name for ID generation (important for deduplication)
                     let safe_server_name = crate::utils::fs::sanitize_filename(&server_name);
-                    
+
                     // Clean title and snippet more thoroughly to avoid HTML leakage
                     // Use regex to strip HTML tags, and handle truncated tags
                     let html_re = regex::Regex::new(r"<[^>]*>").unwrap();
                     let mut clean_title = html_re.replace_all(&result.title, "").trim().to_string();
                     let mut clean_snippet = html_re.replace_all(&result.snippet, "").trim().to_string();
-                    
+
                     // Helper closure to clean truncated tags
                     let strip_truncated = |s: &str| -> String {
                         if s.starts_with('<') {
@@ -261,7 +261,7 @@ impl RegistrySearcher {
 
                     // Also check for leading "- " which might happen after stripping
                     clean_snippet = clean_snippet.trim_start_matches("- ").to_string();
-                    
+
                     Some(RegistrySearchResult {
                         source: DiscoverySource::WebSearch { url: result.url.clone() },
                         server_info: ServerInfo {
