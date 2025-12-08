@@ -35,39 +35,109 @@ Expose the planner itself as RTFS-callable capabilities.
 | `planner.introspect_result` | Analyze execution output | low |
 | `planner.register_capability` | Add a new capability | medium |
 
-### Sample Meta-Plan (RTFS)
+### Sample Meta-Plan (RTFS) - Recursive
 
 ```clojure
-;; A plan that creates and tests a new capability
-(let [goal "group issues by label and count"
-      ;; Step 1: Decompose the goal
-      intents (call "planner.decompose" {:goal goal})
+;; Recursive meta-planning: decompose → resolve → synthesize → repeat
+(defn resolve-or-decompose [intent max-depth]
+  "Recursively resolve an intent, decomposing if needed"
+  (if (<= max-depth 0)
+    {:error "Max recursion depth reached" :intent intent}
+    
+    (let [;; Try to resolve directly
+          capability (call "planner.resolve_intent" {:intent intent})]
       
-      ;; Step 2: Find missing capabilities
-      missing (filter (fn [i] (nil? (call "planner.resolve_intent" {:intent i}))) intents)
+      (if capability
+        ;; Found! Return resolved intent
+        {:resolved true :capability capability :intent intent}
+        
+        ;; Not found - decompose into sub-intents
+        (let [sub-intents (call "planner.decompose" {:goal (:description intent)})
+              
+              ;; Recursively resolve each sub-intent
+              resolved-subs (map (fn [sub] 
+                                   (resolve-or-decompose sub (- max-depth 1))) 
+                                 sub-intents)
+              
+              ;; Check if any failed
+              failures (filter (fn [r] (not (:resolved r))) resolved-subs)]
+          
+          (if (empty? failures)
+            ;; All resolved - compose the plan
+            {:resolved true 
+             :composed (call "planner.compose" {:intents resolved-subs})}
+            
+            ;; Some unresolved - try synthesis
+            (let [synthesized (map (fn [f] 
+                                     (call "planner.synthesize_capability" 
+                                           {:spec (:intent f)}))
+                                   failures)]
+              ;; Return with synthesis attempts
+              {:resolved (every? :success synthesized)
+               :synthesized synthesized
+               :failures failures})))))))
+
+;; Main entry: recursive planning with governance
+(let [goal "group GitHub issues by label and show counts"
+      max-depth 3
       
-      ;; Step 3: Synthesize missing capabilities
-      synthesized (map (fn [m] (call "planner.synthesize_capability" {:spec m})) missing)
+      ;; Create root intent
+      root-intent {:description goal :id (uuid)}
       
-      ;; Step 4: Generate the plan
-      plan (call "planner.generate_rtfs" {:intents intents :capabilities synthesized})
-      
-      ;; Step 5: Validate before execution
-      validation (call "planner.validate_plan" {:plan plan})]
+      ;; Recursive resolution
+      result (resolve-or-decompose root-intent max-depth)]
   
-  ;; Only execute if validation passes
-  (if (:valid validation)
-    (call "planner.execute_plan" {:plan plan})
-    {:error "Validation failed" :issues (:issues validation)}))
+  (if (:resolved result)
+    ;; Success - generate and validate the plan
+    (let [plan (call "planner.generate_rtfs" {:result result})
+          validation (call "planner.validate_plan" {:plan plan})]
+      
+      (if (:valid validation)
+        ;; Execute with governance approval
+        (call "governance.request_approval" 
+              {:action "execute_meta_plan" :plan plan})
+        {:error "Validation failed" :issues (:issues validation)}))
+    
+    ;; Failed - queue for human review
+    {:status "pending_synthesis" 
+     :failures (:failures result)}))
 ```
 
-### Implementation
+### Recursive Resolution Flow
 
-#### [NEW] `ccos/src/planner/capabilities_meta.rs`
-Meta-planning capabilities that wrap the orchestrator
+```
+Goal: "group issues by label"
+│
+├─► Decompose → [list_issues, group_by_label, display]
+│
+├─► Resolve list_issues → ✅ mcp.github/list_issues
+│
+├─► Resolve group_by_label → ❌ Not found
+│   │
+│   └─► Decompose → [extract_labels, count_per_label, format_output]
+│       │
+│       ├─► Resolve extract_labels → ❌ Not found
+│       │   └─► Synthesize → generated/extract_labels ✅
+│       │
+│       ├─► Resolve count_per_label → ❌ Not found  
+│       │   └─► Synthesize → generated/count_per_label ✅
+│       │
+│       └─► Resolve format_output → ✅ ccos.io.println
+│
+└─► Compose final RTFS plan from resolved tree
+```
 
-#### [MODIFY] `ccos/src/capabilities/native_provider.rs`
-Register meta-planning capabilities alongside CLI capabilities
+### Key Recursive Capabilities
+
+| Capability | Purpose |
+|-----------|---------|
+| `planner.decompose` | Break intent into sub-intents |
+| `planner.resolve_intent` | Find capability for intent |
+| `planner.synthesize_capability` | Create missing capability |
+| `planner.compose` | Combine resolved sub-intents into plan |
+| `planner.validate_plan` | Check plan correctness |
+| `governance.request_approval` | Gate execution on human approval |
+
 
 ---
 
