@@ -200,11 +200,29 @@ pub enum ActionType {
     IntentArchived,
     IntentReactivated,
 
-    // Capability Lifecycle (new)
+    // Capability Lifecycle
     CapabilityRegistered,
     CapabilityRemoved,
     CapabilityUpdated,
     CapabilityDiscoveryCompleted,
+
+    // Governance & Self-Programming
+    /// Version snapshot created before capability modification
+    CapabilityVersionCreated,
+    /// Capability rolled back to previous version
+    CapabilityRollback,
+    /// Capability synthesis started
+    CapabilitySynthesisStarted,
+    /// Capability synthesis completed (success or failure)
+    CapabilitySynthesisCompleted,
+    /// Action requires human approval
+    GovernanceApprovalRequested,
+    /// Human approved an action
+    GovernanceApprovalGranted,
+    /// Human denied an action
+    GovernanceApprovalDenied,
+    /// Bounded exploration limit reached (synthesis/decomposition)
+    BoundedExplorationLimitReached,
 }
 
 /// Represents the outcome of an executed action or plan.
