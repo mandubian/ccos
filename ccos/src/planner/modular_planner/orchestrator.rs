@@ -11,28 +11,30 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::planner::adapters::SchemaBridge;
+
+use super::decomposition::hybrid::HybridConfig;
 use super::decomposition::{
     DecompositionContext, DecompositionError, DecompositionStrategy, HybridDecomposition,
 };
-use super::decomposition::hybrid::HybridConfig;
 use super::resolution::{
     CompositeResolution, ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability,
 };
+use super::safe_executor::SafeCapabilityExecutor;
 use super::types::ToolSummary;
 use super::types::{ApiAction, DomainHint, IntentType, SubIntent};
-use super::safe_executor::SafeCapabilityExecutor;
+use crate::capability_marketplace::CapabilityMarketplace;
 use crate::intent_graph::storage::Edge;
 use crate::intent_graph::IntentGraph;
-use crate::capability_marketplace::CapabilityMarketplace;
-use crate::utils::value_conversion::rtfs_value_to_json;
 use crate::plan_archive::PlanArchive;
-use crate::types::{EdgeType, GenerationContext, IntentStatus, Plan, PlanStatus, StorableIntent, TriggerSource};
 use crate::synthesis::enqueue_missing_capability_placeholder;
-use crate::synthesis::queue::{SynthQueue, SynthQueueItem, SynthQueueStatus};
-use crate::synthesis::core::missing_capability_strategies::{
-    MissingCapabilityStrategyConfig, PureRtfsGenerationStrategy,
+use crate::synthesis::missing_capability_resolver::{
+    MissingCapabilityRequest, MissingCapabilityResolver, ResolutionResult,
 };
-use crate::synthesis::core::missing_capability_resolver::MissingCapabilityRequest;
+use crate::types::{
+    EdgeType, GenerationContext, IntentStatus, Plan, PlanStatus, StorableIntent, TriggerSource,
+};
+use crate::utils::value_conversion::rtfs_value_to_json;
 
 const GROUNDING_VALUE_LIMIT: usize = 800;
 
@@ -136,78 +138,9 @@ fn generated_capability_id_from_description(desc: &str) -> String {
     format!("generated/{}-{:016x}", slug, hash)
 }
 
-/// Attempt a single inline RTFS-only synthesis for missing data/output intents.
-/// Returns Some(capability_id) if synthesized and persisted to synth queue with status=generated.
-async fn attempt_inline_rtfs_synth(sub_intent: &SubIntent) -> Option<String> {
-    // Only handle data/output intents
-    let (_intent_type, prefix) = match &sub_intent.intent_type {
-        IntentType::DataTransform { transform } => (
-            IntentType::DataTransform {
-                transform: transform.clone(),
-            },
-            "transform_", // Use underscore for strategy detection
-        ),
-        IntentType::Output { format } => (
-            IntentType::Output {
-                format: format.clone(),
-            },
-            "output_", // Use underscore for strategy detection
-        ),
-        _ => return None,
-    };
-
-    let slug = slugify_description(&sub_intent.description);
-    let hash = fnv1a64(&sub_intent.description);
-    let capability_id = format!("generated/{}{}-{:016x}", prefix, slug, hash);
-
-    // Try to synthesize using PureRtfsGenerationStrategy
-    let config = MissingCapabilityStrategyConfig {
-        enable_pure_rtfs: true,
-        enable_user_interaction: false,
-        enable_external_llm: false,
-        enable_service_discovery: false,
-        ..Default::default()
-    };
-    let strategy = PureRtfsGenerationStrategy::new(config);
-
-    // Build context from params
-    let mut context = HashMap::new();
-    for (k, v) in &sub_intent.extracted_params {
-        context.insert(k.clone(), v.clone());
-    }
-    context.insert("description".to_string(), sub_intent.description.clone());
-
-    let request = MissingCapabilityRequest {
-        capability_id: capability_id.clone(),
-        context,
-        attempt_count: 0,
-        arguments: vec![],
-        requested_at: SystemTime::now(),
-    };
-
-    let rtfs_code = match strategy.generate_pure_rtfs_implementation(&request).await {
-        Ok(code) => code,
-        Err(e) => {
-            log::warn!("Inline synthesis failed for {}: {}", capability_id, e);
-            // Fallback to placeholder if strategy fails, or just return None to let it be enqueued?
-            // User complained about "no code" placeholder. If real synth fails, maybe better to fail over to NeedsImpl.
-            return None;
-        }
-    };
-
-    // Persist to synth queue as generated artifact
-    let mut item = SynthQueueItem::needs_impl(capability_id.clone(), sub_intent.description.clone());
-    item.status = SynthQueueStatus::Generated;
-    item.notes = Some("Auto-synthesized RTFS (inline)".to_string());
-    let _ = SynthQueue::new(None).enqueue(item);
-
-    // Also write RTFS to generated capabilities dir for visibility (best effort)
-    let gen_dir = crate::utils::fs::find_workspace_root().join("capabilities/generated");
-    let _ = std::fs::create_dir_all(&gen_dir);
-    let _ = std::fs::write(gen_dir.join(format!("{}.rtfs", capability_id.replace('/', "_"))), rtfs_code);
-
-    Some(capability_id)
-}
+// Inline RTFS synthesis has been removed. Missing capabilities are now resolved
+// exclusively via the MissingCapabilityResolver to ensure a single source of truth
+// (LLM + persistence + logging).
 
 /// Errors that can occur during planning
 #[derive(Debug, Error)]
@@ -348,6 +281,8 @@ pub struct ModularPlanner {
     config: PlannerConfig,
     /// Optional safe executor for grounding (read-only/network)
     safe_executor: Option<SafeCapabilityExecutor>,
+    /// Optional missing capability resolver for immediate synthesis
+    missing_capability_resolver: Option<Arc<MissingCapabilityResolver>>,
 }
 
 impl ModularPlanner {
@@ -363,6 +298,7 @@ impl ModularPlanner {
             intent_graph,
             config: PlannerConfig::default(),
             safe_executor: None,
+            missing_capability_resolver: None,
         }
     }
 
@@ -374,11 +310,21 @@ impl ModularPlanner {
             intent_graph,
             config: PlannerConfig::default(),
             safe_executor: None,
+            missing_capability_resolver: None,
         }
     }
 
     pub fn with_config(mut self, config: PlannerConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Inject a missing capability resolver so planner can resolve immediately.
+    pub fn with_missing_capability_resolver(
+        mut self,
+        resolver: Arc<MissingCapabilityResolver>,
+    ) -> Self {
+        self.missing_capability_resolver = Some(resolver);
         self
     }
 
@@ -460,10 +406,9 @@ impl ModularPlanner {
     pub async fn plan(&mut self, goal: &str) -> Result<PlanResult, PlannerError> {
         // Optional: early exit if max depth is zero
         if self.config.max_depth == 0 {
-            return Err(ResolutionError::NotFound(
-                "Max depth is zero; cannot plan".to_string(),
-            )
-            .into());
+            return Err(
+                ResolutionError::NotFound("Max depth is zero; cannot plan".to_string()).into(),
+            );
         }
 
         let mut trace = PlanningTrace {
@@ -543,7 +488,9 @@ impl ModularPlanner {
             .with_show_prompt(self.config.show_prompt)
             .with_confirm_llm(self.config.confirm_llm);
         for (k, v) in grounding_params.iter() {
-            decomp_context.pre_extracted_params.insert(k.clone(), v.clone());
+            decomp_context
+                .pre_extracted_params
+                .insert(k.clone(), v.clone());
         }
 
         let tools_slice = available_tools.as_ref().map(|v| v.as_slice());
@@ -571,7 +518,9 @@ impl ModularPlanner {
             .await?;
 
         // Print Intent Graph
-        println!("\n╭──────────────────────────────────────────────────────────────────────────────");
+        println!(
+            "\n╭──────────────────────────────────────────────────────────────────────────────"
+        );
         println!("│ 🧭 Intent Graph");
         println!("╰──────────────────────────────────────────────────────────────────────────────");
         println!("ROOT: {}", goal);
@@ -597,8 +546,12 @@ impl ModularPlanner {
         let goal_snapshot = goal.to_string();
 
         // Working queue for intents to resolve/refine (stack order preserved)
-        let mut intent_queue: Vec<(usize, SubIntent)> =
-            decomp_result.sub_intents.iter().cloned().enumerate().collect();
+        let mut intent_queue: Vec<(usize, SubIntent)> = decomp_result
+            .sub_intents
+            .iter()
+            .cloned()
+            .enumerate()
+            .collect();
 
         while let Some((idx, sub_intent)) = intent_queue.pop() {
             let intent_id = &intent_ids[idx];
@@ -637,62 +590,37 @@ impl ModularPlanner {
                         let has_params = !sub_intent.extracted_params.is_empty();
                         if !is_simple || (!has_params && !is_same_as_goal) {
                             refined_attempts.insert(intent_id.clone());
+
+                            // Collect sibling intent descriptions for context
+                            let sibling_descriptions: Vec<String> = decomp_result
+                                .sub_intents
+                                .iter()
+                                .map(|s| s.description.clone())
+                                .collect();
+
                             let refine_ctx = DecompositionContext::new()
                                 .with_max_depth(current_depth)
                                 .with_verbose_llm(self.config.verbose_llm)
                                 .with_show_prompt(self.config.show_prompt)
-                                .with_confirm_llm(self.config.confirm_llm);
+                                .with_confirm_llm(self.config.confirm_llm)
+                                .with_parent_intent(goal_snapshot.clone())
+                                .with_siblings(sibling_descriptions)
+                                .with_data_sources(sub_intent.dependencies.clone());
+
                             let mut refine_ctx = refine_ctx;
                             for (k, v) in grounding_params.iter() {
                                 refine_ctx.pre_extracted_params.insert(k.clone(), v.clone());
                             }
 
-                            // Build a focused refinement goal: only refine this intent
-                            // Include resolved siblings and grounded previews as context
-                            let resolved_summary: Vec<String> = intent_ids
-                                .iter()
-                                .zip(decomp_result.sub_intents.iter())
-                                .filter_map(|(rid, si)| {
-                                    resolutions
-                                        .get(rid)
-                                        .and_then(|r| r.capability_id())
-                                        .map(|cid| format!("{} -> {}", si.description, cid))
-                                })
-                                .collect();
-                            let resolved_preview = truncate_grounding(
-                                &resolved_summary
-                                    .iter()
-                                    .take(5)
-                                    .cloned()
-                                    .collect::<Vec<_>>()
-                                    .join(" | "),
-                            );
-                            let grounded_preview_text = grounding_params
-                                .get("latest_result")
-                                .map(|s| truncate_grounding(s))
-                                .unwrap_or_else(|| "none".to_string());
+                            // CRITICAL: Use ONLY the sub-intent description as the goal.
+                            // Do NOT include the original goal - that causes the LLM to re-plan everything.
+                            // The sibling context (set via DecompositionContext) tells the LLM what's already done.
+                            let refine_goal = sub_intent.description.clone();
 
-                            let domain_hint = sub_intent
-                                .domain_hint
-                                .as_ref()
-                                .map(|d| format!("{:?}", d))
-                                .unwrap_or_else(|| "unknown".to_string());
-
-                            let refine_goal = format!(
-                                "[refine-only]\nGoal: {}\nDomain: {}\nTarget intent: desc=\"{}\", type={:?}, deps={:?}, params={:?}\nResolved steps: {}\nGrounded output: {}\nInstructions: Refine ONLY this intent into 1-3 sub-steps that fit the existing pipeline; keep previous steps; do NOT repeat the original goal; avoid recreating already resolved intents.",
-                                truncate_grounding(&goal_snapshot),
-                                domain_hint,
-                                sub_intent.description,
-                                sub_intent.intent_type,
-                                sub_intent.dependencies,
-                                sub_intent.extracted_params,
-                                resolved_preview,
-                                grounded_preview_text
-                            );
-
+                            // CRITICAL: Pass tools_slice so refinement can see available tools
                             match self
                                 .decomposition
-                                .decompose(&refine_goal, None, &refine_ctx)
+                                .decompose(&refine_goal, tools_slice, &refine_ctx)
                                 .await
                             {
                                 Ok(refine_result) if !refine_result.sub_intents.is_empty() => {
@@ -707,7 +635,10 @@ impl ModularPlanner {
                                         .await?;
 
                                     // Enqueue for resolution
-                                    for (rid, rsub) in refined_ids.into_iter().zip(refine_result.sub_intents.into_iter()) {
+                                    for (rid, rsub) in refined_ids
+                                        .into_iter()
+                                        .zip(refine_result.sub_intents.into_iter())
+                                    {
                                         // maintain mapping in intent_ids/resolutions
                                         intent_ids.push(rid.clone());
                                         intent_queue.push((intent_ids.len() - 1, rsub.clone()));
@@ -744,26 +675,74 @@ impl ModularPlanner {
                         let capability_id =
                             generated_capability_id_from_description(&sub_intent.description);
 
-                        // Single synth attempt (stub; currently falls through to enqueue)
-                        let synth_generated = attempt_inline_rtfs_synth(&sub_intent).await;
+                        // Inline synth removed; queue for resolver to handle synthesis
+                        let _ = enqueue_missing_capability_placeholder(
+                            capability_id.clone(),
+                            sub_intent.description.clone(),
+                            None, // input_schema
+                            None, // output_schema
+                            example_input.clone(),
+                            None, // example_output
+                            Some(sub_intent.description.clone()),
+                            Some(format!(
+                                "Planner could not resolve; queued for reification. Last grounding sample: {}",
+                                example_input
+                                    .as_ref()
+                                    .map(|v| truncate_grounding(&v.to_string()))
+                                    .unwrap_or_else(|| "n/a".to_string())
+                            )),
+                        );
 
-                        if synth_generated.is_none() {
-                            let _ = enqueue_missing_capability_placeholder(
-                                capability_id,
-                                sub_intent.description.clone(),
-                                None, // input_schema
-                                None, // output_schema
-                                example_input.clone(),
-                                None, // example_output
-                                Some(sub_intent.description.clone()),
-                                Some(format!(
-                                    "Planner could not resolve; queued for reification. Last grounding sample: {}",
-                                    example_input
-                                        .as_ref()
-                                        .map(|v| truncate_grounding(&v.to_string()))
-                                        .unwrap_or_else(|| "n/a".to_string())
-                                )),
-                            );
+                        // Optionally trigger resolver immediately for faster availability
+                        if let Some(resolver) = &self.missing_capability_resolver {
+                            let mut ctx = HashMap::new();
+                            ctx.insert("description".to_string(), sub_intent.description.clone());
+                            if let Some(ex) = example_input {
+                                if let Ok(s) = serde_json::to_string(&ex) {
+                                    ctx.insert("example_input".to_string(), s);
+                                }
+                            }
+                            let request = MissingCapabilityRequest {
+                                capability_id: capability_id.clone(),
+                                context: ctx,
+                                attempt_count: 0,
+                                arguments: vec![],
+                                requested_at: SystemTime::now(),
+                            };
+                            match resolver.resolve_capability(&request).await {
+                                Ok(ResolutionResult::Resolved {
+                                    capability_id: cid, ..
+                                }) => {
+                                    log::info!(
+                                        "Resolved missing capability '{}' immediately via resolver",
+                                        cid
+                                    );
+                                    // Fix: Use the resolved capability immediately instead of falling back
+                                    resolutions.insert(
+                                        intent_id.clone(),
+                                        ResolvedCapability::Local {
+                                            capability_id: cid,
+                                            arguments: HashMap::new(),
+                                            confidence: 1.0,
+                                        },
+                                    );
+                                    continue;
+                                }
+                                Ok(other) => {
+                                    log::info!(
+                                        "Resolver did not resolve '{}' immediately: {:?}",
+                                        capability_id,
+                                        other
+                                    );
+                                }
+                                Err(err) => {
+                                    log::warn!(
+                                        "Immediate resolve failed for '{}': {}",
+                                        capability_id,
+                                        err
+                                    );
+                                }
+                            }
                         }
                     }
 
@@ -803,19 +782,22 @@ impl ModularPlanner {
         // Determine plan status
         let has_pending_synth = resolutions.values().any(|r| {
             // Check for NeedsReferral with synth suggestion
-            if let ResolvedCapability::NeedsReferral { suggested_action, .. } = r {
+            if let ResolvedCapability::NeedsReferral {
+                suggested_action, ..
+            } = r
+            {
                 if suggested_action.contains("Synth-or-enqueue") {
                     return true;
                 }
             }
-            
+
             // Check for usage of generated (placeholder) capabilities
             if let Some(id) = r.capability_id() {
                 if id.starts_with("generated/") {
                     return true;
                 }
             }
-            
+
             false
         });
 
@@ -840,28 +822,31 @@ impl ModularPlanner {
         // we should try to do it.
 
         if self.config.persist_intents {
-             // Locate workspace root to find plan storage
-             let root = crate::utils::fs::find_workspace_root();
-             let plan_storage_path = root.join("storage/plans");
-             if let Ok(_) = std::fs::create_dir_all(&plan_storage_path) {
-                 if let Ok(archive) = PlanArchive::with_file_storage(plan_storage_path) {
-                     let mut plan = Plan::new_rtfs(rtfs_plan.clone(), intent_ids.clone());
-                     plan.status = plan_status;
-                     plan.name = Some(goal.to_string());
-                     
-                     // Add metadata
-                     plan.metadata.insert("goal".to_string(), rtfs::runtime::values::Value::String(goal.to_string()));
-                     
-                     match archive.archive_plan(&plan) {
-                         Ok(hash) => {
-                             println!("💾 Plan archived with status {:?}: {}", plan.status, hash);
-                         }
-                         Err(e) => {
-                             log::warn!("Failed to archive plan: {}", e);
-                         }
-                     }
-                 }
-             }
+            // Locate workspace root to find plan storage
+            let root = crate::utils::fs::find_workspace_root();
+            let plan_storage_path = root.join("storage/plans");
+            if let Ok(_) = std::fs::create_dir_all(&plan_storage_path) {
+                if let Ok(archive) = PlanArchive::with_file_storage(plan_storage_path) {
+                    let mut plan = Plan::new_rtfs(rtfs_plan.clone(), intent_ids.clone());
+                    plan.status = plan_status;
+                    plan.name = Some(goal.to_string());
+
+                    // Add metadata
+                    plan.metadata.insert(
+                        "goal".to_string(),
+                        rtfs::runtime::values::Value::String(goal.to_string()),
+                    );
+
+                    match archive.archive_plan(&plan) {
+                        Ok(hash) => {
+                            println!("💾 Plan archived with status {:?}: {}", plan.status, hash);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to archive plan: {}", e);
+                        }
+                    }
+                }
+            }
         }
 
         Ok(PlanResult {
@@ -1156,9 +1141,12 @@ impl ModularPlanner {
                     ResolvedCapability::Local { .. }
                     | ResolvedCapability::Remote { .. }
                     | ResolvedCapability::BuiltIn { .. }
-                    | ResolvedCapability::Synthesized { .. } => {
-                        self.generate_call_expr(resolved, sub_intent, &logical_bindings, sub_intents)
-                    }
+                    | ResolvedCapability::Synthesized { .. } => self.generate_call_expr(
+                        resolved,
+                        sub_intent,
+                        &logical_bindings,
+                        sub_intents,
+                    ),
                     ResolvedCapability::NeedsReferral {
                         suggested_action, ..
                     } => {
@@ -1180,10 +1168,115 @@ impl ModularPlanner {
             if let Some(grounded) = grounding_params.get(&format!("result_{}", intent_id)) {
                 let grounded = truncate_grounding(grounded);
                 let escaped = grounded.replace('"', "\\\"");
-                call_expr = format!("(let [:_grounding_comment \"{}\"]\n  {})", escaped, call_expr);
+                call_expr = format!(
+                    "(let [:_grounding_comment \"{}\"]\n  {})",
+                    escaped, call_expr
+                );
             }
 
             bindings.push((var_name, call_expr));
+        }
+
+        // Post-process: detect schema mismatches and insert inline adapters
+        // For each step with grounding data, check if downstream consumers expect a different type
+        let mut adapter_mappings: HashMap<String, String> = HashMap::new();
+
+        for (idx, sub_intent) in sub_intents.iter().enumerate() {
+            let intent_id = &intent_ids[idx];
+            let var_name = format!("step_{}", idx + 1);
+
+            // Get raw grounding data if available (not the preview format)
+            if let Some(grounded_str) = grounding_params.get(&format!("raw_result_{}", intent_id)) {
+                // Try to parse the grounding data to detect structure
+                if let Ok(grounded_json) = serde_json::from_str::<serde_json::Value>(grounded_str) {
+                    // Check each consumer of this step
+                    for (consumer_idx, consumer_intent) in sub_intents.iter().enumerate() {
+                        if consumer_intent.dependencies.contains(&idx) {
+                            // Get consumer's expected input schema
+                            let consumer_id = &intent_ids[consumer_idx];
+                            let consumer_schema = resolutions.get(consumer_id).and_then(|r| {
+                                if let ResolvedCapability::Remote { input_schema, .. } = r {
+                                    input_schema.as_ref()
+                                } else {
+                                    // Synthesized and other types don't have input_schema
+                                    None
+                                }
+                            });
+
+                            // Detect if we need an adapter
+                            let bridge =
+                                SchemaBridge::detect(None, consumer_schema, Some(&grounded_json));
+                            if bridge.needs_adapter() {
+                                let adapted_var = format!("{}_data", var_name);
+                                let adapter_expr = bridge.generate_rtfs_expr(&var_name);
+                                adapter_mappings.insert(var_name.clone(), adapted_var.clone());
+
+                                log::debug!(
+                                    "🔌 Inserting adapter for {}: {} → {}",
+                                    var_name,
+                                    bridge.description,
+                                    adapter_expr
+                                );
+                                println!(
+                                    "   🔌 Adapter: {} → {} ({})",
+                                    var_name, adapted_var, bridge.description
+                                );
+                                break; // Only need one adapter per producer
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Insert adapter bindings and update references
+        if !adapter_mappings.is_empty() {
+            let mut new_bindings: Vec<(String, String)> = Vec::new();
+
+            for (var_name, call_expr) in bindings.iter() {
+                new_bindings.push((var_name.clone(), call_expr.clone()));
+
+                // If this step needs an adapter, add it right after
+                if let Some(adapted_var) = adapter_mappings.get(var_name) {
+                    // Parse grounding to detect the right field to extract
+                    let producer_idx: usize = var_name
+                        .strip_prefix("step_")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(1)
+                        - 1;
+
+                    if let Some(intent_id) = intent_ids.get(producer_idx) {
+                        if let Some(grounded_str) =
+                            grounding_params.get(&format!("raw_result_{}", intent_id))
+                        {
+                            if let Ok(grounded_json) =
+                                serde_json::from_str::<serde_json::Value>(grounded_str)
+                            {
+                                let bridge = SchemaBridge::detect(None, None, Some(&grounded_json));
+                                let adapter_expr = bridge.generate_rtfs_expr(var_name);
+                                new_bindings.push((adapted_var.clone(), adapter_expr));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Update call expressions to use adapted variables
+            bindings = new_bindings
+                .into_iter()
+                .map(|(name, mut expr)| {
+                    // Replace references to original vars with adapted vars in call expressions
+                    for (orig, adapted) in &adapter_mappings {
+                        // Only replace in argument positions, not in the variable binding itself
+                        if !name.ends_with("_data") {
+                            expr =
+                                expr.replace(&format!(" {}}}", orig), &format!(" {}}}", adapted));
+                            expr = expr.replace(&format!(" {} ", orig), &format!(" {} ", adapted));
+                        }
+                    }
+                    (name, expr)
+                })
+                .collect();
         }
 
         // Build nested let expression
@@ -1524,6 +1617,7 @@ impl ModularPlanner {
             }
             Err(e) => {
                 log::warn!("Safe exec error for {}: {}", cap_id, e);
+                eprintln!("DEBUG: Safe exec error for {}: {}", cap_id, e);
                 // Don't propagate error - just skip this step
                 Ok(None)
             }
@@ -1531,7 +1625,7 @@ impl ModularPlanner {
     }
 
     /// Execute safe capabilities in topological order, passing results through the pipeline.
-    /// 
+    ///
     /// This method:
     /// 1. Computes topological order based on SubIntent.dependencies
     /// 2. Executes each step in order, passing _previous_result from dependencies
@@ -1546,83 +1640,103 @@ impl ModularPlanner {
         trace: &mut PlanningTrace,
     ) -> Result<(), PlannerError> {
         use rtfs::runtime::values::Value;
-        
+
         // Compute topological order based on dependencies
         let order = self.topological_sort(sub_intents);
-        
-        println!("\n╭──────────────────────────────────────────────────────────────────────────────");
-        println!("│ 🔄 Safe Execution Pass ({} steps in dependency order)", order.len());
+
+        println!(
+            "\n╭──────────────────────────────────────────────────────────────────────────────"
+        );
+        println!(
+            "│ 🔄 Safe Execution Pass ({} steps in dependency order)",
+            order.len()
+        );
         println!("╰──────────────────────────────────────────────────────────────────────────────");
-        
+
         // Store execution results by step index
         let mut step_results: HashMap<usize, Value> = HashMap::new();
-        
+
         for step_idx in order {
             if step_idx >= sub_intents.len() {
                 continue;
             }
-            
+
             let sub_intent = &sub_intents[step_idx];
             let intent_id = if step_idx < intent_ids.len() {
                 &intent_ids[step_idx]
             } else {
                 continue;
             };
-            
+
             let resolved = match resolutions.get(intent_id) {
                 Some(r) => r,
                 None => continue,
             };
-            
+
             let cap_id = resolved.capability_id().unwrap_or("unknown");
-            
+
             // Get the previous result from the most recent dependency
             let previous_result: Option<&Value> = if !sub_intent.dependencies.is_empty() {
                 // Use the result from the last dependency (most recent in pipeline)
-                sub_intent.dependencies.iter()
+                sub_intent
+                    .dependencies
+                    .iter()
                     .filter_map(|dep_idx| step_results.get(dep_idx))
                     .last()
             } else {
                 None
             };
-            
-            println!("\n▶️  Step {}/{}: {}", step_idx + 1, sub_intents.len(), sub_intent.description);
+
+            println!(
+                "\n▶️  Step {}/{}: {}",
+                step_idx + 1,
+                sub_intents.len(),
+                sub_intent.description
+            );
             println!("   ├─ Intent ID: {}", intent_id);
             println!("   ├─ Capability: {}", cap_id);
             println!("   ├─ Dependencies: {:?}", sub_intent.dependencies);
             if previous_result.is_some() {
                 println!("   ├─ Input: Received _previous_result from upstream");
             }
-            
+
             // Execute the step with dependency data
-            match self.maybe_execute_and_ground(executor, sub_intent, resolved, previous_result).await {
+            match self
+                .maybe_execute_and_ground(executor, sub_intent, resolved, previous_result)
+                .await
+            {
                 Ok(Some(result)) => {
                     let grounded_text = grounding_preview(&result);
-                    
+
                     trace.events.push(TraceEvent::ResolutionCompleted {
                         intent_id: intent_id.clone(),
                         capability: format!("{} (executed)", cap_id),
                     });
-                    
-                    println!("   ╰─ ✅ Result Captured ({} chars): {}", 
+
+                    println!(
+                        "   ╰─ ✅ Result Captured ({} chars): {}",
                         grounded_text.len(),
-                        grounded_text.chars().take(100).collect::<String>().replace("\n", " "));
-                    
+                        grounded_text
+                            .chars()
+                            .take(100)
+                            .collect::<String>()
+                            .replace("\n", " ")
+                    );
+
                     // Store for downstream steps
-                    step_results.insert(step_idx, result);
-                    
-                    grounding_params.insert(
-                        format!("result_{}", intent_id),
-                        grounded_text.clone(),
-                    );
-                    grounding_params.insert(
-                        format!("step_{}_result", step_idx),
-                        grounded_text.clone(),
-                    );
-                    grounding_params.insert(
-                        "latest_result".to_string(),
-                        grounded_text,
-                    );
+                    step_results.insert(step_idx, result.clone());
+
+                    grounding_params.insert(format!("result_{}", intent_id), grounded_text.clone());
+                    grounding_params
+                        .insert(format!("step_{}_result", step_idx), grounded_text.clone());
+                    grounding_params.insert("latest_result".to_string(), grounded_text);
+
+                    // Also store raw JSON for adapter detection
+                    if let Ok(raw_json) = rtfs_value_to_json(&result) {
+                        if let Ok(raw_str) = serde_json::to_string(&raw_json) {
+                            grounding_params.insert(format!("raw_result_{}", intent_id), raw_str);
+                        }
+                    }
                 }
                 Ok(None) => {
                     println!("   ╰─ ⏭️  Skipped (Not safe to execute or no manifest)");
@@ -1633,12 +1747,15 @@ impl ModularPlanner {
                 }
             }
         }
-        
-        println!("\n✅ Safe execution pass complete ({} results captured)\n", step_results.len());
-        
+
+        println!(
+            "\n✅ Safe execution pass complete ({} results captured)\n",
+            step_results.len()
+        );
+
         Ok(())
     }
-    
+
     /// Compute topological order of sub-intents based on their dependencies.
     /// Uses a stable Kahn's algorithm (preserves original order among roots).
     fn topological_sort(&self, sub_intents: &[SubIntent]) -> Vec<usize> {
@@ -1646,7 +1763,7 @@ impl ModularPlanner {
         if n == 0 {
             return vec![];
         }
-        
+
         // Compute in-degree for each node
         let mut in_degree = vec![0usize; n];
         for (idx, intent) in sub_intents.iter().enumerate() {
@@ -1657,7 +1774,7 @@ impl ModularPlanner {
                 }
             }
         }
-        
+
         // Start with nodes that have no dependencies (in-degree 0), preserve index order
         let mut queue: VecDeque<usize> = VecDeque::new();
         let mut enqueued = vec![false; n];
@@ -1669,10 +1786,10 @@ impl ModularPlanner {
         }
 
         let mut result = Vec::with_capacity(n);
-        
+
         while let Some(node) = queue.pop_front() {
             result.push(node);
-            
+
             // For each node that depends on this one, decrease in-degree
             for (idx, intent) in sub_intents.iter().enumerate() {
                 if intent.dependencies.contains(&node) {
@@ -1684,13 +1801,13 @@ impl ModularPlanner {
                 }
             }
         }
-        
+
         // If we couldn't process all nodes, there's a cycle - fall back to natural order
         if result.len() < n {
             log::warn!("Dependency cycle detected, falling back to natural order");
             return (0..n).collect();
         }
-        
+
         result
     }
 }

@@ -222,8 +222,14 @@ impl CatalogResolution {
                     // - mcp.{server}/{server}-mcp/{tool}
                     // - mcp.{server}/{tool}
                     // - mcp.{server}.{tool}
-                    possible_ids.push(format!("mcp.{}/{}-mcp.{}", server_name, server_name, tool_name));
-                    possible_ids.push(format!("mcp.{}/{}-mcp/{}", server_name, server_name, tool_name));
+                    possible_ids.push(format!(
+                        "mcp.{}/{}-mcp.{}",
+                        server_name, server_name, tool_name
+                    ));
+                    possible_ids.push(format!(
+                        "mcp.{}/{}-mcp/{}",
+                        server_name, server_name, tool_name
+                    ));
                     possible_ids.push(format!("mcp.{}/{}", server_name, tool_name));
                     possible_ids.push(format!("mcp.{}.{}", server_name, tool_name));
                 }

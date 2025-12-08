@@ -67,6 +67,18 @@ pub struct DecompositionContext {
 
     /// Whether to confirm before each LLM call
     pub confirm_llm: bool,
+
+    /// Parent intent description (for sub-intent refinement)
+    /// When refining a sub-intent, this contains the original parent goal
+    pub parent_intent: Option<String>,
+
+    /// Descriptions of sibling intents (other steps at same level in parent plan)
+    /// Helps LLM understand what's already being done and avoid regenerating
+    pub sibling_intents: Vec<String>,
+
+    /// Indices of sibling steps that provide input data to this intent
+    /// e.g., if this intent depends on step 0 for data, data_source_indices = [0]
+    pub data_source_indices: Vec<usize>,
 }
 
 impl DecompositionContext {
@@ -80,6 +92,9 @@ impl DecompositionContext {
             verbose_llm: false,
             show_prompt: false,
             confirm_llm: false,
+            parent_intent: None,
+            sibling_intents: vec![],
+            data_source_indices: vec![],
         }
     }
 
@@ -118,7 +133,28 @@ impl DecompositionContext {
             verbose_llm: self.verbose_llm,
             show_prompt: self.show_prompt,
             confirm_llm: self.confirm_llm,
+            parent_intent: self.parent_intent.clone(),
+            sibling_intents: self.sibling_intents.clone(),
+            data_source_indices: self.data_source_indices.clone(),
         }
+    }
+
+    /// Set the parent intent description for sub-intent refinement
+    pub fn with_parent_intent(mut self, parent: impl Into<String>) -> Self {
+        self.parent_intent = Some(parent.into());
+        self
+    }
+
+    /// Set sibling intent descriptions (other steps in parent plan)
+    pub fn with_siblings(mut self, siblings: Vec<String>) -> Self {
+        self.sibling_intents = siblings;
+        self
+    }
+
+    /// Set indices of sibling steps that provide data to this intent
+    pub fn with_data_sources(mut self, sources: Vec<usize>) -> Self {
+        self.data_source_indices = sources;
+        self
     }
 
     pub fn is_at_max_depth(&self) -> bool {

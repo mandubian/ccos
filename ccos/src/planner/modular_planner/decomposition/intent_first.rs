@@ -118,8 +118,7 @@ RULE: If grounded data covers what you need, use data_transform/output. Only ask
                     .and_then(|s| s.get("properties"))
                     .and_then(|p| p.as_object())
                     .map(|obj| {
-                        let keys: Vec<String> =
-                            obj.keys().take(6).cloned().collect();
+                        let keys: Vec<String> = obj.keys().take(6).cloned().collect();
                         keys.join(", ")
                     })
                     .unwrap_or_else(|| "unknown".to_string());

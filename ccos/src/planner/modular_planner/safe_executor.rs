@@ -9,20 +9,20 @@
 use std::sync::Arc;
 
 use crate::capability_marketplace::CapabilityMarketplace;
+use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use rtfs::runtime::values::Value;
-use rtfs::ast::MapKey;
 use rtfs::runtime::security::{RuntimeContext, SecurityAuthorizer};
+use rtfs::runtime::values::Value;
 
 /// Allowlist of effects that are considered safe for opportunistic execution.
-const SAFE_EFFECTS: &[&str] = &[":network", ":compute", ":read", ":output"];
+const SAFE_EFFECTS: &[&str] = &[":network", ":compute", ":read", ":output", ":pure"];
 
 /// Denylist of effects that block safe execution.
 const UNSAFE_EFFECTS: &[&str] = &[":filesystem", ":system", ":write", ":delete"];
 
 /// Minimal executor that enforces an allowlist of effects.
 pub struct SafeCapabilityExecutor {
-    marketplace: Arc<CapabilityMarketplace>,
+    pub marketplace: Arc<CapabilityMarketplace>,
     runtime_context: RuntimeContext,
 }
 
@@ -56,9 +56,9 @@ impl SafeCapabilityExecutor {
         if manifest.effects.is_empty() {
             // MCP patterns: list_, search_, get_
             let mcp_safe_patterns = ["list_", "search_", "get_", ".list", ".search", ".get"];
-            
+
             let is_mcp_safe = mcp_safe_patterns.iter().any(|p| capability_id.contains(p));
-            
+
             // If no effects and not an MCP safe pattern, we can't determine safety
             return is_mcp_safe;
         }
@@ -78,7 +78,7 @@ impl SafeCapabilityExecutor {
     }
 
     /// Execute if the capability is low-risk; otherwise return None.
-    /// 
+    ///
     /// # Arguments
     /// - `capability_id`: The capability to execute
     /// - `params`: String parameters from the intent
@@ -93,8 +93,8 @@ impl SafeCapabilityExecutor {
         let manifest = match self.marketplace.get_capability(capability_id).await {
             Some(m) => m,
             None => {
-                log::debug!(
-                    "Safe exec skipped for {} (manifest not registered in marketplace)",
+                eprintln!(
+                    "DEBUG: Safe exec skipped for {} (manifest not registered in marketplace)",
                     capability_id
                 );
                 return Ok(None);
@@ -106,16 +106,16 @@ impl SafeCapabilityExecutor {
             for eff in &manifest.effects {
                 let norm = eff.trim().to_lowercase();
                 if UNSAFE_EFFECTS.contains(&norm.as_str()) {
-                    log::debug!(
-                        "Safe exec blocked for {} (effect {} not allowed)",
+                    eprintln!(
+                        "DEBUG: Safe exec blocked for {} (effect {} not allowed)",
                         capability_id, norm
                     );
                     return Ok(None);
                 }
                 if !SAFE_EFFECTS.contains(&norm.as_str()) && !norm.is_empty() {
-                    log::debug!(
-                        "Safe exec blocked for {} (effect {} not in allowlist)",
-                        capability_id, norm
+                    eprintln!(
+                        "DEBUG: Safe exec blocked for {} (effect {} not in allowlist: {:?})",
+                        capability_id, norm, SAFE_EFFECTS
                     );
                     return Ok(None);
                 }
@@ -126,13 +126,15 @@ impl SafeCapabilityExecutor {
             // Core CCOS patterns: ccos.data.*, ccos.io.println, ccos.echo
             let mcp_safe_patterns = ["list_", "search_", "get_", ".list", ".search", ".get"];
             let ccos_safe_prefixes = ["ccos.data.", "ccos.echo", "ccos.io.println", "ccos.io.log"];
-            
+
             let is_mcp_safe = mcp_safe_patterns.iter().any(|p| capability_id.contains(p));
-            let is_ccos_safe = ccos_safe_prefixes.iter().any(|p| capability_id.starts_with(p));
-            
+            let is_ccos_safe = ccos_safe_prefixes
+                .iter()
+                .any(|p| capability_id.starts_with(p));
+
             if !is_mcp_safe && !is_ccos_safe {
-                log::debug!(
-                    "Safe exec blocked for {} (no effects declared and not a safe pattern)",
+                eprintln!(
+                    "DEBUG: Safe exec blocked for {} (no effects declared and not a safe pattern)",
                     capability_id
                 );
                 return Ok(None);
@@ -140,17 +142,14 @@ impl SafeCapabilityExecutor {
         }
 
         // Authorize via RuntimeContext (effects/cap allowlist)
-        let args: Vec<Value> = params
-            .values()
-            .cloned()
-            .map(Value::String)
-            .collect();
+        let args: Vec<Value> = params.values().cloned().map(Value::String).collect();
         let mut ctx = self.runtime_context.clone();
         ctx.allowed_capabilities.insert(capability_id.to_string());
         if let Err(e) = SecurityAuthorizer::authorize_capability(&ctx, capability_id, &args) {
-            log::debug!(
+            log::info!(
                 "Safe exec blocked for {} (authorization failed: {})",
-                capability_id, e
+                capability_id,
+                e
             );
             return Ok(None);
         }
@@ -158,27 +157,53 @@ impl SafeCapabilityExecutor {
         // Build Value::Map from params, injecting _previous_result if available
         let mut map = std::collections::HashMap::new();
         for (k, v) in params {
-            // If this param is _previous_result and looks like JSON, parse to RTFS Value
-            if k == "_previous_result" {
-                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(v) {
-                    if let Ok(rtfs_val) = crate::utils::value_conversion::json_to_rtfs_value(&json_val) {
-                        map.insert(MapKey::String(k.clone()), rtfs_val);
-                        continue;
-                    }
+            // Try to parse JSON for all parameters
+            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(v) {
+                if let Ok(rtfs_val) = crate::utils::value_conversion::json_to_rtfs_value(&json_val)
+                {
+                    // Only use parsed value if it's structural (Map/Array) or Bool/Number
+                    // Avoid parsing simple strings that happen to be valid JSON (like "true") if type inference is ambiguous,
+                    // but generally parsing is safer for grounding.
+                    // However, we must be careful not to parse "foo" as string "foo" (which is valid JSON)
+                    // if the capability expects a raw string.
+                    // Actually, json_to_rtfs_value handles types well.
+                    map.insert(MapKey::String(k.clone()), rtfs_val);
+                    continue;
                 }
             }
             map.insert(MapKey::String(k.clone()), Value::String(v.clone()));
         }
-        
+
         // Inject _previous_result for data pipeline support
         if let Some(prev) = previous_result {
+            eprintln!(
+                "DEBUG: SafeExec injecting prev result type: {:?}",
+                prev.type_name()
+            );
+
             map.insert(MapKey::String("_previous_result".to_string()), prev.clone());
+            map.insert(
+                MapKey::Keyword(Keyword("_previous_result".to_string())),
+                prev.clone(),
+            );
+
+            // Heuristic: if "data" is missing, alias _previous_result to "data"
+            // This fixes issues with capabilities that expect :data (like filter/sort/transforms)
+            // We verify both String and Keyword keys
+            if !map.contains_key(&MapKey::String("data".to_string()))
+                && !map.contains_key(&MapKey::Keyword(Keyword("data".to_string())))
+            {
+                eprintln!("DEBUG: SafeExec aliasing _previous_result to :data");
+                map.insert(MapKey::String("data".to_string()), prev.clone());
+                map.insert(MapKey::Keyword(Keyword("data".to_string())), prev.clone());
+            }
+
             log::debug!(
                 "Safe exec injecting _previous_result into {} params",
                 capability_id
             );
         }
-        
+
         let input = Value::Map(map);
 
         let result = self
@@ -197,4 +222,3 @@ impl SafeCapabilityExecutor {
         Ok(Some(result))
     }
 }
-

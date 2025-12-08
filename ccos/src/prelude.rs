@@ -41,30 +41,26 @@ pub fn load_prelude(env: &mut Environment) {
     );
 
     // Step-scoped context setter (stored on host; exposed in context snapshots)
-    let context_set = Value::Function(Function::BuiltinWithContext(
-        BuiltinFunctionWithContext {
-            name: "ccos.context/set".to_string(),
-            arity: Arity::Fixed(2),
-            func: Arc::new(
-                |mut args: Vec<Value>, evaluator: &Evaluator, _env: &mut Environment| {
-                    if args.len() != 2 {
-                        return Err(RuntimeError::Generic(
-                            "ccos.context/set expects 2 arguments: key, value".to_string(),
-                        ));
-                    }
-                    let value = args.pop().unwrap();
-                    let key_val = args.pop().unwrap();
-                    let key = match key_val {
-                        Value::String(s) => s,
-                        other => other.to_string(),
-                    };
-                    evaluator
-                        .set_context_value(key, value)
-                        .map(|_| Value::Nil)
-                },
-            ),
-        },
-    ));
+    let context_set = Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+        name: "ccos.context/set".to_string(),
+        arity: Arity::Fixed(2),
+        func: Arc::new(
+            |mut args: Vec<Value>, evaluator: &Evaluator, _env: &mut Environment| {
+                if args.len() != 2 {
+                    return Err(RuntimeError::Generic(
+                        "ccos.context/set expects 2 arguments: key, value".to_string(),
+                    ));
+                }
+                let value = args.pop().unwrap();
+                let key_val = args.pop().unwrap();
+                let key = match key_val {
+                    Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                evaluator.set_context_value(key, value).map(|_| Value::Nil)
+            },
+        ),
+    }));
     env.define(&Symbol("ccos.context/set".to_string()), context_set.clone());
     env.define(&Symbol("context/set".to_string()), context_set);
     env.define(

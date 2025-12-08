@@ -203,6 +203,50 @@ RULE: If grounded data covers what you need, use data_transform/output. Only ask
             )
         };
 
+        // Build parent/sibling context for sub-intent refinement
+        let sibling_context = if !context.sibling_intents.is_empty() {
+            let sibling_list: Vec<String> = context
+                .sibling_intents
+                .iter()
+                .enumerate()
+                .map(|(i, s)| format!("  Step {}: {}", i + 1, s))
+                .collect();
+            let data_source_desc = if context.data_source_indices.is_empty() {
+                "none".to_string()
+            } else {
+                context
+                    .data_source_indices
+                    .iter()
+                    .map(|i| format!("Step {}", i + 1))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!(
+                r#"
+
+CONTEXT FROM PARENT PLAN:
+Parent goal: {}
+Existing sibling steps (already in the pipeline):
+{}
+
+Data already available from: {}
+
+CRITICAL RULES FOR SUB-INTENT:
+- Do NOT regenerate steps that siblings already provide (especially data fetching steps)
+- Use data from the sibling step(s) listed above instead of making new API calls
+- Only add steps that refine THIS specific sub-intent, not the entire parent goal
+- Reference sibling output using depends_on indices"#,
+                context
+                    .parent_intent
+                    .as_deref()
+                    .unwrap_or("(not specified)"),
+                sibling_list.join("\n"),
+                data_source_desc
+            )
+        } else {
+            String::new()
+        };
+
         format!(
             r#"You are a goal decomposition expert with access to tools. Break down the goal into executable steps.
 
@@ -214,6 +258,9 @@ RULES:
 3. Extract parameters from the goal that match the tool's input_schema.
 4. Avoid intent_type "user_input" unless critical parameters are missing or ambiguous. Do NOT ask the user just to reformat or summarize; prefer data_transform/output with existing data.
 5. If no tool matches exactly, use intent_type "api_call" or "data_transform" without a tool.
+   - IMPORTANT: Do NOT force a tool match if the tool's description doesn't fit the goal.
+   - It is BETTER to leave "tool" as null than to pick a wrong tool.
+   - If you need a capability that isn't in the list (e.g., "group_by", "summarize"), use "tool": null.
 6. When data is already available, produce an "output" step (e.g., with ccos.io.println) instead of asking the user.
 7. Use CONCRETE values, not placeholders. For dates, use ISO 8601 format (YYYY-MM-DD). Today is {today}.
 8. For "weekly" or "last 7 days", calculate the actual date: {week_ago}.
@@ -225,7 +272,7 @@ INTENT TYPES:
 - "output": Display results to user
 
 GOAL: "{goal}"
-{params_hint}
+{params_hint}{sibling_context}
 
 Respond with ONLY valid JSON:
 {{
@@ -235,15 +282,19 @@ Respond with ONLY valid JSON:
       "intent_type": "api_call|data_transform|output|user_input",
       "action": "search|list|get|create|filter|sort|display|...",
       "tool": "exact_tool_name_from_list_or_null",
-      "depends_on": [],
+      "depends_on": [0],
       "params": {{"param_name": "value_from_goal"}}
     }}
   ]
 }}
+
+CRITICAL: "depends_on" MUST be an array of NUMERIC step indices (0, 1, 2...), NOT step descriptions.
+Example: if step 2 depends on step 0, use "depends_on": [0] - NOT "depends_on": ["description of step 0"]
 "#,
             tools_list = tools_list,
             goal = goal,
             params_hint = params_hint,
+            sibling_context = sibling_context,
             today = chrono::Utc::now().format("%Y-%m-%d"),
             week_ago = (chrono::Utc::now() - chrono::Duration::days(7)).format("%Y-%m-%d"),
         )
@@ -455,6 +506,11 @@ fn convert_grounded_to_sub_intents(
             sub_intent
                 .extracted_params
                 .insert("_suggested_tool".to_string(), tool);
+        } else {
+            // Explicitly mark that no tool was suggested by the grounded planner
+            sub_intent
+                .extracted_params
+                .insert("_grounded_no_tool".to_string(), "true".to_string());
         }
 
         for (key, value) in step.params {
