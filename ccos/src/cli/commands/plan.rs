@@ -2,7 +2,6 @@ use crate::cli::CliContext;
 use crate::ops::plan::{CreatePlanOptions, ExecutePlanOptions};
 use clap::Subcommand;
 use rtfs::runtime::error::RuntimeResult;
-use std::collections::HashMap;
 
 fn parse_key_val(s: &str) -> Result<(String, String), String> {
     let pos = s
@@ -70,6 +69,19 @@ pub enum PlanCommand {
         /// Plan ID or path
         plan: String,
     },
+
+    /// List archived plans (by ID, name, or goal)
+    List {
+        /// Optional filter (matches id, name, or goal substring)
+        #[arg(long, short)]
+        filter: Option<String>,
+    },
+
+    /// Delete a plan from the archive
+    Delete {
+        /// Plan ID, prefix, or name/goal substring
+        plan: String,
+    },
 }
 
 pub async fn execute(_ctx: &mut CliContext, command: PlanCommand) -> RuntimeResult<()> {
@@ -132,6 +144,42 @@ pub async fn execute(_ctx: &mut CliContext, command: PlanCommand) -> RuntimeResu
             } else {
                 println!("Plan is invalid.");
             }
+        }
+        PlanCommand::List { filter } => {
+            let plans = crate::ops::plan::list_archived_plans(filter.as_deref())?;
+
+            if plans.is_empty() {
+                println!("No plans found in archive.");
+                return Ok(());
+            }
+
+            println!(
+                "{:<38}  {:<28}  {:<14}  {}",
+                "PLAN ID", "NAME/GOAL", "STATUS", "CREATED_AT"
+            );
+            for plan in plans {
+                let label = plan
+                    .name
+                    .as_deref()
+                    .or_else(|| plan.metadata.get("goal").map(|s| s.as_str()))
+                    .unwrap_or("-");
+                let truncated = if label.len() > 28 {
+                    format!("{}…", &label[..27])
+                } else {
+                    label.to_string()
+                };
+                println!(
+                    "{:<38}  {:<28}  {:<14}  {}",
+                    plan.plan_id,
+                    truncated,
+                    format!("{:?}", plan.status),
+                    plan.created_at
+                );
+            }
+        }
+        PlanCommand::Delete { plan } => {
+            let removed = crate::ops::plan::delete_plan_by_hint(&plan)?;
+            println!("🗑️  Deleted plan {}", removed);
         }
     }
     Ok(())

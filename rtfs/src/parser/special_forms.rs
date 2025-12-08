@@ -1339,9 +1339,9 @@ pub(super) fn build_match_expr(match_expr_pair: Pair<Rule>) -> Result<MatchExpr,
                 });
             }
             unknown_rule => {
-                return Err(PestParseError::InvalidInput { 
+                return Err(PestParseError::InvalidInput {
                     message: format!("Unexpected rule {:?} in match expression, expected Rule::match_clause_content", unknown_rule),
-                    span: Some(pair_to_source_span(&clause_candidate_pair)) 
+                    span: Some(pair_to_source_span(&clause_candidate_pair))
                 });
             }
         }

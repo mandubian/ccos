@@ -239,7 +239,11 @@ impl CanonicalCapabilitySchema {
             if let Some(schema_val) = cap_map.get(&MapKey::String(schema_field.to_string())) {
                 if !matches!(
                     schema_val,
-                    Value::Map(_) | Value::Vector(_) | Value::List(_) | Value::String(_) | Value::Keyword(_)
+                    Value::Map(_)
+                        | Value::Vector(_)
+                        | Value::List(_)
+                        | Value::String(_)
+                        | Value::Keyword(_)
                 ) {
                     return Err(format!(
                         "Capability {} must be a map, vector, list, string, or keyword type expression",

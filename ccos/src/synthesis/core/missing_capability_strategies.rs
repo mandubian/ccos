@@ -32,8 +32,7 @@ const CAPABILITY_PROMPT_VERSION: &str = "v1";
 
 static CAPABILITY_PROMPT_MANAGER: Lazy<PromptManager<FilePromptStore>> = Lazy::new(|| {
     // CARGO_MANIFEST_DIR points to ccos/ccos; prompts live at ../assets/prompts/arbiter
-    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../assets/prompts/arbiter");
+    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/prompts/arbiter");
     PromptManager::new(FilePromptStore::new(base_dir))
 });
 
@@ -295,14 +294,11 @@ impl PureRtfsGenerationStrategy {
             .render(CAPABILITY_PROMPT_ID, CAPABILITY_PROMPT_VERSION, &vars)
             .map_err(|e| ResolutionError::Internal(format!("Prompt rendering failed: {}", e)))?;
 
-        let response = arbiter
-            .generate_raw_text(&prompt)
-            .await
-            .map_err(|e| {
-                let msg = format!("LLM synthesis failed: {}", e);
-                eprintln!("❌ {}", msg);
-                ResolutionError::Internal(msg)
-            })?;
+        let response = arbiter.generate_raw_text(&prompt).await.map_err(|e| {
+            let msg = format!("LLM synthesis failed: {}", e);
+            eprintln!("❌ {}", msg);
+            ResolutionError::Internal(msg)
+        })?;
 
         // Log the raw response for debugging (truncated if too long)
         if response.len() > 500 {
@@ -1051,7 +1047,9 @@ impl ExternalLlmHintStrategy {
 
         CAPABILITY_PROMPT_MANAGER
             .render(CAPABILITY_PROMPT_ID, CAPABILITY_PROMPT_VERSION, &vars)
-            .map_err(|e| ResolutionError::Internal(format!("Failed to render capability prompt: {}", e)))
+            .map_err(|e| {
+                ResolutionError::Internal(format!("Failed to render capability prompt: {}", e))
+            })
     }
 }
 

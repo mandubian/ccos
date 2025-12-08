@@ -471,7 +471,7 @@ pub async fn discover_by_goal_with_options(
                                                             if introspection.tools.len() > 10 {
                                                                 println!("      ... and {} more", introspection.tools.len() - 10);
                                                             }
-                                                            
+
                                                             // Save tools to RTFS file and link to pending entry
                                                             if let Err(e) = crate::ops::server::save_discovered_tools(
                                                                 &introspection,
@@ -488,7 +488,7 @@ pub async fn discover_by_goal_with_options(
                                                     Err(e2) => {
                                                         println!("   ❌ Still failed: {}", e2);
                                                         println!("   💡 Troubleshooting:");
-                                                        
+
                                                         // Check if it's GitHub Copilot endpoint
                                                         if endpoint.contains("githubcopilot.com") {
                                                             println!("      ⚠️  This is GitHub Copilot MCP (not regular GitHub)");

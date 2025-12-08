@@ -14,7 +14,7 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
             "Filters a list of objects based on exact match criteria. Params: data (list), criteria (map)".to_string(),
             Arc::new(|input| {
                 let (data, criteria) = extract_data_and_params(input, "ccos.data.filter", "criteria")?;
-                
+
                 let criteria_map = match criteria {
                     Some(Value::Map(m)) => Some(m),
                     None => None,
@@ -27,7 +27,7 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
 
                 // Extract list from data - handle both direct lists and wrapped results
                 let items = extract_list_from_value(data)?;
-                
+
                 if let Some(crit) = criteria_map {
                     let filtered: Vec<Value> = items.iter().filter(|item| {
                         if let Value::Map(item_map) = item {
@@ -57,17 +57,17 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
             "Sorts a list of objects. Params: data (list), key (string), order (string: 'asc'|'desc')".to_string(),
             Arc::new(|input| {
                 let (data, params_val) = extract_data_and_params(input, "ccos.data.sort", "params")?;
-                
+
                 let (key, order) = if let Some(Value::Map(params)) = params_val {
                     let k = params.get(&MapKey::String("key".to_string()))
                         .or_else(|| params.get(&MapKey::Keyword(Keyword("key".to_string()))))
                         .map(|v| value_to_clean_string(v));
-                    
+
                     let o = params.get(&MapKey::String("order".to_string()))
                         .or_else(|| params.get(&MapKey::Keyword(Keyword("order".to_string()))))
                         .map(|v| value_to_clean_string(v).to_lowercase())
                         .unwrap_or("asc".to_string());
-                        
+
                     (k, o)
                 } else {
                     (None, "asc".to_string())
@@ -75,7 +75,7 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
 
                 // Extract list from data - handle both direct lists and wrapped results like {"items": [...]}
                 let items = extract_list_from_value(data)?;
-                
+
                 let mut sorted = items.clone();
                 sorted.sort_by(|a, b| {
                     let val_a = if let Some(ref k) = key {
@@ -88,7 +88,7 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                     } else {
                         Some(b)
                     };
-                    
+
                     match (val_a, val_b) {
                         (Some(va), Some(vb)) => compare_values(va, vb),
                         (Some(_), None) => Ordering::Less,
@@ -96,11 +96,11 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                         (None, None) => Ordering::Equal,
                     }
                 });
-                
+
                 if order == "desc" {
                     sorted.reverse();
                 }
-                
+
                 Ok(Value::List(sorted))
             }),
             vec![":compute".to_string()], // Safe effect - pure data transformation

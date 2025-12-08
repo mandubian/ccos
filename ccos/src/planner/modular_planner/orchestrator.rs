@@ -6,6 +6,7 @@
 
 use regex::Regex;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -231,6 +232,12 @@ pub struct PlanResult {
     pub rtfs_plan: String,
     /// Planning trace for debugging
     pub trace: PlanningTrace,
+    /// Optional plan_id assigned when the plan is archived
+    pub plan_id: Option<String>,
+    /// Optional content-addressable hash returned by the archive
+    pub archive_hash: Option<String>,
+    /// Optional path to the archive directory used for persistence
+    pub archive_path: Option<PathBuf>,
 }
 
 /// Trace of planning decisions for debugging/audit
@@ -871,6 +878,10 @@ impl ModularPlanner {
             plan_status = PlanStatus::PendingSynthesis;
         }
 
+        let mut archived_plan_id: Option<String> = None;
+        let mut archived_hash: Option<String> = None;
+        let mut archive_path: Option<PathBuf> = None;
+
         // We need a way to access PlanArchive here. For now, we'll construct one if we can get the path,
         // but ideally it should be passed in.
         // Assuming we are in CLI/runtime context where we can access storage.
@@ -886,11 +897,9 @@ impl ModularPlanner {
         // we should try to do it.
 
         if self.config.persist_intents {
-            // Locate workspace root to find plan storage
-            let root = crate::utils::fs::find_workspace_root();
-            let plan_storage_path = root.join("storage/plans");
+            let plan_storage_path = crate::utils::fs::default_plan_archive_path();
             if let Ok(_) = std::fs::create_dir_all(&plan_storage_path) {
-                if let Ok(archive) = PlanArchive::with_file_storage(plan_storage_path) {
+                if let Ok(archive) = PlanArchive::with_file_storage(plan_storage_path.clone()) {
                     let mut plan = Plan::new_rtfs(rtfs_plan.clone(), intent_ids.clone());
                     plan.status = plan_status;
                     plan.name = Some(goal.to_string());
@@ -901,8 +910,13 @@ impl ModularPlanner {
                         rtfs::runtime::values::Value::String(goal.to_string()),
                     );
 
+                    let pid = plan.plan_id.clone();
+                    archived_plan_id = Some(pid.clone());
+
                     match archive.archive_plan(&plan) {
                         Ok(hash) => {
+                            archived_hash = Some(hash.clone());
+                            archive_path = Some(plan_storage_path.clone());
                             println!("💾 Plan archived with status {:?}: {}", plan.status, hash);
                         }
                         Err(e) => {
@@ -919,6 +933,9 @@ impl ModularPlanner {
             resolutions,
             rtfs_plan,
             trace,
+            plan_id: archived_plan_id,
+            archive_hash: archived_hash,
+            archive_path,
         })
     }
 
@@ -1245,7 +1262,7 @@ impl ModularPlanner {
         // For each step with grounding data, check if downstream consumers expect a different type
         let mut adapter_mappings: HashMap<String, String> = HashMap::new();
 
-        for (idx, sub_intent) in sub_intents.iter().enumerate() {
+        for (idx, _) in sub_intents.iter().enumerate() {
             let intent_id = &intent_ids[idx];
             let var_name = format!("step_{}", idx + 1);
 

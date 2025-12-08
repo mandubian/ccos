@@ -41,8 +41,3 @@ pub fn enqueue_missing_capability_placeholder(
     let queue = SynthQueue::new(None);
     queue.enqueue(item)
 }
-
-
-
-
-

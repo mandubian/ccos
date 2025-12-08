@@ -5,6 +5,7 @@ pub mod marketplace;
 pub mod mcp_discovery;
 pub mod resource_monitor;
 pub mod types;
+pub mod version_store;
 pub mod versioning;
 
 // Export types and CapabilityMarketplace struct (but not its impl from types.rs)

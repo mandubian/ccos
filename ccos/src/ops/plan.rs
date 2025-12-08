@@ -7,10 +7,13 @@
 //! - `repair_plan`: Attempts to fix a failing plan using LLM
 
 use crate::arbiter::llm_provider::{LlmProviderConfig, LlmProviderFactory, LlmProviderType};
+use crate::archivable_types::ArchivablePlan;
 use crate::capabilities::{MCPSessionHandler, SessionPoolManager};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::examples_common::builder::load_agent_config;
 use crate::mcp::core::MCPDiscoveryService;
+use crate::orchestrator::Orchestrator;
+use crate::plan_archive::PlanArchive;
 use crate::planner::modular_planner::decomposition::hybrid::HybridConfig;
 use crate::planner::modular_planner::decomposition::llm_adapter::CcosLlmAdapter;
 use crate::planner::modular_planner::decomposition::{HybridDecomposition, PatternDecomposition};
@@ -20,7 +23,7 @@ use crate::planner::modular_planner::resolution::{
 };
 use crate::planner::modular_planner::{DecompositionStrategy, ModularPlanner, PlannerConfig};
 use crate::planner::CcosCatalogAdapter;
-use crate::types::Plan;
+use crate::types::{Plan, PlanBody};
 use crate::CCOS;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::security::RuntimeContext;
@@ -104,6 +107,10 @@ pub struct CreatePlanResult {
     pub all_resolved: bool,
     /// Unresolved capability IDs
     pub unresolved_capabilities: Vec<String>,
+    /// Plan ID if the planner archived the plan
+    pub plan_id: Option<String>,
+    /// Content-addressable hash returned by the archive (if persisted)
+    pub archive_hash: Option<String>,
 }
 
 /// Create plan from goal using LLM
@@ -241,6 +248,23 @@ pub async fn create_plan_with_options(
     let rtfs_code = plan_result.rtfs_plan.clone();
     println!("{}", rtfs_code);
 
+    if let Some(plan_id) = &plan_result.plan_id {
+        if let Some(hash) = &plan_result.archive_hash {
+            if let Some(path) = &plan_result.archive_path {
+                println!(
+                    "💾 Plan archived as {} (hash {}) at {}",
+                    plan_id,
+                    hash,
+                    path.display()
+                );
+            } else {
+                println!("💾 Plan archived as {} (hash {})", plan_id, hash);
+            }
+        } else {
+            println!("💾 Plan archived as {}", plan_id);
+        }
+    }
+
     // Validate capability references unless explicitly skipped.
     let (validation_issues, all_resolved, unresolved_capabilities) = if !options.skip_validation {
         validate_capabilities_in_code(&rtfs_code, &marketplace).await
@@ -284,6 +308,8 @@ pub async fn create_plan_with_options(
         validation_issues,
         all_resolved,
         unresolved_capabilities,
+        plan_id: plan_result.plan_id,
+        archive_hash: plan_result.archive_hash,
     })
 }
 
@@ -410,7 +436,8 @@ pub async fn execute_plan_with_options(
     options: ExecutePlanOptions,
 ) -> RuntimeResult<String> {
     // 1. Resolve plan content
-    let mut content = resolve_plan_content(&plan_input)?;
+    let resolved = resolve_plan_content(&plan_input)?;
+    let mut content = resolved.content.clone();
 
     // 2. Initialize CCOS runtime
     println!("🚀 Initializing CCOS runtime...");
@@ -432,7 +459,13 @@ pub async fn execute_plan_with_options(
         attempts += 1;
 
         // Create Plan object
-        let plan = Plan::new_rtfs(content.clone(), vec![]);
+        let plan = if let Some(base) = resolved.plan.as_ref() {
+            let mut plan = base.clone();
+            plan.body = PlanBody::Rtfs(content.clone());
+            plan
+        } else {
+            Plan::new_rtfs(content.clone(), vec![])
+        };
 
         // Execute
         if attempts == 1 {
@@ -509,7 +542,8 @@ pub async fn execute_plan_with_options(
 /// Validate plan syntax only (no CCOS initialization, Send-safe)
 /// This is used by native capabilities which need Send futures.
 pub async fn validate_plan(plan_input: String) -> RuntimeResult<bool> {
-    let content = resolve_plan_content(&plan_input)?;
+    let resolved = resolve_plan_content(&plan_input)?;
+    let content = resolved.content;
 
     // Syntax validation only
     match rtfs::parser::parse(&content) {
@@ -524,7 +558,8 @@ pub async fn validate_plan(plan_input: String) -> RuntimeResult<bool> {
 /// Validate plan syntax and capability availability (full validation)
 /// This creates CCOS and checks capabilities, so it's not Send-safe.
 pub async fn validate_plan_full(plan_input: String) -> RuntimeResult<bool> {
-    let content = resolve_plan_content(&plan_input)?;
+    let resolved = resolve_plan_content(&plan_input)?;
+    let content = resolved.content;
 
     // 1. Syntax validation
     println!("🔍 Validating syntax...");
@@ -621,20 +656,207 @@ Rules:
 
 // --- Helpers ---
 
-fn resolve_plan_content(input: &str) -> RuntimeResult<String> {
-    let path = Path::new(input);
-    if path.exists() && path.is_file() {
-        std::fs::read_to_string(path)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to read plan file: {}", e)))
-    } else {
-        // Assume input is raw RTFS if it looks like it, otherwise treat as file not found
-        let trimmed = input.trim();
-        if trimmed.starts_with('(') || trimmed.contains("(do") || trimmed.contains("(plan") {
-            Ok(input.to_string())
-        } else {
-            Err(RuntimeError::Generic(format!("File not found: {}", input)))
+#[derive(Debug)]
+struct ResolvedPlan {
+    content: String,
+    plan: Option<Plan>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum MatchKind {
+    ExactId,
+    PrefixId,
+    Name,
+    Goal,
+}
+
+fn open_plan_archive() -> RuntimeResult<PlanArchive> {
+    let archive_path = crate::utils::fs::default_plan_archive_path();
+    std::fs::create_dir_all(&archive_path).map_err(|e| {
+        RuntimeError::Generic(format!(
+            "Failed to create plan archive dir {}: {}",
+            archive_path.display(),
+            e
+        ))
+    })?;
+
+    PlanArchive::with_file_storage(archive_path.clone()).map_err(|e| {
+        RuntimeError::Generic(format!(
+            "Failed to open plan archive at {}: {}",
+            archive_path.display(),
+            e
+        ))
+    })
+}
+
+fn match_plan_hint(plan: &ArchivablePlan, hint: &str) -> Option<MatchKind> {
+    let needle = hint.to_lowercase();
+
+    if plan.plan_id == hint {
+        return Some(MatchKind::ExactId);
+    }
+    if plan.plan_id.starts_with(hint) {
+        return Some(MatchKind::PrefixId);
+    }
+
+    if let Some(name) = &plan.name {
+        if name.to_lowercase().contains(&needle) {
+            return Some(MatchKind::Name);
         }
     }
+
+    if let Some(goal) = plan.metadata.get("goal") {
+        if goal.to_lowercase().contains(&needle) {
+            return Some(MatchKind::Goal);
+        }
+    }
+
+    None
+}
+
+fn find_plan_by_hint(archive: &PlanArchive, hint: &str) -> RuntimeResult<Option<ArchivablePlan>> {
+    let mut candidates: Vec<(MatchKind, ArchivablePlan)> = Vec::new();
+    for plan_id in archive.list_plan_ids() {
+        if let Some(plan) = archive.get_plan_by_id(&plan_id) {
+            if let Some(kind) = match_plan_hint(&plan, hint) {
+                candidates.push((kind, plan));
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    candidates.sort_by(|a, b| a.0.cmp(&b.0));
+    let best_kind = candidates.first().map(|c| c.0).unwrap();
+    let best: Vec<_> = candidates
+        .into_iter()
+        .filter(|(k, _)| *k == best_kind)
+        .collect();
+
+    if best.len() > 1 {
+        let summary: Vec<String> = best
+            .iter()
+            .map(|(_, p)| {
+                if let Some(name) = &p.name {
+                    format!("{} ({})", p.plan_id, name)
+                } else {
+                    p.plan_id.clone()
+                }
+            })
+            .collect();
+        return Err(RuntimeError::Generic(format!(
+            "Ambiguous plan reference '{}'. Candidates: {}",
+            hint,
+            summary.join(", ")
+        )));
+    }
+
+    Ok(best.into_iter().next().map(|(_, p)| p))
+}
+
+pub fn list_archived_plans(filter: Option<&str>) -> RuntimeResult<Vec<ArchivablePlan>> {
+    let archive = open_plan_archive()?;
+    let filter = filter.map(|f| f.to_lowercase());
+    let mut out = Vec::new();
+
+    for plan_id in archive.list_plan_ids() {
+        if let Some(plan) = archive.get_plan_by_id(&plan_id) {
+            if let Some(ref needle) = filter {
+                let matches_id = plan.plan_id.to_lowercase().contains(needle);
+                let matches_name = plan
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_lowercase().contains(needle))
+                    .unwrap_or(false);
+                let matches_goal = plan
+                    .metadata
+                    .get("goal")
+                    .map(|g| g.to_lowercase().contains(needle))
+                    .unwrap_or(false);
+
+                if !(matches_id || matches_name || matches_goal) {
+                    continue;
+                }
+            }
+            out.push(plan);
+        }
+    }
+
+    Ok(out)
+}
+
+pub fn delete_plan_by_hint(hint: &str) -> RuntimeResult<String> {
+    let archive = open_plan_archive()?;
+    let plan = find_plan_by_hint(&archive, hint).and_then(|opt| {
+        opt.ok_or_else(|| RuntimeError::Generic(format!("Plan not found: {}", hint)))
+    })?;
+
+    let plan_id = plan.plan_id.clone();
+    let deleted = archive
+        .delete_plan(&plan_id)
+        .map_err(|e| RuntimeError::Generic(format!("Failed to delete plan: {}", e)))?;
+
+    if !deleted {
+        return Err(RuntimeError::Generic(format!(
+            "Plan not found: {}",
+            plan_id
+        )));
+    }
+
+    Ok(plan_id)
+}
+
+fn load_plan_from_archive(hint: &str) -> RuntimeResult<Option<Plan>> {
+    let archive = open_plan_archive()?;
+    let plan = find_plan_by_hint(&archive, hint)?;
+    Ok(plan.map(|p| Orchestrator::archivable_plan_to_plan(&p)))
+}
+
+fn plan_body_to_string(plan: &Plan) -> RuntimeResult<String> {
+    match &plan.body {
+        PlanBody::Rtfs(code) => Ok(code.clone()),
+        PlanBody::Wasm(_) => Err(RuntimeError::Generic(
+            "WASM plan execution from archive is not supported".to_string(),
+        )),
+    }
+}
+
+fn resolve_plan_content(input: &str) -> RuntimeResult<ResolvedPlan> {
+    let path = Path::new(input);
+    if path.exists() && path.is_file() {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to read plan file: {}", e)))?;
+        return Ok(ResolvedPlan {
+            content,
+            plan: None,
+        });
+    }
+
+    // Assume input is raw RTFS if it looks like it.
+    let trimmed = input.trim();
+    if trimmed.starts_with('(') || trimmed.contains("(do") || trimmed.contains("(plan") {
+        return Ok(ResolvedPlan {
+            content: input.to_string(),
+            plan: None,
+        });
+    }
+
+    // Fallback to plan archive lookup (id, prefix, name, goal)
+    if let Some(plan) = load_plan_from_archive(input)? {
+        let content = plan_body_to_string(&plan)?;
+        println!("📦 Loaded plan '{}' from archive", plan.plan_id);
+        return Ok(ResolvedPlan {
+            content,
+            plan: Some(plan),
+        });
+    }
+
+    Err(RuntimeError::Generic(format!(
+        "File or plan not found: {}",
+        input
+    )))
 }
 
 fn get_llm_config_from_env() -> RuntimeResult<LlmProviderConfig> {
