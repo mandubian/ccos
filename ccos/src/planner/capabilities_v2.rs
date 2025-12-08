@@ -11,9 +11,12 @@ use crate::capability_marketplace::types::ProviderType;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogEntryKind, CatalogFilter, CatalogService};
 use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
+// Note: Using local SubIntentDto instead of importing private SubIntent
+use crate::synthesis::core::MissingCapabilityResolver;
 use crate::CCOS;
 
 /// Register granular planner capabilities (v2) for the autonomous agent loop.
+/// Now includes recursive meta-planning capabilities for AI self-programming.
 pub async fn register_planner_capabilities_v2(
     marketplace: Arc<CapabilityMarketplace>,
     catalog: Arc<CatalogService>,
@@ -57,6 +60,254 @@ pub async fn register_planner_capabilities_v2(
             build_menu_handler,
         )
         .await?;
+
+    // ------------------------------------------------------------------
+    // META-PLANNING CAPABILITIES (AI Self-Programming)
+    // ------------------------------------------------------------------
+
+    // planner.decompose - Break a goal into sub-intents (recursive decomposition)
+    let catalog_for_decompose = Arc::clone(&catalog);
+    let delegating_for_decompose = ccos.get_delegating_arbiter();
+    
+    let decompose_handler = Arc::new(move |input: &Value| {
+        let payload: DecomposeInput = parse_payload("planner.decompose", input)?;
+        let catalog = Arc::clone(&catalog_for_decompose);
+        let delegating = delegating_for_decompose.clone();
+        let goal = payload.goal.clone();
+        let max_depth = payload.max_depth.unwrap_or(3);
+        
+        // Capture Tokio handle for async execution
+        let rt_handle = tokio::runtime::Handle::current();
+        
+        let sub_intents = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                // Use LLM to decompose if available
+                if let Some(arbiter) = delegating {
+                    let prompt = format!(
+                        r#"Decompose this goal into 2-5 sub-tasks. Return JSON array.
+Goal: {}
+Max depth remaining: {}
+
+Output format:
+[
+  {{"id": "step_1", "description": "...", "type": "api_call|data_transform|output"}},
+  ...
+]"#,
+                        goal, max_depth
+                    );
+                    
+                    let response = arbiter.generate_raw_text(&prompt).await?;
+                    
+                    // Parse JSON array from response
+                    if let Some(json_str) = extract_json(&response) {
+                        let intents: Vec<SubIntentDto> = serde_json::from_str(json_str)
+                            .unwrap_or_else(|_| vec![SubIntentDto {
+                                id: "step_1".to_string(),
+                                description: goal.clone(),
+                                intent_type: "unknown".to_string(),
+                            }]);
+                        return Ok(intents);
+                    }
+                }
+                
+                // Fallback: Use catalog semantic search to find related capabilities
+                let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
+                let hits = catalog.search_semantic(&goal, Some(&filter), 5);
+                
+                let intents: Vec<SubIntentDto> = hits.iter().enumerate().map(|(i, hit)| {
+                    SubIntentDto {
+                        id: format!("step_{}", i + 1),
+                        description: format!("Use {} for: {}", hit.entry.id, hit.entry.description.as_deref().unwrap_or("(no description)")),
+                        intent_type: "api_call".to_string(),
+                    }
+                }).collect();
+                
+                Ok::<Vec<SubIntentDto>, RuntimeError>(intents)
+            })
+        }).join().map_err(|_| RuntimeError::Generic("Thread join error in planner.decompose".to_string()))??;
+        
+        produce_value("planner.decompose", DecomposeOutput { sub_intents })
+    });
+    
+    marketplace
+        .register_local_capability(
+            "planner.decompose".to_string(),
+            "Planner / Decompose".to_string(),
+            "Break a goal into sub-intents for recursive planning.".to_string(),
+            decompose_handler,
+        )
+        .await?;
+
+    // planner.resolve_intent - Find a capability for an intent
+    let catalog_for_resolve = Arc::clone(&catalog);
+    let marketplace_for_resolve = Arc::clone(&marketplace);
+    
+    let resolve_intent_handler = Arc::new(move |input: &Value| {
+        let payload: ResolveIntentInput = parse_payload("planner.resolve_intent", input)?;
+        let catalog = Arc::clone(&catalog_for_resolve);
+        let marketplace = Arc::clone(&marketplace_for_resolve);
+        let description = payload.description.clone();
+        
+        // Capture Tokio handle for async execution
+        let rt_handle = tokio::runtime::Handle::current();
+        
+        let resolution = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                // 1. Try semantic search in catalog
+                let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
+                let hits = catalog.search_semantic(&description, Some(&filter), 3);
+                
+                if let Some(best) = hits.first() {
+                    if best.score > 0.6 {
+                        // Verify capability exists in marketplace
+                        if marketplace.get_capability(&best.entry.id).await.is_some() {
+                            return Ok(ResolveIntentOutput {
+                                resolved: true,
+                                capability_id: Some(best.entry.id.clone()),
+                                confidence: Some(best.score as f64),
+                                needs_synthesis: false,
+                            });
+                        }
+                    }
+                }
+                
+                // 2. Not found - mark as needing synthesis
+                Ok::<ResolveIntentOutput, RuntimeError>(ResolveIntentOutput {
+                    resolved: false,
+                    capability_id: None,
+                    confidence: None,
+                    needs_synthesis: true,
+                })
+            })
+        }).join().map_err(|_| RuntimeError::Generic("Thread join error in planner.resolve_intent".to_string()))??;
+        
+        produce_value("planner.resolve_intent", resolution)
+    });
+    
+    marketplace
+        .register_local_capability(
+            "planner.resolve_intent".to_string(),
+            "Planner / Resolve Intent".to_string(),
+            "Find a capability that can fulfill an intent.".to_string(),
+            resolve_intent_handler,
+        )
+        .await?;
+
+    // planner.synthesize_capability - Create a missing capability via LLM
+    let delegating_for_synthesis = ccos.get_delegating_arbiter();
+    let resolver_for_synthesis = ccos.get_missing_capability_resolver();
+    
+    let synthesize_capability_handler = Arc::new(move |input: &Value| {
+        let payload: SynthesizeCapabilityInput = parse_payload("planner.synthesize_capability", input)?;
+        let delegating = delegating_for_synthesis.clone();
+        let resolver = resolver_for_synthesis.clone();
+        let description = payload.description.clone();
+        let input_schema = payload.input_schema.clone();
+        let output_schema = payload.output_schema.clone();
+        
+        // Capture Tokio handle for async execution
+        let rt_handle = tokio::runtime::Handle::current();
+        
+        let result = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                let capability_id = format!("generated/{}", slugify(&description));
+                
+                if let Some(resolver) = resolver {
+                    // Use MissingCapabilityResolver for proper synthesis
+                    let request = crate::synthesis::core::MissingCapabilityRequest {
+                        capability_id: capability_id.clone(),
+                        arguments: vec![],
+                        context: {
+                            let mut ctx = HashMap::new();
+                            ctx.insert("description".to_string(), description.clone());
+                            if let Some(ref schema) = input_schema {
+                                ctx.insert("input_schema".to_string(), schema.clone());
+                            }
+                            if let Some(ref schema) = output_schema {
+                                ctx.insert("output_schema".to_string(), schema.clone());
+                            }
+                            ctx
+                        },
+                        requested_at: std::time::SystemTime::now(),
+                        attempt_count: 0,
+                    };
+                    
+                    let resolved = resolver.resolve_capability(&request).await?;
+                    
+                    // Map ResolutionResult to our output
+                    return match resolved {
+                        crate::synthesis::core::ResolutionResult::Resolved { capability_id, resolution_method, .. } => {
+                            Ok(SynthesizeCapabilityOutput {
+                                success: true,
+                                capability_id: Some(capability_id),
+                                rtfs_code: None, // Code is stored in capability file
+                                error: None,
+                            })
+                        }
+                        crate::synthesis::core::ResolutionResult::Failed { reason, .. } => {
+                            Ok(SynthesizeCapabilityOutput {
+                                success: false,
+                                capability_id: None,
+                                rtfs_code: None,
+                                error: Some(reason),
+                            })
+                        }
+                        crate::synthesis::core::ResolutionResult::PermanentlyFailed { reason, .. } => {
+                            Ok(SynthesizeCapabilityOutput {
+                                success: false,
+                                capability_id: None,
+                                rtfs_code: None,
+                                error: Some(reason),
+                            })
+                        }
+                    };
+                }
+                
+                // Fallback: Direct LLM synthesis
+                if let Some(arbiter) = delegating {
+                    let prompt = format!(
+                        r#"Create an RTFS capability for: {}
+Input schema hint: {:?}
+Output schema hint: {:?}
+
+Output ONLY valid RTFS capability code."#,
+                        description, input_schema, output_schema
+                    );
+                    
+                    let response = arbiter.generate_raw_text(&prompt).await?;
+                    
+                    return Ok(SynthesizeCapabilityOutput {
+                        success: true,
+                        capability_id: Some(capability_id),
+                        rtfs_code: Some(response),
+                        error: None,
+                    });
+                }
+                
+                Ok::<SynthesizeCapabilityOutput, RuntimeError>(SynthesizeCapabilityOutput {
+                    success: false,
+                    capability_id: None,
+                    rtfs_code: None,
+                    error: Some("No LLM provider or resolver available".to_string()),
+                })
+            })
+        }).join().map_err(|_| RuntimeError::Generic("Thread join error in planner.synthesize_capability".to_string()))??;
+        
+        produce_value("planner.synthesize_capability", result)
+    });
+    
+    marketplace
+        .register_local_capability(
+            "planner.synthesize_capability".to_string(),
+            "Planner / Synthesize Capability".to_string(),
+            "Create a new capability via LLM synthesis.".to_string(),
+            synthesize_capability_handler,
+        )
+        .await?;
+
+    // ------------------------------------------------------------------
+    // EXISTING CAPABILITIES (v2)
+    // ------------------------------------------------------------------
 
     // 2. planner.synthesize
     // Creates a plan (list of steps) based on the goal and menu.
@@ -365,7 +616,76 @@ pub struct PlanStep {
     pub inputs: JsonValue,
 }
 
+// --- Meta-Planning DTOs (AI Self-Programming) ---
+
+#[derive(Debug, Deserialize)]
+struct DecomposeInput {
+    goal: String,
+    #[serde(default)]
+    max_depth: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+struct DecomposeOutput {
+    sub_intents: Vec<SubIntentDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct SubIntentDto {
+    id: String,
+    description: String,
+    #[serde(rename = "type")]
+    intent_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolveIntentInput {
+    description: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ResolveIntentOutput {
+    resolved: bool,
+    capability_id: Option<String>,
+    confidence: Option<f64>,
+    needs_synthesis: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SynthesizeCapabilityInput {
+    description: String,
+    #[serde(default)]
+    input_schema: Option<String>,
+    #[serde(default)]
+    output_schema: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SynthesizeCapabilityOutput {
+    success: bool,
+    capability_id: Option<String>,
+    rtfs_code: Option<String>,
+    error: Option<String>,
+}
+
 // --- Helpers ---
+
+/// Slugify a description into a valid capability ID component
+fn slugify(s: &str) -> String {
+    s.chars()
+        .take(50) // Limit length
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
 
 fn parse_payload<T: DeserializeOwned>(capability: &str, value: &Value) -> RuntimeResult<T> {
     let serialized = rtfs_value_to_json(value)?;
