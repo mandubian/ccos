@@ -4,6 +4,61 @@
 //! this module generates inline RTFS expressions to bridge the gap.
 
 use serde_json::Value as JsonValue;
+use std::path::PathBuf;
+
+/// Load sample output from capability metadata file.
+///
+/// Looks up the capability file and extracts the `:sample-output` from the `:metadata` section.
+pub fn load_capability_sample(capability_id: &str) -> Option<JsonValue> {
+    let path = find_capability_file_for_bridge(capability_id)?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    extract_sample_from_rtfs_content(&content)
+}
+
+/// Find capability file path from capability ID
+fn find_capability_file_for_bridge(capability_id: &str) -> Option<PathBuf> {
+    // Use the schema_refiner's find function if available, or implement a simple lookup
+    if let Some(path) =
+        crate::synthesis::introspection::schema_refiner::find_capability_file(capability_id)
+    {
+        return Some(path);
+    }
+
+    // Fallback: try common locations
+    let root = crate::utils::fs::get_workspace_root();
+
+    // Try generated capabilities directory
+    let generated_path = root
+        .join("capabilities/generated")
+        .join(capability_id)
+        .join("capability.rtfs");
+    if generated_path.exists() {
+        return Some(generated_path);
+    }
+
+    None
+}
+
+/// Extract sample-output from RTFS capability file content
+fn extract_sample_from_rtfs_content(content: &str) -> Option<JsonValue> {
+    // Look for :sample-output in :metadata section
+    // Pattern: :sample-output "..."
+    let sample_pattern = r#":sample-output\s+"([^"\\]*(?:\\.[^"\\]*)*)""#;
+    let re = regex::Regex::new(sample_pattern).ok()?;
+
+    if let Some(caps) = re.captures(content) {
+        let sample_str = caps.get(1)?.as_str();
+        // Unescape the string
+        let unescaped = sample_str
+            .replace("\\\"", "\"")
+            .replace("\\n", "\n")
+            .replace("\\\\", "\\");
+        // Try to parse as JSON
+        serde_json::from_str(&unescaped).ok()
+    } else {
+        None
+    }
+}
 
 /// Represents a detected schema mismatch and how to bridge it
 #[derive(Debug, Clone)]

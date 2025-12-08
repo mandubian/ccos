@@ -191,6 +191,10 @@ pub struct PlannerConfig {
     pub allow_grounding_context: bool,
     /// Optional hybrid strategy configuration
     pub hybrid_config: Option<HybridConfig>,
+    /// Whether to enable LLM-based schema validation after refinement
+    pub enable_schema_validation: bool,
+    /// Whether to enable LLM-based plan validation after generation
+    pub enable_plan_validation: bool,
 }
 
 impl Default for PlannerConfig {
@@ -208,6 +212,8 @@ impl Default for PlannerConfig {
             initial_grounding_params: HashMap::new(),
             allow_grounding_context: true,
             hybrid_config: Some(HybridConfig::default()),
+            enable_schema_validation: false, // Disabled by default
+            enable_plan_validation: false,   // Disabled by default
         }
     }
 }
@@ -772,12 +778,70 @@ impl ModularPlanner {
         }
 
         // 5. Generate RTFS plan from resolved intents
-        let rtfs_plan = self.generate_rtfs_plan(
+        let mut rtfs_plan = self.generate_rtfs_plan(
             &decomp_result.sub_intents,
             &intent_ids,
             &resolutions,
             &grounding_params,
         )?;
+
+        // 5b. LLM Plan Validation (if enabled)
+        if self.config.enable_plan_validation {
+            use crate::synthesis::validation::{auto_repair_plan, validate_plan, ValidationConfig};
+            use std::collections::HashMap as StdHashMap;
+
+            let validation_config = ValidationConfig::default();
+
+            // Build resolutions map for context
+            let resolutions_map: StdHashMap<String, String> = resolutions
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        v.capability_id().unwrap_or("unknown").to_string(),
+                    )
+                })
+                .collect();
+
+            match validate_plan(&rtfs_plan, &resolutions_map, goal, &validation_config).await {
+                Ok(validation) => {
+                    if validation.is_valid {
+                        log::info!("✅ Plan validation passed");
+                    } else {
+                        log::warn!("⚠️ Plan validation issues: {:?}", validation.errors);
+                        for suggestion in &validation.suggestions {
+                            log::info!("   💡 Suggestion: {}", suggestion);
+                        }
+
+                        // Attempt auto-repair if enabled
+                        if validation_config.enable_auto_repair {
+                            match auto_repair_plan(
+                                &rtfs_plan,
+                                &validation.errors,
+                                0,
+                                &validation_config,
+                            )
+                            .await
+                            {
+                                Ok(Some(repaired_plan)) => {
+                                    log::info!("🔧 Plan auto-repaired successfully");
+                                    rtfs_plan = repaired_plan;
+                                }
+                                Ok(None) => {
+                                    log::warn!("Auto-repair did not produce a valid plan");
+                                }
+                                Err(e) => {
+                                    log::warn!("Auto-repair failed: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::debug!("Plan validation skipped: {}", e);
+                }
+            }
+        }
 
         // Determine plan status
         let has_pending_synth = resolutions.values().any(|r| {
@@ -1628,6 +1692,52 @@ impl ModularPlanner {
                                         result.original_output_schema,
                                         result.inferred_output_schema
                                     );
+
+                                    // 1b. LLM Schema Validation (if enabled)
+                                    if self.config.enable_schema_validation {
+                                        use crate::synthesis::validation::{
+                                            validate_schema, ValidationConfig,
+                                        };
+                                        let validation_config = ValidationConfig::default();
+                                        let sample_preview = grounding_preview(&val);
+
+                                        match validate_schema(
+                                            &result.inferred_output_schema,
+                                            cap_id,
+                                            Some(&sample_preview),
+                                            &validation_config,
+                                        )
+                                        .await
+                                        {
+                                            Ok(validation) => {
+                                                if validation.is_valid {
+                                                    log::info!(
+                                                        "✅ Schema validation passed for {}",
+                                                        cap_id
+                                                    );
+                                                } else {
+                                                    log::warn!(
+                                                        "⚠️ Schema validation issues for {}: {:?}",
+                                                        cap_id,
+                                                        validation.errors
+                                                    );
+                                                    for suggestion in &validation.suggestions {
+                                                        log::info!(
+                                                            "   💡 Suggestion: {}",
+                                                            suggestion
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                log::debug!(
+                                                    "Schema validation skipped for {}: {}",
+                                                    cap_id,
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
                                 }
                                 Ok(false) => {}
                                 Err(e) => {
