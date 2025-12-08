@@ -2538,7 +2538,11 @@ impl DiscoveryEngine {
 
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("../capabilities/generated"));
+            .unwrap_or_else(|_| {
+                crate::utils::fs::find_workspace_root()
+                    .join("capabilities")
+                    .join("generated")
+            });
 
         fs::create_dir_all(&storage_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
@@ -2651,7 +2655,11 @@ impl DiscoveryEngine {
 
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("capabilities/discovered"));
+            .unwrap_or_else(|_| {
+                crate::utils::fs::find_workspace_root()
+                    .join("capabilities")
+                    .join("discovered")
+            });
 
         // Use hierarchical structure: capabilities/discovered/mcp/<namespace>/<tool>.rtfs
         // Parse capability ID: "mcp.namespace.tool_name" or "github.issues.list"

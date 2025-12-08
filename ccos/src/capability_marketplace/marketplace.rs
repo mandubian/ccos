@@ -1756,13 +1756,15 @@ impl CapabilityMarketplace {
     ) -> RuntimeResult<Value> {
         // Delegate to the existing method, but preserve metadata for missing-capability context
         // so downstream resolvers can see any grounding/context hints.
-        self.execute_capability_with_metadata(id, inputs, metadata).await
+        self.execute_capability_with_metadata(id, inputs, metadata)
+            .await
     }
 
     // execute_effect_request removed - unified into execute_capability_enhanced
 
     pub async fn execute_capability(&self, id: &str, inputs: &Value) -> RuntimeResult<Value> {
-        self.execute_capability_with_metadata(id, inputs, None).await
+        self.execute_capability_with_metadata(id, inputs, None)
+            .await
     }
 
     async fn execute_capability_with_metadata(
@@ -1827,7 +1829,14 @@ impl CapabilityMarketplace {
                         for (k, v) in &meta.context {
                             // Truncate to avoid prompt bloat
                             let trimmed: String = v.chars().take(400).collect();
-                            context.insert(k.clone(), if trimmed.len() < v.len() { format!("{}... [truncated]", trimmed) } else { trimmed });
+                            context.insert(
+                                k.clone(),
+                                if trimmed.len() < v.len() {
+                                    format!("{}... [truncated]", trimmed)
+                                } else {
+                                    trimmed
+                                },
+                            );
                         }
                     }
 
@@ -2609,7 +2618,11 @@ impl CapabilityMarketplace {
             .unwrap_or_else(|| {
                 std::env::var("CCOS_CAPABILITY_STORAGE")
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| std::path::PathBuf::from("capabilities/discovered"))
+                    .unwrap_or_else(|_| {
+                        crate::utils::fs::find_workspace_root()
+                            .join("capabilities")
+                            .join("discovered")
+                    })
             });
 
         if !dir.exists() {

@@ -11,8 +11,8 @@ use crate::capabilities::{MCPSessionHandler, SessionPoolManager};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::examples_common::builder::load_agent_config;
 use crate::mcp::core::MCPDiscoveryService;
-use crate::planner::modular_planner::decomposition::llm_adapter::CcosLlmAdapter;
 use crate::planner::modular_planner::decomposition::hybrid::HybridConfig;
+use crate::planner::modular_planner::decomposition::llm_adapter::CcosLlmAdapter;
 use crate::planner::modular_planner::decomposition::{HybridDecomposition, PatternDecomposition};
 use crate::planner::modular_planner::resolution::mcp::RuntimeMcpDiscovery;
 use crate::planner::modular_planner::resolution::{
@@ -42,7 +42,7 @@ fn maybe_set_capability_storage_from_config(config_path: &str) {
                 .and_then(|v| v.get("export_directory"))
                 .and_then(|v| v.as_str())
             {
-                std::env::set_var("CCOS_CAPABILITY_STORAGE", dir);
+                unsafe { std::env::set_var("CCOS_CAPABILITY_STORAGE", dir) };
             }
         }
     }
@@ -120,11 +120,91 @@ pub async fn create_plan_with_options(
 ) -> RuntimeResult<CreatePlanResult> {
     println!("🧠 Generating plan for goal: \"{}\"...", goal);
 
-    let llm_config = get_llm_config_from_env()?;
-
     // Load agent config from config file (if available)
-    maybe_set_capability_storage_from_config("config/agent_config.toml");
-    let agent_config = load_agent_config("config/agent_config.toml").ok();
+    // Try local config/ first, then parent ../config/ (for when running from crate dir)
+    let config_path = if std::path::Path::new("config/agent_config.toml").exists() {
+        "config/agent_config.toml"
+    } else if std::path::Path::new("../config/agent_config.toml").exists() {
+        "../config/agent_config.toml"
+    } else {
+        "config/agent_config.toml" // default fallback
+    };
+
+    maybe_set_capability_storage_from_config(config_path);
+    let mut agent_config = match load_agent_config(config_path) {
+        Ok(cfg) => {
+            println!("✅ Loaded agent configuration from {}", config_path);
+            Some(cfg)
+        }
+        Err(e) => {
+            println!(
+                "ℹ️  Could not load agent config from {} (using defaults): {}",
+                config_path, e
+            );
+            None
+        }
+    };
+
+    // Force verbose logging for missing capability resolver if --verbose is set
+    if options.verbose {
+        if let Some(ref mut config) = agent_config {
+            config.missing_capabilities.verbose_logging = Some(true);
+        } else {
+            // Create default config with verbose logging
+            let mut config = rtfs::config::types::AgentConfig::default();
+            config.missing_capabilities.verbose_logging = Some(true);
+            agent_config = Some(config);
+        }
+    }
+
+    let mut llm_config = get_llm_config_from_env()?;
+
+    // Override LLM config from agent config if available
+    if let Some(config) = &agent_config {
+        if let Some(profiles) = &config.llm_profiles {
+            if let Some(sets) = &profiles.model_sets {
+                for set in sets {
+                    if let Some(default_model) = &set.default {
+                        if let Some(model_spec) =
+                            set.models.iter().find(|m| &m.name == default_model)
+                        {
+                            println!(
+                                "ℹ️  Using default LLM profile from config: {}/{}",
+                                set.name, model_spec.name
+                            );
+
+                            let provider_type = match set.provider.as_str() {
+                                "openai" => LlmProviderType::OpenAI,
+                                "anthropic" => LlmProviderType::Anthropic,
+                                "stub" => LlmProviderType::Stub,
+                                "local" => LlmProviderType::Local,
+                                "openrouter" => LlmProviderType::OpenAI,
+                                _ => LlmProviderType::OpenAI,
+                            };
+
+                            let api_key = if let Some(env_var) = &set.api_key_env {
+                                std::env::var(env_var).ok()
+                            } else {
+                                set.api_key.clone()
+                            };
+
+                            llm_config = LlmProviderConfig {
+                                provider_type,
+                                model: model_spec.model.clone(),
+                                api_key,
+                                base_url: set.base_url.clone(),
+                                max_tokens: model_spec.max_output_tokens,
+                                temperature: None,
+                                timeout_seconds: None,
+                                retry_config: Default::default(),
+                            };
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Initialize full CCOS runtime so we have catalog, marketplace and governance wired.
     // Pass agent config if available so LLM provider is properly configured.
@@ -132,7 +212,7 @@ pub async fn create_plan_with_options(
         CCOS::new_with_agent_config_and_configs_and_debug_callback(
             Default::default(),
             None,
-            agent_config,
+            agent_config.clone(),
             None,
         )
         .await?,
@@ -291,6 +371,17 @@ async fn build_cli_modular_planner(
     if options.enable_safe_exec {
         planner = planner.with_safe_executor(ccos.get_capability_marketplace());
         println!("🛡️  Safe exec enabled: executor wired to marketplace");
+    }
+
+    if let Some(resolver) = ccos.get_missing_capability_resolver() {
+        planner = planner.with_missing_capability_resolver(resolver);
+        if verbose {
+            println!("🔍 Missing capability resolver wired: unresolved data/output intents will trigger synthesis");
+        }
+    } else if verbose {
+        println!(
+            "⚠️ Missing capability resolver unavailable; unresolved intents will only enqueue placeholders"
+        );
     }
 
     Ok(planner)
@@ -627,19 +718,19 @@ fn extract_capabilities_from_rtfs(rtfs_code: &str) -> HashSet<String> {
     for line in rtfs_code.lines() {
         let trimmed = line.trim();
         if let Some(call_idx) = trimmed.find("(call ") {
-        let after_call = &trimmed[call_idx + 6..];
+            let after_call = &trimmed[call_idx + 6..];
             // Extract the capability ID (starts with : or is a symbol)
-        let raw_cap: String = after_call
-            .chars()
-            .take_while(|c| !c.is_whitespace() && *c != ')' && *c != '{')
-            .collect();
-        if !raw_cap.is_empty() {
-            // Handle either symbols (:ccos.io.println) or quoted strings ("ccos.io.println")
-            let cap_id = raw_cap
-                .trim_start_matches(':')
-                .trim_matches('"')
-                .to_string();
-            capabilities.insert(cap_id);
+            let raw_cap: String = after_call
+                .chars()
+                .take_while(|c| !c.is_whitespace() && *c != ')' && *c != '{')
+                .collect();
+            if !raw_cap.is_empty() {
+                // Handle either symbols (:ccos.io.println) or quoted strings ("ccos.io.println")
+                let cap_id = raw_cap
+                    .trim_start_matches(':')
+                    .trim_matches('"')
+                    .to_string();
+                capabilities.insert(cap_id);
             }
         }
     }
@@ -696,21 +787,16 @@ fn extract_rtfs_from_response(response: &str) -> Option<String> {
 /// Uses the marketplace's built-in import_capabilities_from_rtfs_dir_recursive
 /// to load capabilities from the approved servers directory.
 async fn load_approved_capabilities(marketplace: &Arc<CapabilityMarketplace>) -> RuntimeResult<()> {
-    // Try multiple potential locations for the approved servers directory
-    let potential_paths = [
-        std::path::PathBuf::from("capabilities/servers/approved"),
-        std::path::PathBuf::from("../capabilities/servers/approved"),
-    ];
+    // Use workspace-relative path for approved servers directory
+    // Workspace root is the config dir, so ../capabilities goes to <workspace>/capabilities
+    let approved_dir = crate::utils::fs::resolve_workspace_path("../capabilities/servers/approved");
 
-    let approved_dir = potential_paths.iter().find(|p| p.exists());
+    if !approved_dir.exists() {
+        log::debug!("No approved servers directory found at {:?}", approved_dir);
+        return Ok(());
+    }
 
-    let approved_dir = match approved_dir {
-        Some(path) => path,
-        None => {
-            log::debug!("No approved servers directory found");
-            return Ok(());
-        }
-    };
+    let approved_dir = &approved_dir;
 
     // Use the marketplace's built-in method to recursively import RTFS capabilities
     let loaded = marketplace
@@ -725,22 +811,19 @@ async fn load_approved_capabilities(marketplace: &Arc<CapabilityMarketplace>) ->
 }
 
 /// Load generated capabilities
-async fn load_generated_capabilities(marketplace: &Arc<CapabilityMarketplace>) -> RuntimeResult<()> {
-    // Try multiple potential locations for the generated capabilities directory
-    let potential_paths = [
-        std::path::PathBuf::from("capabilities/generated"),
-        std::path::PathBuf::from("../capabilities/generated"),
-    ];
+async fn load_generated_capabilities(
+    marketplace: &Arc<CapabilityMarketplace>,
+) -> RuntimeResult<()> {
+    // Use workspace-relative path for generated capabilities directory
+    // Workspace root is the config dir, so ../capabilities goes to <workspace>/capabilities
+    let gen_dir = crate::utils::fs::resolve_workspace_path("../capabilities/generated");
 
-    let gen_dir = potential_paths.iter().find(|p| p.exists());
+    if !gen_dir.exists() {
+        log::debug!("No generated capabilities directory found at {:?}", gen_dir);
+        return Ok(());
+    }
 
-    let gen_dir = match gen_dir {
-        Some(path) => path,
-        None => {
-            log::debug!("No generated capabilities directory found");
-            return Ok(());
-        }
-    };
+    let gen_dir = &gen_dir;
 
     // Use the marketplace's built-in method to recursively import RTFS capabilities
     let loaded = marketplace

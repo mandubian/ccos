@@ -515,10 +515,10 @@ pub async fn save_discovered_tools(
 
     // Find workspace root to ensure we save to the correct capabilities/ directory
     let workspace_root = find_workspace_root();
-    
+
     // Debug: log the workspace root being used
     eprintln!("📁 Using workspace root: {}", workspace_root.display());
-    
+
     // Save to capabilities/servers/pending/{server_id}/capabilities.rtfs
     // This matches the approval flow which moves files from pending to approved
     let pending_dir = workspace_root.join("capabilities/servers/pending");
@@ -544,10 +544,7 @@ pub async fn save_discovered_tools(
             "⚠️  Capabilities file already exists for pending server: {}",
             server_id
         );
-        eprintln!(
-            "   Existing file: {}",
-            capabilities_path
-        );
+        eprintln!("   Existing file: {}", capabilities_path);
         eprintln!("   Updating with new introspection results...");
     }
 

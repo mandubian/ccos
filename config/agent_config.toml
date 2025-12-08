@@ -53,6 +53,18 @@ enabled = false
 [marketplace]
 registry_paths = []
 
+# Storage paths configuration
+# All paths are relative to this config file's directory (config/)
+[storage]
+# Base directory for all capabilities
+capabilities_dir = "../capabilities"
+# Subdirectory for discovered capabilities
+discovered_subdir = "discovered"
+# Subdirectory for generated/synthesized capabilities  
+generated_subdir = "generated"
+# Subdirectory for approved server capabilities
+servers_approved_subdir = "servers/approved"
+
 # MCP Discovery Configuration
 [mcp_discovery]
 # Enable output schema introspection (calls tools with safe inputs)
@@ -162,7 +174,7 @@ name = "openrouter_free"
 provider = "openrouter"
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
-default = "balanced_ds_32"
+default = "balanced_gfl"
 
   [[llm_profiles.model_sets.models]]
   name = "fast"
