@@ -433,14 +433,20 @@ impl ModularPlannerBuilder {
             .with_catalog(env.ccos.get_catalog()),
         );
 
-        // Setup cache directory for MCP tools
-        let cache_dir = PathBuf::from("../capabilities/discovered/mcp");
+        // Setup cache directory for MCP tools using config-driven path
+        let cache_dir = crate::utils::fs::resolve_workspace_path(&format!(
+            "{}/mcp",
+            env.agent_config.storage.capabilities_dir
+        ));
         let mcp_resolution = McpResolution::new(mcp_discovery)
-            .with_cache_dir(cache_dir)
+            .with_cache_dir(cache_dir.clone())
             .with_no_cache(self.no_cache);
 
         if self.discover_mcp {
-            println!("   ✅ Enabled MCP Resolution (cache: ../capabilities/discovered/mcp/)");
+            println!(
+                "   ✅ Enabled MCP Resolution (cache: {})",
+                cache_dir.display()
+            );
             if self.no_cache {
                 println!("   🔄 Cache disabled, will refresh from server");
             }
@@ -497,6 +503,19 @@ pub fn load_agent_config(config_path: &str) -> Result<AgentConfig, Box<dyn Error
             ).into());
         }
     };
+
+    // Set workspace root to config file's parent directory
+    // This makes all relative paths in storage config resolve correctly
+    if let Some(config_dir) = actual_path.parent() {
+        let workspace_root = if config_dir.is_absolute() {
+            config_dir.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(config_dir))
+                .unwrap_or_else(|_| config_dir.to_path_buf())
+        };
+        crate::utils::fs::set_workspace_root(workspace_root);
+    }
 
     let mut content = std::fs::read_to_string(&actual_path).map_err(|e| {
         format!(

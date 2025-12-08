@@ -55,6 +55,55 @@ pub struct AgentConfig {
     /// Missing capability resolution configuration
     #[serde(default)]
     pub missing_capabilities: MissingCapabilityRuntimeConfig,
+    /// Storage paths configuration
+    #[serde(default)]
+    pub storage: StoragePathsConfig,
+}
+
+/// Storage paths configuration for capability directories
+/// All paths are relative to the config file's directory unless absolute.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StoragePathsConfig {
+    /// Base directory for all capabilities (relative to config file or absolute)
+    /// Default: "../capabilities" (one level up from config/ directory)
+    #[serde(default = "default_capabilities_dir")]
+    pub capabilities_dir: String,
+    /// Subdirectory for discovered capabilities within capabilities_dir
+    #[serde(default = "default_discovered_subdir")]
+    pub discovered_subdir: String,
+    /// Subdirectory for generated/synthesized capabilities within capabilities_dir
+    #[serde(default = "default_generated_subdir")]
+    pub generated_subdir: String,
+    /// Subdirectory for approved server capabilities within capabilities_dir
+    #[serde(default = "default_servers_approved_subdir")]
+    pub servers_approved_subdir: String,
+}
+
+fn default_capabilities_dir() -> String {
+    "../capabilities".to_string()
+}
+
+fn default_discovered_subdir() -> String {
+    "discovered".to_string()
+}
+
+fn default_generated_subdir() -> String {
+    "generated".to_string()
+}
+
+fn default_servers_approved_subdir() -> String {
+    "servers/approved".to_string()
+}
+
+impl Default for StoragePathsConfig {
+    fn default() -> Self {
+        Self {
+            capabilities_dir: default_capabilities_dir(),
+            discovered_subdir: default_discovered_subdir(),
+            generated_subdir: default_generated_subdir(),
+            servers_approved_subdir: default_servers_approved_subdir(),
+        }
+    }
 }
 
 /// A named LLM model profile that can be selected at runtime
@@ -633,6 +682,7 @@ impl Default for AgentConfig {
             discovery: DiscoveryConfig::default(),
             catalog: CatalogConfig::default(),
             missing_capabilities: MissingCapabilityRuntimeConfig::default(),
+            storage: StoragePathsConfig::default(),
         }
     }
 }

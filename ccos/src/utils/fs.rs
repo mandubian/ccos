@@ -38,59 +38,66 @@ pub fn sanitize_filename(input: &str) -> String {
     result.trim_matches('_').to_string()
 }
 
-/// Find the workspace root directory (where `capabilities/` and `ccos/Cargo.toml` live).
+use std::sync::OnceLock;
+
+/// Cached workspace root resolved at first use
+static WORKSPACE_ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+/// Get the workspace root directory.
 ///
-/// Strategy:
-/// 1) If current dir has both `ccos/Cargo.toml` and `capabilities/`, use it.
-/// 2) Walk up to find a dir that has both.
-/// 3) Walk up to find a dir that has `capabilities/`.
-/// 4) If inside `ccos/`, go up one level if it has `capabilities/` or `ccos/Cargo.toml`.
-/// 5) Fallback to current dir.
-pub fn find_workspace_root() -> PathBuf {
-    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-    // Strategy 1
-    if current_dir.join("ccos/Cargo.toml").exists() && current_dir.join("capabilities").exists() {
-        return current_dir;
-    }
-
-    // Strategy 2
-    let mut path = current_dir.clone();
-    loop {
-        if path.join("ccos/Cargo.toml").exists() && path.join("capabilities").exists() {
-            return path;
-        }
-        if let Some(parent) = path.parent() {
-            path = parent.to_path_buf();
-        } else {
-            break;
-        }
-    }
-
-    // Strategy 3
-    let mut path = current_dir.clone();
-    loop {
-        if path.join("capabilities").exists() {
-            return path;
-        }
-        if let Some(parent) = path.parent() {
-            path = parent.to_path_buf();
-        } else {
-            break;
-        }
-    }
-
-    // Strategy 4
-    if current_dir.join("Cargo.toml").exists() {
-        if let Some(parent) = current_dir.parent() {
-            if parent.join("capabilities").exists() || parent.join("ccos/Cargo.toml").exists() {
-                return parent.to_path_buf();
+/// Resolution order:
+/// 1. Value set via `set_workspace_root()` (typically from config file location)
+/// 2. `CCOS_WORKSPACE_ROOT` environment variable (must be absolute and exist)
+/// 3. Current working directory as fallback
+///
+/// The workspace root is cached after first resolution.
+pub fn get_workspace_root() -> PathBuf {
+    WORKSPACE_ROOT
+        .get_or_init(|| {
+            // 1. Environment variable override
+            if let Ok(root) = std::env::var("CCOS_WORKSPACE_ROOT") {
+                let path = PathBuf::from(&root);
+                if path.is_absolute() && path.exists() {
+                    return path;
+                }
             }
-        }
-    }
 
-    // Strategy 5
-    current_dir
+            // 2. Fallback to current directory
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        })
+        .clone()
+}
+
+/// Set the workspace root explicitly.
+///
+/// Should be called early during initialization (e.g., when loading config).
+/// If the config file is at `<workspace>/config/agent_config.toml`, pass
+/// the config file's parent directory (`<workspace>/config/`).
+///
+/// All relative paths in storage config will be resolved relative to this.
+///
+/// Returns `true` if the root was set, `false` if already set.
+pub fn set_workspace_root(root: PathBuf) -> bool {
+    WORKSPACE_ROOT.set(root).is_ok()
+}
+
+/// Resolve a path relative to the workspace root.
+///
+/// If the path is already absolute, returns it as-is.
+/// If relative, joins it with the workspace root.
+pub fn resolve_workspace_path(path: &str) -> PathBuf {
+    let p = PathBuf::from(path);
+    if p.is_absolute() {
+        p
+    } else {
+        get_workspace_root().join(p)
+    }
+}
+
+/// Legacy alias for backward compatibility. Prefer `get_workspace_root()`.
+#[deprecated(since = "0.2.0", note = "Use get_workspace_root() instead")]
+pub fn find_workspace_root() -> PathBuf {
+    get_workspace_root()
 }
 
 #[cfg(test)]

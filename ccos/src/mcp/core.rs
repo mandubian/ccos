@@ -197,9 +197,11 @@ impl MCPDiscoveryService {
                                     approved_roots
                                         .first()
                                         .cloned()
-                                        .unwrap_or_else(|| std::path::PathBuf::from(
-                                            "capabilities/servers/approved",
-                                        ))
+                                        .unwrap_or_else(|| {
+                                            std::path::PathBuf::from(
+                                                "capabilities/servers/approved",
+                                            )
+                                        })
                                         .join(&server_id)
                                 });
 
@@ -1397,9 +1399,9 @@ impl MCPDiscoveryService {
             session_manager: Arc::clone(&self.session_manager),
             registry_client: MCPRegistryClient::new(), // Registry client is stateless
             config_discovery: LocalConfigMcpDiscovery::new(), // Config discovery is stateless
-            approval_queue: ApprovalQueue::new(crate::utils::fs::find_workspace_root()),   // Approval queue is stateless (file-based)
-            introspector: MCPIntrospector::new(),      // Introspector is stateless
-            cache: Arc::clone(&self.cache),            // Share cache
+            approval_queue: ApprovalQueue::new(crate::utils::fs::find_workspace_root()), // Approval queue is stateless (file-based)
+            introspector: MCPIntrospector::new(), // Introspector is stateless
+            cache: Arc::clone(&self.cache),       // Share cache
             rate_limiter: Arc::clone(&self.rate_limiter), // Share rate limiter
             marketplace: self.marketplace.as_ref().map(Arc::clone),
             catalog: self.catalog.as_ref().map(Arc::clone),
