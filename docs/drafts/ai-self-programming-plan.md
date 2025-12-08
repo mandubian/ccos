@@ -19,6 +19,39 @@ Enable CCOS agents to **evolve their own capabilities** by treating the planner 
 
 ---
 
+## Implementation Status
+
+> **Last Updated**: December 2024
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1: Meta-Planning | ✅ **Complete** | `planner.decompose`, `planner.resolve_intent`, `planner.synthesize_capability` implemented in [capabilities_v2.rs](../ccos/src/planner/capabilities_v2.rs) |
+| Phase 2: Learning Loop | ⬜ Not started | Feedback collection, failure analysis |
+| Phase 3: Governance & Safety | ✅ **Complete** | Trust levels, approval gates, bounded exploration, versioning, causal chain recording |
+| Phase 4: Introspection | ⬜ Not started | Plan trace, capability graph |
+| Phase 5: Evolutionary Agents | ⬜ Not started | Agent memory, coordination |
+
+### Implemented Components
+
+**Phase 1 - Meta-Planning**:
+- [capabilities_v2.rs](../ccos/src/planner/capabilities_v2.rs): `planner.build_menu`, `planner.decompose`, `planner.resolve_intent`, `planner.synthesize_capability`
+- Sample meta-plan in [capabilities/samples/meta-planner.rtfs](../capabilities/samples/meta-planner.rtfs)
+
+**Phase 3 - Governance & Safety**:
+- [SelfProgrammingConfig](../rtfs/src/config/types.rs): Trust levels (0-4), approval thresholds
+- [SelfProgrammingSession](../rtfs/src/config/self_programming_session.rs): Bounded exploration limits, approval queue
+- [CapabilityVersionStore](../ccos/src/capability_marketplace/version_store.rs): Version snapshots, rollback support
+- [GovernanceEventRecorder](../ccos/src/synthesis/governance_events.rs): Causal chain recording for all governance events
+- [config/agent_config.toml](../config/agent_config.toml): `[self_programming]` section added
+
+**New Causal Chain ActionTypes**:
+- `CapabilityVersionCreated`, `CapabilityRollback` - Version tracking
+- `CapabilitySynthesisStarted`, `CapabilitySynthesisCompleted` - Synthesis lifecycle
+- `GovernanceApprovalRequested/Granted/Denied` - Approval workflow
+- `BoundedExplorationLimitReached` - Limit enforcement
+
+---
+
 ## Phase 1: Meta-Planning Capabilities (Foundation)
 
 Expose the planner itself as RTFS-callable capabilities.
@@ -189,7 +222,7 @@ Use execution feedback to refine capability schemas
 
 ---
 
-## Phase 3: Governance & Safety
+## Phase 3: Governance & Safety ✅ IMPLEMENTED
 
 Critical controls for autonomous evolution, **enforced by the constitution**.
 
@@ -230,25 +263,15 @@ Level 4 (Full):     Full autonomy (use with extreme caution)
    - Diff views for capability changes
    - Attribution of who/what triggered changes
 
-### Implementation
+### Implementation ✅
 
-#### [MODIFY] `ccos/src/governance_kernel.rs`
-Add self-modification policies with trust levels
+> All governance components implemented. See **Implementation Status** section above for file locations.
 
-#### [NEW] `ccos/src/capabilities/versioning.rs`
-Version control for capabilities with rollback
-
-#### [MODIFY] `config/constitution.rtfs`
-Add self-programming governance rules
-
-#### [MODIFY] `config/agent_config.toml`
-```toml
-[self_programming]
-enabled = true
-trust_level = 0  # Start with most restrictive
-max_synthesis_per_session = 10
-max_plan_depth = 5
-```
+- ✅ `SelfProgrammingConfig` with trust levels (0-4)
+- ✅ `SelfProgrammingSession` with bounded exploration limits
+- ✅ `CapabilityVersionStore` with rollback support
+- ✅ `GovernanceEventRecorder` for causal chain audit
+- ✅ `config/agent_config.toml` `[self_programming]` section
 
 
 ---
@@ -349,8 +372,10 @@ Multi-agent coordination and task delegation
 
 ## User Review Required
 
-> [!IMPORTANT]
-> **Key Design Decision**: Should AI self-modification require human approval by default, or should we allow fully autonomous mode with rollback?
+> [!NOTE]
+> **RESOLVED**: AI self-modification requires human approval by default (trust_level=0).
+> Trust levels can be progressively increased as confidence builds.
 
-> [!IMPORTANT]
-> **Scope Question**: Start with Phase 1 (Meta-Planning) only, or include Phase 3 (Governance) in the first iteration?
+> [!NOTE]
+> **RESOLVED**: Phase 1 (Meta-Planning) and Phase 3 (Governance) implemented together.
+> Next: Phase 2 (Learning Loop) then Phase 4 (Introspection).
