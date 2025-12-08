@@ -1,0 +1,11 @@
+//! Validation module for synthesized capabilities and plans.
+//!
+//! Provides LLM-based validation with configurable auto-repair
+//! and queue escalation for external review.
+
+pub mod llm_validator;
+
+pub use llm_validator::{
+    auto_repair_plan, validate_plan, validate_schema, ValidationConfig, ValidationError,
+    ValidationErrorType, ValidationResult,
+};

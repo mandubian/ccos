@@ -158,6 +158,114 @@ fn slugify_capability_id(id: &str) -> String {
         .collect()
 }
 
+// ============================================
+// Metadata Sample Capture
+// ============================================
+
+/// Maximum length for sample strings (truncate if longer)
+const SAMPLE_MAX_LEN: usize = 500;
+
+/// Format a Value as an RTFS string for metadata storage
+fn value_to_rtfs_sample(value: &Value) -> String {
+    let s = format!("{}", value);
+    if s.len() > SAMPLE_MAX_LEN {
+        format!("{}... [truncated]", &s[..SAMPLE_MAX_LEN])
+    } else {
+        s
+    }
+}
+
+/// Update a capability file with sample input/output metadata.
+///
+/// Adds or updates the `:metadata` section with sample values.
+pub fn update_capability_metadata_samples(
+    capability_path: &PathBuf,
+    sample_input: Option<&Value>,
+    sample_output: &Value,
+) -> Result<bool, String> {
+    let content = fs::read_to_string(capability_path)
+        .map_err(|e| format!("Failed to read capability file: {}", e))?;
+
+    // Generate sample strings
+    let output_sample = value_to_rtfs_sample(sample_output);
+    let input_sample = sample_input.map(value_to_rtfs_sample);
+    let timestamp = chrono::Utc::now().to_rfc3339();
+
+    // Check if :metadata section exists
+    let metadata_pattern = r":metadata\s*\{[^}]*\}";
+    let metadata_re =
+        regex::Regex::new(metadata_pattern).map_err(|e| format!("Invalid regex: {}", e))?;
+
+    let updated_content = if metadata_re.is_match(&content) {
+        // Update existing metadata section
+        // For simplicity, we'll replace the whole metadata block
+        let new_metadata = if let Some(inp) = &input_sample {
+            format!(
+                ":metadata {{\n    :sample-input \"{}\"\n    :sample-output \"{}\"\n    :captured-at \"{}\"\n  }}",
+                escape_rtfs_string(inp),
+                escape_rtfs_string(&output_sample),
+                timestamp
+            )
+        } else {
+            format!(
+                ":metadata {{\n    :sample-output \"{}\"\n    :captured-at \"{}\"\n  }}",
+                escape_rtfs_string(&output_sample),
+                timestamp
+            )
+        };
+        metadata_re
+            .replace(&content, new_metadata.as_str())
+            .to_string()
+    } else {
+        // Insert metadata before closing paren of capability definition
+        // Find the last closing paren
+        let insert_metadata = if let Some(inp) = &input_sample {
+            format!(
+                "\n  :metadata {{\n    :sample-input \"{}\"\n    :sample-output \"{}\"\n    :captured-at \"{}\"\n  }}",
+                escape_rtfs_string(inp),
+                escape_rtfs_string(&output_sample),
+                timestamp
+            )
+        } else {
+            format!(
+                "\n  :metadata {{\n    :sample-output \"{}\"\n    :captured-at \"{}\"\n  }}",
+                escape_rtfs_string(&output_sample),
+                timestamp
+            )
+        };
+
+        // Find the position to insert (before last closing paren)
+        if let Some(pos) = content.rfind(')') {
+            let mut new_content = content.clone();
+            new_content.insert_str(pos, &insert_metadata);
+            new_content
+        } else {
+            return Ok(false);
+        }
+    };
+
+    if updated_content == content {
+        return Ok(false);
+    }
+
+    // Write back
+    fs::write(capability_path, &updated_content)
+        .map_err(|e| format!("Failed to write capability file: {}", e))?;
+
+    log::info!("Updated metadata samples in {}", capability_path.display());
+
+    Ok(true)
+}
+
+/// Escape a string for RTFS string literal
+fn escape_rtfs_string(s: &str) -> String {
+    s.replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
