@@ -27,6 +27,7 @@ pub mod primitives;
 pub mod queue;
 pub mod registration;
 pub mod runtime;
+pub mod validation;
 
 // Standalone modules (not moved)
 pub mod status;
@@ -81,6 +82,7 @@ pub use dialogue::preference_schema::*;
 pub use dialogue::preference_schema::{extract_with_metrics, ParamType};
 
 // Queue helpers
+pub use queue::{PendingPlanItem, PendingPlanQueue, PendingPlanStatus};
 pub use queue::{SynthQueue, SynthQueueItem, SynthQueueStatus};
 
 // Synth enqueue helpers

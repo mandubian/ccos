@@ -123,3 +123,135 @@ impl SynthQueue {
             .collect()
     }
 }
+
+// ============================================
+// PendingPlanQueue - Plans needing external review
+// ============================================
+
+/// Status of a queued plan for external review.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingPlanStatus {
+    NeedsReview,
+    Reviewed,
+    Approved,
+    Rejected,
+}
+
+/// A plan that failed validation and needs external review.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingPlanItem {
+    /// Plan identifier (goal hash or similar)
+    pub plan_id: String,
+    /// The RTFS plan code
+    pub rtfs_plan: String,
+    /// Original goal/intent description
+    pub goal: String,
+    /// Validation errors that triggered escalation
+    pub validation_errors: Vec<String>,
+    /// Auto-repair attempts made
+    pub repair_attempts: usize,
+    /// Additional context (resolutions, grounding data)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<serde_json::Value>,
+    /// Current status
+    pub status: PendingPlanStatus,
+    /// Timestamp (RFC3339)
+    pub created_at: String,
+}
+
+impl PendingPlanItem {
+    pub fn needs_review(
+        plan_id: impl Into<String>,
+        rtfs_plan: impl Into<String>,
+        goal: impl Into<String>,
+        validation_errors: Vec<String>,
+        repair_attempts: usize,
+    ) -> Self {
+        Self {
+            plan_id: plan_id.into(),
+            rtfs_plan: rtfs_plan.into(),
+            goal: goal.into(),
+            validation_errors,
+            repair_attempts,
+            context: None,
+            status: PendingPlanStatus::NeedsReview,
+            created_at: Utc::now().to_rfc3339(),
+        }
+    }
+
+    pub fn with_context(mut self, ctx: serde_json::Value) -> Self {
+        self.context = Some(ctx);
+        self
+    }
+}
+
+/// Queue for plans that need external review.
+pub struct PendingPlanQueue {
+    base_dir: PathBuf,
+}
+
+impl PendingPlanQueue {
+    /// Create queue at the provided path or default under workspace root.
+    pub fn new(base_dir: Option<PathBuf>) -> Self {
+        let default_dir = get_workspace_root().join("storage/pending_validation");
+        Self {
+            base_dir: base_dir.unwrap_or(default_dir),
+        }
+    }
+
+    /// Enqueue a plan for external review. Returns the path written.
+    pub fn enqueue(&self, item: PendingPlanItem) -> RuntimeResult<PathBuf> {
+        if !self.base_dir.exists() {
+            fs::create_dir_all(&self.base_dir).map_err(|e| {
+                RuntimeError::Generic(format!(
+                    "Failed to create pending plan queue dir {}: {}",
+                    self.base_dir.display(),
+                    e
+                ))
+            })?;
+        }
+
+        let file_name = SynthQueue::sanitize_file_name(&item.plan_id);
+        let path = self
+            .base_dir
+            .join(format!("{}-{}.json", file_name, Utc::now().timestamp()));
+        let json = serde_json::to_string_pretty(&item).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to serialize pending plan item: {}", e))
+        })?;
+
+        fs::write(&path, json).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to write pending plan item to {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        log::info!("Plan queued for external review: {}", path.display());
+        Ok(path)
+    }
+
+    /// List all pending plans.
+    pub fn list_pending(&self) -> RuntimeResult<Vec<PendingPlanItem>> {
+        if !self.base_dir.exists() {
+            return Ok(vec![]);
+        }
+
+        let mut items = Vec::new();
+        for entry in fs::read_dir(&self.base_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to read pending plan queue dir: {}", e))
+        })? {
+            let entry = entry.map_err(|e| RuntimeError::Generic(e.to_string()))?;
+            let path = entry.path();
+            if path.extension().map(|s| s == "json").unwrap_or(false) {
+                let content =
+                    fs::read_to_string(&path).map_err(|e| RuntimeError::Generic(e.to_string()))?;
+                if let Ok(item) = serde_json::from_str::<PendingPlanItem>(&content) {
+                    items.push(item);
+                }
+            }
+        }
+        Ok(items)
+    }
+}

@@ -1610,11 +1610,13 @@ impl ModularPlanner {
                 // Post-execution schema introspection for synthesized capabilities
                 if cap_id.starts_with("generated/") {
                     use crate::synthesis::introspection::schema_refiner;
-                    let result = schema_refiner::infer_output_schema_from_result(
-                        cap_id, &val, None, // Could pass declared schema if available
-                    );
-                    if result.was_updated {
-                        if let Some(path) = schema_refiner::find_capability_file(cap_id) {
+
+                    // Find capability file once
+                    if let Some(path) = schema_refiner::find_capability_file(cap_id) {
+                        // 1. Schema refinement
+                        let result =
+                            schema_refiner::infer_output_schema_from_result(cap_id, &val, None);
+                        if result.was_updated {
                             match schema_refiner::update_capability_output_schema(
                                 &path,
                                 &result.inferred_output_schema,
@@ -1631,6 +1633,21 @@ impl ModularPlanner {
                                 Err(e) => {
                                     log::warn!("Failed to update schema for {}: {}", cap_id, e);
                                 }
+                            }
+                        }
+
+                        // 2. Metadata sample capture
+                        match schema_refiner::update_capability_metadata_samples(
+                            &path,
+                            previous_result, // input sample
+                            &val,            // output sample
+                        ) {
+                            Ok(true) => {
+                                log::debug!("📝 Captured sample output for {}", cap_id);
+                            }
+                            Ok(false) => {}
+                            Err(e) => {
+                                log::debug!("Failed to capture sample for {}: {}", cap_id, e);
                             }
                         }
                     }
