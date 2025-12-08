@@ -26,9 +26,10 @@ pub struct ValidationConfig {
     #[serde(default = "default_max_repair_attempts")]
     pub max_repair_attempts: usize,
 
-    /// Override LLM model for validation (uses default if None)
+    /// LLM profile to use for validation (from llm_profiles section)
+    /// Format: "set:model" or "profile_name"
     #[serde(default)]
-    pub validation_model: Option<String>,
+    pub validation_profile: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -45,7 +46,7 @@ impl Default for ValidationConfig {
             enable_plan_validation: false,
             enable_auto_repair: true,
             max_repair_attempts: 2,
-            validation_model: None,
+            validation_profile: None,
         }
     }
 }
@@ -97,53 +98,111 @@ impl ValidationResult {
 }
 
 /// Get an LLM provider based on ValidationConfig.
-/// Uses the config's validation_model if specified, otherwise falls back to default.
+/// Uses the config's validation_profile if specified, otherwise falls back to default.
 async fn get_validation_provider(
     config: &ValidationConfig,
 ) -> Option<Box<dyn crate::arbiter::llm_provider::LlmProvider + Send + Sync>> {
-    use crate::arbiter::llm_provider::{LlmProviderConfig, LlmProviderFactory, LlmProviderType};
-
-    // If a specific validation model is configured, create a provider for it
-    if let Some(model) = &config.validation_model {
-        // Determine provider type from model name
-        let (provider_type, api_key_var) = if model.starts_with("gpt-") || model.starts_with("o1") {
-            (LlmProviderType::OpenAI, "OPENAI_API_KEY")
-        } else if model.starts_with("claude-") {
-            (LlmProviderType::Anthropic, "ANTHROPIC_API_KEY")
-        } else if model.contains("/") {
-            // OpenRouter format: provider/model
-            (LlmProviderType::OpenAI, "OPENROUTER_API_KEY")
-        } else {
-            // Default to OpenAI-compatible
-            (LlmProviderType::OpenAI, "OPENAI_API_KEY")
-        };
-
-        if let Ok(api_key) = std::env::var(api_key_var) {
-            let base_url = if api_key_var == "OPENROUTER_API_KEY" {
-                Some("https://openrouter.ai/api/v1".to_string())
-            } else {
-                std::env::var(format!("{}_BASE_URL", api_key_var.replace("_API_KEY", ""))).ok()
-            };
-
-            let provider_config = LlmProviderConfig {
-                provider_type,
-                model: model.clone(),
-                api_key: Some(api_key),
-                base_url,
-                max_tokens: Some(4096),
-                temperature: Some(0.3), // Lower temperature for validation
-                timeout_seconds: None,
-                retry_config: Default::default(),
-            };
-
-            if let Ok(provider) = LlmProviderFactory::create_provider(provider_config).await {
-                return Some(provider);
-            }
+    // If a specific validation profile is configured, try to resolve it
+    if let Some(profile_name) = &config.validation_profile {
+        // Try to get agent config and resolve profile
+        if let Some(provider) = resolve_profile_to_provider(profile_name).await {
+            // The provider is Send + Sync because all our LLM implementations are
+            return Some(provider);
         }
+        log::debug!(
+            "Could not resolve profile '{}', falling back to default",
+            profile_name
+        );
     }
 
     // Fall back to default provider
     crate::arbiter::get_default_llm_provider().await
+}
+
+/// Resolve a profile name to an LLM provider.
+/// Profile names can be "set:model" (e.g., "openrouter_free:fast") or a direct profile name.
+async fn resolve_profile_to_provider(
+    profile_name: &str,
+) -> Option<Box<dyn crate::arbiter::llm_provider::LlmProvider + Send + Sync>> {
+    use crate::arbiter::llm_provider::{LlmProviderConfig, LlmProviderFactory, LlmProviderType};
+
+    // Parse profile name - could be "set:model" format
+    let (set_name, model_name) = if profile_name.contains(':') {
+        let parts: Vec<&str> = profile_name.splitn(2, ':').collect();
+        (Some(parts[0]), parts.get(1).copied())
+    } else {
+        (None, Some(profile_name))
+    };
+
+    // For now, extract provider info from profile name conventions
+    // In a full implementation, this would load from AgentConfig
+    let (provider_type, model, api_key_env, base_url) = match set_name {
+        Some("openrouter_free") | Some("openrouter") => {
+            let model = match model_name {
+                Some("fast") => "nvidia/nemotron-nano-9b-v2:free",
+                Some("balanced") => "deepseek/deepseek-v3.2-exp",
+                Some("balanced_gfl") => "google/gemini-2.5-flash-lite",
+                Some("premium") => "x-ai/grok-4-fast:free",
+                Some(m) => m,
+                None => "deepseek/deepseek-v3.2-exp",
+            };
+            (
+                LlmProviderType::OpenAI,
+                model.to_string(),
+                "OPENROUTER_API_KEY",
+                Some("https://openrouter.ai/api/v1".to_string()),
+            )
+        }
+        _ => {
+            // Try to infer from model name
+            let model = model_name.unwrap_or("gpt-4o-mini");
+            if model.starts_with("claude-") {
+                (
+                    LlmProviderType::Anthropic,
+                    model.to_string(),
+                    "ANTHROPIC_API_KEY",
+                    None,
+                )
+            } else {
+                (
+                    LlmProviderType::OpenAI,
+                    model.to_string(),
+                    "OPENAI_API_KEY",
+                    None,
+                )
+            }
+        }
+    };
+
+    // Get API key
+    let api_key = std::env::var(api_key_env).ok()?;
+
+    let provider_config = LlmProviderConfig {
+        provider_type,
+        model,
+        api_key: Some(api_key),
+        base_url,
+        max_tokens: Some(4096),
+        temperature: Some(0.3), // Lower temperature for validation
+        timeout_seconds: None,
+        retry_config: Default::default(),
+    };
+
+    // All our LlmProvider implementations are Send + Sync
+    // We use the "as" cast because the concrete types returned implement these traits
+    match LlmProviderFactory::create_provider(provider_config).await {
+        Ok(provider) => {
+            // SAFETY: All LlmProvider implementations (OpenAI, Anthropic, Stub) are Send+Sync
+            // The trait object just doesn't carry those bounds in create_provider's signature
+            Some(unsafe {
+                std::mem::transmute::<
+                    Box<dyn crate::arbiter::llm_provider::LlmProvider>,
+                    Box<dyn crate::arbiter::llm_provider::LlmProvider + Send + Sync>,
+                >(provider)
+            })
+        }
+        Err(_) => None,
+    }
 }
 
 /// Validate an inferred schema using LLM.

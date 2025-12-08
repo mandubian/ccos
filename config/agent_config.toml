@@ -65,6 +65,21 @@ generated_subdir = "generated"
 # Subdirectory for approved server capabilities
 servers_approved_subdir = "servers/approved"
 
+# LLM Validation Configuration
+# Controls schema and plan validation using LLM
+[validation]
+# Enable LLM schema validation for inferred schemas
+enable_schema_validation = false
+# Enable LLM plan validation (schema compatibility, dependencies)
+enable_plan_validation = false
+# Enable auto-repair on validation failures
+enable_auto_repair = true
+# Max auto-repair attempts before queuing for external review
+max_repair_attempts = 2
+# LLM profile to use for validation (from llm_profiles section)
+# Uses a lower quality/faster model for validation tasks
+validation_profile = "openrouter_free:balanced_gfl"
+
 # MCP Discovery Configuration
 [mcp_discovery]
 # Enable output schema introspection (calls tools with safe inputs)
