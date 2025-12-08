@@ -615,6 +615,14 @@ impl ResolutionStrategy for McpResolution {
             }
         }
 
+        // Check if LLM explicitly said "no tool" (grounded decomposition returned null)
+        if intent.extracted_params.contains_key("_grounded_no_tool") {
+            println!("   ⚠️ Grounded planner found no tool for this step. Skipping fallback scoring.");
+            return Err(ResolutionError::NotFound(
+                "Grounded planner explicitly returned no tool".to_string(),
+            ));
+        }
+
         // Fallback: Score all tools (for non-grounded decomposition)
         let mut scored: Vec<(McpToolInfo, f64)> = Vec::new();
         for tool in tools {

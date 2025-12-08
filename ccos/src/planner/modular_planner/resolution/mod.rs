@@ -258,7 +258,7 @@ impl ResolutionStrategy for CompositeResolution {
     async fn list_available_tools(&self, domain_hints: Option<&[DomainHint]>) -> Vec<ToolSummary> {
         let mut all_tools = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
-        
+
         for strategy in &self.strategies {
             let tools = strategy.list_available_tools(domain_hints).await;
             for tool in tools {
@@ -266,10 +266,13 @@ impl ResolutionStrategy for CompositeResolution {
                 // Prefer the version with the more specific id (contains '/' or more dots)
                 if seen_ids.contains(&tool.id) {
                     // Check if this is a "better" version (more specific ID)
-                    if let Some(existing_idx) = all_tools.iter().position(|t: &ToolSummary| t.id == tool.id) {
+                    if let Some(existing_idx) =
+                        all_tools.iter().position(|t: &ToolSummary| t.id == tool.id)
+                    {
                         let existing = &all_tools[existing_idx];
                         // Prefer the one with more path separators (fuller ID)
-                        let existing_seps = existing.id.matches('/').count() + existing.id.matches('.').count();
+                        let existing_seps =
+                            existing.id.matches('/').count() + existing.id.matches('.').count();
                         let new_seps = tool.id.matches('/').count() + tool.id.matches('.').count();
                         if new_seps > existing_seps {
                             all_tools[existing_idx] = tool;

@@ -37,8 +37,8 @@
 
 pub mod decomposition;
 pub mod orchestrator;
-pub mod safe_executor;
 pub mod resolution;
+pub mod safe_executor;
 pub mod types;
 
 // Re-exports

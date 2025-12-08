@@ -129,7 +129,8 @@ impl DecompositionStrategy for HybridDecomposition {
         // 1. Try pattern matching first
         let pattern_confidence = self.pattern.can_handle(goal);
 
-        if !self.config.force_llm && pattern_confidence >= self.config.pattern_confidence_threshold {
+        if !self.config.force_llm && pattern_confidence >= self.config.pattern_confidence_threshold
+        {
             match self.pattern.decompose(goal, available_tools, context).await {
                 Ok(result) => {
                     if context.show_prompt || context.verbose_llm {
@@ -158,6 +159,8 @@ impl DecompositionStrategy for HybridDecomposition {
         }
 
         // 2. Try grounded LLM if tools available and configured
+        // NOTE: We do NOT fallback to IntentFirst anymore - GroundedLLM is the single LLM strategy
+        // This is simpler to debug and GroundedLLM produces better results with tool context
         if self.config.prefer_grounded && available_tools.is_some() {
             if let Some(ref grounded) = self.grounded {
                 match grounded.decompose(goal, available_tools, context).await {
@@ -169,27 +172,17 @@ impl DecompositionStrategy for HybridDecomposition {
                         return Ok(result);
                     }
                     Err(e) => {
-                        log::debug!("[hybrid] Grounded LLM failed, trying intent-first: {}", e);
+                        log::debug!("[hybrid] Grounded LLM failed: {}", e);
+                        // No IntentFirst fallback - return the error
+                        return Err(e);
                     }
                 }
             }
         }
 
-        // 3. Try intent-first LLM as fallback
-        if let Some(ref intent_first) = self.intent_first {
-            match intent_first.decompose(goal, available_tools, context).await {
-                Ok(result) => {
-                    log::debug!(
-                        "[hybrid] Intent-first LLM succeeded with confidence {:.2}",
-                        result.confidence
-                    );
-                    return Ok(result);
-                }
-                Err(e) => {
-                    log::debug!("[hybrid] Intent-first LLM failed: {}", e);
-                    return Err(e);
-                }
-            }
+        // 3. If no tools available, try grounded LLM anyway (it can do abstract decomposition)
+        if let Some(ref grounded) = self.grounded {
+            return grounded.decompose(goal, available_tools, context).await;
         }
 
         // 4. If we got here with a partial pattern match, try pattern anyway

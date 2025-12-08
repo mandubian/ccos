@@ -234,15 +234,15 @@ impl CanonicalCapabilitySchema {
             }
         }
 
-        // Validate :input-schema and :output-schema if present (should be maps)
+        // Validate :input-schema and :output-schema if present (should be maps, vectors, lists, strings, or keywords)
         for schema_field in &[":input-schema", ":output-schema"] {
             if let Some(schema_val) = cap_map.get(&MapKey::String(schema_field.to_string())) {
                 if !matches!(
                     schema_val,
-                    Value::Map(_) | Value::Vector(_) | Value::List(_) | Value::String(_)
+                    Value::Map(_) | Value::Vector(_) | Value::List(_) | Value::String(_) | Value::Keyword(_)
                 ) {
                     return Err(format!(
-                        "Capability {} must be a map, vector, list, or string type expression",
+                        "Capability {} must be a map, vector, list, string, or keyword type expression",
                         schema_field
                     ));
                 }

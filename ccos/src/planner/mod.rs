@@ -3,6 +3,7 @@
 //! This module exposes reusable building blocks for the smart assistant planner
 //! so they can evolve into first-class RTFS capabilities.
 
+pub mod adapters;
 pub mod capabilities;
 pub mod capabilities_v2;
 pub mod catalog_adapter;
