@@ -106,12 +106,26 @@ impl CapabilityExplorer {
         // Load capabilities from approved servers directory
         let approved_dir = std::path::Path::new("capabilities/servers/approved");
         if approved_dir.exists() {
-            // println!("Loading capabilities from approved servers...");
             if let Err(e) = marketplace
                 .import_capabilities_from_rtfs_dir_recursive(approved_dir)
                 .await
             {
                 eprintln!("Failed to load capabilities from approved servers: {}", e);
+            }
+        }
+
+        // Load locally generated capabilities (workspace only; do not traverse parent)
+        let generated_dir = std::path::Path::new("capabilities/generated");
+        if generated_dir.exists() {
+            if let Err(e) = marketplace
+                .import_capabilities_from_rtfs_dir_recursive(generated_dir)
+                .await
+            {
+                eprintln!(
+                    "Failed to load generated capabilities from {}: {}",
+                    generated_dir.display(),
+                    e
+                );
             }
         }
 
@@ -228,9 +242,8 @@ impl CapabilityExplorer {
                 // It's a regular capability call - execute through marketplace
                 let args = Self::parse_rtfs_map(&args_str)?;
                 let result = self.call_capability_rtfs(&cap_id, args, quiet).await?;
-                if !quiet {
-                    self.output_value(&result, output_format);
-                }
+                // In RTFS mode, always show the result so users see the output even with --quiet.
+                self.output_value(&result, output_format);
                 Ok(result)
             }
         }
@@ -277,7 +290,10 @@ impl CapabilityExplorer {
             }
 
             // Return last result or nil
-            Ok(results.pop().unwrap_or(Value::Nil))
+            let final_val = results.pop().unwrap_or(Value::Nil);
+            // In RTFS mode, always show the result so users see the output even with --quiet.
+            self.output_value(&final_val, output_format);
+            Ok(final_val)
         })
     }
 

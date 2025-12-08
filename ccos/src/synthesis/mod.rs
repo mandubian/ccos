@@ -24,9 +24,9 @@ pub mod dialogue;
 pub mod importers;
 pub mod introspection;
 pub mod primitives;
+pub mod queue;
 pub mod registration;
 pub mod runtime;
-pub mod queue;
 
 // Standalone modules (not moved)
 pub mod status;

@@ -3,8 +3,8 @@ use crate::discovery::approval_queue::{DiscoverySource, ServerInfo};
 use crate::mcp::registry::MCPRegistryClient;
 use crate::synthesis::runtime::web_search_discovery::WebSearchDiscovery;
 use rtfs::runtime::error::RuntimeResult;
-use std::path::PathBuf;
 use serde::Deserialize;
+use std::path::PathBuf;
 
 pub struct RegistrySearcher {
     mcp_client: MCPRegistryClient,
@@ -432,7 +432,8 @@ impl RegistrySearcher {
     fn is_web_search_enabled() -> bool {
         // First check environment variable (takes precedence)
         if let Ok(disable) = std::env::var("CCOS_DISABLE_WEB_SEARCH") {
-            if disable == "1" || disable.to_lowercase() == "true" || disable.to_lowercase() == "on" {
+            if disable == "1" || disable.to_lowercase() == "true" || disable.to_lowercase() == "on"
+            {
                 return false;
             }
         }

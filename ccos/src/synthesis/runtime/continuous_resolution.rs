@@ -558,14 +558,15 @@ impl ContinuousResolutionLoop {
                     let implementation =
                         introspector.generate_mcp_wrapper_code(&url, tool_name, &manifest.name);
 
-                    // Save to disk
-                    let output_dir = std::path::Path::new("capabilities/discovered");
+                    // Save to disk - use workspace root
+                    use crate::utils::fs::find_workspace_root;
+                    let output_dir = find_workspace_root().join("capabilities").join("discovered");
                     std::fs::create_dir_all(output_dir.join("mcp")).ok();
 
                     let path = introspector.save_capability_to_rtfs(
                         &manifest,
                         &implementation,
-                        output_dir,
+                        &output_dir,
                         None,
                     )?;
 

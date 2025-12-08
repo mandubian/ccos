@@ -29,6 +29,7 @@ use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;
 use crate::synthesis::runtime::server_trust::{
     create_default_trust_registry, ServerCandidate, ServerSelectionHandler, ServerTrustRegistry,
 };
+use crate::utils::fs::find_workspace_root;
 use crate::utils::value_conversion;
 use rtfs::ast::TypeExpr;
 use rtfs::ast::{
@@ -1138,8 +1139,20 @@ impl MissingCapabilityResolver {
 
     /// Inject the delegating arbiter for LLM-backed synthesis.
     pub fn set_delegating_arbiter(&self, arbiter: Option<Arc<DelegatingArbiter>>) {
+        eprintln!(
+            "🔧 MissingCapabilityResolver: set_delegating_arbiter called with {:?}",
+            if arbiter.is_some() {
+                "Some(Arbiter)"
+            } else {
+                "None"
+            }
+        );
         if let Ok(mut slot) = self.delegating_arbiter.write() {
             *slot = arbiter;
+        } else {
+            eprintln!(
+                "❌ MissingCapabilityResolver: failed to acquire write lock for delegating_arbiter"
+            );
         }
     }
 
@@ -1635,13 +1648,26 @@ impl MissingCapabilityResolver {
                 )
             })?;
 
-        let storage_root = std::env::var("CCOS_CAPABILITY_STORAGE")
+        // Use dedicated env var for generated capabilities, separate from MCP discovery exports
+        // CCOS_CAPABILITY_STORAGE is for discovered capabilities, not generated ones
+        let storage_root = std::env::var("CCOS_GENERATED_CAPABILITY_STORAGE")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("./capabilities"));
-        let storage_root = storage_root.join("generated");
+            .unwrap_or_else(|_| {
+                // Use workspace-relative path: <workspace_root>/../capabilities/generated
+                // This works because workspace root is set to config dir when config is loaded
+                crate::utils::fs::resolve_workspace_path("../capabilities/generated")
+            });
+        eprintln!(
+            "🔍 persist_llm_generated_capability: About to create storage_root={:?}",
+            storage_root
+        );
         std::fs::create_dir_all(&storage_root).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
         })?;
+        eprintln!(
+            "🔍 persist_llm_generated_capability: Created storage_root={:?}",
+            storage_root
+        );
 
         let capability_dir = storage_root.join(Self::sanitize_capability_dir_name(&manifest.id));
         std::fs::create_dir_all(&capability_dir).map_err(|e| {
@@ -1702,7 +1728,7 @@ impl MissingCapabilityResolver {
 
         let storage_root = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("./capabilities"));
+            .unwrap_or_else(|_| find_workspace_root().join("capabilities"));
         let storage_root = storage_root.join("discovered").join("mcp");
         std::fs::create_dir_all(&storage_root).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create MCP discovery directory: {}", e))
@@ -1810,30 +1836,32 @@ impl MissingCapabilityResolver {
         let mut lines = Vec::new();
         lines.push(format!(";; Synthesized capability: {}", manifest.id));
         lines.push(format!(";; Generated: {}", timestamp));
-        lines.push("{:type \"capability\"".to_string());
-        lines.push(format!(" :id \"{}\"", Self::escape_string(&manifest.id)));
-        lines.push(format!(" :name \"{}\"", escaped_name));
-        lines.push(format!(" :description \"{}\"", escaped_description));
         lines.push(format!(
-            " :version \"{}\"",
+            "(capability \"{}\"",
+            Self::escape_string(&manifest.id)
+        ));
+        lines.push(format!("  :name \"{}\"", escaped_name));
+        lines.push(format!("  :description \"{}\"", escaped_description));
+        lines.push(format!(
+            "  :version \"{}\"",
             Self::escape_string(&manifest.version)
         ));
+        lines.push(format!("  :language \"{}\"", Self::escape_string(language)));
+        lines.push(format!("  :permissions {}", permissions));
+        lines.push(format!("  :effects {}", effects));
+        lines.push(format!("  :input-schema {}", input_schema));
+        lines.push(format!("  :output-schema {}", output_schema));
         if let Some(provider) = provider_str {
             lines.push("  ;; PROVIDER START".to_string());
             lines.push(format!("  :provider {}", provider));
             lines.push("  ;; PROVIDER END".to_string());
         }
-        lines.push(format!(" :language \"{}\"", Self::escape_string(language)));
-        lines.push(format!(" :permissions {}", permissions));
-        lines.push(format!(" :effects {}", effects));
-        lines.push(format!(" :input-schema {}", input_schema));
-        lines.push(format!(" :output-schema {}", output_schema));
         if let Some(meta) = metadata_block {
-            lines.push(format!(" :metadata {}", meta));
+            lines.push(format!("  :metadata {}", meta));
         }
-        lines.push(" :implementation".to_string());
+        lines.push("  :implementation".to_string());
         lines.push(implementation_block);
-        lines.push("}".to_string());
+        lines.push(")".to_string());
 
         lines.join("\n") + "\n"
     }
@@ -1924,13 +1952,7 @@ impl MissingCapabilityResolver {
                 .collect();
             pairs.sort();
             // Surface grounding:* first if present
-            pairs.sort_by_key(|line| {
-                if line.contains("grounding:") {
-                    0
-                } else {
-                    1
-                }
-            });
+            pairs.sort_by_key(|line| if line.contains("grounding:") { 0 } else { 1 });
             format!("Execution context:\n{}", pairs.join("\n"))
         };
 
@@ -3547,10 +3569,49 @@ impl MissingCapabilityResolver {
     ) -> RuntimeResult<Option<CapabilityManifest>> {
         // Build a local pure-RTFS generator and ask it for an implementation
         let config = MissingCapabilityStrategyConfig::default();
-        let strategy = PureRtfsGenerationStrategy::new(config);
+
+        // Prefer an injected arbiter if available; otherwise fall back to pure RTFS templates
+        let arbiter_opt = {
+            match self.delegating_arbiter.read() {
+                Ok(guard) => {
+                    let val = guard.clone();
+                    eprintln!(
+                        "🔧 MissingCapabilityResolver: read delegating_arbiter = {:?}",
+                        if val.is_some() {
+                            "Some(Arbiter)"
+                        } else {
+                            "None"
+                        }
+                    );
+                    val
+                }
+                Err(_) => {
+                    eprintln!("❌ MissingCapabilityResolver: failed to acquire read lock for delegating_arbiter");
+                    None
+                }
+            }
+        };
+
+        let strategy = if let Some(arbiter) = arbiter_opt {
+            eprintln!(
+                "🧠 LLM synthesis: using delegating arbiter for '{}'",
+                capability_id_normalized
+            );
+            PureRtfsGenerationStrategy::new(config).with_arbiter(arbiter)
+        } else {
+            eprintln!(
+                "ℹ️ LLM synthesis: no arbiter available, falling back to template generation for '{}'",
+                capability_id_normalized
+            );
+            PureRtfsGenerationStrategy::new(config)
+        };
 
         match strategy.generate_pure_rtfs_implementation(request).await {
             Ok(rtfs_source) => {
+                eprintln!(
+                    "📝 Synthesis produced RTFS for '{}'; registering as pure_rtfs_generated",
+                    capability_id_normalized
+                );
                 self.process_generated_rtfs(
                     rtfs_source,
                     capability_id_normalized,
@@ -3569,8 +3630,16 @@ impl MissingCapabilityResolver {
         _capability_id_normalized: &str,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
         let config = MissingCapabilityStrategyConfig::default();
-        let strategy =
+        let mut strategy =
             UserInteractionStrategy::new(config).with_marketplace(self.marketplace.clone());
+
+        // Inject arbiter if available
+        {
+            let guard = self.delegating_arbiter.read().unwrap();
+            if let Some(arbiter) = guard.as_ref() {
+                strategy = strategy.with_arbiter(arbiter.clone());
+            }
+        }
 
         let context = crate::planner::modular_planner::ResolutionContext {
             domain_hints: vec![],
@@ -3615,7 +3684,10 @@ impl MissingCapabilityResolver {
                 self.process_generated_rtfs(rtfs_source, capability_id_normalized, "llm_generated")
                     .await
             }
-            Err(_) => Ok(None),
+            Err(e) => {
+                eprintln!("❌ LLM synthesis attempt failed: {}", e);
+                Ok(None)
+            }
         }
     }
 
@@ -3652,13 +3724,18 @@ impl MissingCapabilityResolver {
             .await
         {
             Ok(mut manifest) => {
-                // Mark the generated RTFS implementation for persistence & auditing
-                manifest
-                    .metadata
-                    .insert("rtfs_implementation".to_string(), rtfs_source.clone());
+                eprintln!(
+                    "💾 Persisting generated capability '{}' (source: {})",
+                    manifest.id, source_label
+                );
+                // Mark the resolution source (implementation already extracted by manifest_from_rtfs)
                 manifest
                     .metadata
                     .insert("resolution_source".to_string(), source_label.to_string());
+                // Store the full RTFS source for auditing (but implementation is already extracted)
+                manifest
+                    .metadata
+                    .insert("rtfs_source_full".to_string(), rtfs_source.clone());
 
                 // Persist generated RTFS to disk so it's available for inspection
                 if let Ok(path) = self.persist_llm_generated_capability(&manifest).await {
@@ -3670,12 +3747,10 @@ impl MissingCapabilityResolver {
                 Ok(Some(manifest))
             }
             Err(err) => {
-                if self.config.verbose_logging {
-                    eprintln!(
-                        "❌ RTFS generation produced invalid capability RTFS: {}",
-                        err
-                    );
-                }
+                eprintln!(
+                    "❌ RTFS generation produced invalid capability RTFS: {}",
+                    err
+                );
                 Ok(None)
             }
         }
@@ -3689,7 +3764,7 @@ impl MissingCapabilityResolver {
     ) -> RuntimeResult<()> {
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("./capabilities"));
+            .unwrap_or_else(|_| find_workspace_root().join("capabilities"));
 
         std::fs::create_dir_all(&storage_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
@@ -3794,17 +3869,8 @@ impl MissingCapabilityResolver {
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
-                // Get the project root directory (parent of rtfs_compiler)
-                let current_dir =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                if current_dir.ends_with("rtfs_compiler") {
-                    current_dir
-                        .parent()
-                        .unwrap_or(&current_dir)
-                        .join("capabilities")
-                } else {
-                    current_dir.join("capabilities")
-                }
+                // Find workspace root and use capabilities there
+                find_workspace_root().join("capabilities")
             });
 
         std::fs::create_dir_all(&storage_dir).map_err(|e| {

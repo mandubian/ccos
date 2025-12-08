@@ -366,22 +366,19 @@ impl CCOS {
                     .default
                     .clone()
                     .or_else(|| llm_profiles.profiles.first().map(|p| p.name.clone()));
-                
+
                 if let Some(name) = profile_name {
                     if let Some(profile) = crate::examples_common::builder::find_llm_profile(
                         agent_config.as_ref(),
                         &name,
                     ) {
                         // Resolve API key from env var or inline
-                        let api_key = profile
-                            .api_key
-                            .clone()
-                            .or_else(|| {
-                                profile
-                                    .api_key_env
-                                    .as_ref()
-                                    .and_then(|env| std::env::var(env).ok())
-                            });
+                        let api_key = profile.api_key.clone().or_else(|| {
+                            profile
+                                .api_key_env
+                                .as_ref()
+                                .and_then(|env| std::env::var(env).ok())
+                        });
 
                         let provider_type = match profile.provider.to_lowercase().as_str() {
                             "openai" | "openrouter" => {
@@ -414,18 +411,19 @@ impl CCOS {
                         // Profile not found, fall through to env var logic
                         let model = std::env::var("CCOS_DELEGATING_MODEL")
                             .unwrap_or_else(|_| "stub".to_string());
-                        let (api_key, base_url) = if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-                            let base = std::env::var("CCOS_LLM_BASE_URL")
-                                .ok()
-                                .or_else(|| Some("https://openrouter.ai/api/v1".to_string()));
-                            (Some(key), base)
-                        } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-                            (Some(key), None)
-                        } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-                            (Some(key), std::env::var("CCOS_LLM_BASE_URL").ok())
-                        } else {
-                            (None, std::env::var("CCOS_LLM_BASE_URL").ok())
-                        };
+                        let (api_key, base_url) =
+                            if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+                                let base = std::env::var("CCOS_LLM_BASE_URL")
+                                    .ok()
+                                    .or_else(|| Some("https://openrouter.ai/api/v1".to_string()));
+                                (Some(key), base)
+                            } else if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+                                (Some(key), None)
+                            } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+                                (Some(key), std::env::var("CCOS_LLM_BASE_URL").ok())
+                            } else {
+                                (None, std::env::var("CCOS_LLM_BASE_URL").ok())
+                            };
                         let provider_hint = std::env::var("CCOS_LLM_PROVIDER_HINT")
                             .unwrap_or_else(|_| String::from(""));
                         let provider_type = if provider_hint.eq_ignore_ascii_case("stub")
