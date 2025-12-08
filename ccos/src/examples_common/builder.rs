@@ -469,6 +469,8 @@ impl ModularPlannerBuilder {
             initial_grounding_params: HashMap::new(),
             allow_grounding_context: true,
             hybrid_config: Some(HybridConfig::default()),
+            enable_schema_validation: false,
+            enable_plan_validation: false,
         };
 
         let planner = ModularPlanner::new(

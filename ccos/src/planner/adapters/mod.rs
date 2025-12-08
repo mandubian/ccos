@@ -6,4 +6,4 @@
 
 mod schema_bridge;
 
-pub use schema_bridge::{AdapterKind, SchemaBridge};
+pub use schema_bridge::{load_capability_sample, AdapterKind, SchemaBridge};
