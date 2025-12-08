@@ -862,25 +862,26 @@ impl ApprovalQueue {
                 // Determine the source directory
                 // capabilities_path is like "capabilities/servers/pending/github_github-mcp/capabilities.rtfs"
                 // We want to move the entire directory "capabilities/servers/pending/github_github-mcp"
-                let source_dir: std::path::PathBuf = if let Some(ref capabilities_path) = item.server_info.capabilities_path {
-                    // Extract directory from capabilities_path (absolute or relative)
-                    let path = std::path::Path::new(capabilities_path);
-                    let absolute = if path.is_absolute() {
-                        path.to_path_buf()
+                let source_dir: std::path::PathBuf =
+                    if let Some(ref capabilities_path) = item.server_info.capabilities_path {
+                        // Extract directory from capabilities_path (absolute or relative)
+                        let path = std::path::Path::new(capabilities_path);
+                        let absolute = if path.is_absolute() {
+                            path.to_path_buf()
+                        } else {
+                            self.base_path.join(path)
+                        };
+                        absolute
+                            .parent()
+                            .ok_or_else(|| {
+                                RuntimeError::Generic(
+                                    "Invalid capabilities_path: no parent directory".to_string(),
+                                )
+                            })?
+                            .to_path_buf()
                     } else {
-                        self.base_path.join(path)
+                        pending_server_dir.clone()
                     };
-                    absolute
-                        .parent()
-                        .ok_or_else(|| {
-                            RuntimeError::Generic(
-                                "Invalid capabilities_path: no parent directory".to_string(),
-                            )
-                        })?
-                        .to_path_buf()
-                } else {
-                    pending_server_dir.clone()
-                };
 
                 if source_dir.exists() {
                     if approved_server_dir.exists() {

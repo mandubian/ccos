@@ -1,13 +1,22 @@
 use crate::capability_marketplace::types::CapabilityDiscovery;
-use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
+use crate::capability_marketplace::types::{
+    CapabilityManifest, LocalCapability, MCPCapability, ProviderType,
+};
 use crate::mcp::types::DiscoveredMCPTool;
 use crate::synthesis::mcp_introspector::MCPIntrospector;
 use async_trait::async_trait;
 use chrono::Utc;
+use log::debug;
 use rtfs::ast::{
     Expression, Keyword, Literal, MapKey, MapTypeEntry, PrimitiveType, Symbol, TopLevel, TypeExpr,
 };
+use rtfs::runtime::environment::Environment;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+use rtfs::runtime::evaluator::Evaluator;
+use rtfs::runtime::module_runtime::ModuleRegistry;
+use rtfs::runtime::pure_host;
+use rtfs::runtime::security::RuntimeContext;
+use rtfs::runtime::{Runtime, TreeWalkingStrategy};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
@@ -735,8 +744,16 @@ impl MCPDiscoveryProvider {
         // to prevent duplication when saving (save_rtfs_capabilities will use the ones in the map)
         Ok(RTFSCapabilityDefinition {
             capability: Expression::Map(capability_map),
-            input_schema: if input_schema_added { None } else { input_schema },
-            output_schema: if output_schema_added { None } else { output_schema },
+            input_schema: if input_schema_added {
+                None
+            } else {
+                input_schema
+            },
+            output_schema: if output_schema_added {
+                None
+            } else {
+                output_schema
+            },
         })
     }
 
@@ -798,7 +815,7 @@ impl MCPDiscoveryProvider {
             // Use explicit iteration since HashMap key comparison may not work as expected
             let mut input_schema_in_map = false;
             let mut output_schema_in_map = false;
-            
+
             if let Expression::Map(ref cap_map) = capability.capability {
                 for (key, _) in cap_map.iter() {
                     if let MapKey::Keyword(kw) = key {
@@ -824,7 +841,7 @@ impl MCPDiscoveryProvider {
             } else {
                 // Need to add wrapper fields for backward compatibility
                 rtfs_content.push_str("\n");
-                
+
                 if !input_schema_in_map {
                     if let Some(input_schema) = &capability.input_schema {
                         rtfs_content.push_str("        :input-schema ");
@@ -1670,6 +1687,7 @@ impl MCPDiscoveryProvider {
         let mut metadata = HashMap::new();
         let mut effects = Vec::new();
         let mut serialized_effects: Option<String> = None;
+        let mut implementation_expr: Option<Expression> = None;
 
         for (key, value) in cap_map {
             match key {
@@ -1774,6 +1792,9 @@ impl MCPDiscoveryProvider {
                         }
                     }
                 }
+                MapKey::Keyword(k) if k.0 == "implementation" => {
+                    implementation_expr = Some(value.clone());
+                }
                 _ => {}
             }
         }
@@ -1850,6 +1871,11 @@ impl MCPDiscoveryProvider {
                             .cloned()
                             .unwrap_or_else(|| "https://api.example.com".to_string());
 
+                        debug!(
+                            "RTFS capability '{}' has provider_type string, defaulting to HTTP base_url={}",
+                            name, base_url
+                        );
+
                         ProviderType::Http(crate::capability_marketplace::types::HttpCapability {
                             base_url,
                             timeout_ms: 30000,
@@ -1864,17 +1890,52 @@ impl MCPDiscoveryProvider {
             } else {
                 self.convert_rtfs_provider_to_manifest(&provider_map)?
             }
-        } else {
-            // No provider info - create Http provider as fallback
-            let base_url = metadata
-                .get("base_url")
-                .cloned()
-                .unwrap_or_else(|| "https://api.example.com".to_string());
+        } else if let Some(impl_expr) = implementation_expr.clone() {
+            // Pure RTFS implementation -> run locally
+            let impl_expr_cloned = impl_expr.clone();
+            ProviderType::Local(LocalCapability {
+                handler: std::sync::Arc::new(move |inputs: &rtfs::runtime::values::Value| {
+                    // Build a tiny RTFS evaluator with stdlib and a bound `input`
+                    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
+                    let _ = rtfs::runtime::stdlib::load_stdlib(&module_registry);
 
-            ProviderType::Http(crate::capability_marketplace::types::HttpCapability {
-                base_url,
-                timeout_ms: 30000,
-                auth_token: None,
+                    let mut env = Environment::new();
+                    if let Some(stdlib) = module_registry.get_module("stdlib") {
+                        if let Ok(exports) = stdlib.exports.read() {
+                            for (name, export) in exports.iter() {
+                                env.define(&Symbol(name.clone()), export.value.clone());
+                            }
+                        }
+                    }
+                    env.define(&Symbol("input".to_string()), inputs.clone());
+
+                    let host = pure_host::create_pure_host();
+                    let evaluator = Evaluator::with_environment(
+                        module_registry.clone(),
+                        env,
+                        RuntimeContext::pure(),
+                        host,
+                    );
+                    let mut runtime = Runtime::new(Box::new(TreeWalkingStrategy::new(evaluator)));
+
+                    let call_expr = Expression::FunctionCall {
+                        callee: Box::new(impl_expr_cloned.clone()),
+                        arguments: vec![Expression::Symbol(Symbol("input".to_string()))],
+                    };
+
+                    runtime.run(&call_expr)
+                }),
+            })
+        } else {
+            // No provider info and no implementation - default to pure local no-op
+            debug!(
+                "RTFS capability '{}' missing provider and implementation; defaulting to local noop",
+                name
+            );
+            ProviderType::Local(LocalCapability {
+                handler: std::sync::Arc::new(|_inputs: &rtfs::runtime::values::Value| {
+                    Ok(rtfs::runtime::values::Value::Nil)
+                }),
             })
         };
 
@@ -1893,7 +1954,10 @@ impl MCPDiscoveryProvider {
         }
 
         if effects.is_empty() {
-            effects = vec![":network".to_string()];
+            effects = match provider {
+                ProviderType::Local(_) => vec![":pure".to_string()],
+                _ => vec![":network".to_string()],
+            };
         }
 
         Ok(CapabilityManifest {

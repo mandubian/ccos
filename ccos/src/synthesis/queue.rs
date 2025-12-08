@@ -53,10 +53,7 @@ pub struct SynthQueueItem {
 }
 
 impl SynthQueueItem {
-    pub fn needs_impl(
-        capability_id: impl Into<String>,
-        description: impl Into<String>,
-    ) -> Self {
+    pub fn needs_impl(capability_id: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
             capability_id: capability_id.into(),
             description: description.into(),
@@ -99,7 +96,9 @@ impl SynthQueue {
         }
 
         let file_name = Self::sanitize_file_name(&item.capability_id);
-        let path = self.base_dir.join(format!("{}-{}.json", file_name, Utc::now().timestamp()));
+        let path = self
+            .base_dir
+            .join(format!("{}-{}.json", file_name, Utc::now().timestamp()));
         let json = serde_json::to_string_pretty(&item).map_err(|e| {
             RuntimeError::Generic(format!("Failed to serialize synth queue item: {}", e))
         })?;
@@ -124,6 +123,8 @@ impl SynthQueue {
             .collect()
     }
 }
+
+
 
 
 

@@ -1,9 +1,7 @@
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::utils::value_conversion::rtfs_value_to_json;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
-use serde_json;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -154,76 +152,6 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
             RuntimeError::Generic(format!("Failed to register ccos.data.select: {:?}", e))
         })?;
 
-    // ccos.data.format - pretty-print with limits, safe for grounding
-    marketplace
-        .register_local_capability_with_effects(
-            "ccos.data.format".to_string(),
-            "Format Data".to_string(),
-            "Formats data to pretty JSON string with optional limits. Params: data (any), max_items (int, optional), max_chars (int, optional)".to_string(),
-            Arc::new(|input| {
-                let (data, params_val) =
-                    extract_data_and_params(input, "ccos.data.format", "params")?;
-
-                // Defaults aimed at readable grounding without flooding logs
-                let mut max_items: usize = 20;
-                let mut max_chars: usize = 4000;
-
-                if let Some(Value::Map(params)) = params_val {
-                    if let Some(mi) = params
-                        .get(&MapKey::String("max_items".to_string()))
-                        .or_else(|| params.get(&MapKey::Keyword(Keyword("max_items".to_string()))))
-                    {
-                        if let Some(v) = value_to_usize(mi) {
-                            max_items = v;
-                        }
-                    }
-                    if let Some(mc) = params
-                        .get(&MapKey::String("max_chars".to_string()))
-                        .or_else(|| params.get(&MapKey::Keyword(Keyword("max_chars".to_string()))))
-                    {
-                        if let Some(v) = value_to_usize(mc) {
-                            max_chars = v;
-                        }
-                    }
-                }
-
-                let mut json_val = rtfs_value_to_json(data)?;
-                let mut items_truncated = None;
-
-                // If top-level is an array, clip to max_items
-                if let serde_json::Value::Array(arr) = &mut json_val {
-                    if arr.len() > max_items {
-                        let total = arr.len();
-                        arr.truncate(max_items);
-                        items_truncated = Some(total);
-                    }
-                }
-
-                let mut output = serde_json::to_string_pretty(&json_val)
-                    .unwrap_or_else(|_| format!("{}", json_val));
-
-                if let Some(total) = items_truncated {
-                    output.push_str(&format!(
-                        "\n... [truncated items to {} of {}]",
-                        max_items, total
-                    ));
-                }
-
-                if output.len() > max_chars {
-                    let total = output.len();
-                    output.truncate(max_chars);
-                    output.push_str(&format!("... [truncated, total {} chars]", total));
-                }
-
-                Ok(Value::String(output))
-            }),
-            vec![":compute".to_string()], // Safe effect - pure formatting
-        )
-        .await
-        .map_err(|e| {
-            RuntimeError::Generic(format!("Failed to register ccos.data.format: {:?}", e))
-        })?;
-
     Ok(())
 }
 
@@ -282,15 +210,6 @@ fn value_to_clean_string(v: &Value) -> String {
             // Remove surrounding quotes if present
             s.trim_matches('"').to_string()
         }
-    }
-}
-
-fn value_to_usize(v: &Value) -> Option<usize> {
-    match v {
-        Value::Integer(i) if *i >= 0 => Some(*i as usize),
-        Value::Float(f) if *f >= 0.0 => Some(*f as usize),
-        Value::String(s) => s.parse::<usize>().ok(),
-        _ => None,
     }
 }
 

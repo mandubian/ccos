@@ -315,53 +315,49 @@ impl CapabilityExecutor for MCPExecutor {
                 request_builder = request_builder.header("Mcp-Session-Id", sid);
             }
 
-            let handle_tool_response =
-                |tool_response: serde_json::Value| -> RuntimeResult<Value> {
-                    if let Some(error) = tool_response.get("error") {
-                        return Err(RuntimeError::Generic(format!(
-                            "MCP tool execution failed: {:?}",
-                            error
-                        )));
-                    }
-                    if let Some(result) = tool_response.get("result") {
-                        if let Some(content) = result.get("content") {
-                            // Prefer structured RTFS over raw JSON-in-string
-                            if let Some(arr) = content.as_array() {
-                                if let Some(first) = arr.first() {
-                                    if first
-                                        .get("type")
-                                        .and_then(|v| v.as_str())
-                                        .map(|t| t.eq_ignore_ascii_case("text"))
-                                        .unwrap_or(false)
-                                    {
-                                        if let Some(text) = first.get("text").and_then(|v| v.as_str())
+            let handle_tool_response = |tool_response: serde_json::Value| -> RuntimeResult<Value> {
+                if let Some(error) = tool_response.get("error") {
+                    return Err(RuntimeError::Generic(format!(
+                        "MCP tool execution failed: {:?}",
+                        error
+                    )));
+                }
+                if let Some(result) = tool_response.get("result") {
+                    if let Some(content) = result.get("content") {
+                        // Prefer structured RTFS over raw JSON-in-string
+                        if let Some(arr) = content.as_array() {
+                            if let Some(first) = arr.first() {
+                                if first
+                                    .get("type")
+                                    .and_then(|v| v.as_str())
+                                    .map(|t| t.eq_ignore_ascii_case("text"))
+                                    .unwrap_or(false)
+                                {
+                                    if let Some(text) = first.get("text").and_then(|v| v.as_str()) {
+                                        if let Ok(parsed) =
+                                            serde_json::from_str::<serde_json::Value>(text)
                                         {
-                                            if let Ok(parsed) =
-                                                serde_json::from_str::<serde_json::Value>(text)
-                                            {
-                                                return CapabilityMarketplace::json_to_rtfs_value(
-                                                    &parsed,
-                                                )
-                                                .or_else(|_| {
-                                                    CapabilityMarketplace::json_to_rtfs_value(
-                                                        content,
-                                                    )
-                                                });
-                                            }
+                                            return CapabilityMarketplace::json_to_rtfs_value(
+                                                &parsed,
+                                            )
+                                            .or_else(|_| {
+                                                CapabilityMarketplace::json_to_rtfs_value(content)
+                                            });
                                         }
                                     }
                                 }
                             }
-                            CapabilityMarketplace::json_to_rtfs_value(content)
-                        } else {
-                            CapabilityMarketplace::json_to_rtfs_value(result)
                         }
+                        CapabilityMarketplace::json_to_rtfs_value(content)
                     } else {
-                        Err(RuntimeError::Generic(
-                            "No result in MCP tool response".to_string(),
-                        ))
+                        CapabilityMarketplace::json_to_rtfs_value(result)
                     }
-                };
+                } else {
+                    Err(RuntimeError::Generic(
+                        "No result in MCP tool response".to_string(),
+                    ))
+                }
+            };
 
             // Prefer streaming consumption when available to avoid partial SSE bodies.
             if let Some(es_builder) = request_builder.try_clone() {
@@ -375,8 +371,9 @@ impl CapabilityExecutor for MCPExecutor {
                                         continue;
                                     }
                                     event_source.close();
-                                    return match serde_json::from_str::<serde_json::Value>(&msg.data)
-                                    {
+                                    return match serde_json::from_str::<serde_json::Value>(
+                                        &msg.data,
+                                    ) {
                                         Ok(v) => handle_tool_response(v),
                                         Err(e) => Err(RuntimeError::Generic(format!(
                                             "Failed to parse SSE data: {} (data: {})",
@@ -549,12 +546,8 @@ impl CapabilityExecutor for MCPExecutor {
                             .to_string();
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&cleaned) {
                             v
-                        } else if let Some(start_idx) =
-                            body_text.find(|c| c == '{' || c == '[')
-                        {
-                            if let Some(end_idx) =
-                                body_text.rfind(|c| c == '}' || c == ']')
-                            {
+                        } else if let Some(start_idx) = body_text.find(|c| c == '{' || c == '[') {
+                            if let Some(end_idx) = body_text.rfind(|c| c == '}' || c == ']') {
                                 let slice = body_text[start_idx..=end_idx].trim();
                                 serde_json::from_str(slice).map_err(|secondary_err| {
                                     RuntimeError::Generic(format!(

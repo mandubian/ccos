@@ -175,7 +175,10 @@ impl RuntimeHost {
                 .iter()
                 .map(|(k, v)| (MapKey::String(k.clone()), v.clone()))
                 .collect();
-            map.insert(MapKey::String("step_context".to_string()), Value::Map(step_map.clone()));
+            map.insert(
+                MapKey::String("step_context".to_string()),
+                Value::Map(step_map.clone()),
+            );
 
             // Also flatten step context into top-level entries for prompt builders
             for (k, v) in step_map {
@@ -351,9 +354,8 @@ impl HostInterface for RuntimeHost {
         let capability_args = Value::Map(call_map);
 
         // Prepare CallMetadata with flattened context (including grounding:* from step_context)
-        let call_metadata: Option<CallMetadata> = snapshot
-            .as_ref()
-            .map(|snap| self.build_call_metadata(snap));
+        let call_metadata: Option<CallMetadata> =
+            snapshot.as_ref().map(|snap| self.build_call_metadata(snap));
 
         // 2. Check execution mode and security level for dry-run simulation
         let execution_mode = self.get_execution_mode();

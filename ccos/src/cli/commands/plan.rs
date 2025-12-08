@@ -80,20 +80,20 @@ pub async fn execute(_ctx: &mut CliContext, command: PlanCommand) -> RuntimeResu
             save,
             verbose,
             skip_validation,
-        enable_safe_exec,
-        allow_grounding_context,
-        grounding_param,
-        force_llm,
+            enable_safe_exec,
+            allow_grounding_context,
+            grounding_param,
+            force_llm,
         } => {
             let options = CreatePlanOptions {
                 dry_run,
                 save_to: save,
                 verbose,
                 skip_validation,
-            enable_safe_exec,
-            allow_grounding_context,
-            grounding_params: grounding_param.into_iter().collect(),
-            force_llm,
+                enable_safe_exec,
+                allow_grounding_context,
+                grounding_params: grounding_param.into_iter().collect(),
+                force_llm,
             };
             let result = crate::ops::plan::create_plan_with_options(goal, options).await?;
 
