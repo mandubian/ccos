@@ -21,12 +21,12 @@ Enable CCOS agents to **evolve their own capabilities** by treating the planner 
 
 ## Implementation Status
 
-> **Last Updated**: December 2024
+> **Last Updated**: December 10, 2024
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| Phase 1: Meta-Planning | ✅ **Complete** | `planner.decompose`, `planner.resolve_intent`, `planner.synthesize_capability` implemented in [capabilities_v2.rs](../ccos/src/planner/capabilities_v2.rs) |
-| Phase 2: Learning Loop | ⬜ Not started | Feedback collection, failure analysis |
+| Phase 1: Meta-Planning | ✅ **Complete** | `planner.decompose`, `planner.resolve_intent`, `planner.synthesize_capability` implemented |
+| Phase 2: Learning Loop | ✅ **Complete** | Error classification, failure querying, analysis capabilities |
 | Phase 3: Governance & Safety | ✅ **Complete** | Trust levels, approval gates, bounded exploration, versioning, causal chain recording |
 | Phase 4: Introspection | ⬜ Not started | Plan trace, capability graph |
 | Phase 5: Evolutionary Agents | ⬜ Not started | Agent memory, coordination |
@@ -43,6 +43,11 @@ Enable CCOS agents to **evolve their own capabilities** by treating the planner 
 - [CapabilityVersionStore](../ccos/src/capability_marketplace/version_store.rs): Version snapshots, rollback support
 - [GovernanceEventRecorder](../ccos/src/synthesis/governance_events.rs): Causal chain recording for all governance events
 - [config/agent_config.toml](../config/agent_config.toml): `[self_programming]` section added
+
+**Phase 2 - Learning Loop**:
+- [classify_error()](../ccos/src/host.rs): Pattern-based error categorization (SchemaError, MissingCapability, TimeoutError, etc.)
+- [learning/capabilities.rs](../ccos/src/learning/capabilities.rs): `learning.get_failures`, `learning.get_failure_stats`, `learning.analyze_failure`
+- CausalChain query APIs: `query_actions()`, `get_actions_for_capability()` used for failure analysis
 
 **New Causal Chain ActionTypes**:
 - `CapabilityVersionCreated`, `CapabilityRollback` - Version tracking
@@ -174,51 +179,43 @@ Goal: "group issues by label"
 
 ---
 
-## Phase 2: Learning Loop (Feedback Integration)
+## Phase 2: Learning Loop ✅ IMPLEMENTED
 
-Enable the AI to learn from execution results and improve.
+Enables CCOS to analyze execution failures and suggest improvements.
 
-### Architecture
+### Implemented Capabilities
 
+| Capability | Description |
+|-----------|-------------|
+| `learning.get_failures` | Query failures from CausalChain with filters (capability_id, error_category, limit) |
+| `learning.get_failure_stats` | Aggregated statistics by error category and top failing capabilities |
+| `learning.analyze_failure` | Analyze error message → category + suggested fix |
+
+### Error Classification
+
+Automatic categorization in `host.rs` via `classify_error()`:
+- `SchemaError` - missing field, type mismatch, validation failed
+- `MissingCapability` - unknown capability, not found
+- `TimeoutError` - timeout, timed out
+- `NetworkError` - connection, http, network
+- `LLMError` - generation failed, synthesis
+- `RuntimeError` - default
+
+### CausalChain Integration
+
+Learning capabilities query the existing CausalChain:
+```rust
+let query = CausalQuery {
+    action_type: Some(ActionType::CapabilityResult),
+    ..Default::default()
+};
+let failures = chain.query_actions(&query)
+    .filter(|a| !a.result.success);
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Self-Programming Loop                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   ┌─────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐  │
-│   │  Goal   │───▶│ Planning │───▶│ Execute  │───▶│ Evaluate │  │
-│   └─────────┘    └──────────┘    └──────────┘    └──────────┘  │
-│        ▲                                               │        │
-│        │           ┌───────────────────────────────────┘        │
-│        │           ▼                                            │
-│        │    ┌──────────────┐                                    │
-│        └────│   Learn      │                                    │
-│             └──────────────┘                                    │
-│                    │                                            │
-│                    ▼                                            │
-│             ┌──────────────┐                                    │
-│             │  Improve     │ (new capabilities, better plans)   │
-│             └──────────────┘                                    │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
 
-### New Capabilities
-
-| Capability ID | Description | Security |
-|--------------|-------------|----------|
-| `learning.record_feedback` | Store execution outcome | low |
-| `learning.analyze_failure` | Diagnose why a plan failed | low |
-| `learning.suggest_improvement` | Propose plan/capability changes | low |
-| `learning.apply_improvement` | Modify plan or capability | high |
-
-### Implementation
-
-#### [NEW] `ccos/src/learning/feedback_loop.rs`
-Track plan execution outcomes and suggest improvements
-
-#### [MODIFY] `ccos/src/synthesis/introspection/schema_refiner.rs`
-Use execution feedback to refine capability schemas
+### Future Work
+- `learning.suggest_improvement` - LLM-assisted capability rewriting
+- `learning.apply_improvement` - Gated modification with governance approval
 
 ---
 
