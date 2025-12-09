@@ -487,11 +487,7 @@ impl MCPDiscoveryService {
         let mut discovered_tools = Vec::new();
         let mut errors = Vec::new();
 
-        eprintln!(
-            "📂 Loading {} capability file(s) for approved server: {}",
-            capability_files.len(),
-            approved_server.server_info.name
-        );
+        eprintln!("📂 Loading from {}", approved_server.server_info.name);
 
         let approved_roots = [
             std::path::Path::new("capabilities/servers/approved").to_path_buf(),
@@ -531,7 +527,6 @@ impl MCPDiscoveryService {
                 continue;
             }
 
-            eprintln!("📄 Loading RTFS file: {}", full_path.display());
             log::debug!("Loading RTFS file: {}", full_path.display());
 
             let parser = MCPDiscoveryProvider::new(MCPServerConfig::default()).map_err(|e| {
@@ -540,31 +535,23 @@ impl MCPDiscoveryService {
 
             match parser.load_rtfs_capabilities(full_path.to_str().unwrap()) {
                 Ok(module) => {
-                    eprintln!(
-                        "✅ Parsed RTFS module with {} capabilities",
-                        module.capabilities.len()
-                    );
-                    log::debug!(
-                        "Parsed RTFS module with {} capabilities",
-                        module.capabilities.len()
-                    );
+                    let mut success_count = 0;
+                    let mut failed_caps = Vec::new();
+
                     for (idx, cap_def) in module.capabilities.iter().enumerate() {
                         match parser.rtfs_to_capability_manifest(cap_def) {
                             Ok(manifest) => {
-                                eprintln!(
-                                    "✅ Successfully converted capability: {}",
-                                    manifest.name
-                                );
-                                log::debug!("Successfully converted capability: {}", manifest.name);
+                                log::debug!("Converted capability: {}", manifest.name);
                                 // Convert CapabilityManifest to DiscoveredMCPTool
                                 let tool = DiscoveredMCPTool {
                                     tool_name: manifest.name.clone(),
                                     description: Some(manifest.description.clone()),
                                     input_schema: manifest.input_schema.clone(),
                                     output_schema: manifest.output_schema.clone(),
-                                    input_schema_json: None, // Could extract from metadata if needed
+                                    input_schema_json: None,
                                 };
                                 discovered_tools.push(tool);
+                                success_count += 1;
                             }
                             Err(e) => {
                                 let err_msg = format!(
@@ -573,10 +560,30 @@ impl MCPDiscoveryService {
                                     full_path.display(),
                                     e
                                 );
-                                eprintln!("❌ {}", err_msg);
                                 log::warn!("{}", err_msg);
+                                failed_caps.push(err_msg.clone());
                                 errors.push(err_msg);
                             }
+                        }
+                    }
+
+                    // Compact summary line
+                    if failed_caps.is_empty() {
+                        eprintln!(
+                            "   ✅ Loaded {} capabilities from {}",
+                            success_count,
+                            full_path.file_name().unwrap_or_default().to_string_lossy()
+                        );
+                    } else {
+                        eprintln!(
+                            "   ⚠️  Loaded {}/{} capabilities from {} ({} failed)",
+                            success_count,
+                            module.capabilities.len(),
+                            full_path.file_name().unwrap_or_default().to_string_lossy(),
+                            failed_caps.len()
+                        );
+                        for err in &failed_caps {
+                            eprintln!("      ❌ {}", err);
                         }
                     }
                 }
