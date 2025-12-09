@@ -2738,9 +2738,7 @@ impl CapabilityMarketplace {
                 match self.import_single_rtfs_file(&path).await {
                     Ok(count) => {
                         total_loaded += count;
-                        if count > 0 {
-                            eprintln!("✅ Loaded {} capabilities from {}", count, path.display());
-                        }
+                        // Only log to debug callback, not eprintln
                         if let Some(cb) = &self.debug_callback {
                             cb(format!(
                                 "Loaded {} capabilities from {}",

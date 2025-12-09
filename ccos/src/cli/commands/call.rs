@@ -29,9 +29,12 @@ pub async fn execute(ctx: &mut CliContext, args: CallArgs) -> RuntimeResult<()> 
         Ok(cfg) => {
             ctx.status(&format!("Loaded agent config from {}", config_path));
             Some(cfg)
-        },
+        }
         Err(e) => {
-            ctx.status(&format!("Warning: Could not load agent config from {}: {}", config_path, e));
+            ctx.status(&format!(
+                "Warning: Could not load agent config from {}: {}",
+                config_path, e
+            ));
             ctx.status("Using default configuration.");
             None
         }
@@ -47,50 +50,42 @@ pub async fn execute(ctx: &mut CliContext, args: CallArgs) -> RuntimeResult<()> 
         None
     };
 
-    let ccos = Arc::new(crate::ccos_core::CCOS::new_with_agent_config_and_configs_and_debug_callback(
-        crate::intent_graph::IntentGraphConfig::default(),
-        None,
-        agent_config,
-        debug_callback
-    ).await?);
+    let ccos = Arc::new(
+        crate::ccos_core::CCOS::new_with_agent_config_and_configs_and_debug_callback(
+            crate::intent_graph::IntentGraphConfig::default(),
+            None,
+            agent_config,
+            debug_callback,
+        )
+        .await?,
+    );
     ccos.init_v2_capabilities().await?;
     let marketplace = ccos.capability_marketplace.clone();
 
     // Load capabilities from approved servers directory
     let approved_dir = std::path::Path::new("capabilities/servers/approved");
+    let mut total_loaded = 0;
     if approved_dir.exists() {
-        ctx.status("Loading capabilities from approved servers...");
         let count = marketplace
             .import_capabilities_from_rtfs_dir_recursive(approved_dir)
             .await?;
-        if count > 0 {
-            ctx.status(&format!(
-                "Loaded {} capabilities from approved servers",
-                count
-            ));
-        } else {
-            ctx.status("Warning: No capabilities loaded from approved servers");
-        }
+        total_loaded += count;
     }
 
     // Load capabilities from samples directory (for testing)
     let samples_dir = std::path::Path::new("capabilities/samples");
     if samples_dir.exists() {
-        ctx.status("Loading capabilities from samples...");
         let count = marketplace
             .import_capabilities_from_rtfs_dir_recursive(samples_dir)
             .await?;
-        if count > 0 {
-            ctx.status(&format!(
-                "Loaded {} capabilities from samples",
-                count
-            ));
-        }
+        total_loaded += count;
     }
 
     // Register native capabilities (ccos.cli.*)
-    ctx.status("Registering native CLI capabilities...");
     crate::ops::native::register_native_capabilities(&marketplace).await?;
+
+    // Show compact summary
+    ctx.status(&format!("Loaded {} capabilities + natives", total_loaded));
 
     // Parse arguments
     let input_value = parse_args(&args.args)?;
