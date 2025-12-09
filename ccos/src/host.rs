@@ -450,12 +450,18 @@ impl HostInterface for RuntimeHost {
                 value: value.clone(),
                 metadata: Default::default(),
             },
-            Err(e) => ExecutionResult {
-                success: false,
-                value: Value::Nil,
-                metadata: Default::default(),
+            Err(e) => {
+                let error_msg = e.to_string();
+                let error_category = classify_error(&error_msg);
+                ExecutionResult {
+                    success: false,
+                    value: Value::Nil,
+                    metadata: std::collections::HashMap::from([
+                        ("error".to_string(), Value::String(error_msg)),
+                        ("error_category".to_string(), Value::String(error_category)),
+                    ]),
+                }
             }
-            .with_error(&e.to_string()),
         };
 
         self.get_causal_chain()?
@@ -701,4 +707,68 @@ impl std::fmt::Debug for RuntimeHost {
             .field("has_execution_context", &ctx_state)
             .finish()
     }
+}
+
+/// Classify an error message into a category for learning and analysis.
+///
+/// Categories:
+/// - SchemaError: Input/output validation failures
+/// - MissingCapability: Required capability not found
+/// - TimeoutError: Execution timed out
+/// - NetworkError: Network/connection issues
+/// - LLMError: LLM generation or synthesis failures
+/// - RuntimeError: General RTFS execution errors (default)
+fn classify_error(error_msg: &str) -> String {
+    let msg = error_msg.to_lowercase();
+
+    // Schema and validation errors
+    if msg.contains("schema")
+        || msg.contains("validation failed")
+        || msg.contains("missing field")
+        || msg.contains("missing required")
+        || msg.contains("type mismatch")
+        || msg.contains("does not match schema")
+    {
+        return "SchemaError".to_string();
+    }
+
+    // Missing capability errors
+    if msg.contains("unknown capability")
+        || msg.contains("not found")
+        || msg.contains("missing capability")
+        || msg.contains("no capability")
+        || msg.contains("capability not registered")
+    {
+        return "MissingCapability".to_string();
+    }
+
+    // Timeout errors
+    if msg.contains("timeout") || msg.contains("timed out") || msg.contains("deadline exceeded") {
+        return "TimeoutError".to_string();
+    }
+
+    // Network errors
+    if msg.contains("network")
+        || msg.contains("connection")
+        || msg.contains("http")
+        || msg.contains("request failed")
+        || msg.contains("dns")
+        || msg.contains("socket")
+    {
+        return "NetworkError".to_string();
+    }
+
+    // LLM-related errors
+    if msg.contains("llm")
+        || msg.contains("generation failed")
+        || msg.contains("synthesis failed")
+        || msg.contains("openai")
+        || msg.contains("anthropic")
+        || msg.contains("model")
+    {
+        return "LLMError".to_string();
+    }
+
+    // Default: general runtime error
+    "RuntimeError".to_string()
 }

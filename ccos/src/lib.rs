@@ -16,6 +16,7 @@ pub mod governance_kernel;
 pub mod intent_archive;
 pub mod intent_graph;
 pub mod intent_storage;
+pub mod learning;
 pub mod mcp;
 pub mod orchestrator;
 pub mod plan_archive;

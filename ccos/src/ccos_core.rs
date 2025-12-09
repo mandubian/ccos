@@ -1424,14 +1424,23 @@ impl CCOS {
             .await
     }
 
-    /// Initialize v2 capabilities (meta-planning) that require full CCOS reference
+    /// Initialize v2 capabilities (meta-planning, learning) that require full CCOS reference
     pub async fn init_v2_capabilities(self: &Arc<Self>) -> RuntimeResult<()> {
         crate::planner::capabilities_v2::register_planner_capabilities_v2(
             Arc::clone(&self.capability_marketplace),
             Arc::clone(&self.catalog),
             Arc::clone(self),
         )
-        .await
+        .await;
+
+        // Register learning capabilities for failure analysis
+        crate::learning::capabilities::register_learning_capabilities(
+            Arc::clone(&self.capability_marketplace),
+            Arc::clone(&self.causal_chain),
+        )
+        .await?;
+
+        Ok(())
     }
 
     pub fn get_delegating_arbiter(&self) -> Option<Arc<DelegatingArbiter>> {
