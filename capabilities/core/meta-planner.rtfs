@@ -1,0 +1,129 @@
+;; Sample Meta-Plan: Recursive Self-Programming
+;; 
+;; This RTFS capability demonstrates how the planner can recursively
+;; decompose goals, resolve intents, and synthesize missing capabilities.
+;;
+;; Usage:
+;;   (call "meta-planner/resolve-goal" {:goal "group GitHub issues by label"})
+
+(capability "meta-planner/resolve-goal"
+  :description "Recursively resolve a goal by decomposing into sub-intents and synthesizing missing capabilities"
+  :input-schema [:map 
+    [:goal :string]
+    [:max-depth {:optional true} :int]]
+  :output-schema [:map
+    [:success :boolean]
+    [:plan {:optional true} :any]
+    [:failures {:optional true} [:vector :any]]]
+  :effects [:io :network]
+  :implementation
+  (fn [input]
+    (let [goal (:goal input)
+          max-depth (or (:max-depth input) 3)]
+      
+      ;; Helper: resolve or decompose a single intent
+      (defn resolve-or-decompose [intent depth]
+        (if (<= depth 0)
+          ;; Max depth reached - return failure
+          {:resolved false 
+           :error "Max recursion depth reached" 
+           :intent intent}
+          
+          ;; Try to resolve the intent
+          (let [resolution (call "planner.resolve_intent" 
+                                 {:description (:description intent)})]
+            (if (:resolved resolution)
+              ;; Found a capability!
+              {:resolved true 
+               :capability_id (:capability_id resolution)
+               :confidence (:confidence resolution)
+               :intent intent}
+              
+              ;; Not found - try to decompose further
+              (if (:needs_synthesis resolution)
+                ;; Decompose into sub-intents
+                (let [sub-result (call "planner.decompose" 
+                                       {:goal (:description intent)
+                                        :max_depth depth})
+                      sub-intents (:sub_intents sub-result)]
+                  
+                  (if (empty? sub-intents)
+                    ;; Can't decompose - try synthesis
+                    (let [synth-result (call "planner.synthesize_capability"
+                                             {:description (:description intent)})]
+                      (if (:success synth-result)
+                        {:resolved true
+                         :capability_id (:capability_id synth-result)
+                         :synthesized true
+                         :intent intent}
+                        {:resolved false
+                         :error (:error synth-result)
+                         :intent intent}))
+                    
+                    ;; Recursively resolve each sub-intent
+                    (let [resolved-subs (map (fn [sub]
+                                               (resolve-or-decompose sub (- depth 1)))
+                                             sub-intents)
+                          failures (filter (fn [r] (not (:resolved r))) resolved-subs)]
+                      
+                      (if (empty? failures)
+                        ;; All resolved - compose
+                        {:resolved true
+                         :composed true
+                         :sub-resolutions resolved-subs
+                         :intent intent}
+                        ;; Some failed
+                        {:resolved false
+                         :partial true
+                         :failures failures
+                         :successes (filter :resolved resolved-subs)
+                         :intent intent}))))
+                
+                ;; Shouldn't need synthesis but not resolved - error
+                {:resolved false 
+                 :error "Could not resolve intent"
+                 :intent intent})))))
+      
+      ;; Main entry: create root intent and resolve
+      (let [root-intent {:description goal :id "root"}
+            result (resolve-or-decompose root-intent max-depth)]
+        
+        (if (:resolved result)
+          ;; Success - validate the composed plan
+          (let [menu (map :capability_id 
+                          (filter :capability_id 
+                                  (if (:sub-resolutions result)
+                                    (:sub-resolutions result)
+                                    [result])))
+                plan-result (call "planner.synthesize" 
+                                  {:goal goal :menu menu})
+                validation (call "planner.validate" 
+                                 {:plan (:plan plan-result) :menu menu})]
+            (if (:valid validation)
+              {:success true
+               :plan (:plan plan-result)
+               :resolution result}
+              {:success false
+               :plan (:plan plan-result)
+               :errors (:errors validation)
+               :resolution result}))
+          
+          ;; Failed
+          {:success false
+           :failures (if (:failures result) (:failures result) [result])
+           :resolution result})))))
+
+;; Convenience wrapper for simple goals
+(capability "meta-planner/quick-plan"
+  :description "Quick planning for simple goals (max depth 2)"
+  :input-schema [:map [:goal :string]]
+  :output-schema [:any]
+  :effects [:io :network]
+  :implementation
+  (fn [input]
+    (call "meta-planner/resolve-goal" 
+          {:goal (:goal input) :max-depth 2})))
+
+;; Example usage:
+;; (call "meta-planner/resolve-goal" 
+;;       {:goal "List GitHub issues from mandubian/ccos, group by label, show counts"})

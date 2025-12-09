@@ -1,8 +1,11 @@
 use crate::capabilities::registry::CapabilityRegistry;
 use crate::capability_marketplace::CapabilityMarketplace;
+use crate::catalog::CatalogService;
 use crate::cli::CliContext;
 use crate::cli::OutputFormatter;
+use crate::planner::capabilities_v2::register_planner_capabilities_v2;
 use crate::utils::value_conversion::rtfs_value_to_json;
+use crate::CCOS;
 use clap::Subcommand;
 use rtfs::ast::Symbol;
 use rtfs::parser::parse_expression;
@@ -155,6 +158,27 @@ async fn load_caps_into_marketplace(marketplace: &Arc<CapabilityMarketplace>) ->
             );
         }
     }
+
+    // Register planner capabilities (v2 meta-planning)
+    let catalog = Arc::new(CatalogService::new());
+    // Create a minimal CCOS for capability registration
+    match CCOS::new().await {
+        Ok(ccos) => {
+            let ccos: Arc<CCOS> = Arc::new(ccos);
+            if let Err(e) =
+                register_planner_capabilities_v2(marketplace.clone(), catalog.clone(), ccos.clone())
+                    .await
+            {
+                eprintln!("Failed to register planner capabilities: {}", e);
+            } else {
+                eprintln!("✅ Registered planner meta-planning capabilities (v2)");
+            }
+        }
+        Err(e) => {
+            eprintln!("⚠️ Could not create CCOS for planner registration: {}", e);
+        }
+    }
+
     Ok(())
 }
 
