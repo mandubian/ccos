@@ -619,6 +619,14 @@ impl CCOS {
             Arc::new(delegating_arbiter)
         };
 
+        // Log which LLM provider is being used
+        {
+            let cfg = delegating_arbiter.get_llm_config();
+            let provider_type = format!("{:?}", cfg.provider_type);
+            let model = &cfg.model;
+            eprintln!("🤖 Arbiter using {} (model: {})", provider_type, model);
+        }
+
         // The delegating_arbiter is now the primary arbiter
         let arbiter = Arc::clone(&delegating_arbiter);
 
