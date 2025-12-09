@@ -968,7 +968,32 @@ impl MCPDiscoveryService {
                             .any(|root| root.join(&server_id).exists())
                     }
                 } else {
-                    false
+                    // Fallback: check if directory exists even without queue entry
+                    let server_id_normalized = server_config
+                        .name
+                        .to_lowercase()
+                        .replace(" ", "_")
+                        .replace("/", "_");
+                    let approved_roots = [
+                        std::path::Path::new("capabilities/servers/approved").to_path_buf(),
+                        std::path::Path::new("../capabilities/servers/approved").to_path_buf(),
+                    ];
+                    approved_roots.iter().any(|root| {
+                        let dir = root.join(&server_id_normalized);
+                        if dir.exists() {
+                            // Check if there are RTFS files in the directory
+                            std::fs::read_dir(&dir)
+                                .ok()
+                                .map(|entries| {
+                                    entries.flatten().any(|e| {
+                                        e.path().extension().map_or(false, |ext| ext == "rtfs")
+                                    })
+                                })
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    })
                 }
             } else {
                 false
