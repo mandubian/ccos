@@ -1,0 +1,87 @@
+;; Simple Meta-Plan: Testing planner capabilities
+;; 
+;; This RTFS capability tests the planner.decompose, planner.resolve_intent,
+;; and planner.synthesize_capability capabilities work correctly.
+;;
+;; Usage:
+;;   (call "meta-planner/test-decompose" {:goal "group GitHub issues by label"})
+
+;; Test planner.decompose
+(capability "meta-planner/test-decompose"
+  :name "Test Decompose"
+  :description "Test the planner.decompose capability"
+  :input-schema [:map [:goal :string]]
+  :output-schema :any
+  :effects [:io :network]
+  :implementation
+  (fn [input]
+    (let [goal (:goal input)
+          _ (call "ccos.io.println" {:message (str "Testing decompose for: " goal)})
+          result (call "planner.decompose" {:goal goal :max_depth 3})
+          _ (call "ccos.io.println" {:message {:decompose_result result}})]
+      result)))
+
+;; Test planner.resolve_intent
+(capability "meta-planner/test-resolve-intent"
+  :name "Test Resolve Intent"
+  :description "Test the planner.resolve_intent capability"
+  :input-schema [:map [:description :string]]
+  :output-schema :any
+  :effects [:io :network]
+  :implementation
+  (fn [input]
+    (let [desc (:description input)
+          _ (call "ccos.io.println" {:message (str "Testing resolve_intent for: " desc)})
+          result (call "planner.resolve_intent" {:description desc})
+          _ (call "ccos.io.println" {:message {:resolve_intent_result result}})]
+      result)))
+
+;; Test planner.synthesize_capability (requires LLM)
+(capability "meta-planner/test-synthesize"
+  :name "Test Synthesize"
+  :description "Test the planner.synthesize_capability capability"
+  :input-schema [:map [:description :string]]
+  :output-schema :any
+  :effects [:io :network]
+  :implementation
+  (fn [input]
+    (let [desc (:description input)
+          _ (call "ccos.io.println" {:message (str "Testing synthesize for: " desc)})
+          result (call "planner.synthesize_capability" {:description desc})
+          _ (call "ccos.io.println" {:message {:synthesize_result result}})]
+      result)))
+
+;; Simple non-recursive resolve-goal: decompose once, then resolve each
+(capability "meta-planner/resolve-goal-simple"
+  :name "Resolve Goal Simple"
+  :description "Decompose a goal and resolve each sub-intent (non-recursive)"
+  :input-schema [:map [:goal :string]]
+  :output-schema :any
+  :effects [:io :network]
+  :implementation
+  (fn [input]
+    (let [goal (:goal input)
+          _ (call "ccos.io.println" {:message (str "=== Starting resolve-goal for: " goal " ===")})
+          
+          ;; Step 1: Decompose the goal
+          decomposed (call "planner.decompose" {:goal goal :max_depth 2})
+          sub_intents (:sub_intents decomposed)
+          _ (call "ccos.io.println" {:message {:step "decompose" :sub_intents sub_intents}})
+          
+          ;; Step 2: Try to resolve each sub-intent
+          resolutions (map (fn [sub]
+                            (let [desc (:description sub)
+                                  resolution (call "planner.resolve_intent" {:description desc})]
+                              {:intent sub :resolution resolution}))
+                          sub_intents)
+          _ (call "ccos.io.println" {:message {:step "resolve" :resolutions resolutions}})
+          
+          ;; Step 3: Identify unresolved intents
+          unresolved (filter (fn [r] (not (:resolved (:resolution r)))) resolutions)
+          _ (call "ccos.io.println" {:message {:step "check_unresolved" :unresolved_count (count unresolved)}})]
+      
+      {:goal goal
+       :sub_intents sub_intents
+       :resolutions resolutions
+       :unresolved unresolved
+       :success (= 0 (count unresolved))})))
