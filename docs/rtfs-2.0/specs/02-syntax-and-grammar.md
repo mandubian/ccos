@@ -70,6 +70,26 @@ Special forms are built-in constructs that cannot be implemented as functions:
 ;; defn - function definitions
 (defn add [x y]
   (+ x y))
+
+;; defn in let body - local function definitions with closures
+;; This is the correct pattern for defining functions within let expressions
+(let [value 42]
+  (defn helper [x] (+ x value))  ; Function defined in let body
+  (helper 8))                    ; Returns 50, captures 'value' as closure
+```
+
+**Important Note**: `defn` must be used in the **body** of `let` expressions, not in the bindings. This pattern enables proper lexical scoping and closure creation:
+
+```clojure
+;; ✅ CORRECT - defn in let body
+(let [outer-var 10]
+  (defn use-outer [] outer-var)  ; Creates closure over outer-var
+  (use-outer))                   ; Returns 10
+
+;; ❌ INCORRECT - defn in let bindings (will not work)
+(let [(defn bad-fn [] 42)        ; This syntax is invalid
+      value 5]
+  (bad-fn))
 ```
 
 ### Control Flow
@@ -199,6 +219,78 @@ RTFS yields to the host for side effects through the `call` primitive:
 ```
 
 The `call` primitive is the primary mechanism for RTFS to interact with CCOS capabilities. It accepts a capability identifier (as a keyword or string) followed by arguments, and yields control to the host for execution.
+
+## Advanced Patterns and Meta-Planner Usage
+
+### Recursive Decomposition with defn in let
+
+The meta-planner pattern demonstrates advanced usage of `defn` within `let` expressions for recursive decomposition:
+
+```clojure
+;; Meta-planner style recursive decomposition
+(let [goal "resolve complex intent"
+      max-depth 5]
+  
+  ;; Define recursive resolver function in let body
+  (defn resolve-or-decompose [intent depth]
+    (if (<= depth 0)
+      {:resolved false :error "Max recursion depth reached" :intent intent}
+      
+      ;; Base case: simple intent can be resolved directly
+      (if (simple-intent? intent)
+        {:resolved true :intent intent :depth depth}
+        
+        ;; Recursive case: decompose complex intent
+        (let [sub-intents (decompose intent)]
+          {:resolved false
+           :intent intent
+           :sub-intents (map #(resolve-or-decompose % (- depth 1)) sub-intents)
+           :depth depth}))))
+  
+  ;; Use the function with initial parameters
+  (let [root-intent {:description goal :id "root" :complexity 8}]
+    (resolve-or-decompose root-intent max-depth)))
+```
+
+This pattern shows:
+- **Lexical scoping**: The function captures `max-depth` from the outer scope
+- **Recursive decomposition**: The function calls itself with decremented depth
+- **Closure creation**: Inner `let` bindings are accessible to the function
+- **Structured data**: Returns maps with detailed resolution information
+
+### Multiple Function Definitions
+
+You can define multiple functions in the same `let` body:
+
+```clojure
+(let [data [1 2 3 4 5]
+      threshold 3]
+  
+  (defn filter-above [items limit]
+    (filter #(> % limit) items))
+  
+  (defn sum-squares [items]
+    (reduce + (map #(* % %) items)))
+  
+  ;; Use both functions
+  (let [filtered (filter-above data threshold)
+        result (sum-squares filtered)]
+    {:filtered filtered :sum result}))
+```
+
+### Function Factories
+
+Functions can create and return other functions (higher-order functions):
+
+```clojure
+(let [base 10]
+  (defn create-multiplier [factor]
+    (fn [x] (* x factor base)))
+  
+  (let [double (create-multiplier 2)
+        triple (create-multiplier 3)]
+    (+ (double 5) (triple 2))))  ; Returns 10 + 60 = 70
+```
 
 ## Metadata
 

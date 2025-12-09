@@ -96,12 +96,17 @@ Output format:
                         goal, max_depth
                     );
 
+                    eprintln!("[planner.decompose] Calling LLM with goal: {}", goal);
                     let response = arbiter.generate_raw_text(&prompt).await?;
+                    eprintln!("[planner.decompose] LLM response (first 500 chars): {}", 
+                        response.chars().take(500).collect::<String>());
 
                     // Parse JSON array from response
                     if let Some(json_str) = extract_json(&response) {
+                        eprintln!("[planner.decompose] Extracted JSON: {}", json_str);
                         let intents: Vec<SubIntentDto> = serde_json::from_str(json_str)
-                            .unwrap_or_else(|_| {
+                            .unwrap_or_else(|e| {
+                                eprintln!("[planner.decompose] JSON parse error: {}", e);
                                 vec![SubIntentDto {
                                     id: "step_1".to_string(),
                                     description: goal.clone(),
@@ -109,6 +114,8 @@ Output format:
                                 }]
                             });
                         return Ok(intents);
+                    } else {
+                        eprintln!("[planner.decompose] No JSON found in response, falling back to catalog search");
                     }
                 }
 
@@ -825,6 +832,15 @@ fn json_to_rtfs_value(json: serde_json::Value) -> RuntimeResult<Value> {
 }
 
 fn extract_json(response: &str) -> Option<&str> {
+    // Try to find JSON array first (for decompose which expects [])
+    if let Some(arr_start) = response.find('[') {
+        if let Some(arr_end) = response.rfind(']') {
+            if arr_end >= arr_start {
+                return Some(&response[arr_start..=arr_end]);
+            }
+        }
+    }
+    // Fallback to JSON object {}
     if let Some(start) = response.find('{') {
         if let Some(end) = response.rfind('}') {
             if end >= start {
