@@ -23,9 +23,38 @@ pub struct CallArgs {
 pub async fn execute(ctx: &mut CliContext, args: CallArgs) -> RuntimeResult<()> {
     let formatter = OutputFormatter::new(ctx.output_format);
 
-    // Initialize marketplace
-    let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
-    let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+    // Try to load agent config
+    let config_path = "config/agent_config.toml";
+    let agent_config = match crate::examples_common::builder::load_agent_config(config_path) {
+        Ok(cfg) => {
+            ctx.status(&format!("Loaded agent config from {}", config_path));
+            Some(cfg)
+        },
+        Err(e) => {
+            ctx.status(&format!("Warning: Could not load agent config from {}: {}", config_path, e));
+            ctx.status("Using default configuration.");
+            None
+        }
+    };
+
+    // Initialize CCOS to get full capability set (including planner v2)
+    // We use CCOS::new to ensure all components (arbiter, catalog, etc.) are wired up
+    let debug_callback = if ctx.verbose {
+        Some(Arc::new(|msg: String| {
+            eprintln!("[DEBUG] {}", msg);
+        }) as Arc<dyn Fn(String) + Send + Sync>)
+    } else {
+        None
+    };
+
+    let ccos = Arc::new(crate::ccos_core::CCOS::new_with_agent_config_and_configs_and_debug_callback(
+        crate::intent_graph::IntentGraphConfig::default(),
+        None,
+        agent_config,
+        debug_callback
+    ).await?);
+    ccos.init_v2_capabilities().await?;
+    let marketplace = ccos.capability_marketplace.clone();
 
     // Load capabilities from approved servers directory
     let approved_dir = std::path::Path::new("capabilities/servers/approved");
@@ -41,6 +70,21 @@ pub async fn execute(ctx: &mut CliContext, args: CallArgs) -> RuntimeResult<()> 
             ));
         } else {
             ctx.status("Warning: No capabilities loaded from approved servers");
+        }
+    }
+
+    // Load capabilities from samples directory (for testing)
+    let samples_dir = std::path::Path::new("capabilities/samples");
+    if samples_dir.exists() {
+        ctx.status("Loading capabilities from samples...");
+        let count = marketplace
+            .import_capabilities_from_rtfs_dir_recursive(samples_dir)
+            .await?;
+        if count > 0 {
+            ctx.status(&format!(
+                "Loaded {} capabilities from samples",
+                count
+            ));
         }
     }
 

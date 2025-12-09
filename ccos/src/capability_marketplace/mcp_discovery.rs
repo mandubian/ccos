@@ -14,6 +14,7 @@ use rtfs::runtime::environment::Environment;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::evaluator::Evaluator;
 use rtfs::runtime::module_runtime::ModuleRegistry;
+use rtfs::runtime::host_interface::HostInterface;
 use rtfs::runtime::pure_host;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::{Runtime, TreeWalkingStrategy};
@@ -112,6 +113,10 @@ pub struct MCPDiscoveryProvider {
     config: MCPServerConfig,
     /// Unified discovery service - always used for discovery
     discovery_service: std::sync::Arc<crate::mcp::core::MCPDiscoveryService>,
+    /// Factory used to create a Host for executing RTFS capabilities
+    rtfs_host_factory: std::sync::Arc<
+        dyn Fn() -> std::sync::Arc<dyn HostInterface + Send + Sync> + Send + Sync,
+    >,
 }
 
 impl MCPDiscoveryProvider {
@@ -260,6 +265,20 @@ impl MCPDiscoveryProvider {
     ///
     /// Internally creates an `MCPDiscoveryService` for all discovery operations.
     pub fn new(config: MCPServerConfig) -> RuntimeResult<Self> {
+        Self::new_with_rtfs_host_factory(config, std::sync::Arc::new(|| {
+            let host: std::sync::Arc<dyn HostInterface + Send + Sync> =
+                std::sync::Arc::new(pure_host::PureHost::new());
+            host
+        }))
+    }
+
+    /// Create a new MCP discovery provider with a custom RTFS Host factory
+    pub fn new_with_rtfs_host_factory(
+        config: MCPServerConfig,
+        rtfs_host_factory: std::sync::Arc<
+            dyn Fn() -> std::sync::Arc<dyn HostInterface + Send + Sync> + Send + Sync,
+        >,
+    ) -> RuntimeResult<Self> {
         // Build auth headers if token provided
         let auth_headers = config.auth_token.as_ref().map(|token| {
             let mut headers = HashMap::new();
@@ -275,6 +294,7 @@ impl MCPDiscoveryProvider {
         Ok(Self {
             config,
             discovery_service,
+            rtfs_host_factory,
         })
     }
 
@@ -285,9 +305,29 @@ impl MCPDiscoveryProvider {
         config: MCPServerConfig,
         discovery_service: std::sync::Arc<crate::mcp::core::MCPDiscoveryService>,
     ) -> Self {
+        Self::with_discovery_service_and_host(
+            config,
+            discovery_service,
+            std::sync::Arc::new(|| {
+                let host: std::sync::Arc<dyn HostInterface + Send + Sync> =
+                    std::sync::Arc::new(pure_host::PureHost::new());
+                host
+            }),
+        )
+    }
+
+    /// Create a new MCP discovery provider with an existing discovery service and Host factory
+    pub fn with_discovery_service_and_host(
+        config: MCPServerConfig,
+        discovery_service: std::sync::Arc<crate::mcp::core::MCPDiscoveryService>,
+        rtfs_host_factory: std::sync::Arc<
+            dyn Fn() -> std::sync::Arc<dyn HostInterface + Send + Sync> + Send + Sync,
+        >,
+    ) -> Self {
         Self {
             config,
             discovery_service,
+            rtfs_host_factory,
         }
     }
 
@@ -1893,6 +1933,8 @@ impl MCPDiscoveryProvider {
         } else if let Some(impl_expr) = implementation_expr.clone() {
             // Pure RTFS implementation -> run locally
             let impl_expr_cloned = impl_expr.clone();
+            let rtfs_host_factory = std::sync::Arc::clone(&self.rtfs_host_factory);
+            let capability_name = name.clone();
             ProviderType::Local(LocalCapability {
                 handler: std::sync::Arc::new(move |inputs: &rtfs::runtime::values::Value| {
                     // Build a tiny RTFS evaluator with stdlib and a bound `input`
@@ -1909,7 +1951,15 @@ impl MCPDiscoveryProvider {
                     }
                     env.define(&Symbol("input".to_string()), inputs.clone());
 
-                    let host = pure_host::create_pure_host();
+                    let host = (rtfs_host_factory)();
+                    // Ensure the host has a minimal execution context to avoid fatal errors
+                    let plan_id = format!("rtfs-{}", uuid::Uuid::new_v4());
+                    let intent_id = capability_name.clone();
+                    host.set_execution_context(
+                        plan_id,
+                        vec![intent_id],
+                        "rtfs-standalone".to_string(),
+                    );
                     let evaluator = Evaluator::with_environment(
                         module_registry.clone(),
                         env,

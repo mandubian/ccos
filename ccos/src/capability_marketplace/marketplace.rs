@@ -18,6 +18,8 @@ use chrono::Utc;
 use futures::future::BoxFuture;
 use rtfs::ast::{MapKey, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+use rtfs::runtime::host_interface::HostInterface;
+use rtfs::runtime::pure_host;
 use rtfs::runtime::type_validator::{TypeCheckingConfig, TypeValidator, VerificationContext};
 use rtfs::runtime::values::Value;
 use serde::{Deserialize, Serialize};
@@ -297,6 +299,7 @@ impl CapabilityMarketplace {
             debug_callback,
             session_pool: Arc::new(RwLock::new(None)),
             catalog: Arc::new(RwLock::new(None)),
+            rtfs_host_factory: Arc::new(std::sync::RwLock::new(None)),
         };
         marketplace.executor_registry.insert(
             TypeId::of::<MCPCapability>(),
@@ -335,6 +338,32 @@ impl CapabilityMarketplace {
     pub async fn set_catalog_service(&self, catalog: Arc<CatalogService>) {
         let mut guard = self.catalog.write().await;
         *guard = Some(catalog);
+    }
+
+    /// Configure the Host factory used to execute RTFS capabilities (default: PureHost).
+    pub fn set_rtfs_host_factory(
+        &self,
+        factory: Arc<dyn Fn() -> Arc<dyn HostInterface + Send + Sync> + Send + Sync>,
+    ) {
+        if let Ok(mut guard) = self.rtfs_host_factory.write() {
+            *guard = Some(factory);
+        }
+    }
+
+    fn get_rtfs_host_factory(
+        &self,
+    ) -> Arc<dyn Fn() -> Arc<dyn HostInterface + Send + Sync> + Send + Sync> {
+        self.rtfs_host_factory
+            .read()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_else(|| {
+                Arc::new(|| {
+                    let host: Arc<dyn HostInterface + Send + Sync> =
+                        Arc::new(pure_host::PureHost::new());
+                    host
+                })
+            })
     }
 
     /// Trigger a full capability re-ingestion into the catalog
@@ -581,7 +610,8 @@ impl CapabilityMarketplace {
 
     /// Add an MCP discovery provider
     pub fn add_mcp_discovery(&mut self, config: MCPServerConfig) -> RuntimeResult<()> {
-        let provider = MCPDiscoveryProvider::new(config)?;
+        let provider =
+            MCPDiscoveryProvider::new_with_rtfs_host_factory(config, self.get_rtfs_host_factory())?;
         self.discovery_agents.push(Box::new(provider));
         Ok(())
     }
@@ -2740,9 +2770,11 @@ impl CapabilityMarketplace {
             .to_str()
             .ok_or_else(|| RuntimeError::Generic(format!("Non-UTF8 path: {}", path.display())))?;
 
-        let parser = MCPDiscoveryProvider::new(MCPServerConfig::default()).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to initialize RTFS parser: {}", e))
-        })?;
+        let parser = MCPDiscoveryProvider::new_with_rtfs_host_factory(
+            MCPServerConfig::default(),
+            self.get_rtfs_host_factory(),
+        )
+        .map_err(|e| RuntimeError::Generic(format!("Failed to initialize RTFS parser: {}", e)))?;
 
         let module = parser.load_rtfs_capabilities(path_str)?;
         let mut loaded = 0usize;
@@ -2809,7 +2841,11 @@ impl CapabilityMarketplace {
             ))
         })?;
 
-        let parser = MCPDiscoveryProvider::new(MCPServerConfig::default()).map_err(|e| {
+        let parser = MCPDiscoveryProvider::new_with_rtfs_host_factory(
+            MCPServerConfig::default(),
+            self.get_rtfs_host_factory(),
+        )
+        .map_err(|e| {
             RuntimeError::Generic(format!(
                 "Failed to initialize RTFS parser for {}: {}",
                 dir_path.display(),
