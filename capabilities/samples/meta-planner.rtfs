@@ -7,14 +7,12 @@
 ;;   (call "meta-planner/resolve-goal" {:goal "group GitHub issues by label"})
 
 (capability "meta-planner/resolve-goal"
+  :name "Resolve Goal"
   :description "Recursively resolve a goal by decomposing into sub-intents and synthesizing missing capabilities"
   :input-schema [:map 
     [:goal :string]
-    [:max-depth {:optional true} :int]]
-  :output-schema [:map
-    [:success :boolean]
-    [:plan {:optional true} :any]
-    [:failures {:optional true} [:vector :any]]]
+    [:max-depth :integer]]
+  :output-schema :any
   :effects [:io :network]
   :implementation
   (fn [input]
@@ -31,7 +29,11 @@
           
           ;; Try to resolve the intent
           (let [resolution (call "planner.resolve_intent" 
-                                 {:description (:description intent)})]
+                                 {:description (:description intent)})
+                _ (call "ccos.io.println" {:message {:stage "resolve_intent"
+                                                     :intent intent
+                                                     :depth depth
+                                                     :resolution resolution}})]
             (if (:resolved resolution)
               ;; Found a capability!
               {:resolved true 
@@ -45,12 +47,20 @@
                 (let [sub-result (call "planner.decompose" 
                                        {:goal (:description intent)
                                         :max_depth depth})
-                      sub-intents (:sub_intents sub-result)]
+                      sub-intents (:sub_intents sub-result)
+                      _ (call "ccos.io.println" {:message {:stage "decompose"
+                                                           :intent intent
+                                                           :depth depth
+                                                           :sub_intents sub-intents}})]
                   
                   (if (empty? sub-intents)
                     ;; Can't decompose - try synthesis
                     (let [synth-result (call "planner.synthesize_capability"
-                                             {:description (:description intent)})]
+                                             {:description (:description intent)})
+                          _ (call "ccos.io.println" {:message {:stage "synthesize_capability"
+                                                               :intent intent
+                                                               :depth depth
+                                                               :synth_result synth-result}})]
                       (if (:success synth-result)
                         {:resolved true
                          :capability_id (:capability_id synth-result)
@@ -65,6 +75,12 @@
                                                (resolve-or-decompose sub (- depth 1)))
                                              sub-intents)
                           failures (filter (fn [r] (not (:resolved r))) resolved-subs)]
+                      
+                      (call "ccos.io.println" {:message {:stage "resolve_sub_intents"
+                                                         :intent intent
+                                                         :depth depth
+                                                         :resolved_subs resolved-subs
+                                                         :failures failures}})
                       
                       (if (empty? failures)
                         ;; All resolved - compose
@@ -98,7 +114,12 @@
                 plan-result (call "planner.synthesize" 
                                   {:goal goal :menu menu})
                 validation (call "planner.validate" 
-                                 {:plan (:plan plan-result) :menu menu})]
+                                 {:plan (:plan plan-result) :menu menu})
+                _ (call "ccos.io.println" {:message {:stage "plan_validation"
+                                                     :goal goal
+                                                     :menu menu
+                                                     :plan (:plan plan-result)
+                                                     :validation validation}})]
             (if (:valid validation)
               {:success true
                :plan (:plan plan-result)
@@ -110,11 +131,13 @@
           
           ;; Failed
           {:success false
+           :plan {}
            :failures (if (:failures result) (:failures result) [result])
            :resolution result})))))
 
 ;; Convenience wrapper for simple goals
 (capability "meta-planner/quick-plan"
+  :name "Quick Plan"
   :description "Quick planning for simple goals (max depth 2)"
   :input-schema [:map [:goal :string]]
   :output-schema [:any]

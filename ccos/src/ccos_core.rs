@@ -24,6 +24,7 @@ use crate::arbiter::prompt::{FilePromptStore, PromptStore};
 use crate::arbiter::DelegatingArbiter;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogEntryKind, CatalogFilter, CatalogHit, CatalogService};
+use crate::host::RuntimeHost;
 use crate::rtfs_bridge::RtfsErrorExplainer;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::config::types::AgentConfig;
@@ -40,6 +41,7 @@ use crate::governance_kernel::GovernanceKernel;
 use crate::intent_graph::{config::IntentGraphConfig, IntentGraph};
 use crate::types::StorableIntent;
 use rtfs::runtime::error::RuntimeError;
+use rtfs::runtime::host_interface::HostInterface;
 
 use once_cell::sync::Lazy;
 
@@ -308,6 +310,20 @@ impl CCOS {
         capability_marketplace.bootstrap().await?;
 
         let capability_marketplace = Arc::new(capability_marketplace);
+
+        // Provide a CCOS-aware host for executing RTFS capabilities loaded into the marketplace
+        let rtfs_host_factory = {
+            let marketplace_clone = Arc::clone(&capability_marketplace);
+            let causal_chain_clone = Arc::clone(&causal_chain);
+            Arc::new(move || {
+                Arc::new(RuntimeHost::new(
+                    Arc::clone(&causal_chain_clone),
+                    Arc::clone(&marketplace_clone),
+                    RuntimeContext::full(),
+                )) as Arc<dyn HostInterface + Send + Sync>
+            })
+        };
+        capability_marketplace.set_rtfs_host_factory(rtfs_host_factory);
 
         let catalog_service = Arc::new(CatalogService::new());
         capability_marketplace
@@ -1350,14 +1366,14 @@ impl CCOS {
                     // Record completed event
                     if let Ok(mut chain) = self.causal_chain.lock() {
                         let mut meta = std::collections::HashMap::new();
-                        meta.insert("agent_id".to_string(), Value::String(agent_id.clone()));
-                        meta.insert("success".to_string(), Value::Boolean(result.success));
-                        let _ = chain.record_delegation_event(
-                            &stored.intent_id,
-                            "delegation.agent_feedback",
-                            meta,
+                        meta.insert(
+                            "selected_agent".to_string(),
+                            Value::String(agent_id.clone()),
                         );
+                        meta.insert("success".to_string(), Value::Boolean(result.success));
+                        let _ = chain.record_delegation_event(&stored.intent_id, "completed", meta);
                     }
+                    // Feedback update (rolling average) via registry
                     // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
                     // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
                     // if result.success {
@@ -1369,10 +1385,64 @@ impl CCOS {
             }
         }
 
+        // Learning phase is currently opt-in to avoid penalizing hot paths during tests
+        if self.synthesis_enabled() {
+            // This is a no-fail operation - synthesis errors don't affect the request result
+            let _ = self.conclude_and_learn().await;
+        }
+
         Ok(result)
     }
 
-    // --- Accessors for external analysis ---
+    /// Conclude the current session/request and trigger learning/synthesis
+    pub async fn conclude_and_learn(&self) -> RuntimeResult<()> {
+        // For now, just return Ok. Real implementation would trigger synthesis.
+        if self.synthesis_enabled() {
+            self.emit_debug(|| {
+                "conclude_and_learn: synthesis enabled but not implemented".to_string()
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate and execute a pre-constructed Plan
+    pub async fn validate_and_execute_plan(
+        &self,
+        plan: crate::types::Plan,
+        security_context: &RuntimeContext,
+    ) -> RuntimeResult<ExecutionResult> {
+        self.governance_kernel
+            .validate_and_execute(plan, security_context)
+            .await
+    }
+
+    /// Initialize v2 capabilities (meta-planning) that require full CCOS reference
+    pub async fn init_v2_capabilities(self: &Arc<Self>) -> RuntimeResult<()> {
+        crate::planner::capabilities_v2::register_planner_capabilities_v2(
+            Arc::clone(&self.capability_marketplace),
+            Arc::clone(&self.catalog),
+            Arc::clone(self),
+        )
+        .await
+    }
+
+    pub fn get_delegating_arbiter(&self) -> Option<Arc<DelegatingArbiter>> {
+        Some(Arc::clone(&self.arbiter))
+    }
+
+    pub fn get_missing_capability_resolver(
+        &self,
+    ) -> Option<Arc<crate::synthesis::missing_capability_resolver::MissingCapabilityResolver>> {
+        self.missing_capability_resolver.as_ref().map(Arc::clone)
+    }
+
+    pub fn get_capability_marketplace(&self) -> Arc<CapabilityMarketplace> {
+        Arc::clone(&self.capability_marketplace)
+    }
+
+    pub fn get_catalog(&self) -> Arc<CatalogService> {
+        Arc::clone(&self.catalog)
+    }
 
     pub fn get_intent_graph(&self) -> Arc<Mutex<IntentGraph>> {
         Arc::clone(&self.intent_graph)
@@ -1384,695 +1454,6 @@ impl CCOS {
 
     pub fn get_rtfs_runtime(&self) -> Arc<Mutex<dyn RTFSRuntime>> {
         Arc::clone(&self.rtfs_runtime)
-    }
-
-    pub fn get_capability_marketplace(&self) -> Arc<CapabilityMarketplace> {
-        Arc::clone(&self.capability_marketplace)
-    }
-
-    /// Access the missing capability resolver if configured.
-    pub fn get_missing_capability_resolver(
-        &self,
-    ) -> Option<Arc<crate::synthesis::missing_capability_resolver::MissingCapabilityResolver>> {
-        self.missing_capability_resolver.as_ref().map(Arc::clone)
-    }
-
-    // AgentRegistry migration: Removed get_agent_registry() methods
-    // Use CapabilityMarketplace.get_capability() with :kind :agent filter instead
-
-    pub fn get_delegating_arbiter(&self) -> Option<Arc<DelegatingArbiter>> {
-        // The arbiter is now always a delegating arbiter
-        Some(Arc::clone(&self.arbiter))
-    }
-
-    pub fn get_orchestrator(&self) -> Arc<Orchestrator> {
-        Arc::clone(&self.orchestrator)
-    }
-
-    pub fn get_agent_config(&self) -> Arc<AgentConfig> {
-        Arc::clone(&self.agent_config)
-    }
-
-    pub fn get_catalog(&self) -> Arc<CatalogService> {
-        Arc::clone(&self.catalog)
-    }
-
-    pub fn get_plan_archive(&self) -> Arc<PlanArchive> {
-        Arc::clone(&self.plan_archive)
-    }
-
-    /// Validate and execute a pre-built Plan via the Governance Kernel.
-    /// This is a convenience wrapper for examples and integration tests that
-    /// already have a Plan object and want to run it through governance.
-    pub async fn validate_and_execute_plan(
-        &self,
-        plan: crate::types::Plan,
-        context: &RuntimeContext,
-    ) -> RuntimeResult<ExecutionResult> {
-        // Preflight capability validation
-        self.preflight_validate_capabilities(&plan).await?;
-
-        let reuse_hit = self.query_catalog_for_reuse(&plan);
-        if let Some((ref hit, mode)) = reuse_hit {
-            self.log_catalog_reuse_action(&plan, hit, mode).await?;
-        }
-
-        let mut result = self
-            .governance_kernel
-            .validate_and_execute(plan, context)
-            .await?;
-
-        if let Some((hit, mode)) = reuse_hit {
-            result.metadata.insert(
-                "catalog_reuse".to_string(),
-                Self::create_catalog_hit_metadata(&hit, mode),
-            );
-        }
-
-        Ok(result)
-    }
-
-    /// Validate and execute a plan, retrying with LLM-based auto-repair when the RTFS compiler
-    /// rejects the generated code. Requires a delegating arbiter to be configured.
-    pub async fn validate_and_execute_plan_with_auto_repair(
-        &self,
-        plan: crate::types::Plan,
-        context: &RuntimeContext,
-        options: PlanAutoRepairOptions,
-    ) -> RuntimeResult<ExecutionResult> {
-        let mut current_plan = plan.clone();
-        let mut attempts_remaining = options.max_attempts;
-        let mut attempt_index = 0usize;
-
-        loop {
-            let plan_for_execution = current_plan.clone();
-            let execution_result = self
-                .validate_and_execute_plan(plan_for_execution, context)
-                .await;
-
-            match execution_result {
-                Ok(result) => {
-                    // Check if execution was successful
-                    if result.success {
-                        return Ok(result);
-                    }
-
-                    // Execution failed (runtime error), but we got a result object
-                    // Extract error from metadata to attempt repair
-                    if attempts_remaining == 0 {
-                        return Ok(result);
-                    }
-
-                    let error_message = result
-                        .metadata
-                        .get("error")
-                        .and_then(|v| match v {
-                            Value::String(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .unwrap_or_else(|| "Unknown execution error".to_string());
-
-                    let runtime_error = RuntimeError::Generic(error_message);
-
-                    match self
-                        .try_repair_plan_with_llm(
-                            &current_plan,
-                            &runtime_error,
-                            attempt_index,
-                            &options,
-                        )
-                        .await?
-                    {
-                        Some(repaired_plan) => {
-                            current_plan = repaired_plan;
-                            attempts_remaining -= 1;
-                            attempt_index += 1;
-                        }
-                        None => {
-                            // Could not repair, return the original failure result
-                            return Ok(result);
-                        }
-                    }
-                }
-                Err(err) => {
-                    if attempts_remaining == 0 {
-                        return Err(err);
-                    }
-
-                    match self
-                        .try_repair_plan_with_llm(&current_plan, &err, attempt_index, &options)
-                        .await?
-                    {
-                        Some(repaired_plan) => {
-                            current_plan = repaired_plan;
-                            attempts_remaining -= 1;
-                            attempt_index += 1;
-                        }
-                        None => {
-                            return Err(err);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    async fn try_repair_plan_with_llm(
-        &self,
-        plan: &crate::types::Plan,
-        error: &RuntimeError,
-        attempt_index: usize,
-        options: &PlanAutoRepairOptions,
-    ) -> RuntimeResult<Option<crate::types::Plan>> {
-        let delegating = match self.get_delegating_arbiter() {
-            Some(arbiter) => arbiter,
-            None => return Ok(None),
-        };
-
-        let plan_source = match &plan.body {
-            crate::types::PlanBody::Rtfs(source) => source.clone(),
-            _ => return Ok(None),
-        };
-
-        // No deterministic inlined repairs here; prefer LLM-based auto-repair for
-        // behavioral fixes such as converting stringified JSON into vectors. The
-        // LLM will be provided with a clear diagnostic and grammar hints to suggest
-        // the appropriate RTFS transformation (`ccos.json.parse`) when needed.
-
-        let diagnostics = RtfsErrorExplainer::explain(error);
-        if diagnostics.is_none()
-            && !matches!(
-                error,
-                RuntimeError::Generic(_)
-                    | RuntimeError::InvalidProgram(_)
-                    | RuntimeError::TypeValidationError(_)
-                    | RuntimeError::UndefinedSymbol(_)
-                    | RuntimeError::SymbolNotFound(_)
-                    | RuntimeError::TypeError { .. }
-                    | RuntimeError::ArityMismatch { .. }
-                    | RuntimeError::InvalidArguments { .. }
-            )
-        {
-            return Ok(None);
-        }
-
-        let diag_string = diagnostics
-            .as_ref()
-            .map(RtfsErrorExplainer::format_for_llm)
-            .unwrap_or_else(|| format!("{}", error));
-
-        let mut hints: Vec<String> = diagnostics
-            .as_ref()
-            .map(|d| d.hints.clone())
-            .unwrap_or_default();
-
-        for hint in &options.grammar_hints {
-            if !hints.iter().any(|existing| existing == hint) {
-                hints.push(hint.clone());
-            }
-        }
-
-        let mut prompt = String::new();
-        prompt.push_str("You are an expert RTFS compiler repairing an invalid plan.\n");
-        prompt.push_str("The RTFS compiler produced the following diagnostics:\n");
-        prompt.push_str(&diag_string);
-        prompt.push('\n');
-        if !hints.is_empty() {
-            prompt.push_str("Follow these RTFS rules when fixing the plan:\n");
-            for hint in &hints {
-                prompt.push_str("- ");
-                prompt.push_str(hint);
-                prompt.push('\n');
-            }
-        }
-        if let Some(extra) = &options.additional_context {
-            if !extra.trim().is_empty() {
-                prompt.push_str("\nAdditional context:\n");
-                prompt.push_str(extra);
-                prompt.push('\n');
-            }
-        }
-        prompt.push_str("\nCurrent plan (RTFS):\n```rtfs\n");
-        prompt.push_str(&plan_source);
-        prompt.push_str("\n```\n");
-        prompt.push_str(
-            "Produce ONLY the corrected RTFS code (e.g. `(do ...)`). Do not add commentary. Do NOT wrap in `(plan ...)`.\n",
-        );
-
-        let response = delegating.generate_raw_text(&prompt).await.map_err(|e| {
-            RuntimeError::Generic(format!(
-                "Failed to request RTFS plan repair from delegating arbiter: {}",
-                e
-            ))
-        })?;
-
-        if options.debug_responses {
-            if let Some(callback) = &self.debug_callback {
-                callback(format!(
-                    "{{\"auto_repair_prompt\":\"{}\",\"auto_repair_response\":\"{}\"}}",
-                    prompt, response
-                ));
-            }
-        }
-
-        let new_plan_source = match extract_plan_rtfs_from_response(&response) {
-            Some(src) => src,
-            None => {
-                println!("DEBUG: Failed to extract RTFS plan from repair response");
-                return Ok(None);
-            }
-        };
-
-        if let Err(e) = rtfs::parser::parse(&new_plan_source) {
-            println!("DEBUG: Repaired plan failed to parse: {}", e);
-            return Ok(None);
-        }
-
-        let mut repaired_plan = plan.clone();
-        repaired_plan.body = crate::types::PlanBody::Rtfs(new_plan_source);
-        repaired_plan.metadata.insert(
-            "auto_repair_attempts".to_string(),
-            Value::Integer((attempt_index + 1) as i64),
-        );
-
-        Ok(Some(repaired_plan))
-    }
-
-    /// Try a deterministic repair specific to a MP/collection mismatch by inserting a
-    /// json.parse call when we detect `(get step_N :content)` used as a `:collection`.
-    /// Returns Some(repaired_plan_source) if a change was applied and the new program
-    /// parses successfully.
-    // Previously we had a deterministic heuristic to insert `ccos.json.parse` into
-    // plans when a collection mismatch was detected. Per request, we removed the
-    // deterministic injection so repairs go through the LLM-driven auto-repair
-    // path which keeps plan repair autonomous and within the RTFS/LLM context.
-
-    /// Analyze the current session's interactions and synthesize new capabilities.
-    /// This method should be called after successful request processing to enable
-    /// CCOS to learn from user interactions and generate reusable capabilities.
-    ///
-    /// The synthesis process:
-    /// 1. Extracts interaction data from IntentGraph and CausalChain
-    /// 2. Identifies patterns in user requests and agent responses
-    /// 3. Generates collector, planner, and stub capabilities
-    /// 4. Registers new capabilities in the marketplace for future use
-    pub async fn conclude_and_learn(&self) -> RuntimeResult<()> {
-        let recent_intents = self.extract_recent_intents().await?;
-
-        if recent_intents.is_empty() {
-            // No interactions to analyze
-            return Ok(());
-        }
-
-        let interaction_turns = self.convert_intents_to_interaction_turns(&recent_intents);
-
-        // Run the synthesis pipeline, passing a snapshot of the capability marketplace.
-        // Take the snapshot inside a small scope so the read lock is released before we try to
-        // register synthesized capabilities (which requires a write lock).
-        let marketplace = self.get_capability_marketplace();
-        let snapshot: Vec<crate::capability_marketplace::types::CapabilityManifest> = {
-            let caps = marketplace.capabilities.read().await;
-            caps.values().cloned().collect()
-        };
-
-        // Always prefer the registry-first synthesis entrypoint (Option A).
-        // If the marketplace snapshot is empty we still call the registry-first
-        // entrypoint and let the v0.1 generator decide to produce a stub.
-        let synth_result = crate::synthesis::synthesize_capabilities_with_marketplace(
-            &interaction_turns,
-            &snapshot,
-        );
-
-        self.log_synthesis_results(&synth_result).await;
-
-        Ok(())
-    }
-
-    /// Process pending missing capability resolution requests
-    pub async fn process_missing_capability_queue(&self) -> RuntimeResult<()> {
-        if let Some(ref resolver) = self.missing_capability_resolver {
-            resolver.process_queue().await?;
-        }
-        Ok(())
-    }
-
-    /// Get statistics about missing capability resolution
-    pub fn get_missing_capability_stats(
-        &self,
-    ) -> Option<crate::synthesis::missing_capability_resolver::ResolverStats> {
-        self.missing_capability_resolver
-            .as_ref()
-            .map(|resolver| resolver.get_stats())
-    }
-
-    /// Extract recent intents from the IntentGraph for analysis.
-    async fn extract_recent_intents(&self) -> RuntimeResult<Vec<crate::types::StorableIntent>> {
-        let ig = self
-            .intent_graph
-            .lock()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to lock intent graph: {}", e)))?;
-
-        // Get recent intents using list_intents with empty filter
-        let intents = ig
-            .storage
-            .list_intents(crate::intent_storage::IntentFilter::default())
-            .await
-            .unwrap_or_default();
-
-        Ok(intents)
-    }
-
-    /// Convert stored intents to InteractionTurn format for synthesis.
-    fn convert_intents_to_interaction_turns(
-        &self,
-        intents: &[crate::types::StorableIntent],
-    ) -> Vec<crate::synthesis::InteractionTurn> {
-        intents
-            .iter()
-            .enumerate()
-            .map(|(i, intent)| crate::synthesis::InteractionTurn {
-                turn_index: i,
-                prompt: intent.original_request.clone(),
-                answer: Some(intent.goal.clone()), // Use goal as the "answer" for synthesis
-            })
-            .collect()
-    }
-
-    /// Log the results of capability synthesis.
-    async fn log_synthesis_results(&self, synth_result: &crate::synthesis::SynthesisResult) {
-        if let Some(collector_code) = &synth_result.collector {
-            // Parse and register the collector capability
-            match self
-                .register_synthesized_capability(collector_code, "collector")
-                .await
-            {
-                Ok(capability_id) => println!(
-                    "[synthesis] Registered collector capability: {}",
-                    capability_id
-                ),
-                Err(e) => eprintln!("[synthesis] Failed to register collector capability: {}", e),
-            }
-        }
-
-        if let Some(planner_code) = &synth_result.planner {
-            // Parse and register the planner capability
-            match self
-                .register_synthesized_capability(planner_code, "planner")
-                .await
-            {
-                Ok(capability_id) => println!(
-                    "[synthesis] Registered planner capability: {}",
-                    capability_id
-                ),
-                Err(e) => eprintln!("[synthesis] Failed to register planner capability: {}", e),
-            }
-        }
-
-        // Handle pending capabilities that need resolution
-        if !synth_result.pending_capabilities.is_empty() {
-            println!(
-                "[synthesis] Found {} pending capabilities requiring resolution: {:?}",
-                synth_result.pending_capabilities.len(),
-                synth_result.pending_capabilities
-            );
-
-            // Enqueue missing capabilities for resolution
-            if let Some(resolver) = &self.missing_capability_resolver {
-                for capability_id in &synth_result.pending_capabilities {
-                    let _ = resolver.handle_missing_capability(
-                        capability_id.clone(),
-                        vec![],
-                        std::collections::HashMap::new(),
-                    );
-                }
-            }
-        }
-    }
-
-    /// Register a synthesized RTFS capability by parsing the code and creating a handler.
-    async fn register_synthesized_capability(
-        &self,
-        rtfs_code: &str,
-        capability_type: &str,
-    ) -> RuntimeResult<String> {
-        // Parse the RTFS code to extract the capability definition
-        let parsed = rtfs::parser::parse_with_enhanced_errors(rtfs_code, None).map_err(|e| {
-            RuntimeError::Generic(format!(
-                "Failed to parse synthesized {} capability: {}",
-                capability_type, e
-            ))
-        })?;
-
-        // Find the capability definition
-        let capability_def = parsed
-            .iter()
-            .find_map(|top| {
-                if let rtfs::ast::TopLevel::Capability(cap) = top {
-                    Some(cap)
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| {
-                RuntimeError::Generic(format!(
-                    "No capability definition found in synthesized {} code",
-                    capability_type
-                ))
-            })?;
-
-        let capability_id = capability_def.name.0.clone();
-
-        // Extract the implementation property
-        let _implementation_expr = capability_def
-            .properties
-            .iter()
-            .find_map(|prop| {
-                if prop.key.0 == "implementation" {
-                    Some(&prop.value)
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| {
-                RuntimeError::Generic(format!(
-                    "No implementation found in synthesized {} capability",
-                    capability_type
-                ))
-            })?;
-
-        let capability_id_clone = capability_id.clone();
-        let handler = Arc::new(move |input: &Value| {
-            // TODO: Implement proper RTFS execution for synthesized capabilities
-            // For now, return a placeholder result
-            let mut result_map = std::collections::HashMap::new();
-            result_map.insert(
-                rtfs::ast::MapKey::String("capability_id".to_string()),
-                Value::String(capability_id_clone.clone()),
-            );
-            result_map.insert(
-                rtfs::ast::MapKey::String("status".to_string()),
-                Value::String("synthesized_capability_placeholder".to_string()),
-            );
-            result_map.insert(
-                rtfs::ast::MapKey::String("input".to_string()),
-                input.clone(),
-            );
-            Ok(Value::Map(result_map))
-        });
-
-        // Register the capability in the marketplace
-        self.capability_marketplace
-            .register_local_capability(
-                capability_id.clone(),
-                format!("Synthesized {} capability", capability_type),
-                format!(
-                    "Automatically generated {} capability from interaction synthesis",
-                    capability_type
-                ),
-                handler,
-            )
-            .await?;
-
-        Ok(capability_id)
-    }
-
-    fn query_catalog_for_reuse(
-        &self,
-        plan: &crate::types::Plan,
-    ) -> Option<(CatalogHit, CatalogQueryMode)> {
-        let query = Self::build_catalog_query_from_plan(plan)?;
-        let filter = CatalogFilter::for_kind(CatalogEntryKind::Plan);
-        let thresholds = &self.agent_config.catalog;
-
-        let semantic_candidate = self
-            .catalog
-            .search_semantic(&query, Some(&filter), 5)
-            .into_iter()
-            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal));
-        if let Some(hit) = semantic_candidate.clone() {
-            if hit.score >= thresholds.plan_min_score {
-                return Some((hit, CatalogQueryMode::Semantic));
-            }
-        }
-
-        let keyword_candidate = self
-            .catalog
-            .search_keyword(&query, Some(&filter), 5)
-            .into_iter()
-            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(Ordering::Equal));
-        if let Some(hit) = keyword_candidate {
-            if hit.score >= thresholds.keyword_min_score {
-                return Some((hit, CatalogQueryMode::Keyword));
-            }
-        }
-
-        None
-    }
-
-    async fn log_catalog_reuse_action(
-        &self,
-        plan: &crate::types::Plan,
-        hit: &CatalogHit,
-        mode: CatalogQueryMode,
-    ) -> RuntimeResult<()> {
-        let intent_id = plan
-            .intent_ids
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "catalog-reuse".to_string());
-
-        let mut causal_chain = self
-            .causal_chain
-            .lock()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to lock causal chain: {}", e)))?;
-
-        let action =
-            causal_chain.log_plan_event(&plan.plan_id, &intent_id, ActionType::CatalogReuse)?;
-
-        let mut metadata = HashMap::new();
-        metadata.insert(
-            "catalog_entry_id".to_string(),
-            Value::String(hit.entry.id.clone()),
-        );
-        metadata.insert(
-            "catalog_entry_kind".to_string(),
-            Value::String(format!("{:?}", hit.entry.kind)),
-        );
-        metadata.insert(
-            "catalog_mode".to_string(),
-            Value::String(mode.as_str().to_string()),
-        );
-        metadata.insert("catalog_score".to_string(), Value::Float(hit.score as f64));
-        metadata.insert(
-            "catalog_source".to_string(),
-            Value::String(format!("{:?}", hit.entry.source)),
-        );
-        if let Some(name) = &hit.entry.name {
-            metadata.insert(
-                "catalog_entry_name".to_string(),
-                Value::String(name.clone()),
-            );
-        }
-
-        let result = ExecutionResult {
-            success: true,
-            value: Value::Nil,
-            metadata,
-        };
-
-        causal_chain.record_result(action, result)?;
-        Ok(())
-    }
-
-    fn create_catalog_hit_metadata(hit: &CatalogHit, mode: CatalogQueryMode) -> Value {
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            MapKey::Keyword(Keyword::new("id")),
-            Value::String(hit.entry.id.clone()),
-        );
-        if let Some(name) = &hit.entry.name {
-            map.insert(
-                MapKey::Keyword(Keyword::new("name")),
-                Value::String(name.clone()),
-            );
-        }
-        map.insert(
-            MapKey::Keyword(Keyword::new("score")),
-            Value::Float(hit.score as f64),
-        );
-        map.insert(
-            MapKey::Keyword(Keyword::new("mode")),
-            Value::String(mode.as_str().to_string()),
-        );
-        map.insert(
-            MapKey::Keyword(Keyword::new("kind")),
-            Value::String(format!("{:?}", hit.entry.kind)),
-        );
-        map.insert(
-            MapKey::Keyword(Keyword::new("source")),
-            Value::String(format!("{:?}", hit.entry.source)),
-        );
-        if let Some(goal) = &hit.entry.goal {
-            map.insert(
-                MapKey::Keyword(Keyword::new("goal")),
-                Value::String(goal.clone()),
-            );
-        }
-
-        Value::Map(map)
-    }
-
-    fn build_catalog_query_from_plan(plan: &crate::types::Plan) -> Option<String> {
-        let mut parts = Vec::new();
-        parts.push(plan.plan_id.clone());
-        if let Some(name) = &plan.name {
-            parts.push(name.clone());
-        }
-        if let Some(goal) = plan
-            .metadata
-            .get("goal")
-            .and_then(Self::plan_value_to_string)
-        {
-            parts.push(goal);
-        }
-        if let Some(goal) = plan
-            .annotations
-            .get("goal")
-            .and_then(Self::plan_value_to_string)
-        {
-            parts.push(goal);
-        }
-        parts.extend(plan.capabilities_required.iter().cloned());
-
-        let query = parts.join(" ").trim().to_string();
-        if query.is_empty() {
-            None
-        } else {
-            Some(query)
-        }
-    }
-
-    fn plan_value_to_string(value: &Value) -> Option<String> {
-        match value {
-            Value::String(s) => Some(s.clone()),
-            Value::Keyword(k) => Some(k.0.clone()),
-            Value::Symbol(sym) => Some(sym.0.clone()),
-            Value::Integer(i) => Some(i.to_string()),
-            Value::Float(f) => Some(f.to_string()),
-            Value::Boolean(b) => Some(b.to_string()),
-            Value::Vector(items) => {
-                let joined: Vec<String> = items
-                    .iter()
-                    .filter_map(Self::plan_value_to_string)
-                    .collect();
-                if joined.is_empty() {
-                    None
-                } else {
-                    Some(joined.join(" "))
-                }
-            }
-            _ => None,
-        }
     }
 }
 

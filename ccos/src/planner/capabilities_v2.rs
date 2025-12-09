@@ -172,6 +172,21 @@ Output format:
                 let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
                 let hits = catalog.search_semantic(&description, Some(&filter), 3);
 
+                // Instrumentation to understand why resolution fails
+                if let Some(best) = hits.first() {
+                    eprintln!(
+                        "[planner.resolve_intent] desc=\"{}\" top_hit=\"{}\" score={:.3}",
+                        description,
+                        best.entry.id,
+                        best.score
+                    );
+                } else {
+                    eprintln!(
+                        "[planner.resolve_intent] desc=\"{}\" no hits returned",
+                        description
+                    );
+                }
+
                 if let Some(best) = hits.first() {
                     if best.score > 0.6 {
                         // Verify capability exists in marketplace
@@ -183,6 +198,12 @@ Output format:
                                 needs_synthesis: false,
                             });
                         }
+                    } else {
+                        eprintln!(
+                            "[planner.resolve_intent] top hit below threshold: id=\"{}\" score={:.3}",
+                            best.entry.id,
+                            best.score
+                        );
                     }
                 }
 

@@ -6,11 +6,13 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 use futures::future::BoxFuture;
 use rtfs::ast::TypeExpr;
 use rtfs::runtime::error::RuntimeResult;
+use rtfs::runtime::host_interface::HostInterface;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1173,6 +1175,18 @@ pub struct CapabilityMarketplace {
     pub(crate) session_pool: Arc<RwLock<Option<Arc<crate::capabilities::SessionPoolManager>>>>,
     /// Optional catalog service for indexing capabilities
     pub(crate) catalog: Arc<RwLock<Option<Arc<crate::catalog::CatalogService>>>>,
+    /// Optional factory to create a Host for RTFS capability execution (defaults to PureHost)
+    pub(crate) rtfs_host_factory: Arc<
+        StdRwLock<
+            Option<
+                Arc<
+                    dyn Fn() -> Arc<dyn HostInterface + Send + Sync>
+                        + Send
+                        + Sync,
+                >,
+            >,
+        >,
+    >,
 }
 
 /// Trait for capability discovery providers
