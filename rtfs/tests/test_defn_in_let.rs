@@ -24,6 +24,10 @@ fn test_defn_in_let_ast_evaluator() {
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
     let macro_expander = rtfs::compiler::expander::MacroExpander::default();
+    
+    // Load stdlib to have let, defn, etc.
+    rtfs::runtime::stdlib::load_stdlib(&module_registry).expect("Should load stdlib");
+    
     let mut evaluator = Evaluator::new(module_registry, security_context, host, macro_expander);
 
     // Evaluate the expression
@@ -102,6 +106,10 @@ fn test_defn_in_let_with_closure() {
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
     let macro_expander = rtfs::compiler::expander::MacroExpander::default();
+    
+    // Load stdlib to have let, defn, etc.
+    rtfs::runtime::stdlib::load_stdlib(&module_registry).expect("Should load stdlib");
+    
     let mut evaluator = Evaluator::new(module_registry, security_context, host, macro_expander);
 
     let outcome = if let TopLevel::Expression(expr) = &parsed[0] {
@@ -323,9 +331,11 @@ fn test_defn_in_let_ir_runtime_complex() {
     
     // Execute with IR runtime
     let mut ir_runtime = IrRuntime::new(host, security_context);
+    let mut env = rtfs::runtime::environment::IrEnvironment::with_stdlib(&module_registry)
+        .expect("Should create environment with stdlib");
     
     let outcome = ir_runtime
-        .execute_node(&ir_node, &module_registry)
+        .execute_node(&ir_node, &mut env, false, &module_registry)
         .expect("IR execution should succeed");
 
     let result = match outcome {

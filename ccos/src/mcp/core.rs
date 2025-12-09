@@ -247,8 +247,81 @@ impl MCPDiscoveryService {
                                 .await;
                         }
                     } else {
+                        // Fallback: Check if RTFS files exist in approved directory even without queue entry
+                        let server_id_normalized = server_config
+                            .name
+                            .to_lowercase()
+                            .replace(" ", "_")
+                            .replace("/", "_");
+                        let approved_roots = [
+                            std::path::Path::new("capabilities/servers/approved").to_path_buf(),
+                            std::path::Path::new("../capabilities/servers/approved").to_path_buf(),
+                        ];
+                        let approved_dir = approved_roots
+                            .iter()
+                            .find(|p| p.join(&server_id_normalized).exists())
+                            .map(|p| p.join(&server_id_normalized));
+
+                        if let Some(approved_dir) = approved_dir {
+                            let mut files_to_load = Vec::new();
+                            Self::collect_rtfs_files_recursive(
+                                &approved_dir,
+                                "capabilities/servers/approved",
+                                &mut files_to_load,
+                            );
+
+                            if !files_to_load.is_empty() {
+                                eprintln!(
+                                    "📂 Found {} RTFS file(s) in approved directory for: {} (skipping MCP)",
+                                    files_to_load.len(),
+                                    server_config.name
+                                );
+                                log::info!(
+                                    "Found {} RTFS file(s) in approved directory for: {} - skipping MCP discovery",
+                                    files_to_load.len(),
+                                    server_config.name
+                                );
+                                // Create a minimal ApprovedDiscovery for loading
+                                let synthetic_approved = crate::discovery::ApprovedDiscovery {
+                                    id: server_id_normalized.clone(),
+                                    source: crate::discovery::DiscoverySource::LocalOverride {
+                                        path: approved_dir.to_string_lossy().to_string(),
+                                    },
+                                    server_info: crate::discovery::ServerInfo {
+                                        name: server_config.name.clone(),
+                                        endpoint: server_config.endpoint.clone(),
+                                        description: None,
+                                        auth_env_var: None,
+                                        capabilities_path: None,
+                                        alternative_endpoints: vec![],
+                                    },
+                                    domain_match: vec![],
+                                    risk_assessment: crate::discovery::RiskAssessment {
+                                        level: crate::discovery::RiskLevel::Low,
+                                        reasons: vec![],
+                                    },
+                                    requesting_goal: None,
+                                    approved_at: chrono::Utc::now(),
+                                    approved_by: crate::discovery::ApprovalAuthority::Auto,
+                                    approval_reason: Some("Pre-loaded from RTFS files".to_string()),
+                                    capability_files: Some(files_to_load.clone()),
+                                    version: 1,
+                                    last_successful_call: None,
+                                    consecutive_failures: 0,
+                                    total_calls: 0,
+                                    total_errors: 0,
+                                };
+                                return self
+                                    .load_rtfs_capabilities_from_approved(
+                                        &synthetic_approved,
+                                        &files_to_load,
+                                    )
+                                    .await;
+                            }
+                        }
+
                         eprintln!(
-                            "ℹ️  No approved server match found for: {} (will try MCP)",
+                            "ℹ️  No approved RTFS files found for: {} (will try MCP)",
                             server_config.name
                         );
                         log::debug!("No approved server match found for: {}", server_config.name);
