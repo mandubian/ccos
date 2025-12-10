@@ -1,0 +1,1 @@
+{"agent_id":"test-agent-1","name":"Test Agent","description":"My first agent","capabilities_owned":[],"autonomy_level":2,"constraints":{"max_autonomy_level":2,"require_approval_domains":[],"max_concurrent_tasks":5},"created_at":1765398344,"last_active_at":1765398344,"metadata":{}}
