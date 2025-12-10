@@ -39,6 +39,7 @@ use crate::causal_chain::CausalChain;
 use crate::event_sink::CausalChainIntentEventSink;
 use crate::governance_kernel::GovernanceKernel;
 use crate::intent_graph::{config::IntentGraphConfig, IntentGraph};
+use crate::introspect;
 use crate::types::StorableIntent;
 use rtfs::runtime::error::RuntimeError;
 use rtfs::runtime::host_interface::HostInterface;
@@ -1431,12 +1432,20 @@ impl CCOS {
             Arc::clone(&self.catalog),
             Arc::clone(self),
         )
-        .await;
+        .await?;
 
         // Register learning capabilities for failure analysis
         crate::learning::capabilities::register_learning_capabilities(
             Arc::clone(&self.capability_marketplace),
             Arc::clone(&self.causal_chain),
+        )
+        .await?;
+
+        // Register introspection capabilities (Phase 4)
+        introspect::register_introspect_capabilities(
+            Arc::clone(&self.capability_marketplace),
+            Arc::clone(&self.causal_chain),
+            Arc::clone(&self.plan_archive),
         )
         .await?;
 

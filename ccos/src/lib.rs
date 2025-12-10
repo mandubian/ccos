@@ -20,6 +20,7 @@ pub mod learning;
 pub mod mcp;
 pub mod orchestrator;
 pub mod plan_archive;
+pub mod introspect;
 pub mod planner;
 pub mod rtfs_bridge;
 pub mod security_policies;
