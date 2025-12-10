@@ -1449,6 +1449,35 @@ impl CCOS {
         )
         .await?;
 
+        // Register agent capabilities (Phase 5) - uses shared WorkingMemory
+        let workspace_root = crate::utils::fs::get_workspace_root();
+        let agent_registry = Arc::new(crate::agents::AgentRegistry::with_persistence(
+            workspace_root.join(".ccos").join("agents.jsonl"),
+        ));
+        // Attempt to load persisted agents
+        let _ = agent_registry.load();
+
+        // Create in-memory working memory for agent operations
+        let backend =
+            crate::working_memory::InMemoryJsonlBackend::new(None, Some(500), Some(50_000));
+        let wm = crate::working_memory::WorkingMemory::new(Box::new(backend));
+        let agent_working_memory = Arc::new(std::sync::Mutex::new(wm));
+
+        crate::agents::capabilities::register_agent_capabilities(
+            Arc::clone(&self.capability_marketplace),
+            agent_registry,
+            agent_working_memory,
+        )
+        .await?;
+
+        // Register LLM-assisted learning capability (Phase 2 enhancement)
+        crate::learning::capabilities::register_llm_learning_capabilities(
+            Arc::clone(&self.capability_marketplace),
+            Arc::clone(&self.causal_chain),
+            Arc::clone(&self.arbiter),
+        )
+        .await?;
+
         Ok(())
     }
 

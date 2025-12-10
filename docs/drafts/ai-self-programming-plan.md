@@ -26,10 +26,11 @@ Enable CCOS agents to **evolve their own capabilities** by treating the planner 
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1: Meta-Planning | ✅ **Complete** | `planner.decompose`, `planner.resolve_intent`, `planner.synthesize_capability` implemented |
-| Phase 2: Learning Loop | ✅ **Complete** | Error classification, failure querying, analysis capabilities |
+| Phase 2: Learning Loop | ✅ **Complete** | Error classification, failure querying, analysis, LLM-assisted suggestions |
 | Phase 3: Governance & Safety | ✅ **Complete** | Trust levels, approval gates, bounded exploration, versioning, causal chain recording |
-| Phase 4: Introspection | ✅ **Complete** | Capabilities registered (`introspect.capability_graph`, `introspect.plan_trace`, `introspect.type_analysis`, `introspect.causal_chain`), demos runnable (`introspect_demo`, `introspect_runtime_plan`), tests added for graphs, traces, type analysis, and causal chain queries |
-| Phase 5: Evolutionary Agents | ⬜ Not started | Agent memory, coordination |
+| Phase 4: Introspection | ✅ **Complete** | `introspect.*` capabilities, demos, tests |
+| Phase 5: Evolutionary Agents | ✅ **Complete** | `AgentIdentity`, `AgentMemory`, `agent.*` capabilities |
+| Phase 6: Autonomous Learning | ⬜ **Planned** | Pattern extraction, pre-exec recall, auto-remediation, Arbiter integration |
 
 ### Implemented Components
 
@@ -45,9 +46,14 @@ Enable CCOS agents to **evolve their own capabilities** by treating the planner 
 - [config/agent_config.toml](../config/agent_config.toml): `[self_programming]` section added
 
 **Phase 2 - Learning Loop**:
-- [classify_error()](../ccos/src/host.rs): Pattern-based error categorization (SchemaError, MissingCapability, TimeoutError, etc.)
-- [learning/capabilities.rs](../ccos/src/learning/capabilities.rs): `learning.get_failures`, `learning.get_failure_stats`, `learning.analyze_failure`
-- CausalChain query APIs: `query_actions()`, `get_actions_for_capability()` used for failure analysis
+- [classify_error()](../ccos/src/host.rs): Pattern-based error categorization
+- [learning/capabilities.rs](../ccos/src/learning/capabilities.rs): `learning.get_failures`, `learning.get_failure_stats`, `learning.analyze_failure`, `learning.suggest_improvement`
+- [learning_demo.rs](../ccos/src/bin/learning_demo.rs): Demo binary showing full learning loop
+
+**Phase 5 - Evolutionary Agents**:
+- [agents/identity.rs](../ccos/src/agents/identity.rs): `AgentIdentity`, `AgentRegistry` with JSONL persistence
+- [agents/memory.rs](../ccos/src/agents/memory.rs): `AgentMemory` wrapping WorkingMemory + `LearnedPattern`
+- [agents/capabilities.rs](../ccos/src/agents/capabilities.rs): `agent.create`, `agent.recall`, `agent.learn`, `agent.list`
 
 **New Causal Chain ActionTypes**:
 - `CapabilityVersionCreated`, `CapabilityRollback` - Version tracking
@@ -190,32 +196,13 @@ Enables CCOS to analyze execution failures and suggest improvements.
 | `learning.get_failures` | Query failures from CausalChain with filters (capability_id, error_category, limit) |
 | `learning.get_failure_stats` | Aggregated statistics by error category and top failing capabilities |
 | `learning.analyze_failure` | Analyze error message → category + suggested fix |
+| `learning.suggest_improvement` | **LLM-assisted** analysis of failure patterns with improvement suggestions |
 
-### Error Classification
+### Learning Demo
 
-Automatic categorization in `host.rs` via `classify_error()`:
-- `SchemaError` - missing field, type mismatch, validation failed
-- `MissingCapability` - unknown capability, not found
-- `TimeoutError` - timeout, timed out
-- `NetworkError` - connection, http, network
-- `LLMError` - generation failed, synthesis
-- `RuntimeError` - default
+Run: `cargo run --package ccos --bin learning_demo`
 
-### CausalChain Integration
-
-Learning capabilities query the existing CausalChain:
-```rust
-let query = CausalQuery {
-    action_type: Some(ActionType::CapabilityResult),
-    ..Default::default()
-};
-let failures = chain.query_actions(&query)
-    .filter(|a| !a.result.success);
-```
-
-### Future Work
-- `learning.suggest_improvement` - LLM-assisted capability rewriting
-- `learning.apply_improvement` - Gated modification with governance approval
+Demonstrates the full learning loop: execute capabilities → record failures → query → analyze → suggest fixes.
 
 ---
 
@@ -306,7 +293,48 @@ Let the AI understand and debug itself.
 
 ---
 
-## Phase 5: Evolutionary Agents
+---
+
+## Phase 6: Autonomous Learning Loop [PLANNED]
+
+Close the loop so I (the AI agent) can automatically learn, recall, and improve.
+
+### New Capabilities
+
+| Capability | Purpose |
+|-----------|--------|
+| `learning.extract_patterns` | Cluster failures → create LearnedPatterns → store in WorkingMemory |
+| `learning.recall_for_capability` | Pre-exec hook: get relevant patterns + suggested plan modifications |
+| `learning.apply_fix` | Auto-remediation: retry, synthesize, adjust timeout |
+
+### Autonomous Flow
+
+```
+┌─────────────┐    ┌─────────────┐    ┌───────────────┐    ┌──────────────────┐
+│ Capability  │───▶│ CausalChain │───▶│ Pattern       │───▶│ WorkingMemory    │
+│ Fails       │    │ records     │    │ Extractor     │    │ (LearnedPattern) │
+└─────────────┘    └─────────────┘    └───────────────┘    └────────┬─────────┘
+                                                                    │
+┌───────────────────────────────────────────────────────────────────┘
+│
+▼
+┌───────────────────┐    ┌─────────────────┐    ┌────────────────────────────────┐
+│ Pre-Execution     │───▶│ Arbiter         │───▶│ Auto-Remediation               │
+│ Recall            │    │ Plan Injection  │    │ • Retry with adjusted timeout  │
+│                   │    │ (avoid failures)│    │ • Try alternative capability   │
+└───────────────────┘    └─────────────────┘    └────────────────────────────────┘
+```
+
+### Arbiter Integration
+
+Before generating a plan, the Arbiter:
+1. Calls `learning.recall_for_capability` for key steps
+2. Injects retry/fallback steps for high-failure-rate capabilities
+3. Avoids capabilities with repeated `MissingCapability` errors
+
+---
+
+## Phase 5: Evolutionary Agents ✅ IMPLEMENTED
 
 Long-term vision for truly autonomous agents.
 
