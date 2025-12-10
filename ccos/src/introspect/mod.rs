@@ -718,6 +718,8 @@ mod tests {
     use super::*;
     use crate::capabilities::registry::CapabilityRegistry;
     use crate::types::{Action, ActionType, Plan, PlanBody, PlanLanguage, PlanStatus};
+    use futures::FutureExt;
+    use rtfs::runtime::error::RuntimeResult;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::sync::RwLock;
 
@@ -838,6 +840,165 @@ mod tests {
             .cloned()
             .unwrap_or_default();
         assert!(!issues.is_empty());
+    }
+
+    #[tokio::test]
+    async fn capability_graph_static_plan_counts() -> RuntimeResult<()> {
+        let rtfs_src = r#"
+        (do
+          (call "alpha" {:x 1})
+          (call "beta" {:y 2})
+          (call "alpha" {:z 3}))
+        "#;
+        let archive = make_plan_archive_with_rtfs(rtfs_src, "plan-static");
+        let input = CapabilityGraphInput {
+            plan_id: Some("plan-static".to_string()),
+            capability_id: None,
+            mode: Some("static_plan".to_string()),
+            limit: None,
+        };
+
+        let value = build_static_plan_graph(&Arc::new(archive), input).await?;
+        let json = rtfs_value_to_json(&value)?;
+        let nodes = json
+            .get("nodes")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        assert_eq!(nodes.len(), 2);
+        let alpha_calls = nodes
+            .iter()
+            .find(|n| n.get("id").and_then(|v| v.as_str()) == Some("alpha"))
+            .and_then(|n| n.get("call_count"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        assert_eq!(alpha_calls, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn plan_trace_includes_args_and_result() -> RuntimeResult<()> {
+        let mut chain = crate::causal_chain::CausalChain::new()?;
+        let plan_id = "plan-trace".to_string();
+        let intent_id = "intent-trace".to_string();
+
+        let action = Action::new(ActionType::CapabilityCall, plan_id.clone(), intent_id.clone())
+            .with_name("cap.trace")
+            .with_args(vec![Value::Nil])
+            .with_result(ExecutionResult {
+                success: true,
+                value: Value::Nil,
+                metadata: HashMap::new(),
+            });
+        chain.append(&action)?;
+        let chain = Arc::new(Mutex::new(chain));
+
+        let input = PlanTraceInput {
+            plan_id,
+            include_args: Some(true),
+            include_result: Some(true),
+            limit: Some(10),
+        };
+
+        let value = build_plan_trace(&chain, &input).await?;
+        let json = rtfs_value_to_json(&value)?;
+        let steps = json
+            .get("steps")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(steps.len(), 1);
+        let first = steps.first().cloned().unwrap_or_default();
+        let args = first
+            .get("arguments")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(args.len(), 1);
+        let result_obj = first.get("result").cloned().unwrap_or_default();
+        assert_eq!(result_obj.get("success"), Some(&serde_json::Value::Bool(true)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn type_analysis_reports_generic_schema() -> RuntimeResult<()> {
+        let rtfs_src = r#"(call "cap.generic" {:x 1})"#;
+        let archive = make_plan_archive_with_rtfs(rtfs_src, "plan-generic");
+        let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
+        let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+
+        marketplace
+            .register_native_capability(
+                "cap.generic".to_string(),
+                "Generic".to_string(),
+                "Test generic schema".to_string(),
+                Arc::new(|_| async { Ok(Value::Nil) }.boxed()),
+                "low".to_string(),
+            )
+            .await?;
+
+        let input = TypeAnalysisInput {
+            plan_id: Some("plan-generic".to_string()),
+            plan_rtfs: None,
+        };
+
+        let value = run_type_analysis(&Arc::new(archive), &marketplace, &input).await?;
+        let json = rtfs_value_to_json(&value)?;
+        let issues = json
+            .get("issues")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        assert!(issues.len() >= 1);
+        let kinds: Vec<String> = issues
+            .iter()
+            .filter_map(|i| i.get("kind").and_then(|v| v.as_str()).map(str::to_string))
+            .collect();
+        assert!(kinds.iter().any(|k| k.contains("InputSchemaTooGeneric")));
+        assert!(kinds.iter().any(|k| k.contains("OutputSchemaTooGeneric")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn causal_chain_query_filters_by_type_and_limit() -> RuntimeResult<()> {
+        let mut chain = crate::causal_chain::CausalChain::new()?;
+        let plan_id = "plan-cc".to_string();
+        let intent_id = "intent-cc".to_string();
+
+        let start = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
+        chain.append(&start)?;
+        let call = Action::new(ActionType::CapabilityCall, plan_id.clone(), intent_id.clone())
+            .with_name("cap.query");
+        chain.append(&call)?;
+        let completed = Action::new(ActionType::PlanCompleted, plan_id.clone(), intent_id.clone());
+        chain.append(&completed)?;
+
+        let chain = Arc::new(Mutex::new(chain));
+        let input = CausalChainInput {
+            intent_id: None,
+            plan_id: Some(plan_id),
+            action_type: Some("CapabilityCall".to_string()),
+            parent_action_id: None,
+            limit: Some(1),
+        };
+
+        let value = query_causal_chain(&chain, &input).await?;
+        let json = rtfs_value_to_json(&value)?;
+        let actions = json
+            .get("actions")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(actions.len(), 1);
+        let action_type = actions
+            .first()
+            .and_then(|a| a.get("action_type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_eq!(action_type, "CapabilityCall");
+        Ok(())
     }
 }
 
