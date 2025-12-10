@@ -28,7 +28,7 @@ Enable CCOS agents to **evolve their own capabilities** by treating the planner 
 | Phase 1: Meta-Planning | ✅ **Complete** | `planner.decompose`, `planner.resolve_intent`, `planner.synthesize_capability` implemented |
 | Phase 2: Learning Loop | ✅ **Complete** | Error classification, failure querying, analysis capabilities |
 | Phase 3: Governance & Safety | ✅ **Complete** | Trust levels, approval gates, bounded exploration, versioning, causal chain recording |
-| Phase 4: Introspection | ⬜ Not started | Plan trace, capability graph |
+| Phase 4: Introspection | 🟡 In progress | `introspect.capability_graph`, `introspect.plan_trace`, `introspect.type_analysis`, `introspect.causal_chain` registered; runnable demos: `introspect_demo` (synthetic logging + real capability exec) and `introspect_runtime_plan` (RTFS plan parsed/executed, causal chain recorded) |
 | Phase 5: Evolutionary Agents | ⬜ Not started | Agent memory, coordination |
 
 ### Implemented Components
