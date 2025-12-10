@@ -20,6 +20,8 @@ fn test_approval_workflow() {
             endpoint: "http://localhost".to_string(),
             description: None,
             auth_env_var: None,
+            capabilities_path: None,
+            alternative_endpoints: Vec::new(),
         },
         domain_match: vec![],
         risk_assessment: RiskAssessment {
@@ -71,6 +73,8 @@ fn test_rejection_workflow() {
             endpoint: "http://localhost".to_string(),
             description: None,
             auth_env_var: None,
+            capabilities_path: None,
+            alternative_endpoints: Vec::new(),
         },
         domain_match: vec![],
         risk_assessment: RiskAssessment {
