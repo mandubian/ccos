@@ -749,27 +749,33 @@ impl Evaluator {
                 // Fallback: echo as symbolic reference string (keeps prior behavior for resource:ref)
                 Ok(ExecutionOutcome::Complete(Value::String(format!("@{}", s))))
             }
-            Expression::Metadata(metadata_map) => {
-                // Metadata is typically attached to definitions, not evaluated as standalone expressions
-                // For now, we'll evaluate it to a map value. Each evaluated entry returns an
-                // ExecutionOutcome which must be unwrapped to extract the underlying Value or
-                // propagated if it requires a host call.
-                let mut result_map = std::collections::HashMap::new();
-                for (key, value_expr) in metadata_map {
-                    match self.eval_expr(value_expr, env)? {
-                        ExecutionOutcome::Complete(v) => {
-                            result_map.insert(key.clone(), v);
-                        }
-                        ExecutionOutcome::RequiresHost(hc) => {
-                            return Ok(ExecutionOutcome::RequiresHost(hc))
-                        }
-                        #[cfg(feature = "effect-boundary")]
-                        ExecutionOutcome::RequiresHost(host_call) => {
-                            return Ok(ExecutionOutcome::RequiresHost(host_call))
+            Expression::WithMetadata { meta, expr } => {
+                // Extract runtime.* metadata keys and pass to host
+                // Convention: :runtime.foo.bar keys are extracted and sent to host.set_execution_hint
+                for (key, value_expr) in meta.iter() {
+                    let key_str = match key {
+                        crate::ast::MapKey::Keyword(kw) => kw.0.clone(),
+                        crate::ast::MapKey::String(s) => s.clone(),
+                        _ => continue,
+                    };
+                    // Only extract keys with "runtime." prefix
+                    if key_str.starts_with("runtime.") {
+                        // Evaluate the value expression to get a runtime Value
+                        let value_result = self.eval_expr(value_expr, env)?;
+                        if let ExecutionOutcome::Complete(value) = value_result {
+                            // Send to host for step-scoped execution hints
+                            let _ = self.host.set_execution_hint(&key_str, value);
                         }
                     }
                 }
-                Ok(ExecutionOutcome::Complete(Value::Map(result_map)))
+
+                // Evaluate the inner expression
+                let result = self.eval_expr(expr, env);
+
+                // Clear execution hints after inner evaluation completes
+                let _ = self.host.clear_all_execution_hints();
+
+                result
             }
         }
     }
@@ -2265,11 +2271,12 @@ impl Evaluator {
                     .any(|expr| self.expr_references_symbols(expr, symbols))
             }
             Expression::Deref(expr) => self.expr_references_symbols(expr, symbols),
-            Expression::Metadata(metadata_map) => {
-                // Check if any metadata values reference the symbols
-                metadata_map
-                    .values()
-                    .any(|expr| self.expr_references_symbols(expr, symbols))
+            Expression::WithMetadata { meta, expr } => {
+                // Check inner expression and metadata values
+                self.expr_references_symbols(expr, symbols)
+                    || meta
+                        .values()
+                        .any(|v| self.expr_references_symbols(v, symbols))
             }
         }
     }

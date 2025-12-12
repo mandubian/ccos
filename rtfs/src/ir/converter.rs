@@ -1063,17 +1063,10 @@ impl<'a> IrConverter<'a> {
                     })
                 }
             }
-            Expression::Metadata(metadata_map) => {
-                // Metadata is typically attached to definitions, not evaluated as standalone expressions
-                // For now, we'll convert it to a simple string representation
-                let metadata_str = format!("{{{:?}}}", metadata_map.keys().collect::<Vec<_>>());
-                let id = self.next_id();
-                Ok(IrNode::Literal {
-                    id,
-                    value: crate::ast::Literal::String(metadata_str),
-                    ir_type: IrType::String,
-                    source_location: None,
-                })
+            Expression::WithMetadata { meta, expr } => {
+                // Evaluate the inner expression; the metadata is not converted to IR nodes in this pass.
+                // Metadata handling is done at the Evaluator level for learning hints.
+                self.convert_expression(*expr)
             }
             // Macro-related expressions should have been expanded away before IR conversion
             Expression::Quasiquote(_)

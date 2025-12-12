@@ -593,6 +593,10 @@ pub struct Orchestrator {
     plan_archive: Arc<PlanArchive>,
     /// Current step profile being executed (for step-level security enforcement)
     current_step_profile: Option<StepProfile>,
+    /// Execution hint policies from Constitution (for runtime validation)
+    hint_policies: crate::governance_kernel::ExecutionHintPolicies,
+    /// Modular hint handler registry for extensible hint processing
+    hint_registry: Arc<crate::hints::HintHandlerRegistry>,
 }
 
 impl Orchestrator {
@@ -614,6 +618,28 @@ impl Orchestrator {
             checkpoint_archive: Arc::new(CheckpointArchive::new()),
             plan_archive,
             current_step_profile: None,
+            hint_policies: crate::governance_kernel::ExecutionHintPolicies::default(),
+            hint_registry: Arc::new(crate::hints::HintHandlerRegistry::with_defaults()),
+        }
+    }
+
+    /// Creates a new Orchestrator with custom hint policies.
+    pub(crate) fn new_with_policies(
+        causal_chain: Arc<Mutex<CausalChain>>,
+        intent_graph: Arc<Mutex<IntentGraph>>,
+        capability_marketplace: Arc<CapabilityMarketplace>,
+        plan_archive: Arc<PlanArchive>,
+        hint_policies: crate::governance_kernel::ExecutionHintPolicies,
+    ) -> Self {
+        Self {
+            causal_chain,
+            intent_graph,
+            capability_marketplace,
+            checkpoint_archive: Arc::new(CheckpointArchive::new()),
+            plan_archive,
+            current_step_profile: None,
+            hint_policies,
+            hint_registry: Arc::new(crate::hints::HintHandlerRegistry::with_defaults()),
         }
     }
 
@@ -656,14 +682,238 @@ impl Orchestrator {
 
     // handle_effect_request removed - unified into handle_host_call
 
-    async fn handle_host_call(
+    /// Handles a host call with governance (hint validation and application).
+    /// This is the unified entry point for capability execution from RuntimeHost.
+    pub async fn handle_host_call(
         &self,
         host_call: &rtfs::runtime::execution_outcome::HostCall,
     ) -> RuntimeResult<Value> {
-        // Unified capability handling - all host calls go through capability marketplace
-        let args_value = Value::Vector(host_call.args.clone());
+        // Detect security level for conditional governance checkpoint (inline pattern matching)
+        let security_level = Self::detect_security_level_for_capability(&host_call.capability_id);
 
-        // Use enhanced execution with metadata
+        // Tier 2: Atomic governance checkpoint for risky operations
+        let checkpoint_id = if security_level >= "medium" {
+            let decision_action = self.log_action(
+                Action::new(
+                    ActionType::GovernanceCheckpointDecision,
+                    host_call.capability_id.clone(),
+                    String::new(),
+                )
+                .with_metadata("security_level", security_level)
+                .with_metadata("decision", "approved"),
+            )?;
+            Some(decision_action)
+        } else {
+            None
+        };
+
+        // Validate and apply execution hints
+        let hints = host_call
+            .metadata
+            .as_ref()
+            .map(|m| &m.execution_hints)
+            .cloned()
+            .unwrap_or_default();
+
+        // Validate hints against governance policies before executing
+        self.validate_execution_hints(&hints)?;
+
+        // Apply execution hints (retry, timeout, fallback) via modular registry
+        let execution_ctx = crate::hints::ExecutionContext::new(
+            Arc::clone(&self.capability_marketplace),
+            Arc::clone(&self.causal_chain),
+        );
+        let result = self
+            .hint_registry
+            .execute_with_hints(host_call, &hints, &execution_ctx)
+            .await;
+
+        // Tier 2: Record outcome for risky operations
+        if let Some(action_id) = checkpoint_id {
+            let outcome_desc = match &result {
+                Ok(_) => "success".to_string(),
+                Err(e) => format!("error:{}", e),
+            };
+            let _ = self.log_action(
+                Action::new(
+                    ActionType::GovernanceCheckpointOutcome,
+                    host_call.capability_id.clone(),
+                    String::new(),
+                )
+                .with_parent(Some(action_id))
+                .with_metadata("outcome", &outcome_desc),
+            );
+        }
+
+        result
+    }
+
+    /// Detect security level for a capability based on its ID pattern.
+    /// Returns "low", "medium", or "critical".
+    fn detect_security_level_for_capability(capability_id: &str) -> &'static str {
+        let cap = capability_id.to_lowercase();
+
+        // Critical: system-level, payment, deletion operations
+        if cap.contains("system.")
+            || cap.contains("exec")
+            || cap.contains("shell")
+            || cap.contains("payment")
+            || cap.contains("delete")
+            || cap.contains("drop")
+            || cap.contains("admin")
+            || cap.contains("root")
+        {
+            return "critical";
+        }
+
+        // Medium: network, file, external service operations
+        if cap.contains("http")
+            || cap.contains("network")
+            || cap.contains("fetch")
+            || cap.contains("file")
+            || cap.contains("io.")
+            || cap.contains("write")
+            || cap.contains("external")
+            || cap.contains("api.")
+        {
+            return "medium";
+        }
+
+        // Low: pure computation, data transformation
+        "low"
+    }
+
+    /// Validates execution hints against governance policy limits.
+    fn validate_execution_hints(
+        &self,
+        hints: &std::collections::HashMap<String, Value>,
+    ) -> RuntimeResult<()> {
+        // Validate retry hints
+        if let Some(retry_value) = hints.get("runtime.learning.retry") {
+            if let Some(max_retries) = Self::extract_u32_from_map(retry_value, "max-retries")
+                .or_else(|| Self::extract_u32_from_map(retry_value, "max"))
+            {
+                if max_retries > self.hint_policies.max_retries {
+                    return Err(RuntimeError::Generic(format!(
+                        "Execution hint violated: retry max-retries={} exceeds policy limit of {}",
+                        max_retries, self.hint_policies.max_retries
+                    )));
+                }
+            }
+        }
+
+        // Validate timeout hints
+        if let Some(timeout_value) = hints.get("runtime.learning.timeout") {
+            if let Some(multiplier) = Self::extract_f64_from_map(timeout_value, "multiplier") {
+                if multiplier > self.hint_policies.max_timeout_multiplier {
+                    return Err(RuntimeError::Generic(format!(
+                        "Execution hint violated: timeout multiplier={:.1} exceeds policy limit of {:.1}",
+                        multiplier, self.hint_policies.max_timeout_multiplier
+                    )));
+                }
+            }
+            if let Some(absolute_ms) = Self::extract_u64_from_map(timeout_value, "absolute-ms") {
+                if absolute_ms > self.hint_policies.max_absolute_timeout_ms {
+                    return Err(RuntimeError::Generic(format!(
+                        "Execution hint violated: absolute timeout={}ms exceeds policy limit of {}ms",
+                        absolute_ms, self.hint_policies.max_absolute_timeout_ms
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Helper to extract u32 from a RTFS map value
+    fn extract_u32_from_map(value: &Value, key: &str) -> Option<u32> {
+        if let Value::Map(map) = value {
+            for (k, v) in map {
+                let key_str = match k {
+                    rtfs::ast::MapKey::Keyword(kw) => &kw.0,
+                    rtfs::ast::MapKey::String(s) => s,
+                    _ => continue,
+                };
+                if key_str == key {
+                    return match v {
+                        Value::Integer(i) => Some(*i as u32),
+                        Value::Float(f) => Some(*f as u32),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper to extract u64 from a RTFS map value
+    fn extract_u64_from_map(value: &Value, key: &str) -> Option<u64> {
+        if let Value::Map(map) = value {
+            for (k, v) in map {
+                let key_str = match k {
+                    rtfs::ast::MapKey::Keyword(kw) => &kw.0,
+                    rtfs::ast::MapKey::String(s) => s,
+                    _ => continue,
+                };
+                if key_str == key {
+                    return match v {
+                        Value::Integer(i) => Some(*i as u64),
+                        Value::Float(f) => Some(*f as u64),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper to extract f64 from a RTFS map value
+    fn extract_f64_from_map(value: &Value, key: &str) -> Option<f64> {
+        if let Value::Map(map) = value {
+            for (k, v) in map {
+                let key_str = match k {
+                    rtfs::ast::MapKey::Keyword(kw) => &kw.0,
+                    rtfs::ast::MapKey::String(s) => s,
+                    _ => continue,
+                };
+                if key_str == key {
+                    return match v {
+                        Value::Float(f) => Some(*f),
+                        Value::Integer(i) => Some(*i as f64),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper to extract string from a RTFS map value
+    fn extract_string_from_map(value: &Value, key: &str) -> Option<String> {
+        if let Value::Map(map) = value {
+            for (k, v) in map {
+                let key_str = match k {
+                    rtfs::ast::MapKey::Keyword(kw) => &kw.0,
+                    rtfs::ast::MapKey::String(s) => s,
+                    _ => continue,
+                };
+                if key_str == key {
+                    return match v {
+                        Value::String(s) => Some(s.clone()),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        None
+    }
+
+    /// Executes the actual capability call through the marketplace.
+    async fn execute_capability_call(
+        &self,
+        host_call: &rtfs::runtime::execution_outcome::HostCall,
+    ) -> RuntimeResult<Value> {
+        let args_value = Value::Vector(host_call.args.clone());
         self.capability_marketplace
             .execute_capability_enhanced(
                 &host_call.capability_id,
@@ -672,7 +922,6 @@ impl Orchestrator {
             )
             .await
     }
-
     /// Executes a given `Plan` within a specified `RuntimeContext`.
     /// This is the main entry point for the Orchestrator.
     ///
@@ -680,7 +929,7 @@ impl Orchestrator {
     /// This method is restricted to internal CCOS use only.
     /// External code must use the governance-enforced interface through GovernanceKernel.
     pub(crate) async fn execute_plan(
-        &self,
+        self: &Arc<Self>,
         plan: &Plan,
         context: &RuntimeContext,
     ) -> RuntimeResult<ExecutionResult> {
@@ -719,11 +968,15 @@ impl Orchestrator {
         }
 
         // --- 2. Set up the Host and Evaluator ---
-        let host = Arc::new(RuntimeHost::new(
-            self.causal_chain.clone(),
-            self.capability_marketplace.clone(),
-            context.clone(),
-        ));
+        // Wire orchestrator into RuntimeHost for unified governance (hint application)
+        let host = Arc::new(
+            RuntimeHost::new(
+                self.causal_chain.clone(),
+                self.capability_marketplace.clone(),
+                context.clone(),
+            )
+            .with_orchestrator(Arc::clone(self)),
+        );
         host.set_execution_context(
             plan_id.clone(),
             plan.intent_ids.clone(),
@@ -908,7 +1161,7 @@ impl Orchestrator {
     /// This method is restricted to internal CCOS use only.
     /// External code must use the governance-enforced interface through GovernanceKernel.
     pub(crate) async fn execute_intent_graph(
-        &self,
+        self: &Arc<Self>,
         root_intent_id: &str,
         initial_context: &RuntimeContext,
     ) -> RuntimeResult<ExecutionResult> {

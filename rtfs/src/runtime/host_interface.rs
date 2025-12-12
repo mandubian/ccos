@@ -83,4 +83,27 @@ pub trait HostInterface: std::fmt::Debug {
         self.clear_execution_context();
         Ok(())
     }
+
+    /// Sets a runtime execution hint for subsequent capability calls.
+    /// Keys use namespace convention: "runtime.learning.retry", "runtime.tracing.tag", etc.
+    /// The evaluator calls this when encountering `^{:runtime.* ...}` metadata.
+    /// The host is responsible for incorporating these hints into CallMetadata.
+    /// Default implementation: no-op (host doesn't use execution hints).
+    fn set_execution_hint(
+        &self,
+        _key: &str,
+        _value: crate::runtime::values::Value,
+    ) -> RuntimeResult<()> {
+        Ok(())
+    }
+
+    /// Clears a specific execution hint by key.
+    fn clear_execution_hint(&self, _key: &str) -> RuntimeResult<()> {
+        Ok(())
+    }
+
+    /// Clears all execution hints (called when exiting a metadata expression scope).
+    fn clear_all_execution_hints(&self) -> RuntimeResult<()> {
+        Ok(())
+    }
 }

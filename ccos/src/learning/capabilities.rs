@@ -105,6 +105,97 @@ pub struct ImprovementSuggestion {
     pub rationale: Option<String>,
 }
 
+/// Input for learning.extract_patterns
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExtractPatternsInput {
+    /// Look back period in hours (default: 24)
+    #[serde(default)]
+    pub time_window_hours: Option<u64>,
+    /// Minimum occurrences to form a cluster (default: 2)
+    #[serde(default)]
+    pub min_occurrences: Option<usize>,
+    /// Auto-store patterns in WorkingMemory (default: true)
+    #[serde(default)]
+    pub store_in_memory: Option<bool>,
+}
+
+/// Output for learning.extract_patterns
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractPatternsOutput {
+    pub patterns_extracted: usize,
+    pub patterns: Vec<ExtractedPattern>,
+}
+
+/// A pattern extracted from failure clusters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedPattern {
+    pub pattern_id: String,
+    pub description: String,
+    pub confidence: f64,
+    pub affected_capabilities: Vec<String>,
+    pub error_category: String,
+    pub occurrence_count: usize,
+    pub suggested_action: Option<String>,
+}
+
+/// Input for learning.recall_for_capability
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RecallForCapabilityInput {
+    pub capability_id: String,
+}
+
+/// Output for learning.recall_for_capability
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallForCapabilityOutput {
+    pub patterns: Vec<ExtractedPattern>,
+    pub suggested_plan_modifications: Vec<String>,
+}
+
+/// Input for learning.apply_fix - Automatic remediation based on error patterns
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ApplyFixInput {
+    /// The capability ID that failed (required)
+    pub capability_id: String,
+    /// The error category (optional - will be looked up from patterns)
+    pub error_category: Option<String>,
+    /// Specific action to take: "auto", "retry", "synthesize", "alternative", "adjust_timeout"
+    pub action: Option<String>,
+    /// Optional: maximum retries for retry action
+    pub max_retries: Option<u32>,
+    /// Optional: timeout adjustment multiplier (e.g., 2.0 = double timeout)
+    pub timeout_multiplier: Option<f64>,
+}
+
+/// Output for learning.apply_fix
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyFixOutput {
+    /// Whether the fix was applied successfully
+    pub success: bool,
+    /// The remediation action that was taken
+    pub remediation_action: String,
+    /// Description of what was done
+    pub description: String,
+    /// If this triggered another capability call, its ID
+    pub triggered_capability: Option<String>,
+    /// Result of the triggered capability (if any)
+    pub triggered_result: Option<serde_json::Value>,
+    /// Suggestions for the Arbiter to modify plans
+    pub plan_modifications: Vec<PlanModification>,
+}
+
+/// A suggested modification to an execution plan
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanModification {
+    /// Type of modification: "inject_retry", "inject_fallback", "adjust_timeout", "skip_capability", "synthesize_first"
+    pub modification_type: String,
+    /// The capability this applies to
+    pub target_capability: String,
+    /// Additional parameters (e.g., retry count, fallback capability ID)
+    pub parameters: serde_json::Value,
+    /// Confidence that this modification will help (0.0 - 1.0)
+    pub confidence: f64,
+}
+
 /// Register learning capabilities with the marketplace
 pub async fn register_learning_capabilities(
     marketplace: Arc<CapabilityMarketplace>,
@@ -694,4 +785,464 @@ fn suggest_fix(category: &str, msg: &str) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Register pattern extraction capabilities (Phase 6: Autonomous Learning Loop)
+pub async fn register_pattern_extraction_capabilities(
+    marketplace: Arc<CapabilityMarketplace>,
+    causal_chain: Arc<Mutex<crate::causal_chain::CausalChain>>,
+    working_memory: Arc<Mutex<crate::working_memory::facade::WorkingMemory>>,
+) -> Result<(), RuntimeError> {
+    let chain_clone = causal_chain.clone();
+    let wm_clone = working_memory.clone();
+
+    // learning.extract_patterns - Scan CausalChain for failure clusters and store in WorkingMemory
+    marketplace
+        .register_native_capability(
+            "learning.extract_patterns".to_string(),
+            "Extract Patterns".to_string(),
+            "Scan CausalChain for failure clusters, create LearnedPatterns, and store in WorkingMemory".to_string(),
+            Arc::new({
+                let chain = chain_clone.clone();
+                let wm = wm_clone.clone();
+                move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+                    let args_clone = args.clone();
+                    let chain = chain.clone();
+                    let wm = wm.clone();
+                    async move {
+                        let input: ExtractPatternsInput = parse_input(&args_clone)?;
+                        
+                        let time_window = input.time_window_hours.unwrap_or(24);
+                        let min_occurrences = input.min_occurrences.unwrap_or(2);
+                        let store_in_memory = input.store_in_memory.unwrap_or(true);
+                        
+                        // Get current time and calculate cutoff
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        let cutoff = now.saturating_sub(time_window * 3600 * 1000);
+                        
+                        // Query failures from CausalChain
+                        let guard = chain.lock().map_err(|_| {
+                            RuntimeError::Generic("Failed to lock causal chain".to_string())
+                        })?;
+                        
+                        let query = CausalQuery {
+                            action_type: Some(ActionType::CapabilityResult),
+                            ..Default::default()
+                        };
+                        let actions = guard.query_actions(&query);
+                        
+                        // Filter failures within time window and cluster by (capability_id, error_category)
+                        let mut clusters: HashMap<(String, String), Vec<String>> = HashMap::new();
+                        
+                        for action in actions.iter() {
+                            if let Some(result) = action.result.as_ref() {
+                                if !result.success && action.timestamp >= cutoff {
+                                    let capability_id = action.function_name.clone().unwrap_or_default();
+                                    let error_category = result
+                                        .metadata
+                                        .get("error_category")
+                                        .and_then(|v| match v {
+                                            Value::String(s) => Some(s.clone()),
+                                            _ => None,
+                                        })
+                                        .unwrap_or_else(|| "RuntimeError".to_string());
+                                    
+                                    let key = (capability_id, error_category);
+                                    clusters.entry(key).or_default().push(action.action_id.clone());
+                                }
+                            }
+                        }
+                        drop(guard);
+                        
+                        // Extract patterns from clusters with >= min_occurrences
+                        let mut patterns: Vec<ExtractedPattern> = Vec::new();
+                        
+                        for ((capability_id, error_category), failure_ids) in clusters {
+                            if failure_ids.len() >= min_occurrences {
+                                let occurrence_count = failure_ids.len();
+                                let confidence = (occurrence_count as f64 / 10.0).min(1.0).max(0.3);
+                                
+                                let description = format!(
+                                    "{} failures for {} (category: {})",
+                                    occurrence_count,
+                                    capability_id,
+                                    error_category
+                                );
+                                
+                                let suggested_action = suggest_fix(&error_category, "");
+                                
+                                let pattern = ExtractedPattern {
+                                    pattern_id: format!("pattern:{}:{}", capability_id, error_category),
+                                    description: description.clone(),
+                                    confidence,
+                                    affected_capabilities: vec![capability_id.clone()],
+                                    error_category: error_category.clone(),
+                                    occurrence_count,
+                                    suggested_action,
+                                };
+                                
+                                patterns.push(pattern);
+                            }
+                        }
+                        
+                        // Store patterns in WorkingMemory if requested
+                        if store_in_memory && !patterns.is_empty() {
+                            if let Ok(mut wm_guard) = wm.lock() {
+                                for pattern in &patterns {
+                                    let entry = crate::working_memory::types::WorkingMemoryEntry::new_with_estimate(
+                                        pattern.pattern_id.clone(),
+                                        format!("Learned Pattern: {}", pattern.pattern_id),
+                                        serde_json::to_string(pattern).unwrap_or_default(),
+                                        ["learned-pattern".to_string(), 
+                                         format!("error:{}", pattern.error_category),
+                                         format!("capability:{}", pattern.affected_capabilities.join(","))].into_iter(),
+                                        std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs(),
+                                        crate::working_memory::types::WorkingMemoryMeta {
+                                            provider: Some("learning.extract_patterns".to_string()),
+                                            ..Default::default()
+                                        },
+                                    );
+                                    let _ = wm_guard.append(entry);
+                                }
+                            }
+                        }
+                        
+                        let output = ExtractPatternsOutput {
+                            patterns_extracted: patterns.len(),
+                            patterns,
+                        };
+                        
+                        to_value(&output)
+                    }
+                    .boxed()
+                }
+            }),
+            "low".to_string(),
+        )
+        .await?;
+
+    // learning.recall_for_capability - Pre-execution hook to get relevant patterns
+    let wm_clone2 = working_memory.clone();
+    marketplace
+        .register_native_capability(
+            "learning.recall_for_capability".to_string(),
+            "Recall for Capability".to_string(),
+            "Pre-execution hook: retrieve relevant learned patterns before running a capability".to_string(),
+            Arc::new({
+                let wm = wm_clone2;
+                move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+                    let args_clone = args.clone();
+                    let wm = wm.clone();
+                    async move {
+                        let input: RecallForCapabilityInput = parse_input(&args_clone)?;
+                        let capability_id = input.capability_id;
+                        
+                        let mut patterns: Vec<ExtractedPattern> = Vec::new();
+                        let mut suggested_modifications: Vec<String> = Vec::new();
+                        
+                        // Query WorkingMemory for patterns related to this capability
+                        if let Ok(wm_guard) = wm.lock() {
+                            let tag_set: std::collections::HashSet<String> = [
+                                "learned-pattern".to_string(),
+                            ].into_iter().collect();
+                            
+                            let params = crate::working_memory::backend::QueryParams::with_tags(tag_set)
+                                .with_limit(Some(20));
+                            
+                            if let Ok(result) = wm_guard.query(&params) {
+                                for entry in result.entries {
+                                    // Check if pattern relates to our capability
+                                    if entry.tags.iter().any(|t| t.contains(&capability_id)) {
+                                        if let Ok(pattern) = serde_json::from_str::<ExtractedPattern>(&entry.content) {
+                                            // Generate suggested modifications based on pattern
+                                            if pattern.occurrence_count >= 3 {
+                                                match pattern.error_category.as_str() {
+                                                    "TimeoutError" => {
+                                                        suggested_modifications.push("add_timeout_buffer".to_string());
+                                                    }
+                                                    "NetworkError" => {
+                                                        suggested_modifications.push("add_retry_step".to_string());
+                                                    }
+                                                    "SchemaError" => {
+                                                        suggested_modifications.push("add_input_validation".to_string());
+                                                    }
+                                                    "MissingCapability" => {
+                                                        suggested_modifications.push("trigger_synthesis".to_string());
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                            patterns.push(pattern);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        let output = RecallForCapabilityOutput {
+                            patterns,
+                            suggested_plan_modifications: suggested_modifications,
+                        };
+                        
+                        to_value(&output)
+                    }
+                    .boxed()
+                }
+            }),
+            "low".to_string(),
+        )
+        .await?;
+
+    eprintln!("📚 Registered 2 pattern extraction capabilities");
+    Ok(())
+}
+
+/// Register the learning.apply_fix capability for automatic remediation
+pub async fn register_apply_fix_capability(
+    marketplace: Arc<CapabilityMarketplace>,
+    causal_chain: Arc<Mutex<crate::causal_chain::CausalChain>>,
+    working_memory: Arc<Mutex<crate::working_memory::facade::WorkingMemory>>,
+) -> Result<(), RuntimeError> {
+    let chain_clone = causal_chain.clone();
+    let wm_clone = working_memory.clone();
+    let mp_clone = marketplace.clone();
+
+    // learning.apply_fix - Automatic remediation based on error patterns
+    marketplace
+        .register_native_capability(
+            "learning.apply_fix".to_string(),
+            "Apply Fix".to_string(),
+            "Attempt automatic remediation based on error patterns: retry, synthesize, alternative, or timeout adjustment".to_string(),
+            Arc::new({
+                let chain = chain_clone.clone();
+                let wm = wm_clone.clone();
+                let _mp = mp_clone.clone(); // Reserved for future: triggering synthesis
+                move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+                    let args_clone = args.clone();
+                    let chain = chain.clone();
+                    let wm = wm.clone();
+                    let _mp = _mp.clone();
+                    async move {
+                        let input: ApplyFixInput = parse_input(&args_clone)?;
+                        
+                        let capability_id = input.capability_id.clone();
+                        let action = input.action.clone().unwrap_or_else(|| "auto".to_string());
+                        
+                        // Determine error category from input or by looking up patterns
+                        let error_category = if let Some(cat) = input.error_category.clone() {
+                            cat
+                        } else {
+                            // Look up from WorkingMemory
+                            let mut found_category = "Unknown".to_string();
+                            if let Ok(wm_guard) = wm.lock() {
+                                let tag_set: std::collections::HashSet<String> = [
+                                    "learned-pattern".to_string(),
+                                    format!("capability:{}", capability_id),
+                                ].into_iter().collect();
+                                
+                                let params = crate::working_memory::backend::QueryParams::with_tags(tag_set)
+                                    .with_limit(Some(1));
+                                
+                                if let Ok(result) = wm_guard.query(&params) {
+                                    if let Some(entry) = result.entries.first() {
+                                        if let Ok(pattern) = serde_json::from_str::<ExtractedPattern>(&entry.content) {
+                                            found_category = pattern.error_category.clone();
+                                        }
+                                    }
+                                }
+                            }
+                            found_category
+                        };
+                        
+                        // Determine appropriate remediation based on action and error category
+                        let (remediation_action, description, plan_mods) = match action.as_str() {
+                            "auto" => {
+                                // Auto-select based on error category
+                                match error_category.as_str() {
+                                    "TimeoutError" => {
+                                        let multiplier = input.timeout_multiplier.unwrap_or(2.0);
+                                        (
+                                            "adjust_timeout".to_string(),
+                                            format!("Adjusting timeout by {}x for {}", multiplier, capability_id),
+                                            vec![PlanModification {
+                                                modification_type: "adjust_timeout".to_string(),
+                                                target_capability: capability_id.clone(),
+                                                parameters: serde_json::json!({
+                                                    "timeout_multiplier": multiplier
+                                                }),
+                                                confidence: 0.7,
+                                            }]
+                                        )
+                                    }
+                                    "NetworkError" => {
+                                        let max_retries = input.max_retries.unwrap_or(3);
+                                        (
+                                            "inject_retry".to_string(),
+                                            format!("Adding retry logic ({} attempts) for {}", max_retries, capability_id),
+                                            vec![PlanModification {
+                                                modification_type: "inject_retry".to_string(),
+                                                target_capability: capability_id.clone(),
+                                                parameters: serde_json::json!({
+                                                    "max_retries": max_retries,
+                                                    "backoff_ms": 1000
+                                                }),
+                                                confidence: 0.8,
+                                            }]
+                                        )
+                                    }
+                                    "MissingCapability" => {
+                                        (
+                                            "synthesize_first".to_string(),
+                                            format!("Triggering synthesis for missing capability: {}", capability_id),
+                                            vec![PlanModification {
+                                                modification_type: "synthesize_first".to_string(),
+                                                target_capability: capability_id.clone(),
+                                                parameters: serde_json::json!({
+                                                    "trigger_synthesis": true,
+                                                    "synthesis_capability": "planner.synthesize_capability"
+                                                }),
+                                                confidence: 0.6,
+                                            }]
+                                        )
+                                    }
+                                    "SchemaError" => {
+                                        (
+                                            "add_validation".to_string(),
+                                            format!("Adding input validation step before {}", capability_id),
+                                            vec![PlanModification {
+                                                modification_type: "inject_validation".to_string(),
+                                                target_capability: capability_id.clone(),
+                                                parameters: serde_json::json!({
+                                                    "validate_schema": true
+                                                }),
+                                                confidence: 0.75,
+                                            }]
+                                        )
+                                    }
+                                    "LLMError" => {
+                                        (
+                                            "inject_fallback".to_string(),
+                                            format!("Adding fallback LLM provider for {}", capability_id),
+                                            vec![PlanModification {
+                                                modification_type: "inject_fallback".to_string(),
+                                                target_capability: capability_id.clone(),
+                                                parameters: serde_json::json!({
+                                                    "fallback_provider": "alternative_llm"
+                                                }),
+                                                confidence: 0.65,
+                                            }]
+                                        )
+                                    }
+                                    _ => {
+                                        (
+                                            "skip_capability".to_string(),
+                                            format!("Suggesting to skip problematic capability: {}", capability_id),
+                                            vec![PlanModification {
+                                                modification_type: "skip_capability".to_string(),
+                                                target_capability: capability_id.clone(),
+                                                parameters: serde_json::json!({
+                                                    "reason": format!("Frequent {} failures", error_category)
+                                                }),
+                                                confidence: 0.5,
+                                            }]
+                                        )
+                                    }
+                                }
+                            }
+                            "retry" => {
+                                let max_retries = input.max_retries.unwrap_or(3);
+                                (
+                                    "inject_retry".to_string(),
+                                    format!("Adding retry logic ({} attempts) for {}", max_retries, capability_id),
+                                    vec![PlanModification {
+                                        modification_type: "inject_retry".to_string(),
+                                        target_capability: capability_id.clone(),
+                                        parameters: serde_json::json!({
+                                            "max_retries": max_retries,
+                                            "backoff_ms": 1000
+                                        }),
+                                        confidence: 0.8,
+                                    }]
+                                )
+                            }
+                            "synthesize" => {
+                                (
+                                    "synthesize_first".to_string(),
+                                    format!("Triggering synthesis for: {}", capability_id),
+                                    vec![PlanModification {
+                                        modification_type: "synthesize_first".to_string(),
+                                        target_capability: capability_id.clone(),
+                                        parameters: serde_json::json!({
+                                            "trigger_synthesis": true
+                                        }),
+                                        confidence: 0.6,
+                                    }]
+                                )
+                            }
+                            "adjust_timeout" => {
+                                let multiplier = input.timeout_multiplier.unwrap_or(2.0);
+                                (
+                                    "adjust_timeout".to_string(),
+                                    format!("Adjusting timeout by {}x for {}", multiplier, capability_id),
+                                    vec![PlanModification {
+                                        modification_type: "adjust_timeout".to_string(),
+                                        target_capability: capability_id.clone(),
+                                        parameters: serde_json::json!({
+                                            "timeout_multiplier": multiplier
+                                        }),
+                                        confidence: 0.7,
+                                    }]
+                                )
+                            }
+                            "alternative" => {
+                                (
+                                    "inject_fallback".to_string(),
+                                    format!("Adding fallback alternative for {}", capability_id),
+                                    vec![PlanModification {
+                                        modification_type: "inject_fallback".to_string(),
+                                        target_capability: capability_id.clone(),
+                                        parameters: serde_json::json!({
+                                            "find_alternative": true
+                                        }),
+                                        confidence: 0.55,
+                                    }]
+                                )
+                            }
+                            _ => {
+                                return Err(RuntimeError::Generic(format!(
+                                    "Unknown action: {}. Valid actions: auto, retry, synthesize, adjust_timeout, alternative",
+                                    action
+                                )));
+                            }
+                        };
+                        
+                        // Note: CausalChain recording skipped for simplicity.
+                        // The primary value is returning plan_modifications for Arbiter use.
+                        
+                        let output = ApplyFixOutput {
+                            success: true,
+                            remediation_action,
+                            description,
+                            triggered_capability: None,
+                            triggered_result: None,
+                            plan_modifications: plan_mods,
+                        };
+                        
+                        to_value(&output)
+                    }
+                    .boxed()
+                }
+            }),
+            "medium".to_string(),
+        )
+        .await?;
+
+    eprintln!("🔧 Registered learning.apply_fix capability");
+    Ok(())
 }

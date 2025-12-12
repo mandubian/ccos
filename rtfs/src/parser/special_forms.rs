@@ -410,7 +410,7 @@ pub(super) fn build_fn_expr(pair: Pair<Rule>) -> Result<FnExpr, PestParseError> 
         })?;
 
         match peek_pair.as_rule() {
-            Rule::metadata => {
+            Rule::meta_map => {
                 let meta_pair = pairs.next().unwrap();
                 let meta_span = pair_to_source_span(&meta_pair);
                 // Find the delegation_meta within metadata
@@ -689,7 +689,7 @@ pub(super) fn build_defn_expr(defn_expr_pair: Pair<Rule>) -> Result<DefnExpr, Pe
             Rule::WHITESPACE | Rule::COMMENT => {
                 pairs.next();
             }
-            Rule::metadata => {
+            Rule::meta_map => {
                 let meta_pair = pairs.next().unwrap();
                 let meta_span = pair_to_source_span(&meta_pair);
                 // Determine if this is delegation metadata or general metadata

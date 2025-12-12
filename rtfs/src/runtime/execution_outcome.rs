@@ -53,6 +53,17 @@ pub struct CallMetadata {
     pub semantic_hash: Option<Vec<f32>>,
     /// Additional context from external components.
     pub context: std::collections::HashMap<String, String>,
+
+    /// GENERIC - Runtime execution hints from RTFS metadata
+    /// Keys use namespace convention: "runtime.learning.retry", "runtime.tracing.tag", etc.
+    /// Values are RTFS Values for flexibility.
+    ///
+    /// Common learning hint keys:
+    /// - "runtime.learning.retry" → {:max-retries N :backoff-ms N :backoff-multiplier N}
+    /// - "runtime.learning.timeout" → {:multiplier N :absolute-ms N}
+    /// - "runtime.learning.fallback" → {:capability "cap.id" :pass-original-args bool}
+    /// - "runtime.learning.validation" → {:validate-schema bool :required-fields [...]}
+    pub execution_hints: std::collections::HashMap<String, crate::runtime::values::Value>,
 }
 
 impl CallMetadata {
@@ -88,6 +99,21 @@ impl CallMetadata {
     pub fn with_idempotency_key(mut self, key: String) -> Self {
         self.idempotency_key = Some(key);
         self
+    }
+
+    /// Add an execution hint from RTFS metadata
+    pub fn with_execution_hint(
+        mut self,
+        key: String,
+        value: crate::runtime::values::Value,
+    ) -> Self {
+        self.execution_hints.insert(key, value);
+        self
+    }
+
+    /// Get an execution hint by key
+    pub fn get_execution_hint(&self, key: &str) -> Option<&crate::runtime::values::Value> {
+        self.execution_hints.get(key)
     }
 }
 

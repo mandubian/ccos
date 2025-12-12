@@ -249,6 +249,8 @@ pub struct DelegatingArbiter {
     intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
     adaptive_threshold_calculator: Option<crate::adaptive_threshold::AdaptiveThresholdCalculator>,
     prompt_manager: PromptManager<FilePromptStore>,
+    /// Optional WorkingMemory for learning-driven plan augmentation
+    working_memory: Option<Arc<std::sync::Mutex<crate::working_memory::WorkingMemory>>>,
 }
 
 /// Agent registry for managing available agents
@@ -351,7 +353,27 @@ impl DelegatingArbiter {
             intent_graph,
             adaptive_threshold_calculator,
             prompt_manager,
+            working_memory: None,
         })
+    }
+
+    /// Create a new delegating arbiter with WorkingMemory for learning augmentation
+    pub async fn new_with_learning(
+        llm_config: LlmConfig,
+        delegation_config: DelegationConfig,
+        capability_marketplace: Arc<CapabilityMarketplace>,
+        intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
+        working_memory: Arc<std::sync::Mutex<crate::working_memory::WorkingMemory>>,
+    ) -> Result<Self, RuntimeError> {
+        let mut arbiter = Self::new(
+            llm_config,
+            delegation_config,
+            capability_marketplace,
+            intent_graph,
+        )
+        .await?;
+        arbiter.working_memory = Some(working_memory);
+        Ok(arbiter)
     }
 
     /// Get the LLM configuration used by this arbiter
@@ -907,19 +929,177 @@ The tool name MUST be one of: {}"#,
         intent: &Intent,
         context: Option<HashMap<String, Value>>,
     ) -> Result<Plan, RuntimeError> {
+        // [Learning Integration] Step 0: Recall patterns for this intent
+        let pattern_mods = self.recall_patterns_for_intent(intent).await;
+
         // First, analyze if delegation is appropriate
         let delegation_analysis = self
             .analyze_delegation_need(intent, context.clone())
             .await?;
 
-        if delegation_analysis.should_delegate {
+        let plan = if delegation_analysis.should_delegate {
             // Generate plan with delegation
             self.generate_delegated_plan(intent, &delegation_analysis, context)
-                .await
+                .await?
         } else {
             // Generate plan without delegation
-            self.generate_direct_plan(intent, context).await
+            self.generate_direct_plan(intent, context).await?
+        };
+
+        // [Learning Integration] Step 3: Augment plan with learning modifications
+        if !pattern_mods.is_empty() {
+            let result = super::learning_augmenter::augment_plan_with_learning(plan, &pattern_mods);
+
+            if !result.applied_modifications.is_empty() {
+                eprintln!(
+                    "DEBUG: [Learning] Applied {} modifications to plan: {:?}",
+                    result.applied_modifications.len(),
+                    result
+                        .applied_modifications
+                        .iter()
+                        .map(|m| &m.modification_type)
+                        .collect::<Vec<_>>()
+                );
+            }
+            if !result.skipped_modifications.is_empty() {
+                eprintln!(
+                    "DEBUG: [Learning] Skipped {} modifications: {:?}",
+                    result.skipped_modifications.len(),
+                    result
+                        .skipped_modifications
+                        .iter()
+                        .map(|(m, reason)| (&m.modification_type, reason))
+                        .collect::<Vec<_>>()
+                );
+            }
+
+            Ok(result.plan)
+        } else {
+            Ok(plan)
         }
+    }
+
+    /// Recall failure patterns from WorkingMemory for capabilities in this intent
+    async fn recall_patterns_for_intent(
+        &self,
+        intent: &Intent,
+    ) -> Vec<crate::learning::capabilities::PlanModification> {
+        let mut modifications = Vec::new();
+
+        // Skip if no WorkingMemory is configured
+        let working_memory = match &self.working_memory {
+            Some(wm) => wm,
+            None => return modifications,
+        };
+
+        // Extract potential capability IDs from the intent goal
+        // For now, we'll use capability ids mentioned in the goal or metadata
+        let potential_caps = self.extract_capability_hints(intent);
+
+        // Query WorkingMemory for each potential capability using the query API
+        for cap_id in &potential_caps {
+            if let Ok(guard) = working_memory.lock() {
+                // Query for entries with "pattern" tag and matching capability ID
+                let pattern_tag = format!("pattern:{}", cap_id);
+                let query_params =
+                    crate::working_memory::QueryParams::with_tags([pattern_tag.as_str()])
+                        .with_limit(Some(10));
+
+                if let Ok(result) = guard.query(&query_params) {
+                    for entry in result.entries {
+                        // Extract error category from entry content or tags
+                        // Patterns are stored with tags like ["pattern", "pattern:cap_id", "NetworkError"]
+                        for tag in &entry.tags {
+                            if [
+                                "NetworkError",
+                                "TimeoutError",
+                                "MissingCapability",
+                                "SchemaError",
+                            ]
+                            .contains(&tag.as_str())
+                            {
+                                if let Some(m) = self.pattern_to_modification_simple(cap_id, tag) {
+                                    modifications.push(m);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        modifications
+    }
+
+    /// Extract capability hints from the intent (goal text, metadata, etc.)
+    fn extract_capability_hints(&self, intent: &Intent) -> Vec<String> {
+        let mut hints = Vec::new();
+
+        // Check metadata for explicit capability references
+        if let Some(cap_ref) = intent.metadata.get("target_capability") {
+            if let Value::String(cap_id) = cap_ref {
+                hints.push(cap_id.clone());
+            }
+        }
+
+        // Simple heuristic: look for capability-like patterns in the goal
+        // (e.g., "capability:xxx" or "call xxx")
+        let goal_lower = intent.goal.to_lowercase();
+        if goal_lower.contains("demo.") || goal_lower.contains("ccos.") {
+            // Extract any word that looks like a capability ID
+            for word in intent.goal.split_whitespace() {
+                if word.contains('.') && !word.contains("http") {
+                    hints.push(
+                        word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.')
+                            .to_string(),
+                    );
+                }
+            }
+        }
+
+        hints
+    }
+
+    /// Convert an error category tag to a PlanModification
+    fn pattern_to_modification_simple(
+        &self,
+        cap_id: &str,
+        error_category: &str,
+    ) -> Option<crate::learning::capabilities::PlanModification> {
+        use crate::learning::capabilities::PlanModification;
+
+        // Map error categories to modification types
+        let (mod_type, params, confidence) = match error_category {
+            "NetworkError" => (
+                "inject_retry".to_string(),
+                serde_json::json!({"max_retries": 3, "backoff_ms": 1000}),
+                0.8,
+            ),
+            "TimeoutError" => (
+                "adjust_timeout".to_string(),
+                serde_json::json!({"timeout_multiplier": 2.0}),
+                0.7,
+            ),
+            "MissingCapability" => (
+                "synthesize_first".to_string(),
+                serde_json::json!({"trigger_synthesis": true}),
+                0.6,
+            ),
+            "SchemaError" => (
+                "inject_validation".to_string(),
+                serde_json::json!({"validate_input": true}),
+                0.5,
+            ),
+            _ => return None,
+        };
+
+        Some(PlanModification {
+            modification_type: mod_type,
+            target_capability: cap_id.to_string(),
+            parameters: serde_json::from_value(params).unwrap_or_default(),
+            confidence,
+        })
     }
 
     /// Analyze whether delegation is needed for this intent
