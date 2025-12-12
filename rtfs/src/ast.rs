@@ -620,7 +620,11 @@ pub enum Expression {
     For(#[validate] Box<ForExpr>),      // Added for for comprehension
     Deref(#[validate] Box<Expression>), // Added for @atom deref sugar
     ResourceRef(String),                // Added
-    Metadata(HashMap<MapKey, Expression>), // Added for ^{:doc "..."} syntax
+    WithMetadata {
+        meta: HashMap<MapKey, Expression>,
+        #[validate(nested)]
+        expr: Box<Expression>,
+    }, // Attaches metadata to an inner expression
 }
 
 impl Validate for Expression {
@@ -660,6 +664,12 @@ impl Validate for Expression {
             Expression::Match(expr) => expr.validate(),
             Expression::For(expr) => expr.validate(),
             Expression::Deref(expr) => expr.validate(),
+            Expression::WithMetadata { meta, expr } => {
+                for value in meta.values() {
+                    value.validate()?;
+                }
+                expr.validate()
+            }
             _ => Ok(()), // Literals, Symbols, etc. do not need validation
         }
     }

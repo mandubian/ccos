@@ -312,19 +312,7 @@ impl CCOS {
 
         let capability_marketplace = Arc::new(capability_marketplace);
 
-        // Provide a CCOS-aware host for executing RTFS capabilities loaded into the marketplace
-        let rtfs_host_factory = {
-            let marketplace_clone = Arc::clone(&capability_marketplace);
-            let causal_chain_clone = Arc::clone(&causal_chain);
-            Arc::new(move || {
-                Arc::new(RuntimeHost::new(
-                    Arc::clone(&causal_chain_clone),
-                    Arc::clone(&marketplace_clone),
-                    RuntimeContext::full(),
-                )) as Arc<dyn HostInterface + Send + Sync>
-            })
-        };
-        capability_marketplace.set_rtfs_host_factory(rtfs_host_factory);
+        // RuntimeHost factory moved to after Orchestrator creation for unified governance path
 
         let catalog_service = Arc::new(CatalogService::new());
         capability_marketplace
@@ -365,6 +353,25 @@ impl CCOS {
             Arc::clone(&capability_marketplace),
             Arc::clone(&plan_archive),
         ));
+
+        // Provide a CCOS-aware host for executing RTFS capabilities loaded into the marketplace
+        // This is set after Orchestrator creation so hints are applied via unified governance path
+        let rtfs_host_factory = {
+            let marketplace_clone = Arc::clone(&capability_marketplace);
+            let causal_chain_clone = Arc::clone(&causal_chain);
+            let orchestrator_clone = Arc::clone(&orchestrator);
+            Arc::new(move || {
+                Arc::new(
+                    RuntimeHost::new(
+                        Arc::clone(&causal_chain_clone),
+                        Arc::clone(&marketplace_clone),
+                        RuntimeContext::full(),
+                    )
+                    .with_orchestrator(Arc::clone(&orchestrator_clone)),
+                ) as Arc<dyn HostInterface + Send + Sync>
+            })
+        };
+        capability_marketplace.set_rtfs_host_factory(rtfs_host_factory);
 
         let governance_kernel = Arc::new(GovernanceKernel::new(
             Arc::clone(&orchestrator),
@@ -872,10 +879,11 @@ impl CCOS {
                             walk_expr(&fx.body, acc); // body is Box<Expression>
                         }
                         Expression::Deref(inner) => walk_expr(inner, acc),
-                        Expression::Metadata(map) => {
-                            for v in map.values() {
+                        Expression::WithMetadata { meta, expr } => {
+                            for v in meta.values() {
                                 walk_expr(v, acc);
                             }
+                            walk_expr(expr, acc);
                         }
                         Expression::Quasiquote(inner) => walk_expr(inner, acc),
                         Expression::Unquote(inner) => walk_expr(inner, acc),
@@ -1466,7 +1474,7 @@ impl CCOS {
         crate::agents::capabilities::register_agent_capabilities(
             Arc::clone(&self.capability_marketplace),
             agent_registry,
-            agent_working_memory,
+            Arc::clone(&agent_working_memory),
         )
         .await?;
 
@@ -1475,6 +1483,22 @@ impl CCOS {
             Arc::clone(&self.capability_marketplace),
             Arc::clone(&self.causal_chain),
             Arc::clone(&self.arbiter),
+        )
+        .await?;
+
+        // Register pattern extraction capabilities (Phase 6: Autonomous Learning Loop)
+        crate::learning::capabilities::register_pattern_extraction_capabilities(
+            Arc::clone(&self.capability_marketplace),
+            Arc::clone(&self.causal_chain),
+            Arc::clone(&agent_working_memory),
+        )
+        .await?;
+
+        // Register apply_fix capability for automatic remediation (Phase 6)
+        crate::learning::capabilities::register_apply_fix_capability(
+            Arc::clone(&self.capability_marketplace),
+            Arc::clone(&self.causal_chain),
+            Arc::clone(&agent_working_memory),
         )
         .await?;
 

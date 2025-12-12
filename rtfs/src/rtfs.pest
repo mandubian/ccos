@@ -19,7 +19,7 @@ program = { SOI ~ (module_definition | expression)* ~ EOI }
 // Include anonymous and shorthand function forms before other possibilities so they capture '#(' sequences
 // and method-call style tokens ('.method'). Keep explicit order for precedence.
 // Ensure task_context_access (e.g., "@plan-id") takes precedence over generic symbols
-expression = _{ shorthand_fn | anon_fn | method_call_expr | keyword | task_context_access | atom_deref | quasiquote | unquote | unquote_splicing | literal | symbol | resource_ref | special_form | metadata | list | vector | map }
+expression = _{ shorthand_fn | anon_fn | method_call_expr | keyword | task_context_access | atom_deref | quasiquote | unquote | unquote_splicing | literal | symbol | resource_ref | special_form | metadata_expr | list | vector | map }
 
 // --- Basic Values ---
 
@@ -271,11 +271,11 @@ do_expr = { "(" ~ do_keyword ~ expression* ~ ")" }
 
 fn_param_list = { "[" ~ param_def* ~ (AMPERSAND ~ symbol ~ (COLON ~ type_expr)?)? ~ "]" } // New rule for parameter lists
 
-fn_expr   = { "(" ~ fn_keyword ~ WHITESPACE* ~ metadata* ~ WHITESPACE* ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Metadata after fn keyword, before params
+fn_expr   = { "(" ~ fn_keyword ~ WHITESPACE* ~ meta_map* ~ WHITESPACE* ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Metadata after fn keyword, before params
 param_def = { binding_pattern ~ (COLON ~ type_expr)? }
 
 def_expr  = { "(" ~ def_keyword ~ symbol ~ (COLON ~ type_expr)? ~ expression ~ ")" } // Use def_keyword
-defn_expr = { "(" ~ defn_keyword ~ WHITESPACE* ~ metadata* ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Metadata comes after defn keyword and before symbol
+defn_expr = { "(" ~ defn_keyword ~ WHITESPACE* ~ meta_map* ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ fn_param_list ~ (COLON ~ type_expr)? ~ expression+ ~ ")" } // Metadata comes after defn keyword and before symbol
 defmacro_expr = { "(" ~ defmacro_keyword ~ WHITESPACE* ~ symbol ~ WHITESPACE* ~ fn_param_list ~ expression+ ~ ")" }
 
 // defstruct rule for ergonomic struct definitions
@@ -340,9 +340,11 @@ import_option      = { ":as" ~ symbol | ":only" ~ "[" ~ symbol+ ~ "]" } // Norma
 resource_ref_keyword = @{ "resource:ref" }
 resource_ref = { "(" ~ resource_ref_keyword ~ string ~ ")" }
 
-// --- Metadata Support ---
 // Support both delegation metadata (^:delegation) and general metadata (^{:key value})
-metadata = { delegation_meta | general_meta }
+meta_map = { delegation_meta | general_meta }
+
+// Metadata expression: attaches metadata to the following expression
+metadata_expr = { meta_map ~ expression }
 
 delegation_meta = { CARET ~ ":delegation" ~ WHITESPACE* ~ delegation_target }
 general_meta = { CARET ~ "{" ~ map_entry* ~ "}" }

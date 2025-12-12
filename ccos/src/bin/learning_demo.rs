@@ -2,15 +2,19 @@
 //! - Registers demo capabilities (some that fail)
 //! - Executes capabilities and logs failures to CausalChain
 //! - Uses learning capabilities to analyze failures and suggest improvements
-//! - Demonstrates the full learning feedback loop
+//! - Extracts patterns and stores them in WorkingMemory
+//! - Demonstrates the full learning feedback loop with real capabilities
 
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::causal_chain::CausalChain;
 use ccos::learning::capabilities::{
-    register_learning_capabilities, AnalyzeFailureInput, GetFailureStatsInput, GetFailuresInput,
+    register_apply_fix_capability, register_learning_capabilities,
+    register_pattern_extraction_capabilities, AnalyzeFailureInput, GetFailureStatsInput,
+    GetFailuresInput,
 };
 use ccos::types::{Action, ActionType, ExecutionResult};
 use ccos::utils::value_conversion::rtfs_value_to_json;
+use ccos::working_memory::{InMemoryJsonlBackend, WorkingMemory};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
@@ -29,13 +33,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ccos::capabilities::registry::CapabilityRegistry::new(),
     ))));
 
+    // Initialize WorkingMemory for pattern storage
+    let backend = InMemoryJsonlBackend::new(None, Some(100), Some(10_000));
+    let wm = WorkingMemory::new(Box::new(backend));
+    let working_memory = Arc::new(Mutex::new(wm));
+
     // Register demo capabilities (including ones that fail)
     register_demo_capabilities(&marketplace).await?;
 
     // Register learning capabilities
     register_learning_capabilities(Arc::clone(&marketplace), Arc::clone(&chain)).await?;
 
-    println!("📦 Registered demo capabilities + learning capabilities\n");
+    // Register pattern extraction capabilities (Phase 6)
+    register_pattern_extraction_capabilities(
+        Arc::clone(&marketplace),
+        Arc::clone(&chain),
+        Arc::clone(&working_memory),
+    )
+    .await?;
+
+    // Register apply_fix capability for automatic remediation (Phase 6)
+    register_apply_fix_capability(
+        Arc::clone(&marketplace),
+        Arc::clone(&chain),
+        Arc::clone(&working_memory),
+    )
+    .await?;
+
+    println!("📦 Registered demo + learning + pattern extraction + apply_fix capabilities\n");
 
     // =========================================================================
     // Phase 1: Execute capabilities (some succeed, some fail)
@@ -191,23 +216,126 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // =========================================================================
-    // Phase 5: Summary - What the system learned
+    // Phase 5: Extract Patterns from Failure Clusters (REAL)
     // =========================================================================
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("🧠 PHASE 5: Learning Summary");
+    println!("📊 PHASE 5: Extract Patterns from Failures");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-    println!("The learning loop has:");
-    println!("  1. ✅ Executed capabilities and recorded results to CausalChain");
-    println!("  2. ✅ Classified errors by category (Schema, Missing, Timeout, Network)");
-    println!("  3. ✅ Provided actionable suggestions for each error type");
-    println!("  4. ✅ Aggregated statistics to identify problem areas");
+    let extract_input = serde_json::json!({
+        "time_window_hours": 24,
+        "min_occurrences": 1,  // Lower threshold for demo
+        "store_in_memory": true  // Actually store in WorkingMemory
+    });
+    let extract_value = ccos::utils::value_conversion::json_to_rtfs_value(&extract_input)?;
+
+    println!("Calling learning.extract_patterns...");
+    let extract_result = marketplace
+        .execute_capability_enhanced("learning.extract_patterns", &extract_value, None)
+        .await?;
+    let extract_json = rtfs_value_to_json(&extract_result)?;
+    println!(
+        "Result:\n{}\n",
+        serde_json::to_string_pretty(&extract_json)?
+    );
+
+    // =========================================================================
+    // Phase 6: Pre-Execution Recall (REAL)
+    // =========================================================================
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("🔍 PHASE 6: Pre-Execution Pattern Recall");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    // Recall patterns for a capability that has failed
+    let recall_input = serde_json::json!({
+        "capability_id": "demo.network_call"
+    });
+    let recall_value = ccos::utils::value_conversion::json_to_rtfs_value(&recall_input)?;
+
+    println!("Calling learning.recall_for_capability for 'demo.network_call'...");
+    let recall_result = marketplace
+        .execute_capability_enhanced("learning.recall_for_capability", &recall_value, None)
+        .await?;
+    let recall_json = rtfs_value_to_json(&recall_result)?;
+    println!("Result:\n{}\n", serde_json::to_string_pretty(&recall_json)?);
+
+    // Also recall for another failing capability
+    let recall_input2 = serde_json::json!({
+        "capability_id": "demo.slow_operation"
+    });
+    let recall_value2 = ccos::utils::value_conversion::json_to_rtfs_value(&recall_input2)?;
+
+    println!("Calling learning.recall_for_capability for 'demo.slow_operation'...");
+    let recall_result2 = marketplace
+        .execute_capability_enhanced("learning.recall_for_capability", &recall_value2, None)
+        .await?;
+    let recall_json2 = rtfs_value_to_json(&recall_result2)?;
+    println!(
+        "Result:\n{}\n",
+        serde_json::to_string_pretty(&recall_json2)?
+    );
+
+    // =========================================================================
+    // Phase 6.5: Auto-Remediation with learning.apply_fix
+    // =========================================================================
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("🔧 PHASE 6.5: Auto-Remediation (learning.apply_fix)");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    // Apply fix for a network error
+    let apply_fix_input = serde_json::json!({
+        "capability_id": "demo.network_call",
+        "action": "auto"  // Let the system decide based on error pattern
+    });
+    let apply_fix_value = ccos::utils::value_conversion::json_to_rtfs_value(&apply_fix_input)?;
+
+    println!("Calling learning.apply_fix for 'demo.network_call' (auto mode)...");
+    let apply_fix_result = marketplace
+        .execute_capability_enhanced("learning.apply_fix", &apply_fix_value, None)
+        .await?;
+    let apply_fix_json = rtfs_value_to_json(&apply_fix_result)?;
+    println!(
+        "Result:\n{}\n",
+        serde_json::to_string_pretty(&apply_fix_json)?
+    );
+
+    // Apply fix for timeout error
+    let apply_fix_input2 = serde_json::json!({
+        "capability_id": "demo.slow_operation",
+        "action": "adjust_timeout",
+        "timeout_multiplier": 2.5
+    });
+    let apply_fix_value2 = ccos::utils::value_conversion::json_to_rtfs_value(&apply_fix_input2)?;
+
+    println!("Calling learning.apply_fix for 'demo.slow_operation' (adjust_timeout)...");
+    let apply_fix_result2 = marketplace
+        .execute_capability_enhanced("learning.apply_fix", &apply_fix_value2, None)
+        .await?;
+    let apply_fix_json2 = rtfs_value_to_json(&apply_fix_result2)?;
+    println!(
+        "Result:\n{}\n",
+        serde_json::to_string_pretty(&apply_fix_json2)?
+    );
+
+    // =========================================================================
+    // Phase 7: Summary - What the system learned
+    // =========================================================================
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("🧠 PHASE 7: Learning Summary");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    println!("The autonomous learning loop can now:");
+    println!("  1. ✅ Execute capabilities and record results to CausalChain");
+    println!("  2. ✅ Classify errors by category (Schema, Missing, Timeout, Network)");
+    println!("  3. ✅ Query and analyze failures with actionable suggestions");
+    println!("  4. ✅ Extract patterns from failure clusters");
+    println!("  5. ✅ Store patterns in WorkingMemory for persistence");
+    println!("  6. ✅ Recall patterns before executing capabilities");
+    println!("  7. ✅ Suggest plan modifications based on learned patterns");
+    println!("  8. ✅ Apply automatic remediation (retry, timeout, synthesis, fallback)");
     println!();
-    println!("In production, 'learning.suggest_improvement' would use an LLM to:");
-    println!("  • Analyze failure patterns across multiple executions");
-    println!("  • Suggest schema fixes for frequently failing capabilities");
-    println!("  • Recommend retry strategies for transient errors");
-    println!("  • Propose new capabilities to fill missing gaps");
+    println!("Next steps:");
+    println!("  • Arbiter integration - Inject retry/fallback into plans");
     println!();
 
     println!("╔══════════════════════════════════════════════════════════════╗");

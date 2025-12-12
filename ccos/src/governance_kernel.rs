@@ -46,6 +46,35 @@ pub struct ConstitutionRule {
 // TODO: This should be loaded from a secure, signed configuration file.
 pub struct Constitution {
     rules: Vec<ConstitutionRule>,
+    /// Execution hint policy limits
+    pub hint_policies: ExecutionHintPolicies,
+}
+
+/// Policy limits for execution hints
+#[derive(Debug, Clone)]
+pub struct ExecutionHintPolicies {
+    /// Maximum allowed retry attempts (prevents DoS via infinite retries)
+    pub max_retries: u32,
+    /// Maximum timeout multiplier (prevents excessive resource hold)
+    pub max_timeout_multiplier: f64,
+    /// Maximum absolute timeout in milliseconds
+    pub max_absolute_timeout_ms: u64,
+    /// Capability ID patterns that are allowed as fallbacks (glob patterns)
+    pub allowed_fallback_patterns: Vec<String>,
+    /// Whether fallback capabilities must be in approved list
+    pub require_approved_fallbacks: bool,
+}
+
+impl Default for ExecutionHintPolicies {
+    fn default() -> Self {
+        Self {
+            max_retries: 5,
+            max_timeout_multiplier: 10.0,
+            max_absolute_timeout_ms: 300_000, // 5 minutes max
+            allowed_fallback_patterns: vec!["*".to_string()], // Allow all by default
+            require_approved_fallbacks: false,
+        }
+    }
 }
 
 impl Default for Constitution {
@@ -79,7 +108,10 @@ impl Default for Constitution {
             },
         ];
 
-        Self { rules }
+        Self {
+            rules,
+            hint_policies: ExecutionHintPolicies::default(),
+        }
     }
 }
 
@@ -275,6 +307,159 @@ impl GovernanceKernel {
             }
         }
         Ok(())
+    }
+
+    /// Validates execution hints from RTFS metadata against Constitution policies.
+    ///
+    /// Checks:
+    /// - Retry hint: max_retries <= constitution.hint_policies.max_retries
+    /// - Timeout hint: multiplier <= max_timeout_multiplier, absolute_ms <= max_absolute_timeout_ms
+    /// - Fallback hint: capability matches allowed_fallback_patterns (if require_approved_fallbacks)
+    pub fn validate_execution_hints(
+        &self,
+        hints: &std::collections::HashMap<String, Value>,
+    ) -> RuntimeResult<()> {
+        let policies = &self.constitution.hint_policies;
+
+        // Validate retry hints
+        if let Some(retry_value) = hints.get("runtime.learning.retry") {
+            if let Some(max_retries) = self
+                .extract_u32_from_map(retry_value, "max-retries")
+                .or_else(|| self.extract_u32_from_map(retry_value, "max"))
+            {
+                if max_retries > policies.max_retries {
+                    return Err(RuntimeError::Generic(format!(
+                        "Execution hint violated: retry max-retries={} exceeds policy limit of {}",
+                        max_retries, policies.max_retries
+                    )));
+                }
+            }
+        }
+
+        // Validate timeout hints
+        if let Some(timeout_value) = hints.get("runtime.learning.timeout") {
+            if let Some(multiplier) = self.extract_f64_from_map(timeout_value, "multiplier") {
+                if multiplier > policies.max_timeout_multiplier {
+                    return Err(RuntimeError::Generic(format!(
+                        "Execution hint violated: timeout multiplier={:.1} exceeds policy limit of {:.1}",
+                        multiplier, policies.max_timeout_multiplier
+                    )));
+                }
+            }
+            if let Some(absolute_ms) = self.extract_u64_from_map(timeout_value, "absolute-ms") {
+                if absolute_ms > policies.max_absolute_timeout_ms {
+                    return Err(RuntimeError::Generic(format!(
+                        "Execution hint violated: absolute timeout={}ms exceeds policy limit of {}ms",
+                        absolute_ms, policies.max_absolute_timeout_ms
+                    )));
+                }
+            }
+        }
+
+        // Validate fallback hints
+        if policies.require_approved_fallbacks {
+            if let Some(fallback_value) = hints.get("runtime.learning.fallback") {
+                if let Some(capability_id) =
+                    self.extract_string_from_map(fallback_value, "capability")
+                {
+                    let allowed = policies
+                        .allowed_fallback_patterns
+                        .iter()
+                        .any(|pattern| self.matches_pattern(&capability_id, pattern));
+                    if !allowed {
+                        return Err(RuntimeError::Generic(format!(
+                            "Execution hint violated: fallback capability '{}' not in allowed list",
+                            capability_id
+                        )));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Helper to extract u32 from a RTFS map value
+    fn extract_u32_from_map(&self, value: &Value, key: &str) -> Option<u32> {
+        if let Value::Map(map) = value {
+            for (k, v) in map {
+                let key_str = match k {
+                    rtfs::ast::MapKey::Keyword(kw) => &kw.0,
+                    rtfs::ast::MapKey::String(s) => s,
+                    _ => continue,
+                };
+                if key_str == key {
+                    return match v {
+                        Value::Integer(i) => Some(*i as u32),
+                        Value::Float(f) => Some(*f as u32),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper to extract u64 from a RTFS map value
+    fn extract_u64_from_map(&self, value: &Value, key: &str) -> Option<u64> {
+        if let Value::Map(map) = value {
+            for (k, v) in map {
+                let key_str = match k {
+                    rtfs::ast::MapKey::Keyword(kw) => &kw.0,
+                    rtfs::ast::MapKey::String(s) => s,
+                    _ => continue,
+                };
+                if key_str == key {
+                    return match v {
+                        Value::Integer(i) => Some(*i as u64),
+                        Value::Float(f) => Some(*f as u64),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper to extract f64 from a RTFS map value
+    fn extract_f64_from_map(&self, value: &Value, key: &str) -> Option<f64> {
+        if let Value::Map(map) = value {
+            for (k, v) in map {
+                let key_str = match k {
+                    rtfs::ast::MapKey::Keyword(kw) => &kw.0,
+                    rtfs::ast::MapKey::String(s) => s,
+                    _ => continue,
+                };
+                if key_str == key {
+                    return match v {
+                        Value::Float(f) => Some(*f),
+                        Value::Integer(i) => Some(*i as f64),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper to extract String from a RTFS map value
+    fn extract_string_from_map(&self, value: &Value, key: &str) -> Option<String> {
+        if let Value::Map(map) = value {
+            for (k, v) in map {
+                let key_str = match k {
+                    rtfs::ast::MapKey::Keyword(kw) => &kw.0,
+                    rtfs::ast::MapKey::String(s) => s,
+                    _ => continue,
+                };
+                if key_str == key {
+                    return match v {
+                        Value::String(s) => Some(s.clone()),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        None
     }
 
     /// Helper to check if an ID matches a pattern

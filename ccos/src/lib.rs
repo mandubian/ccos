@@ -47,6 +47,7 @@ pub mod capabilities;
 pub mod capability_marketplace;
 pub mod environment;
 pub mod examples_common;
+pub mod hints;
 pub mod host;
 pub mod observability;
 pub mod ops;

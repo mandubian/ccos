@@ -484,16 +484,9 @@ impl From<Expression> for Value {
                 // For now, return a placeholder for deref expressions
                 Value::String("#<deref>".to_string())
             }
-            Expression::Metadata(metadata_map) => {
-                // Convert metadata map to a runtime value
-                let mut result_map = std::collections::HashMap::new();
-                for (key, value_expr) in metadata_map {
-                    // Convert nested expressions to a readable RTFS string instead of Debug
-                    // Simple string representation - full formatting available via CCOS rtfs_bridge
-                    let value_str = format!("{:?}", &value_expr);
-                    result_map.insert(key, Value::String(value_str));
-                }
-                Value::Map(result_map)
+            Expression::WithMetadata { meta, expr } => {
+                // Return the inner expression's value; metadata is not converted to runtime values here.
+                Value::from(*expr)
             }
             // Macro-related expressions should have been expanded before evaluation
             Expression::Quasiquote(_)

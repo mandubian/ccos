@@ -223,6 +223,14 @@ pub enum ActionType {
     GovernanceApprovalDenied,
     /// Bounded exploration limit reached (synthesis/decomposition)
     BoundedExplorationLimitReached,
+
+    // Atomic Governance Checkpoints (Tier 2)
+    /// Governance decision made at step level before execution
+    GovernanceCheckpointDecision,
+    /// Outcome recorded after governed step execution
+    GovernanceCheckpointOutcome,
+    /// Execution hint applied (retry, timeout, fallback)
+    HintApplied,
 }
 
 /// Represents the outcome of an executed action or plan.
@@ -527,6 +535,13 @@ impl Action {
                 Value::String(error_message.to_string()),
             )]),
         });
+        self
+    }
+
+    /// Add metadata context to the action
+    pub fn with_metadata(mut self, key: &str, value: &str) -> Self {
+        self.metadata
+            .insert(key.to_string(), Value::String(value.to_string()));
         self
     }
 }

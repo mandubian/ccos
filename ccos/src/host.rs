@@ -8,10 +8,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::causal_chain::CausalChain;
+use crate::orchestrator::Orchestrator;
 use crate::types::{Action, ActionType, ExecutionResult};
 use crate::utils::value_conversion::{map_key_to_string, rtfs_value_to_json};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use rtfs::runtime::execution_outcome::CallMetadata;
+use rtfs::runtime::execution_outcome::{CallMetadata, CausalContext, HostCall};
 use rtfs::runtime::host_interface::HostInterface;
 use rtfs::runtime::security::{default_effects_for_capability, RuntimeContext};
 use rtfs::runtime::values::Value;
@@ -36,6 +37,10 @@ pub struct RuntimeHost {
     execution_context: Mutex<Option<HostPlanContext>>,
     // Step-level exposure override stack for nested steps
     step_exposure_override: Mutex<Vec<(bool, Option<Vec<String>>)>>,
+    // Step-scoped execution hints for capability calls (generic key-value pairs)
+    execution_hints: Mutex<HashMap<String, Value>>,
+    // Optional orchestrator for unified governance path
+    orchestrator: Option<Arc<Orchestrator>>,
 }
 
 impl RuntimeHost {
@@ -50,7 +55,17 @@ impl RuntimeHost {
             security_context,
             execution_context: Mutex::new(None),
             step_exposure_override: Mutex::new(Vec::new()),
+            execution_hints: Mutex::new(HashMap::new()),
+            orchestrator: None,
         }
+    }
+
+    /// Sets the orchestrator for unified governance path.
+    /// When set, capability calls are routed through the orchestrator
+    /// for hint application (retry, timeout, fallback).
+    pub fn with_orchestrator(mut self, orchestrator: Arc<Orchestrator>) -> Self {
+        self.orchestrator = Some(orchestrator);
+        self
     }
 
     /// Get a snapshot of capability metrics for a given capability id, if available.
@@ -299,6 +314,12 @@ impl RuntimeHost {
         }
 
         metadata.context = ctx_map;
+
+        // Include any step-scoped execution hints
+        if let Ok(guard) = self.execution_hints.lock() {
+            metadata.execution_hints = guard.clone();
+        }
+
         metadata
     }
 }
@@ -353,9 +374,20 @@ impl HostInterface for RuntimeHost {
         }
         let capability_args = Value::Map(call_map);
 
-        // Prepare CallMetadata with flattened context (including grounding:* from step_context)
-        let call_metadata: Option<CallMetadata> =
-            snapshot.as_ref().map(|snap| self.build_call_metadata(snap));
+        // Prepare CallMetadata - ALWAYS include execution_hints for governance
+        // Even if snapshot is None, we must pass hints to the Orchestrator
+        let call_metadata: Option<CallMetadata> = {
+            let mut metadata = snapshot
+                .as_ref()
+                .map(|snap| self.build_call_metadata(snap))
+                .unwrap_or_else(CallMetadata::new);
+
+            // Always include step-scoped execution hints (retry, timeout, fallback)
+            if let Ok(guard) = self.execution_hints.lock() {
+                metadata.execution_hints = guard.clone();
+            }
+            Some(metadata)
+        };
 
         // 2. Check execution mode and security level for dry-run simulation
         let execution_mode = self.get_execution_mode();
@@ -416,32 +448,63 @@ impl HostInterface for RuntimeHost {
             return Ok(simulated_result);
         }
 
-        // 4. Execute the capability via the marketplace without blocking current runtime
+        // 4. Execute the capability - route through Orchestrator for unified governance, or fallback to Marketplace
         let name_owned = name.to_string();
         let args_owned: Vec<Value> = args.to_vec();
-        let marketplace = self.capability_marketplace.clone();
         let runtime_handle = tokio::runtime::Handle::try_current().ok();
         let call_metadata_owned = call_metadata.clone();
 
-        let result = std::thread::spawn(move || {
-            let fut = async move {
-                let args_value = Value::List(args_owned);
-                let meta_ref = call_metadata_owned.as_ref();
-                marketplace
-                    .execute_capability_enhanced(&name_owned, &args_value, meta_ref)
-                    .await
-            };
+        let result = if let Some(orchestrator) = &self.orchestrator {
+            // Route through Orchestrator for governance (hints: retry, timeout, fallback)
+            let orchestrator = orchestrator.clone();
+            let security_context = self.security_context.clone();
 
-            if let Some(handle) = runtime_handle {
-                handle.block_on(fut)
-            } else {
-                futures::executor::block_on(fut)
-            }
-        })
-        .join()
-        .map_err(|_| {
-            RuntimeError::Generic("Thread join error during capability execution".to_string())
-        })?;
+            std::thread::spawn(move || {
+                let fut = async move {
+                    let host_call = HostCall {
+                        capability_id: name_owned,
+                        args: args_owned,
+                        security_context,
+                        causal_context: Some(CausalContext::default()),
+                        metadata: call_metadata_owned,
+                    };
+                    orchestrator.handle_host_call(&host_call).await
+                };
+
+                if let Some(handle) = runtime_handle {
+                    handle.block_on(fut)
+                } else {
+                    futures::executor::block_on(fut)
+                }
+            })
+            .join()
+            .map_err(|_| {
+                RuntimeError::Generic("Thread join error during capability execution".to_string())
+            })?
+        } else {
+            // Fallback: direct marketplace call (for tests without orchestrator)
+            let marketplace = self.capability_marketplace.clone();
+
+            std::thread::spawn(move || {
+                let fut = async move {
+                    let args_value = Value::List(args_owned);
+                    let meta_ref = call_metadata_owned.as_ref();
+                    marketplace
+                        .execute_capability_enhanced(&name_owned, &args_value, meta_ref)
+                        .await
+                };
+
+                if let Some(handle) = runtime_handle {
+                    handle.block_on(fut)
+                } else {
+                    futures::executor::block_on(fut)
+                }
+            })
+            .join()
+            .map_err(|_| {
+                RuntimeError::Generic("Thread join error during capability execution".to_string())
+            })?
+        };
 
         // 5. Log the result to the Causal Chain
         let execution_result = match &result {
@@ -575,6 +638,27 @@ impl HostInterface for RuntimeHost {
             "parent-action-id" => Some(Value::String(ctx.parent_action_id.clone())),
             _ => None,
         }
+    }
+
+    fn set_execution_hint(&self, key: &str, value: Value) -> RuntimeResult<()> {
+        if let Ok(mut guard) = self.execution_hints.lock() {
+            guard.insert(key.to_string(), value);
+        }
+        Ok(())
+    }
+
+    fn clear_execution_hint(&self, key: &str) -> RuntimeResult<()> {
+        if let Ok(mut guard) = self.execution_hints.lock() {
+            guard.remove(key);
+        }
+        Ok(())
+    }
+
+    fn clear_all_execution_hints(&self) -> RuntimeResult<()> {
+        if let Ok(mut guard) = self.execution_hints.lock() {
+            guard.clear();
+        }
+        Ok(())
     }
 }
 

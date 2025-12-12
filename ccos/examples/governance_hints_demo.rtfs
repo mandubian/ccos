@@ -1,0 +1,43 @@
+;; Governance Demo Plan: Tests Two-Tier Governance with Execution Hints
+;;
+;; This RTFS plan demonstrates:
+;; 1. Setting execution hints via ^{:runtime.learning.*} metadata
+;; 2. Calling capabilities with hints attached
+;; 3. Hint validation by Governance Kernel
+;; 4. Hint application by Orchestrator (retry, timeout, fallback)
+;;
+;; Run with: cargo run --bin governance_rtfs_demo
+
+(do
+  ;; === Test 1: Simple capability call without hints ===
+  (step "Test 1: Echo without hints")
+  (call "test.echo" {:message "Hello, CCOS!"})
+
+  ;; === Test 2: Capability call WITH retry hints ===
+  ;; The ^{...} syntax attaches metadata to the expression
+  ;; Keys starting with "runtime." are extracted as execution hints
+  (step "Test 2: Flaky call with retry hint (max-retries: 3)")
+  ^{:runtime.learning.retry {:max-retries 3 :backoff-ms 100}}
+  (call "test.flaky" {:attempt 1})
+
+  ;; === Test 3: Capability call with timeout hint ===
+  (step "Test 3: Call with timeout hint")
+  ^{:runtime.learning.timeout {:multiplier 2.0 :absolute-ms 5000}}
+  (call "test.echo" {:message "With 5s timeout"})
+
+  ;; === Test 4: Capability call with fallback hint ===
+  (step "Test 4: Call with fallback hint")
+  ^{:runtime.learning.fallback {:capability "test.fallback" :reason "primary may fail"}}
+  (call "test.might-fail" {:input "risky"})
+
+  ;; === Test 5: Combined hints ===
+  (step "Test 5: Call with multiple hints (retry + timeout)")
+  ^{:runtime.learning.retry {:max-retries 2 :backoff-ms 50}
+    :runtime.learning.timeout {:absolute-ms 10000}}
+  (call "test.echo" {:message "With retry AND timeout"})
+
+  ;; === Summary ===
+  (step "All tests completed")
+  {:status "complete"
+   :tests-run 5
+   :hints-tested ["retry" "timeout" "fallback" "combined"]})

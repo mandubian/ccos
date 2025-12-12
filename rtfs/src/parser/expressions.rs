@@ -248,39 +248,58 @@ pub(super) fn build_expression(mut pair: Pair<Rule>) -> Result<Expression, PestP
                 }
             }
         }
-        Rule::metadata => {
-            // Parse metadata like ^{:doc "..."} or ^{:key value}
+        Rule::metadata_expr => {
+            // Parse metadata expression: ^{...} expr
             let mut inner = pair.into_inner();
-            let map_pair = inner.next().ok_or_else(|| PestParseError::InvalidInput {
-                message: "metadata requires a map".to_string(),
+
+            // First child is the meta_map (either general_meta or delegation_meta)
+            let meta_pair = inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                message: "metadata_expr requires meta_map".to_string(),
                 span: Some(pair_to_source_span(&current_pair_for_span))
             })?;
 
-            // The map_pair should be a general_meta rule containing a map
-            let map_inner = map_pair.into_inner();
+            // Parse the meta_map into a HashMap
             let mut metadata_map = std::collections::HashMap::new();
-
-            // Parse the map entries
-            for entry_pair in map_inner {
-                if entry_pair.as_rule() == Rule::map_entry {
-                    let entry_span = pair_to_source_span(&entry_pair);
-                    let mut entry_inner = entry_pair.into_inner();
-                    let key_pair = entry_inner.next().ok_or_else(|| PestParseError::InvalidInput {
-                        message: "map_entry requires key".to_string(),
-                        span: Some(entry_span.clone())
-                    })?;
-                    let value_pair = entry_inner.next().ok_or_else(|| PestParseError::InvalidInput {
-                        message: "map_entry requires value".to_string(),
-                        span: Some(entry_span)
-                    })?;
-
-                    let key = build_map_key(key_pair)?;
-                    let value = build_expression(value_pair)?;
-                    metadata_map.insert(key, value);
+            for sub_pair in meta_pair.into_inner() {
+                if sub_pair.as_rule() == Rule::general_meta {
+                    for entry_pair in sub_pair.into_inner() {
+                        if entry_pair.as_rule() == Rule::map_entry {
+                            let entry_span = pair_to_source_span(&entry_pair);
+                            let mut entry_inner = entry_pair.into_inner();
+                            let key_pair = entry_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                                message: "map_entry requires key".to_string(),
+                                span: Some(entry_span.clone())
+                            })?;
+                            let value_pair = entry_inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                                message: "map_entry requires value".to_string(),
+                                span: Some(entry_span)
+                            })?;
+                            let key = build_map_key(key_pair)?;
+                            let value = build_expression(value_pair)?;
+                            metadata_map.insert(key, value);
+                        }
+                    }
+                } else if sub_pair.as_rule() == Rule::delegation_meta {
+                    // Handle delegation_meta: store as a special key
+                    let delegation_str = sub_pair.as_str().to_string();
+                    metadata_map.insert(
+                        MapKey::Keyword(Keyword("delegation".to_string())),
+                        Expression::Literal(Literal::String(delegation_str)),
+                    );
                 }
             }
 
-            Ok(Expression::Metadata(metadata_map))
+            // Second child is the actual expression
+            let expr_pair = inner.next().ok_or_else(|| PestParseError::InvalidInput {
+                message: "metadata_expr requires an expression after meta_map".to_string(),
+                span: Some(pair_to_source_span(&current_pair_for_span))
+            })?;
+            let inner_expr = build_expression(expr_pair)?;
+
+            Ok(Expression::WithMetadata {
+                meta: metadata_map,
+                expr: Box::new(inner_expr),
+            })
         }
         Rule::WHEN => Err(PestParseError::InvalidInput {
             message: "'when' keyword found in unexpected context - should only appear in match expressions".to_string(),

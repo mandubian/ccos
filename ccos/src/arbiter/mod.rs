@@ -49,6 +49,7 @@ pub mod arbiter_factory;
 pub mod delegating_arbiter;
 pub mod dummy_arbiter;
 pub mod hybrid_arbiter;
+pub mod learning_augmenter;
 pub mod llm_arbiter;
 pub mod llm_provider;
 pub mod plan_generation;
