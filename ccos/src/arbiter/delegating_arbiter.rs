@@ -1069,27 +1069,70 @@ The tool name MUST be one of: {}"#,
     ) -> Option<crate::learning::capabilities::PlanModification> {
         use crate::learning::capabilities::PlanModification;
 
-        // Map error categories to modification types
+        // Map error categories to modification types with new hint system
         let (mod_type, params, confidence) = match error_category {
             "NetworkError" => (
+                // Network errors: retry with circuit breaker protection
                 "inject_retry".to_string(),
-                serde_json::json!({"max_retries": 3, "backoff_ms": 1000}),
-                0.8,
+                serde_json::json!({
+                    "max_retries": 3,
+                    "initial_delay_ms": 1000,
+                    // Also suggest circuit breaker for repeated failures
+                    "with_circuit_breaker": true,
+                    "failure_threshold": 5,
+                    "cooldown_ms": 30000
+                }),
+                0.85,
             ),
             "TimeoutError" => (
+                // Timeout: increase timeout and add retry
                 "adjust_timeout".to_string(),
-                serde_json::json!({"timeout_multiplier": 2.0}),
-                0.7,
+                serde_json::json!({
+                    "timeout_ms": 10000,
+                    "with_retry": true,
+                    "max_retries": 2
+                }),
+                0.75,
             ),
             "MissingCapability" => (
+                // Missing capability: try synthesis first, with fallback
                 "synthesize_first".to_string(),
-                serde_json::json!({"trigger_synthesis": true}),
-                0.6,
+                serde_json::json!({
+                    "trigger_synthesis": true,
+                    "fallback_capability": "ccos.error.handler"
+                }),
+                0.65,
             ),
             "SchemaError" => (
-                "inject_validation".to_string(),
-                serde_json::json!({"validate_input": true}),
+                // Schema errors: add metrics for debugging
+                "inject_metrics".to_string(),
+                serde_json::json!({
+                    "emit_to_chain": true,
+                    "track_percentiles": false
+                }),
                 0.5,
+            ),
+            "RateLimitError" => (
+                // Rate limit: add rate limiting and retry with backoff
+                "inject_rate_limit".to_string(),
+                serde_json::json!({
+                    "requests_per_second": 5,
+                    "burst": 10,
+                    "with_retry": true,
+                    "max_retries": 3,
+                    "initial_delay_ms": 2000
+                }),
+                0.8,
+            ),
+            "LLMError" => (
+                // LLM errors: add fallback to alternative model
+                "inject_fallback".to_string(),
+                serde_json::json!({
+                    "fallback_capability": "llm.fallback_model",
+                    "with_circuit_breaker": true,
+                    "failure_threshold": 3
+                }),
+                0.7,
             ),
             _ => return None,
         };

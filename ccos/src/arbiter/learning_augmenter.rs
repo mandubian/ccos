@@ -149,21 +149,32 @@ fn apply_modification_ast(source: &str, modification: &PlanModification) -> Resu
                 .get("max_retries")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(3);
-            let backoff_ms = modification
+            let initial_delay_ms = modification
                 .parameters
-                .get("backoff_ms")
+                .get("initial_delay_ms")
+                .or_else(|| modification.parameters.get("backoff_ms")) // Backward compat
                 .and_then(|v| v.as_i64())
                 .unwrap_or(1000);
 
-            inject_retry_metadata(source, target_cap, max_retries, backoff_ms)
+            inject_retry_metadata(source, target_cap, max_retries, initial_delay_ms)
         }
         "adjust_timeout" => {
-            let multiplier = modification
+            // Support both multiplier (old) and timeout_ms (new)
+            let timeout_ms = modification
                 .parameters
-                .get("timeout_multiplier")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(2.0);
+                .get("timeout_ms")
+                .and_then(|v| v.as_u64())
+                .unwrap_or_else(|| {
+                    let multiplier = modification
+                        .parameters
+                        .get("timeout_multiplier")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(2.0);
+                    (5000.0 * multiplier) as u64
+                });
 
+            // Reuse timeout adjustment with calculated timeout
+            let multiplier = timeout_ms as f64 / 5000.0;
             inject_timeout_adjustment(source, target_cap, multiplier)
         }
         "inject_fallback" => {
@@ -174,6 +185,43 @@ fn apply_modification_ast(source: &str, modification: &PlanModification) -> Resu
                 .unwrap_or("ccos.error.handler");
 
             inject_fallback_metadata(source, target_cap, fallback_cap)
+        }
+        "inject_circuit_breaker" => {
+            let failure_threshold = modification
+                .parameters
+                .get("failure_threshold")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5);
+            let cooldown_ms = modification
+                .parameters
+                .get("cooldown_ms")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(30000);
+
+            inject_circuit_breaker_metadata(source, target_cap, failure_threshold, cooldown_ms)
+        }
+        "inject_rate_limit" => {
+            let rps = modification
+                .parameters
+                .get("requests_per_second")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10);
+            let burst = modification
+                .parameters
+                .get("burst")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5);
+
+            inject_rate_limit_metadata(source, target_cap, rps, burst)
+        }
+        "inject_metrics" => {
+            let emit_to_chain = modification
+                .parameters
+                .get("emit_to_chain")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+
+            inject_metrics_metadata(source, target_cap, emit_to_chain)
         }
         "synthesize_first" => {
             // Add a synthesis step before the capability call
@@ -197,7 +245,7 @@ fn inject_retry_metadata(
     max_retries: i64,
     backoff_ms: i64,
 ) -> Result<String, String> {
-    // Pattern: (call :target_cap ...) -> ^{:learning.retry {:max-retries N :backoff-ms M}} (call :target_cap ...)
+    // Pattern: (call :target_cap ...) -> ^{:runtime.learning.retry {:max-retries N :initial-delay-ms M}} (call :target_cap ...)
     let cap_pattern = format!("(call :{}", target_cap.replace('.', "."));
 
     if !source.contains(&cap_pattern) {
@@ -208,7 +256,7 @@ fn inject_retry_metadata(
         }
         // Use the alternate pattern for replacement
         let metadata = format!(
-            "^{{:learning.retry {{:max-retries {} :backoff-ms {}}}}} ",
+            "^{{:runtime.learning.retry {{:max-retries {} :initial-delay-ms {}}}}} ",
             max_retries, backoff_ms
         );
         return Ok(source.replace(&alt_pattern, &format!("{}{}", metadata, alt_pattern)));
@@ -216,7 +264,7 @@ fn inject_retry_metadata(
 
     // Insert metadata before the call
     let metadata = format!(
-        "^{{:learning.retry {{:max-retries {} :backoff-ms {}}}}} ",
+        "^{{:runtime.learning.retry {{:max-retries {} :initial-delay-ms {}}}}} ",
         max_retries, backoff_ms
     );
 
@@ -232,14 +280,19 @@ fn inject_timeout_adjustment(
     target_cap: &str,
     multiplier: f64,
 ) -> Result<String, String> {
-    // Pattern: (call :target_cap ...) -> ^{:learning.timeout {:multiplier M}} (call :target_cap ...)
+    // Pattern: (call :target_cap ...) -> ^{:runtime.learning.timeout {:timeout-ms M}} (call :target_cap ...)
     let cap_pattern = format!("(call :{}", target_cap.replace('.', "."));
 
     if !source.contains(&cap_pattern) {
         return Err(format!("Capability {} not found in plan", target_cap));
     }
 
-    let metadata = format!("^{{:learning.timeout {{:multiplier {}}}}} ", multiplier);
+    // Convert multiplier to timeout-ms (assume 5s base timeout * multiplier)
+    let timeout_ms = (5000.0 * multiplier) as u64;
+    let metadata = format!(
+        "^{{:runtime.learning.timeout {{:timeout-ms {}}}}} ",
+        timeout_ms
+    );
     let result = source.replace(&cap_pattern, &format!("{}{}", metadata, cap_pattern));
 
     Ok(result)
@@ -258,7 +311,7 @@ fn inject_fallback_metadata(
     }
 
     let metadata = format!(
-        "^{{:learning.fallback {{:capability \"{}\"}}}} ",
+        "^{{:runtime.learning.fallback {{:capability \"{}\"}}}} ",
         fallback_cap
     );
     let result = source.replace(&cap_pattern, &format!("{}{}", metadata, cap_pattern));
@@ -304,6 +357,71 @@ fn skip_capability(source: &str, target_cap: &str) -> Result<String, String> {
             cap_pattern
         ),
     );
+
+    Ok(result)
+}
+
+/// Inject circuit breaker metadata
+fn inject_circuit_breaker_metadata(
+    source: &str,
+    target_cap: &str,
+    failure_threshold: u64,
+    cooldown_ms: u64,
+) -> Result<String, String> {
+    let cap_pattern = format!("(call :{}", target_cap.replace('.', "."));
+
+    if !source.contains(&cap_pattern) {
+        return Err(format!("Capability {} not found in plan", target_cap));
+    }
+
+    let metadata = format!(
+        "^{{:runtime.learning.circuit-breaker {{:failure-threshold {} :cooldown-ms {}}}}} ",
+        failure_threshold, cooldown_ms
+    );
+    let result = source.replace(&cap_pattern, &format!("{}{}", metadata, cap_pattern));
+
+    Ok(result)
+}
+
+/// Inject rate limit metadata
+fn inject_rate_limit_metadata(
+    source: &str,
+    target_cap: &str,
+    requests_per_second: u64,
+    burst: u64,
+) -> Result<String, String> {
+    let cap_pattern = format!("(call :{}", target_cap.replace('.', "."));
+
+    if !source.contains(&cap_pattern) {
+        return Err(format!("Capability {} not found in plan", target_cap));
+    }
+
+    let metadata = format!(
+        "^{{:runtime.learning.rate-limit {{:requests-per-second {} :burst {}}}}} ",
+        requests_per_second, burst
+    );
+    let result = source.replace(&cap_pattern, &format!("{}{}", metadata, cap_pattern));
+
+    Ok(result)
+}
+
+/// Inject metrics metadata for observability
+fn inject_metrics_metadata(
+    source: &str,
+    target_cap: &str,
+    emit_to_chain: bool,
+) -> Result<String, String> {
+    let cap_pattern = format!("(call :{}", target_cap.replace('.', "."));
+
+    if !source.contains(&cap_pattern) {
+        return Err(format!("Capability {} not found in plan", target_cap));
+    }
+
+    let metadata = format!(
+        "^{{:runtime.learning.metrics {{:label \"{}\" :emit-to-chain {}}}}} ",
+        target_cap, emit_to_chain
+    );
+    let result = source.replace(&cap_pattern, &format!("{}{}", metadata, cap_pattern));
 
     Ok(result)
 }
