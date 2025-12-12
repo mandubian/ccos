@@ -30,7 +30,8 @@ Enable CCOS agents to **evolve their own capabilities** by treating the planner 
 | Phase 3: Governance & Safety | ✅ **Complete** | Trust levels, approval gates, bounded exploration, versioning, causal chain recording |
 | Phase 4: Introspection | ✅ **Complete** | `introspect.*` capabilities, demos, tests |
 | Phase 5: Evolutionary Agents | ✅ **Complete** | `AgentIdentity`, `AgentMemory`, `agent.*` capabilities |
-| Phase 6: Autonomous Learning | ⬜ **Planned** | Pattern extraction, pre-exec recall, auto-remediation, Arbiter integration |
+| Phase 6: Execution Hints | ✅ **Complete** | Modular HintHandlerRegistry, 7 handlers, runtime registration API |
+| Phase 7: Autonomous Learning | ⬜ **Planned** | Pattern extraction, pre-exec recall, auto-remediation, Arbiter integration |
 
 ### Implemented Components
 
@@ -54,6 +55,13 @@ Enable CCOS agents to **evolve their own capabilities** by treating the planner 
 - [agents/identity.rs](../ccos/src/agents/identity.rs): `AgentIdentity`, `AgentRegistry` with JSONL persistence
 - [agents/memory.rs](../ccos/src/agents/memory.rs): `AgentMemory` wrapping WorkingMemory + `LearnedPattern`
 - [agents/capabilities.rs](../ccos/src/agents/capabilities.rs): `agent.create`, `agent.recall`, `agent.learn`, `agent.list`
+
+**Phase 6 - Execution Hints**:
+- [hints/registry.rs](../ccos/src/hints/registry.rs): `HintHandlerRegistry` with dynamic handler chaining
+- [hints/types.rs](../ccos/src/hints/types.rs): `HintHandler` trait, `ExecutionContext`, `BoxFuture`, `NextExecutor`
+- Built-in handlers: Retry, Timeout, Fallback, RateLimit, CircuitBreaker, Cache, Metrics
+- Runtime registration API: `register()`, `unregister()`, `list_handlers()`, `handler_info()`
+- Full spec: [040-execution-hints.md](../docs/ccos/specs/040-execution-hints.md)
 
 **New Causal Chain ActionTypes**:
 - `CapabilityVersionCreated`, `CapabilityRollback` - Version tracking
