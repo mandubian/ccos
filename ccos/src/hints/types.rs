@@ -72,6 +72,11 @@ pub trait HintHandler: Send + Sync {
     /// If two handlers have the same priority, registration order is used.
     fn priority(&self) -> u32;
 
+    /// Human-readable description of this handler's behavior.
+    fn description(&self) -> &str {
+        "No description available"
+    }
+
     /// Optional: Validate hint value format.
     /// Returns Ok(()) if valid, Err with message if invalid.
     fn validate_hint(&self, _hint_value: &Value) -> RuntimeResult<()> {

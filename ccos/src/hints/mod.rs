@@ -25,7 +25,8 @@ mod registry;
 mod types;
 
 pub use handlers::{
-    FallbackHintHandler, RateLimitHintHandler, RetryHintHandler, TimeoutHintHandler,
+    CacheHintHandler, CircuitBreakerHintHandler, FallbackHintHandler, MetricsHintHandler,
+    RateLimitHintHandler, RetryHintHandler, TimeoutHintHandler,
 };
 pub use registry::HintHandlerRegistry;
 pub use types::{BoxFuture, ExecutionContext, HintHandler, NextExecutor};
