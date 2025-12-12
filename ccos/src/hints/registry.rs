@@ -49,6 +49,10 @@ impl HintHandlerRegistry {
     /// Creates a registry with the default built-in handlers.
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
+        // Register in any order - they get sorted by priority
+        registry.register(Arc::new(super::handlers::MetricsHintHandler::new()));
+        registry.register(Arc::new(super::handlers::CacheHintHandler::new()));
+        registry.register(Arc::new(super::handlers::CircuitBreakerHintHandler::new()));
         registry.register(Arc::new(super::handlers::RateLimitHintHandler::new()));
         registry.register(Arc::new(super::handlers::RetryHintHandler::new()));
         registry.register(Arc::new(super::handlers::TimeoutHintHandler::new()));
@@ -60,6 +64,38 @@ impl HintHandlerRegistry {
     pub fn register(&mut self, handler: ArcHintHandler) {
         self.handlers.push(handler);
         self.handlers.sort_by_key(|h| h.priority());
+    }
+
+    /// Unregisters a handler by its hint key.
+    /// Returns true if a handler was removed.
+    pub fn unregister(&mut self, hint_key: &str) -> bool {
+        let before = self.handlers.len();
+        self.handlers.retain(|h| h.hint_key() != hint_key);
+        self.handlers.len() < before
+    }
+
+    /// Returns a list of all registered handler keys in priority order.
+    pub fn list_handlers(&self) -> Vec<&str> {
+        self.handlers.iter().map(|h| h.hint_key()).collect()
+    }
+
+    /// Returns handler metadata as (key, priority, description) tuples.
+    pub fn handler_info(&self) -> Vec<(&str, u32, &str)> {
+        self.handlers
+            .iter()
+            .map(|h| (h.hint_key(), h.priority(), h.description()))
+            .collect()
+    }
+
+    /// Creates a new registry with only the specified handler types.
+    /// Useful for creating minimal registries for testing or specific use cases.
+    pub fn with_handlers<F>(builder: F) -> Self
+    where
+        F: FnOnce(&mut Self),
+    {
+        let mut registry = Self::new();
+        builder(&mut registry);
+        registry
     }
 
     /// Returns the number of registered handlers.
