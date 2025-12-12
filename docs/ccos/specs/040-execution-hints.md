@@ -170,8 +170,40 @@ All handlers can log to the causal chain for audit purposes:
 | Registry | `ccos/src/hints/registry.rs` |
 | Handlers | `ccos/src/hints/handlers/*.rs` |
 
+## Learning Integration
+
+The hint system integrates with the learning loop to automatically inject hints based on observed failures:
+
+### Automatic Hint Injection Flow
+
+```
+Capability Fails → CausalChain → extract_patterns → WorkingMemory
+                                        ↓
+Next Execution → recall_patterns_for_intent → pattern_to_modification
+                                        ↓
+augment_plan_with_learning → inject_*_metadata → ^{:runtime.learning.*}
+                                        ↓
+HintHandlerRegistry.execute_with_hints → 7 Handlers Applied
+```
+
+### Error→Hint Mapping
+
+| Error Category | Injected Hints |
+|----------------|----------------|
+| NetworkError | `retry` + `circuit-breaker` |
+| TimeoutError | `timeout` (increased) + `retry` |
+| MissingCapability | `fallback` (to synthesis) |
+| SchemaError | `metrics` (for debugging) |
+| RateLimitError | `rate-limit` + `retry` |
+| LLMError | `fallback` + `circuit-breaker` |
+
+### Related Files
+- `arbiter/learning_augmenter.rs` - Metadata injection functions
+- `arbiter/delegating_arbiter.rs` - Pattern→modification mapping
+
 ## Related Specifications
 
 - [003-causal-chain.md](003-causal-chain.md) - Audit trail and provenance
 - [006-arbiter-and-cognitive-control.md](006-arbiter-and-cognitive-control.md) - Plan generation
 - [030-capability-system-architecture.md](030-capability-system-architecture.md) - Capability execution
+- [035-two-tier-governance.md](035-two-tier-governance.md) - Governance architecture
