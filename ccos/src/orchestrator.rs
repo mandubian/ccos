@@ -2024,12 +2024,12 @@ mod tests {
             tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(
+        let _orchestrator = Arc::new(Orchestrator::new(
             Arc::clone(&chain),
             Arc::clone(&graph),
             Arc::clone(&marketplace),
             Arc::clone(&plan_archive),
-        );
+        ));
 
         // Seed an Active intent
         let stored = StorableIntent::new("test goal".to_string());
@@ -2111,12 +2111,12 @@ mod tests {
             tokio::sync::RwLock::new(crate::capabilities::registry::CapabilityRegistry::new()),
         )));
         let plan_archive = Arc::new(PlanArchive::new());
-        let mut _orchestrator = Orchestrator::new(
+        let _orchestrator = Arc::new(Orchestrator::new(
             Arc::clone(&chain),
             Arc::clone(&graph),
             Arc::clone(&marketplace),
             Arc::clone(&plan_archive),
-        );
+        ));
 
         // Seed an Active intent
         let stored = StorableIntent::new("test goal".to_string());
