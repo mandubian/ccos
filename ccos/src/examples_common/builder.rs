@@ -19,7 +19,9 @@ use crate::ccos_core::CCOS;
 use crate::discovery::embedding_service::EmbeddingService;
 use crate::intent_graph::IntentGraph;
 use crate::planner::modular_planner::decomposition::hybrid::HybridConfig;
-use crate::planner::modular_planner::decomposition::llm_adapter::CcosLlmAdapter;
+use crate::planner::modular_planner::decomposition::llm_adapter::{
+    CcosLlmAdapter, LlmInteractionCapture,
+};
 use crate::planner::modular_planner::decomposition::{
     DecompositionError, EmbeddingProvider, HybridDecomposition,
 };
@@ -81,7 +83,7 @@ impl CcosEnv {
         profile_name: &str,
     ) -> Result<Box<dyn LlmProvider>, Box<dyn Error + Send + Sync>> {
         if let Some(profile) = find_llm_profile(&self.agent_config, profile_name) {
-            println!("   ✅ Found LLM profile '{}'", profile_name);
+            ccos_println!("   ✅ Found LLM profile '{}'", profile_name);
 
             // Resolve API key
             let api_key = profile.api_key.clone().or_else(|| {
@@ -100,7 +102,7 @@ impl CcosEnv {
                     "local" => LlmProviderType::Local,
                     "openrouter" => LlmProviderType::OpenAI, // OpenRouter uses OpenAI client
                     _ => {
-                        println!(
+                        ccos_println!(
                             "   ⚠️ Unknown provider '{}', defaulting to OpenAI",
                             profile.provider
                         );
@@ -156,7 +158,7 @@ impl CcosEnvBuilder {
     }
 
     pub async fn build(self) -> Result<CcosEnv, Box<dyn Error + Send + Sync>> {
-        println!("🔧 Initializing CCOS Environment...");
+        ccos_println!("🔧 Initializing CCOS Environment...");
         let agent_config = load_agent_config(&self.config_path)?;
 
         // Ensure delegation is enabled for LLM
@@ -188,14 +190,14 @@ impl CcosEnvBuilder {
         ccos.get_capability_marketplace()
             .set_session_pool(session_pool.clone())
             .await;
-        println!("   ✅ Session pool configured with MCPSessionHandler");
+        ccos_println!("   ✅ Session pool configured with MCPSessionHandler");
 
         // 1. Use IntentGraph from CCOS
-        println!("🔧 Using IntentGraph from CCOS...");
+        ccos_println!("🔧 Using IntentGraph from CCOS...");
         let intent_graph = ccos.get_intent_graph();
 
         // 2. Ingest marketplace into Catalog (so capabilities are searchable)
-        println!("🔍 Indexing capabilities in catalog...");
+        ccos_println!("🔍 Indexing capabilities in catalog...");
         ccos.get_catalog()
             .ingest_marketplace(&ccos.get_capability_marketplace())
             .await;
@@ -245,6 +247,9 @@ pub struct ModularPlannerBuilder {
 
     // LLM Profile override
     pub profile_name: String,
+
+    // Optional LLM trace callback for TUI integration
+    pub llm_trace_callback: Option<Arc<dyn Fn(LlmInteractionCapture) + Send + Sync>>,
 }
 
 impl Default for ModularPlannerBuilder {
@@ -260,6 +265,7 @@ impl Default for ModularPlannerBuilder {
             confirm_llm: false,
             intent_namespace: "demo".to_string(),
             profile_name: "openrouter_free:balanced".to_string(),
+            llm_trace_callback: None,
         }
     }
 }
@@ -310,26 +316,39 @@ impl ModularPlannerBuilder {
         self
     }
 
+    /// Set the LLM trace callback for capturing prompts/responses (used by TUI)
+    pub fn with_llm_trace_callback(
+        mut self,
+        callback: Arc<dyn Fn(LlmInteractionCapture) + Send + Sync>,
+    ) -> Self {
+        self.llm_trace_callback = Some(callback);
+        self
+    }
+
     pub async fn build(self) -> Result<ModularPlannerEnv, Box<dyn Error + Send + Sync>> {
         // 1. Build base CCOS environment
         let env = self.env_builder.build().await?;
 
         // 2. Wrap the CCOS catalog for the planner
-        println!("\n🔍 Setting up capability catalog adapter...");
+        ccos_println!("\n🔍 Setting up capability catalog adapter...");
         let catalog = Arc::new(CcosCatalogAdapter::new(env.ccos.get_catalog()));
 
         // 3. Create decomposition strategy (Hybrid: Pattern + LLM)
-        println!("\n📐 Setting up decomposition strategy...");
+        ccos_println!("\n📐 Setting up decomposition strategy...");
 
         let decomposition: Box<dyn DecompositionStrategy> = {
             match env.create_llm_provider(&self.profile_name).await {
                 Ok(provider) => {
-                    let adapter = Arc::new(CcosLlmAdapter::new(provider));
+                    let adapter = if let Some(callback) = self.llm_trace_callback.clone() {
+                        Arc::new(CcosLlmAdapter::new_with_tracing(provider, callback))
+                    } else {
+                        Arc::new(CcosLlmAdapter::new(provider))
+                    };
                     let mut hybrid = HybridDecomposition::new().with_llm(adapter);
 
                     // If pure LLM requested, configure hybrid to skip patterns
                     if self.pure_llm {
-                        println!("   🤖 Pure LLM mode enabled (skipping patterns)");
+                        ccos_println!("   🤖 Pure LLM mode enabled (skipping patterns)");
                         // Set pattern threshold > 1.0 to ensure patterns never match
                         hybrid = hybrid.with_config(HybridConfig {
                             pattern_confidence_threshold: 2.0,
@@ -343,7 +362,9 @@ impl ModularPlannerBuilder {
                     // Inject embedding provider if enabled
                     if self.use_embeddings {
                         if let Some(service_for_decomp) = EmbeddingService::from_env() {
-                            println!("   ✅ Enabled semantic tool filtering for decomposition");
+                            ccos_println!(
+                                "   ✅ Enabled semantic tool filtering for decomposition"
+                            );
                             let adapter =
                                 Arc::new(EmbeddingServiceAdapter::new(service_for_decomp));
                             hybrid = hybrid.with_embedding(adapter);
@@ -353,7 +374,7 @@ impl ModularPlannerBuilder {
                     Box::new(hybrid)
                 }
                 Err(e) => {
-                    println!(
+                    ccos_println!(
                         "   ⚠️ Failed to create LLM provider: {}. Falling back to Pattern.",
                         e
                     );
@@ -384,23 +405,23 @@ impl ModularPlannerBuilder {
 
             if self.use_embeddings {
                 if let Some(embedding_service) = EmbeddingService::from_env() {
-                    println!(
+                    ccos_println!(
                         "   ✅ Using embedding-based scoring ({})",
                         embedding_service.provider_description()
                     );
                     base.with_embedding_service(embedding_service)
                 } else {
-                    println!(
+                    ccos_println!(
                         "   ⚠️ --use-embeddings specified but no embedding provider configured."
                     );
 
-                    println!("      Set LOCAL_EMBEDDING_URL (e.g., http://localhost:11434/api) for Ollama");
-                    println!("      Or OPENROUTER_API_KEY for remote embeddings");
-                    println!("      Falling back to heuristic scoring.");
+                    ccos_println!("      Set LOCAL_EMBEDDING_URL (e.g., http://localhost:11434/api) for Ollama");
+                    ccos_println!("      Or OPENROUTER_API_KEY for remote embeddings");
+                    ccos_println!("      Falling back to heuristic scoring.");
                     base
                 }
             } else {
-                println!("   📊 Using heuristic-based scoring (use --use-embeddings for semantic matching)");
+                ccos_println!("   📊 Using heuristic-based scoring (use --use-embeddings for semantic matching)");
                 base
             }
         };
@@ -443,16 +464,16 @@ impl ModularPlannerBuilder {
             .with_no_cache(self.no_cache);
 
         if self.discover_mcp {
-            println!(
+            ccos_println!(
                 "   ✅ Enabled MCP Resolution (cache: {})",
                 cache_dir.display()
             );
             if self.no_cache {
-                println!("   🔄 Cache disabled, will refresh from server");
+                ccos_println!("   🔄 Cache disabled, will refresh from server");
             }
             composite_resolution.add_strategy(Box::new(mcp_resolution));
         } else {
-            println!("   ⏭️ Skipping MCP Resolution (use --discover-mcp to enable)");
+            ccos_println!("   ⏭️ Skipping MCP Resolution (use --discover-mcp to enable)");
         }
 
         // 5. Create the modular planner
