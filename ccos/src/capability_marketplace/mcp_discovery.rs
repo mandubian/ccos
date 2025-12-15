@@ -545,7 +545,7 @@ impl MCPDiscoveryProvider {
             .await
         {
             Ok((Some(schema), maybe_sample)) => {
-                eprintln!(
+                ccos_eprintln!(
                     "✅ MCP Discovery: Inferred output schema for '{}'",
                     tool.name
                 );
@@ -554,7 +554,7 @@ impl MCPDiscoveryProvider {
             Ok((None, Some(sample))) => Ok((None, Some(sample))),
             Ok((None, None)) => Ok((None, None)),
             Err(err) => {
-                eprintln!(
+                ccos_eprintln!(
                     "⚠️ MCP Discovery: Output schema introspection failed for '{}': {}",
                     tool.name, err
                 );
@@ -1027,23 +1027,23 @@ impl MCPDiscoveryProvider {
                                     generated_at: chrono::Utc::now().to_rfc3339(),
                                 });
                             } else {
-                                eprintln!(
+                                ccos_eprintln!(
                                     "Found symbol '{}' instead of 'capability' at top level",
                                     sym.0
                                 );
                             }
                         } else {
-                            eprintln!("Empty list at top level");
+                            ccos_eprintln!("Empty list at top level");
                         }
                     } else {
-                        eprintln!(
+                        ccos_eprintln!(
                             "Top level item {} is not a List or FunctionCall: {:?}",
                             i, expr
                         );
                     }
                 }
                 _ => {
-                    eprintln!(
+                    ccos_eprintln!(
                         "Top level item {} is not a Capability or Expression: {:?}",
                         i, top_level
                     );
@@ -2406,7 +2406,7 @@ impl CapabilityDiscovery for MCPDiscoveryProvider {
         // Discover tools
         match self.discover_tools().await {
             Ok(tools) => {
-                eprintln!(
+                ccos_eprintln!(
                     "Discovered {} MCP tools from server: {}",
                     tools.len(),
                     self.config.name
@@ -2414,7 +2414,7 @@ impl CapabilityDiscovery for MCPDiscoveryProvider {
                 all_capabilities.extend(tools);
             }
             Err(e) => {
-                eprintln!(
+                ccos_eprintln!(
                     "MCP tools discovery failed for server {}: {}",
                     self.config.name, e
                 );
@@ -2424,7 +2424,7 @@ impl CapabilityDiscovery for MCPDiscoveryProvider {
         // Discover resources
         match self.discover_resources().await {
             Ok(resources) => {
-                eprintln!(
+                ccos_eprintln!(
                     "Discovered {} MCP resources from server: {}",
                     resources.len(),
                     self.config.name
@@ -2432,7 +2432,7 @@ impl CapabilityDiscovery for MCPDiscoveryProvider {
                 all_capabilities.extend(resources);
             }
             Err(e) => {
-                eprintln!(
+                ccos_eprintln!(
                     "MCP resources discovery failed for server {}: {}",
                     self.config.name, e
                 );

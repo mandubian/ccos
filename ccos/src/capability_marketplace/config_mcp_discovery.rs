@@ -142,7 +142,7 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
         let configs = self.get_all_server_configs();
         let mut all_manifests = Vec::new();
 
-        println!(
+        ccos_println!(
             "🔍 LocalConfigMcpDiscovery found {} servers configuration",
             configs.len()
         );
@@ -151,7 +151,7 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
         let unified_service = Arc::new(crate::mcp::core::MCPDiscoveryService::new());
 
         for config in configs {
-            println!(
+            ccos_println!(
                 "   👉 Discovering from server: {} ({})",
                 config.name, config.endpoint
             );
@@ -178,11 +178,11 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
                 .await
             {
                 Ok(manifests) => {
-                    println!("      ✅ Found {} capabilities", manifests.len());
+                    ccos_println!("      ✅ Found {} capabilities", manifests.len());
                     all_manifests.extend(manifests);
                 }
                 Err(e) => {
-                    println!("      ⚠️  Discovery failed for {}: {}", config.name, e);
+                    ccos_println!("      ⚠️  Discovery failed for {}: {}", config.name, e);
                 }
             }
         }

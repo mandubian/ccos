@@ -1,6 +1,32 @@
 // CCOS Library
 // Cognitive Computing Operating System - orchestration layer built on RTFS
 
+/// Quiet-mode-aware printing macros
+/// When CCOS_QUIET=1|true|on, suppress console output (for TUI mode)
+#[macro_export]
+macro_rules! ccos_println {
+    ($($arg:tt)*) => {{
+        let quiet = std::env::var("CCOS_QUIET")
+            .map(|v| { let v = v.to_lowercase(); v == "1" || v == "true" || v == "on" })
+            .unwrap_or(false);
+        if !quiet {
+            println!($($arg)*);
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! ccos_eprintln {
+    ($($arg:tt)*) => {{
+        let quiet = std::env::var("CCOS_QUIET")
+            .map(|v| { let v = v.to_lowercase(); v == "1" || v == "true" || v == "on" })
+            .unwrap_or(false);
+        if !quiet {
+            eprintln!($($arg)*);
+        }
+    }};
+}
+
 // Include the CCOS module structure
 // AgentRegistry migration: agent module removed (deprecated, use CapabilityMarketplace with :kind :agent)
 pub mod agents;
@@ -28,6 +54,7 @@ pub mod security_policies;
 pub mod storage;
 pub mod storage_backends;
 pub mod synthesis;
+pub mod tui;
 pub mod types;
 pub mod wm_integration;
 

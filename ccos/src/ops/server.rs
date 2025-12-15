@@ -516,8 +516,10 @@ pub async fn save_discovered_tools(
     // Find workspace root to ensure we save to the correct capabilities/ directory
     let workspace_root = find_workspace_root();
 
-    // Debug: log the workspace root being used
-    eprintln!("📁 Using workspace root: {}", workspace_root.display());
+    // Debug: log the workspace root being used (only in debug mode)
+    if std::env::var("CCOS_DEBUG").is_ok() {
+        eprintln!("📁 Using workspace root: {}", workspace_root.display());
+    }
 
     // Save to capabilities/servers/pending/{server_id}/capabilities.rtfs
     // This matches the approval flow which moves files from pending to approved
@@ -536,7 +538,7 @@ pub async fn save_discovered_tools(
     let capabilities_path = capabilities_file.to_string_lossy().to_string();
 
     // Check if capabilities file already exists (from a previous introspection)
-    if capabilities_file.exists() {
+    if capabilities_file.exists() && std::env::var("CCOS_DEBUG").is_ok() {
         // Check if this is the same server (by comparing server name/endpoint)
         // If it's the same, we can safely overwrite (update)
         // If it's different, we should warn or merge
