@@ -103,7 +103,7 @@ const AUTO_REPAIR_PROMPT_VERSION: &str = "v1";
 
 static DEFAULT_REPAIR_GRAMMAR_HINTS: Lazy<Vec<String>> = Lazy::new(|| {
     load_grammar_hints_from_prompt_store().unwrap_or_else(|err| {
-        eprintln!(
+        ccos_eprintln!(
             "⚠️  Falling back to built-in auto-repair grammar hints: {}",
             err
         );
@@ -632,7 +632,7 @@ impl CCOS {
             let cfg = delegating_arbiter.get_llm_config();
             let provider_type = format!("{:?}", cfg.provider_type);
             let model = &cfg.model;
-            eprintln!("🤖 Arbiter using {} (model: {})", provider_type, model);
+            ccos_eprintln!("🤖 Arbiter using {} (model: {})", provider_type, model);
         }
 
         // The delegating_arbiter is now the primary arbiter
@@ -647,7 +647,7 @@ impl CCOS {
             ));
 
         if let Err(err) = missing_capability_config.validate() {
-            eprintln!(
+            ccos_eprintln!(
                 "⚠️  Missing capability configuration invalid: {}. Falling back to environment defaults.",
                 err
             );

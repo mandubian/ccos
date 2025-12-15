@@ -126,10 +126,10 @@ impl MCPDiscoveryService {
     ) -> RuntimeResult<Vec<DiscoveredMCPTool>> {
         // Check for approved RTFS capability files first (for non-MCP servers)
         if !options.ignore_approved_files {
-            eprintln!("🔍 Checking approved servers for: {}", server_config.name);
+            ccos_eprintln!("🔍 Checking approved servers for: {}", server_config.name);
             match self.approval_queue.list_approved() {
                 Ok(approved) => {
-                    eprintln!("📋 Loaded {} approved server(s) from queue", approved.len());
+                    ccos_eprintln!("📋 Loaded {} approved server(s) from queue", approved.len());
                     log::debug!("Loaded {} approved server(s) from queue", approved.len());
 
                     // Try to find matching approved server
@@ -150,7 +150,7 @@ impl MCPDiscoveryService {
                             || s.server_info.name == server_config.name
                             || s.server_info.endpoint == server_config.endpoint;
                         if matches {
-                            eprintln!(
+                            ccos_eprintln!(
                                 "✅ Found approved server match: {} (normalized: {})",
                                 s.server_info.name, approved_name_normalized
                             );
@@ -221,7 +221,7 @@ impl MCPDiscoveryService {
                                     );
                                 } else {
                                     // Keep going to MCP discovery if no files found
-                                    eprintln!("⚠️  No RTFS capability files found for approved server: {} (searched in {})",
+                                    ccos_eprintln!("⚠️  No RTFS capability files found for approved server: {} (searched in {})",
                                         approved_server.server_info.name,
                                         approved_dir.display()
                                     );
@@ -231,7 +231,7 @@ impl MCPDiscoveryService {
 
                         if !files_to_load.is_empty() {
                             // Load RTFS capability files instead of connecting via MCP
-                            eprintln!(
+                            ccos_eprintln!(
                                 "🔄 Loading RTFS capabilities for approved server: {}",
                                 approved_server.server_info.name
                             );
@@ -271,7 +271,7 @@ impl MCPDiscoveryService {
                             );
 
                             if !files_to_load.is_empty() {
-                                eprintln!(
+                                ccos_eprintln!(
                                     "📂 Found {} RTFS file(s) in approved directory for: {} (skipping MCP)",
                                     files_to_load.len(),
                                     server_config.name
@@ -320,7 +320,7 @@ impl MCPDiscoveryService {
                             }
                         }
 
-                        eprintln!(
+                        ccos_eprintln!(
                             "ℹ️  No approved RTFS files found for: {} (will try MCP)",
                             server_config.name
                         );
@@ -333,7 +333,7 @@ impl MCPDiscoveryService {
                 }
             }
         } else {
-            eprintln!("ℹ️  Ignoring approved files (forced discovery)");
+            ccos_eprintln!("ℹ️  Ignoring approved files (forced discovery)");
         }
 
         // Check cache first if enabled
@@ -487,7 +487,7 @@ impl MCPDiscoveryService {
         let mut discovered_tools = Vec::new();
         let mut errors = Vec::new();
 
-        eprintln!("📂 Loading from {}", approved_server.server_info.name);
+        ccos_eprintln!("📂 Loading from {}", approved_server.server_info.name);
 
         let approved_roots = [
             std::path::Path::new("capabilities/servers/approved").to_path_buf(),
@@ -521,7 +521,7 @@ impl MCPDiscoveryService {
 
             if !full_path.exists() {
                 let err_msg = format!("Capability file not found: {}", full_path.display());
-                eprintln!("⚠️  {}", err_msg);
+                ccos_eprintln!("⚠️  {}", err_msg);
                 log::warn!("{}", err_msg);
                 errors.push(err_msg);
                 continue;
@@ -569,13 +569,13 @@ impl MCPDiscoveryService {
 
                     // Compact summary line
                     if failed_caps.is_empty() {
-                        eprintln!(
+                        ccos_eprintln!(
                             "   ✅ Loaded {} capabilities from {}",
                             success_count,
                             full_path.file_name().unwrap_or_default().to_string_lossy()
                         );
                     } else {
-                        eprintln!(
+                        ccos_eprintln!(
                             "   ⚠️  Loaded {}/{} capabilities from {} ({} failed)",
                             success_count,
                             module.capabilities.len(),
@@ -583,14 +583,14 @@ impl MCPDiscoveryService {
                             failed_caps.len()
                         );
                         for err in &failed_caps {
-                            eprintln!("      ❌ {}", err);
+                            ccos_eprintln!("      ❌ {}", err);
                         }
                     }
                 }
                 Err(e) => {
                     let err_msg =
                         format!("Failed to load RTFS file {}: {}", full_path.display(), e);
-                    eprintln!("❌ {}", err_msg);
+                    ccos_eprintln!("❌ {}", err_msg);
                     log::warn!("{}", err_msg);
                     errors.push(err_msg);
                 }
@@ -609,7 +609,7 @@ impl MCPDiscoveryService {
             )));
         }
 
-        eprintln!(
+        ccos_eprintln!(
             "✅ Successfully loaded {} capability(ies) from approved server: {}",
             discovered_tools.len(),
             approved_server.server_info.name
@@ -1019,7 +1019,7 @@ impl MCPDiscoveryService {
 
         // Skip export if loading from approved files (they're already saved)
         if is_approved_with_files {
-            eprintln!("ℹ️  Capabilities loaded from approved RTFS files - skipping export");
+            ccos_eprintln!("ℹ️  Capabilities loaded from approved RTFS files - skipping export");
             // Still register in marketplace if requested (but don't export)
             if options.register_in_marketplace {
                 for manifest in &manifests {
@@ -1082,21 +1082,21 @@ impl MCPDiscoveryService {
 
         // Warn if capabilities already exist
         if !existing_capabilities.is_empty() || export_file_exists {
-            eprintln!();
-            eprintln!("⚠️  Warning: Some capabilities were already discovered:");
+            ccos_eprintln!();
+            ccos_eprintln!("⚠️  Warning: Some capabilities were already discovered:");
             if !existing_capabilities.is_empty() {
-                eprintln!(
+                ccos_eprintln!(
                     "   • {} capability(ies) already registered in marketplace:",
                     existing_capabilities.len()
                 );
                 for cap_id in &existing_capabilities {
-                    eprintln!("     - {}", cap_id);
+                    ccos_eprintln!("     - {}", cap_id);
                 }
             }
             if export_file_exists {
-                eprintln!("   • RTFS export file already exists for this server");
+                ccos_eprintln!("   • RTFS export file already exists for this server");
             }
-            eprintln!();
+            ccos_eprintln!();
 
             // Ask for confirmation before proceeding
             print!("Continue and overwrite? (y/n): ");
@@ -1112,7 +1112,7 @@ impl MCPDiscoveryService {
             let confirm = confirm.trim().to_lowercase();
 
             if confirm != "y" && confirm != "yes" {
-                eprintln!("   Skipping registration and export.");
+                ccos_eprintln!("   Skipping registration and export.");
                 return Ok(manifests); // Return manifests but don't register/export
             }
         }
@@ -1220,7 +1220,7 @@ impl MCPDiscoveryService {
         fs::write(&module_file, rtfs_content).map_err(|e| {
             RuntimeError::Generic(format!("Failed to write RTFS module file: {}", e))
         })?;
-        println!(
+        ccos_println!(
             "  💾 Exported {} capabilities to {}",
             manifests.len(),
             module_file.display()

@@ -507,7 +507,7 @@ impl CapabilityMarketplace {
                             count
                         ));
                     } else {
-                        println!("📦 Loaded {} previously discovered capabilities", count);
+                        ccos_println!("📦 Loaded {} previously discovered capabilities", count);
                     }
                 }
             }
@@ -576,7 +576,7 @@ impl CapabilityMarketplace {
                 }
                 Err(e) => {
                     // Log discovery errors but don't fail bootstrap
-                    eprintln!("Discovery agent failed: {:?}", e);
+                    ccos_eprintln!("Discovery agent failed: {:?}", e);
                 }
             }
         }
@@ -649,14 +649,14 @@ impl CapabilityMarketplace {
             if agent.name() == "NetworkDiscovery" {
                 match agent.discover().await {
                     Ok(capabilities) => {
-                        eprintln!(
+                        ccos_eprintln!(
                             "Discovered {} capabilities from network source",
                             capabilities.len()
                         );
                         all_capabilities.extend(capabilities);
                     }
                     Err(e) => {
-                        eprintln!("Network discovery failed: {}", e);
+                        ccos_eprintln!("Network discovery failed: {}", e);
                         // Continue with other discovery agents even if one fails
                     }
                 }
@@ -1088,13 +1088,13 @@ impl CapabilityMarketplace {
 
             if let Ok(mut chain) = causal_chain.lock() {
                 if let Err(e) = chain.append(&action) {
-                    eprintln!(
+                    ccos_eprintln!(
                         "Failed to record capability audit event in Causal Chain: {:?}",
                         e
                     );
                 }
             } else {
-                eprintln!("Failed to acquire lock on Causal Chain");
+                ccos_eprintln!("Failed to acquire lock on Causal Chain");
             }
         }
 
@@ -1834,7 +1834,7 @@ impl CapabilityMarketplace {
                     .collect();
 
                 for violation in soft_violations {
-                    eprintln!(
+                    ccos_eprintln!(
                         "Soft resource violation for capability '{}': {}",
                         id,
                         violation.to_string()
@@ -1880,7 +1880,7 @@ impl CapabilityMarketplace {
                     if let Err(e) =
                         resolver.handle_missing_capability(id.to_string(), args, context)
                     {
-                        eprintln!(
+                        ccos_eprintln!(
                             "Warning: Failed to queue missing capability '{}': {}",
                             id, e
                         );
@@ -1904,7 +1904,7 @@ impl CapabilityMarketplace {
                 .any(|(k, v)| k.ends_with("_requires_session") && (v == "true" || v == "auto"));
 
             if requires_session {
-                eprintln!(
+                ccos_eprintln!(
                     "📋 Metadata indicates session management required for: {}",
                     id
                 );
@@ -1916,7 +1916,7 @@ impl CapabilityMarketplace {
                 };
 
                 if let Some(pool) = pool_opt {
-                    eprintln!("🔄 Delegating to session pool for session management");
+                    ccos_eprintln!("🔄 Delegating to session pool for session management");
                     let args = match inputs_ref {
                         Value::List(list) => list.clone(),
                         Value::Vector(vec) => vec.clone(),
@@ -1931,8 +1931,8 @@ impl CapabilityMarketplace {
                     // 5. Returns result
                     return pool.execute_with_session(id, &manifest.metadata, &args);
                 } else {
-                    eprintln!("⚠️  Session management required but no session pool configured");
-                    eprintln!("   Falling through to normal execution (will likely fail with 401)");
+                    ccos_eprintln!("⚠️  Session management required but no session pool configured");
+                    ccos_eprintln!("   Falling through to normal execution (will likely fail with 401)");
                 }
             }
         }
@@ -2748,7 +2748,7 @@ impl CapabilityMarketplace {
                         }
                     }
                     Err(e) => {
-                        eprintln!("❌ Failed to load {}: {}", path.display(), e);
+                        ccos_eprintln!("❌ Failed to load {}: {}", path.display(), e);
                         if let Some(cb) = &self.debug_callback {
                             cb(format!("Failed to load {}: {}", path.display(), e));
                         }

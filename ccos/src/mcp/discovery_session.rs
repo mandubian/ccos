@@ -18,6 +18,7 @@
 //! Used by the unified discovery service to establish temporary sessions
 //! for querying MCP servers during capability discovery.
 
+use crate::ccos_println;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -86,7 +87,7 @@ impl MCPSessionManager {
         server_url: &str,
         client_info: &MCPServerInfo,
     ) -> RuntimeResult<MCPSession> {
-        println!("🔄 Initializing MCP session with {}", server_url);
+        ccos_println!("🔄 Initializing MCP session with {}", server_url);
 
         // Build initialize request according to MCP spec
         let init_request = serde_json::json!({
@@ -131,9 +132,9 @@ impl MCPSessionManager {
             .map(|s| s.to_string());
 
         if let Some(ref sid) = session_id {
-            println!("✅ Received session ID: {}...", &sid[..sid.len().min(20)]);
+            ccos_println!("✅ Received session ID: {}...", &sid[..sid.len().min(20)]);
         } else {
-            println!("ℹ️  No session ID provided (stateless mode)");
+            ccos_println!("ℹ️  No session ID provided (stateless mode)");
         }
 
         // Check response status
@@ -197,9 +198,9 @@ impl MCPSessionManager {
             .unwrap_or("2024-11-05")
             .to_string();
 
-        println!("✅ MCP session initialized");
-        println!("   Server: {} v{}", server_info.name, server_info.version);
-        println!("   Protocol: {}", protocol_version);
+        ccos_println!("✅ MCP session initialized");
+        ccos_println!("   Server: {} v{}", server_info.name, server_info.version);
+        ccos_println!("   Protocol: {}", protocol_version);
 
         Ok(MCPSession {
             server_url: server_url.to_string(),
@@ -289,7 +290,7 @@ impl MCPSessionManager {
     /// Sends DELETE request with session ID as per spec
     pub async fn terminate_session(&self, session: &MCPSession) -> RuntimeResult<()> {
         if let Some(ref session_id) = session.session_id {
-            println!("🔚 Terminating MCP session...");
+            ccos_println!("🔚 Terminating MCP session...");
 
             let mut request = self
                 .client
@@ -307,13 +308,13 @@ impl MCPSessionManager {
             match request.send().await {
                 Ok(response) => {
                     if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
-                        println!("ℹ️  Server does not support explicit session termination");
+                        ccos_println!("ℹ️  Server does not support explicit session termination");
                     } else if response.status().is_success() {
-                        println!("✅ Session terminated successfully");
+                        ccos_println!("✅ Session terminated successfully");
                     }
                 }
                 Err(e) => {
-                    println!("⚠️  Failed to terminate session: {}", e);
+                    ccos_println!("⚠️  Failed to terminate session: {}", e);
                 }
             }
         }
