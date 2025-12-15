@@ -226,6 +226,8 @@ pub struct PlanResult {
     pub root_intent_id: String,
     /// All intent IDs created during planning
     pub intent_ids: Vec<String>,
+    /// Sub-intents with full details (description, params, domain hints)
+    pub sub_intents: Vec<SubIntent>,
     /// Resolved capabilities for each intent
     pub resolutions: HashMap<String, ResolvedCapability>,
     /// Generated RTFS plan code
@@ -276,6 +278,15 @@ pub enum TraceEvent {
         intent_id: String,
         reason: String,
     },
+    /// LLM call made during planning/resolution
+    LlmCalled {
+        model: String,
+        prompt: String,
+        response: Option<String>,
+        tokens_prompt: usize,
+        tokens_response: usize,
+        duration_ms: u64,
+    },
 }
 
 /// The main modular planner orchestrator.
@@ -296,6 +307,8 @@ pub struct ModularPlanner {
     safe_executor: Option<SafeCapabilityExecutor>,
     /// Optional missing capability resolver for immediate synthesis
     missing_capability_resolver: Option<Arc<MissingCapabilityResolver>>,
+    /// Optional callback for real-time trace event streaming
+    trace_callback: Option<Box<dyn Fn(&TraceEvent) + Send + Sync>>,
 }
 
 impl ModularPlanner {
@@ -312,6 +325,7 @@ impl ModularPlanner {
             config: PlannerConfig::default(),
             safe_executor: None,
             missing_capability_resolver: None,
+            trace_callback: None,
         }
     }
 
@@ -324,11 +338,22 @@ impl ModularPlanner {
             config: PlannerConfig::default(),
             safe_executor: None,
             missing_capability_resolver: None,
+            trace_callback: None,
         }
     }
 
     pub fn with_config(mut self, config: PlannerConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Set a callback for real-time trace event streaming.
+    /// The callback is called whenever a trace event is emitted during planning.
+    pub fn with_trace_callback<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&TraceEvent) + Send + Sync + 'static,
+    {
+        self.trace_callback = Some(Box::new(callback));
         self
     }
 
@@ -345,6 +370,17 @@ impl ModularPlanner {
     pub fn with_safe_executor(mut self, marketplace: Arc<CapabilityMarketplace>) -> Self {
         self.safe_executor = Some(SafeCapabilityExecutor::new(marketplace));
         self
+    }
+
+    /// Emit a trace event - pushes to the Vec AND calls the callback if set.
+    /// This enables real-time streaming of trace events to the TUI.
+    fn emit_trace(&self, trace: &mut PlanningTrace, event: TraceEvent) {
+        // Call the callback first (for real-time streaming)
+        if let Some(ref callback) = self.trace_callback {
+            callback(&event);
+        }
+        // Then push to the Vec (for the final result)
+        trace.events.push(event);
     }
 
     /// Create a fallback resolution when no capability is found.
@@ -431,12 +467,12 @@ impl ModularPlanner {
 
         // 0. Eager tool discovery (if enabled)
         let available_tools: Option<Vec<ToolSummary>> = if self.config.eager_discovery {
-            println!("\n📦 Discovering available tools...");
+            ccos_println!("\n📦 Discovering available tools...");
 
             // Infer domain hints to restrict search
             let domain_hints = DomainHint::infer_all_from_text(goal);
             if !domain_hints.is_empty() {
-                println!("   🎯 Inferred domains: {:?}", domain_hints);
+                ccos_println!("   🎯 Inferred domains: {:?}", domain_hints);
             }
 
             let mut tools = self
@@ -474,13 +510,13 @@ impl ModularPlanner {
             tools.sort_by(|a, b| tool_rank(b).cmp(&tool_rank(a)));
 
             if !tools.is_empty() {
-                println!(
+                ccos_println!(
                     "   ✅ Found {} tools for grounded decomposition",
                     tools.len()
                 );
                 Some(tools)
             } else {
-                println!("   ⚠️ No tools discovered, using abstract decomposition");
+                ccos_println!("   ⚠️ No tools discovered, using abstract decomposition");
                 None
             }
         } else {
@@ -518,7 +554,7 @@ impl ModularPlanner {
             confidence: decomp_result.confidence,
         });
 
-        println!(
+        ccos_println!(
             "🧭 Planner decomposition done: {} sub-intents (safe_exec enabled={}, executor={})",
             decomp_result.sub_intents.len(),
             self.config.enable_safe_exec,
@@ -531,23 +567,25 @@ impl ModularPlanner {
             .await?;
 
         // Print Intent Graph
-        println!(
+        ccos_println!(
             "\n╭──────────────────────────────────────────────────────────────────────────────"
         );
-        println!("│ 🧭 Intent Graph");
-        println!("╰──────────────────────────────────────────────────────────────────────────────");
-        println!("ROOT: {}", goal);
+        ccos_println!("│ 🧭 Intent Graph");
+        ccos_println!(
+            "╰──────────────────────────────────────────────────────────────────────────────"
+        );
+        ccos_println!("ROOT: {}", goal);
         for (i, sub_intent) in decomp_result.sub_intents.iter().enumerate() {
             let id = intent_ids.get(i).map(|s| s.as_str()).unwrap_or("?");
-            println!("  ├─ [{}] {}", i, sub_intent.description);
-            println!("  │    ID: {}", id);
-            println!("  │    Type: {:?}", sub_intent.intent_type);
-            println!("  │    Dependencies: {:?}", sub_intent.dependencies);
+            ccos_println!("  ├─ [{}] {}", i, sub_intent.description);
+            ccos_println!("  │    ID: {}", id);
+            ccos_println!("  │    Type: {:?}", sub_intent.intent_type);
+            ccos_println!("  │    Dependencies: {:?}", sub_intent.dependencies);
             if !sub_intent.extracted_params.is_empty() {
-                println!("  │    Params: {:?}", sub_intent.extracted_params);
+                ccos_println!("  │    Params: {:?}", sub_intent.extracted_params);
             }
         }
-        println!("");
+        ccos_println!("");
 
         // 3. Resolve each intent to a capability (without execution)
         let mut resolutions = HashMap::new();
@@ -768,7 +806,7 @@ impl ModularPlanner {
         // 4. Safe execution pass: execute in topological order with data flow
         if self.config.enable_safe_exec {
             if let Some(executor) = &self.safe_executor {
-                println!("🔄 [safe-exec] starting dependency-ordered pass");
+                ccos_println!("🔄 [safe-exec] starting dependency-ordered pass");
                 self.execute_safe_in_order(
                     executor,
                     &decomp_result.sub_intents,
@@ -778,9 +816,9 @@ impl ModularPlanner {
                     &mut trace,
                 )
                 .await?;
-                println!("✅ [safe-exec] pass completed");
+                ccos_println!("✅ [safe-exec] pass completed");
             } else {
-                println!("⚠️ Safe exec enabled but no executor configured");
+                ccos_println!("⚠️ Safe exec enabled but no executor configured");
             }
         }
 
@@ -917,7 +955,11 @@ impl ModularPlanner {
                         Ok(hash) => {
                             archived_hash = Some(hash.clone());
                             archive_path = Some(plan_storage_path.clone());
-                            println!("💾 Plan archived with status {:?}: {}", plan.status, hash);
+                            ccos_println!(
+                                "💾 Plan archived with status {:?}: {}",
+                                plan.status,
+                                hash
+                            );
                         }
                         Err(e) => {
                             log::warn!("Failed to archive plan: {}", e);
@@ -930,6 +972,7 @@ impl ModularPlanner {
         Ok(PlanResult {
             root_intent_id: root_id,
             intent_ids,
+            sub_intents: decomp_result.sub_intents,
             resolutions,
             rtfs_plan,
             trace,
@@ -1298,9 +1341,11 @@ impl ModularPlanner {
                                     bridge.description,
                                     adapter_expr
                                 );
-                                println!(
+                                ccos_println!(
                                     "   🔌 Adapter: {} → {} ({})",
-                                    var_name, adapted_var, bridge.description
+                                    var_name,
+                                    adapted_var,
+                                    bridge.description
                                 );
                                 break; // Only need one adapter per producer
                             }
@@ -1791,7 +1836,7 @@ impl ModularPlanner {
             }
             Err(e) => {
                 log::warn!("Safe exec error for {}: {}", cap_id, e);
-                eprintln!("DEBUG: Safe exec error for {}: {}", cap_id, e);
+                ccos_eprintln!("DEBUG: Safe exec error for {}: {}", cap_id, e);
                 // Don't propagate error - just skip this step
                 Ok(None)
             }
@@ -1818,14 +1863,16 @@ impl ModularPlanner {
         // Compute topological order based on dependencies
         let order = self.topological_sort(sub_intents);
 
-        println!(
+        ccos_println!(
             "\n╭──────────────────────────────────────────────────────────────────────────────"
         );
-        println!(
+        ccos_println!(
             "│ 🔄 Safe Execution Pass ({} steps in dependency order)",
             order.len()
         );
-        println!("╰──────────────────────────────────────────────────────────────────────────────");
+        ccos_println!(
+            "╰──────────────────────────────────────────────────────────────────────────────"
+        );
 
         // Store execution results by step index
         let mut step_results: HashMap<usize, Value> = HashMap::new();
@@ -1861,17 +1908,17 @@ impl ModularPlanner {
                 None
             };
 
-            println!(
+            ccos_println!(
                 "\n▶️  Step {}/{}: {}",
                 step_idx + 1,
                 sub_intents.len(),
                 sub_intent.description
             );
-            println!("   ├─ Intent ID: {}", intent_id);
-            println!("   ├─ Capability: {}", cap_id);
-            println!("   ├─ Dependencies: {:?}", sub_intent.dependencies);
+            ccos_println!("   ├─ Intent ID: {}", intent_id);
+            ccos_println!("   ├─ Capability: {}", cap_id);
+            ccos_println!("   ├─ Dependencies: {:?}", sub_intent.dependencies);
             if previous_result.is_some() {
-                println!("   ├─ Input: Received _previous_result from upstream");
+                ccos_println!("   ├─ Input: Received _previous_result from upstream");
             }
 
             // Execute the step with dependency data
@@ -1887,7 +1934,7 @@ impl ModularPlanner {
                         capability: format!("{} (executed)", cap_id),
                     });
 
-                    println!(
+                    ccos_println!(
                         "   ╰─ ✅ Result Captured ({} chars): {}",
                         grounded_text.len(),
                         grounded_text
@@ -1913,16 +1960,16 @@ impl ModularPlanner {
                     }
                 }
                 Ok(None) => {
-                    println!("   ╰─ ⏭️  Skipped (Not safe to execute or no manifest)");
+                    ccos_println!("   ╰─ ⏭️  Skipped (Not safe to execute or no manifest)");
                 }
                 Err(e) => {
-                    println!("   ╰─ ❌ Error: {}", e);
+                    ccos_println!("   ╰─ ❌ Error: {}", e);
                     // Continue with other steps
                 }
             }
         }
 
-        println!(
+        ccos_println!(
             "\n✅ Safe execution pass complete ({} results captured)\n",
             step_results.len()
         );

@@ -374,7 +374,7 @@ impl CatalogResolution {
                     score
                 } else {
                     // Fallback to heuristic if embedding fails
-                    println!("   [Embedding failed, using heuristic fallback]");
+                    log::debug!("   [Embedding failed, using heuristic fallback]");
                     self.score_capability_heuristic(intent, cap)
                 }
             }
@@ -387,9 +387,11 @@ impl CatalogResolution {
                         // Weight: 70% embedding, 30% normalized heuristic
                         let normalized_heuristic = (heuristic_score.max(-1.0).min(1.0) + 1.0) / 2.0; // Map [-1,1] to [0,1]
                         let combined = 0.7 * emb_score + 0.3 * normalized_heuristic;
-                        println!(
+                        log::debug!(
                             "   -> Score: {:.3} (emb: {:.3}, heur: {:.3})",
-                            combined, emb_score, heuristic_score
+                            combined,
+                            emb_score,
+                            heuristic_score
                         );
                         return combined;
                     }
@@ -433,7 +435,7 @@ impl CatalogResolution {
         // Calculate cosine similarity
         let similarity = EmbeddingService::cosine_similarity(&intent_emb, &cap_emb);
 
-        println!("   -> Embedding score for '{}': {:.3}", cap.id, similarity);
+        log::debug!("   -> Embedding score for '{}': {:.3}", cap.id, similarity);
 
         Some(similarity)
     }

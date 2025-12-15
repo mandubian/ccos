@@ -363,12 +363,12 @@ impl McpResolution {
 
         if let Some(first) = cached.first() {
             if now - first.cached_at > 86400 {
-                println!("   ⏰ Cache for {} is stale, will refresh", server_name);
+                ccos_println!("   ⏰ Cache for {} is stale, will refresh", server_name);
                 return None;
             }
         }
 
-        println!(
+        ccos_println!(
             "   📂 Loaded {} tools from cache for {}",
             cached.len(),
             server_name
@@ -397,7 +397,7 @@ impl McpResolution {
                 if let Err(e) = std::fs::write(&cache_file, json) {
                     log::warn!("Failed to write cache: {}", e);
                 } else {
-                    println!(
+                    ccos_println!(
                         "   💾 Saved {} tools to cache: {}",
                         tools.len(),
                         cache_file.display()
@@ -427,14 +427,14 @@ impl McpResolution {
         }
 
         // Discover tools from server
-        println!("   🔍 Discovering tools from MCP server: {}", server.name);
+        ccos_println!("   🔍 Discovering tools from MCP server: {}", server.name);
         let tools = self
             .discovery
             .discover_tools(server)
             .await
             .map_err(|e| ResolutionError::McpError(e))?;
 
-        println!(
+        ccos_println!(
             "   ✅ Discovered {} tools from {}",
             tools.len(),
             server.name
@@ -590,7 +590,7 @@ impl ResolutionStrategy for McpResolution {
         if let Some(suggested_tool) = intent.extracted_params.get("_suggested_tool") {
             // Direct lookup by tool name - trust the LLM's grounded choice
             if let Some(tool) = tools.iter().find(|t| t.name == *suggested_tool) {
-                println!("   🎯 Using LLM-suggested tool: {}", suggested_tool);
+                ccos_println!("   🎯 Using LLM-suggested tool: {}", suggested_tool);
 
                 let capability_id = self
                     .discovery
@@ -608,7 +608,7 @@ impl ResolutionStrategy for McpResolution {
                     confidence: 1.0, // High confidence - LLM chose from exact tool list
                 });
             } else {
-                println!(
+                ccos_println!(
                     "   ⚠️ Suggested tool '{}' not found, falling back to scoring",
                     suggested_tool
                 );
@@ -617,7 +617,7 @@ impl ResolutionStrategy for McpResolution {
 
         // Check if LLM explicitly said "no tool" (grounded decomposition returned null)
         if intent.extracted_params.contains_key("_grounded_no_tool") {
-            println!(
+            ccos_println!(
                 "   ⚠️ Grounded planner found no tool for this step. Skipping fallback scoring."
             );
             return Err(ResolutionError::NotFound(

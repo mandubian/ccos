@@ -59,13 +59,7 @@ impl DecompositionStrategy for IntentFirstDecomposition {
 
         let prompt = build_decomposition_prompt(goal, context, available_tools);
 
-        // DEBUG: Print prompt
-        println!("\n🤖 LLM Prompt (IntentFirst):\n--------------------------------------------------\n{}\n--------------------------------------------------", prompt);
-
         let response = self.llm_provider.generate_text(&prompt).await?;
-
-        // DEBUG: Print response
-        println!("\n🤖 LLM Response (IntentFirst):\n--------------------------------------------------\n{}\n--------------------------------------------------", response);
 
         let parsed = parse_llm_response(&response)?;
 
