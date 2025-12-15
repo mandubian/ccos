@@ -49,14 +49,14 @@ use std::sync::{Arc, Mutex, RwLock};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-// Quiet console logging helper: when CCOS_QUIET_RESOLVER=1|true|on, suppress direct eprintln! noise
+// Quiet console logging helper: when CCOS_QUIET_RESOLVER=1|true|on, suppress direct ccos_eprintln! noise
 macro_rules! quiet_eprintln {
     ($($arg:tt)*) => {{
         let quiet = std::env::var("CCOS_QUIET_RESOLVER")
             .map(|v| { let v = v.to_lowercase(); v == "1" || v == "true" || v == "on" })
             .unwrap_or(false);
         if !quiet {
-            eprintln!($($arg)*);
+            ccos_eprintln!($($arg)*);
         }
     }};
 }
@@ -922,9 +922,9 @@ impl MissingCapabilityResolver {
         );
 
         if should_log_debug_prompts() {
-            eprintln!("┌─ Tool Selector Prompt ─────────────────────────────────────");
-            eprintln!("{}", prompt);
-            eprintln!("└────────────────────────────────────────────────────────────");
+            ccos_eprintln!("┌─ Tool Selector Prompt ─────────────────────────────────────");
+            ccos_eprintln!("{}", prompt);
+            ccos_eprintln!("└────────────────────────────────────────────────────────────");
         }
 
         let response = delegating
@@ -933,9 +933,9 @@ impl MissingCapabilityResolver {
             .map_err(|e| RuntimeError::Generic(format!("Tool selector request failed: {}", e)))?;
 
         if should_log_debug_prompts() {
-            eprintln!("┌─ Tool Selector Response ───────────────────────────────────");
-            eprintln!("{}", response.trim());
-            eprintln!("└────────────────────────────────────────────────────────────");
+            ccos_eprintln!("┌─ Tool Selector Response ───────────────────────────────────");
+            ccos_eprintln!("{}", response.trim());
+            ccos_eprintln!("└────────────────────────────────────────────────────────────");
         }
 
         let rtfs = extract_rtfs_block(&response);
@@ -1139,7 +1139,7 @@ impl MissingCapabilityResolver {
 
     /// Inject the delegating arbiter for LLM-backed synthesis.
     pub fn set_delegating_arbiter(&self, arbiter: Option<Arc<DelegatingArbiter>>) {
-        eprintln!(
+        ccos_eprintln!(
             "🔧 MissingCapabilityResolver: set_delegating_arbiter called with {:?}",
             if arbiter.is_some() {
                 "Some(Arbiter)"
@@ -1150,7 +1150,7 @@ impl MissingCapabilityResolver {
         if let Ok(mut slot) = self.delegating_arbiter.write() {
             *slot = arbiter;
         } else {
-            eprintln!(
+            ccos_eprintln!(
                 "❌ MissingCapabilityResolver: failed to acquire write lock for delegating_arbiter"
             );
         }
@@ -1192,7 +1192,7 @@ impl MissingCapabilityResolver {
     fn persist_alias(&self, record: ToolAliasRecord) {
         if let Ok(mut store) = self.alias_store.write() {
             if let Err(err) = store.insert(record) {
-                eprintln!("⚠️  Failed to persist tool alias: {}", err);
+                ccos_eprintln!("⚠️  Failed to persist tool alias: {}", err);
             }
         }
     }
@@ -1200,7 +1200,7 @@ impl MissingCapabilityResolver {
     fn remove_alias(&self, capability_pattern: &str) {
         if let Ok(mut store) = self.alias_store.write() {
             if let Err(err) = store.remove(capability_pattern) {
-                eprintln!(
+                ccos_eprintln!(
                     "⚠️  Failed to remove tool alias for '{}': {}",
                     capability_pattern, err
                 );
@@ -1217,7 +1217,7 @@ impl MissingCapabilityResolver {
         };
 
         if self.config.verbose_logging {
-            eprintln!(
+            ccos_eprintln!(
                 "🔁 Alias cache hit for '{}' → {} / {}",
                 capability_id, alias.server_name, alias.tool_name
             );
@@ -1226,7 +1226,7 @@ impl MissingCapabilityResolver {
         match ToolAliasStore::materialize_alias(&alias).await {
             Ok(Some(manifest)) => {
                 if let Err(err) = self.persist_discovered_mcp_capability(&manifest) {
-                    eprintln!(
+                    ccos_eprintln!(
                         "⚠️  Failed to persist MCP alias capability '{}': {}",
                         manifest.id, err
                     );
@@ -1235,7 +1235,7 @@ impl MissingCapabilityResolver {
             }
             Ok(None) => {
                 if self.config.verbose_logging {
-                    eprintln!(
+                    ccos_eprintln!(
                         "⚠️  Alias for '{}' is stale (tool not found). Removing from cache.",
                         capability_id
                     );
@@ -1244,7 +1244,7 @@ impl MissingCapabilityResolver {
                 Ok(None)
             }
             Err(err) => {
-                eprintln!(
+                ccos_eprintln!(
                     "⚠️  Failed to materialize alias for '{}': {}",
                     capability_id, err
                 );
@@ -1261,23 +1261,23 @@ impl MissingCapabilityResolver {
         context: HashMap<String, String>,
     ) -> RuntimeResult<()> {
         let normalized_id = Self::normalize_capability_id(&capability_id);
-        eprintln!(
+        ccos_eprintln!(
             "🔍 HANDLE MISSING: Attempting to handle missing capability '{}'",
             normalized_id
         );
 
         // Check if missing capability resolution is enabled
         if !self.feature_checker.is_enabled() {
-            eprintln!("❌ HANDLE MISSING: Feature is disabled");
+            ccos_eprintln!("❌ HANDLE MISSING: Feature is disabled");
             return Ok(()); // Silently ignore if disabled
         }
 
         if !self.feature_checker.is_runtime_detection_enabled() {
-            eprintln!("❌ HANDLE MISSING: Runtime detection is disabled");
+            ccos_eprintln!("❌ HANDLE MISSING: Runtime detection is disabled");
             return Ok(()); // Silently ignore if runtime detection is disabled
         }
 
-        eprintln!("✅ HANDLE MISSING: Feature is enabled, proceeding with queue");
+        ccos_eprintln!("✅ HANDLE MISSING: Feature is enabled, proceeding with queue");
         let request = MissingCapabilityRequest {
             capability_id: normalized_id.clone(),
             arguments,
@@ -1292,7 +1292,7 @@ impl MissingCapabilityResolver {
         }
 
         if self.config.verbose_logging {
-            eprintln!(
+            ccos_eprintln!(
                 "🔍 MISSING CAPABILITY: Added '{}' to resolution queue",
                 normalized_id
             );
@@ -1403,7 +1403,7 @@ impl MissingCapabilityResolver {
 
         // Try to find similar capabilities using marketplace discovery
         // Always log discovery start (not suppressed) so user knows discovery is happening
-        eprintln!(
+        ccos_eprintln!(
             "🔍 DISCOVERY: Starting discovery for capability '{}'",
             capability_id_normalized
         );
@@ -1411,12 +1411,12 @@ impl MissingCapabilityResolver {
             .discover_capability(&capability_id_normalized, request)
             .await?;
         if discovery_result.is_some() {
-            eprintln!(
+            ccos_eprintln!(
                 "✅ DISCOVERY: Successfully discovered capability '{}'",
                 capability_id_normalized
             );
         } else {
-            eprintln!(
+            ccos_eprintln!(
                 "❌ DISCOVERY: No capability found for '{}' after discovery attempts",
                 capability_id_normalized
             );
@@ -1425,7 +1425,7 @@ impl MissingCapabilityResolver {
         match discovery_result {
             Some(manifest) => {
                 let actual_capability_id = manifest.id.clone();
-                eprintln!(
+                ccos_eprintln!(
                     "✅ DISCOVERY: Successfully discovered capability '{}' -> registered as '{}'",
                     capability_id_normalized, actual_capability_id
                 );
@@ -1568,7 +1568,7 @@ impl MissingCapabilityResolver {
 
         let Some(delegating) = delegating else {
             if self.config.verbose_logging {
-                eprintln!(
+                ccos_eprintln!(
                     "ℹ️  LLM synthesis skipped for '{}' (no delegating arbiter configured)",
                     capability_id_normalized
                 );
@@ -1581,9 +1581,9 @@ impl MissingCapabilityResolver {
             .await?;
 
         if should_log_debug_prompts() {
-            eprintln!("┌─ Capability Prompt ────────────────────────────────────────");
-            eprintln!("{}", prompt);
-            eprintln!("└────────────────────────────────────────────────────────────");
+            ccos_eprintln!("┌─ Capability Prompt ────────────────────────────────────────");
+            ccos_eprintln!("{}", prompt);
+            ccos_eprintln!("└────────────────────────────────────────────────────────────");
         }
 
         let response = delegating
@@ -1592,14 +1592,14 @@ impl MissingCapabilityResolver {
             .map_err(|e| RuntimeError::Generic(format!("LLM synthesis request failed: {}", e)))?;
 
         if should_log_debug_prompts() {
-            eprintln!("┌─ LLM Capability Response ──────────────────────────────────");
-            eprintln!("{}", response.trim());
-            eprintln!("└────────────────────────────────────────────────────────────");
+            ccos_eprintln!("┌─ LLM Capability Response ──────────────────────────────────");
+            ccos_eprintln!("{}", response.trim());
+            ccos_eprintln!("└────────────────────────────────────────────────────────────");
         }
 
         let Some(capability_rtfs) = extract_capability_rtfs_from_response(&response) else {
             if self.config.verbose_logging {
-                eprintln!("❌ LLM synthesis response did not contain a `(capability ...)` form.");
+                ccos_eprintln!("❌ LLM synthesis response did not contain a `(capability ...)` form.");
             }
             return Ok(None);
         };
@@ -1627,7 +1627,7 @@ impl MissingCapabilityResolver {
             }
             Err(err) => {
                 if self.config.verbose_logging {
-                    eprintln!("❌ Failed to parse LLM capability: {}", err);
+                    ccos_eprintln!("❌ Failed to parse LLM capability: {}", err);
                 }
                 Ok(None)
             }
@@ -1657,14 +1657,14 @@ impl MissingCapabilityResolver {
                 // This works because workspace root is set to config dir when config is loaded
                 crate::utils::fs::resolve_workspace_path("../capabilities/generated")
             });
-        eprintln!(
+        ccos_eprintln!(
             "🔍 persist_llm_generated_capability: About to create storage_root={:?}",
             storage_root
         );
         std::fs::create_dir_all(&storage_root).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
         })?;
-        eprintln!(
+        ccos_eprintln!(
             "🔍 persist_llm_generated_capability: Created storage_root={:?}",
             storage_root
         );
@@ -2093,7 +2093,7 @@ impl MissingCapabilityResolver {
 
         if manifest_id != expected_id {
             if self.config.verbose_logging {
-                eprintln!(
+                ccos_eprintln!(
                     "ℹ️  LLM generated capability id '{}' differs from requested '{}'; using generated id.",
                     manifest_id, expected_id
                 );
@@ -2154,12 +2154,12 @@ impl MissingCapabilityResolver {
         // Try multiple discovery methods in order of preference
 
         // 1. Exact match in marketplace (race condition check)
-        eprintln!(
+        ccos_eprintln!(
             "🔍 DISCOVERY: Trying exact match in marketplace for '{}'",
             capability_id
         );
         if let Some(manifest) = self.discover_exact_match(capability_id).await? {
-            eprintln!(
+            ccos_eprintln!(
                 "✅ DISCOVERY: Found exact match in marketplace: '{}'",
                 capability_id
             );
@@ -2168,28 +2168,28 @@ impl MissingCapabilityResolver {
 
         // 2. Partial name matching in marketplace (skip for MCP capabilities - use discovery instead)
         if !capability_id.starts_with("mcp.") {
-            eprintln!(
+            ccos_eprintln!(
                 "🔍 DISCOVERY: Trying partial match in marketplace for '{}'",
                 capability_id
             );
             if let Some(manifest) = self.discover_partial_match(capability_id).await? {
-                eprintln!(
+                ccos_eprintln!(
                     "✅ DISCOVERY: Found partial match in marketplace: '{}'",
                     capability_id
                 );
                 return Ok(Some(manifest));
             }
         } else {
-            eprintln!("🔍 DISCOVERY: Skipping partial match for MCP capability '{}' (will try MCP discovery)", capability_id);
+            ccos_eprintln!("🔍 DISCOVERY: Skipping partial match for MCP capability '{}' (will try MCP discovery)", capability_id);
         }
 
         // 3. Local manifest scanning
-        eprintln!(
+        ccos_eprintln!(
             "🔍 DISCOVERY: Trying local manifest scan for '{}'",
             capability_id
         );
         if let Some(manifest) = self.discover_local_manifests(capability_id).await? {
-            eprintln!(
+            ccos_eprintln!(
                 "✅ DISCOVERY: Found in local manifests: '{}'",
                 capability_id
             );
@@ -2197,13 +2197,13 @@ impl MissingCapabilityResolver {
         }
 
         // 4. MCP server discovery
-        eprintln!(
+        ccos_eprintln!(
             "🔍 DISCOVERY: Trying MCP server discovery for '{}'",
             capability_id
         );
         match self.discover_mcp_servers(capability_id, request).await {
             Ok(Some(manifest)) => {
-                eprintln!(
+                ccos_eprintln!(
                     "✅ DISCOVERY: Found via MCP server discovery: '{}'",
                     capability_id
                 );
@@ -2212,7 +2212,7 @@ impl MissingCapabilityResolver {
             Ok(None) => {}
             Err(e) => {
                 if self.config.verbose_logging {
-                    eprintln!("⚠️ MCP discovery failed (will try other methods): {}", e);
+                    ccos_eprintln!("⚠️ MCP discovery failed (will try other methods): {}", e);
                 }
             }
         }
@@ -2224,7 +2224,7 @@ impl MissingCapabilityResolver {
                 Ok(None) => {}
                 Err(e) => {
                     if self.config.verbose_logging {
-                        eprintln!("⚠️ Web search discovery failed: {}", e);
+                        ccos_eprintln!("⚠️ Web search discovery failed: {}", e);
                     }
                 }
             }
@@ -2236,7 +2236,7 @@ impl MissingCapabilityResolver {
             Ok(None) => {}
             Err(e) => {
                 if self.config.verbose_logging {
-                    eprintln!("⚠️ Network catalog discovery failed: {}", e);
+                    ccos_eprintln!("⚠️ Network catalog discovery failed: {}", e);
                 }
             }
         }
@@ -2403,7 +2403,7 @@ impl MissingCapabilityResolver {
         request: &MissingCapabilityRequest,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
         // Always log MCP discovery attempts (not suppressed)
-        eprintln!(
+        ccos_eprintln!(
             "🔍 MCP DISCOVERY: Querying MCP Registry and overrides for '{}'",
             capability_id
         );
@@ -2446,7 +2446,7 @@ impl MissingCapabilityResolver {
             curated.iter().map(|s| s.name.clone()).collect();
         let curated_len = curated.len();
         if !curated.is_empty() {
-            eprintln!(
+            ccos_eprintln!(
                 "📦 MCP DISCOVERY: Loaded {} curated MCP server override(s) for '{}'",
                 curated_len, capability_id
             );
@@ -2460,7 +2460,7 @@ impl MissingCapabilityResolver {
             servers.extend(curated);
         }
 
-        eprintln!(
+        ccos_eprintln!(
             "🔍 MCP DISCOVERY: Found {} MCP server candidate(s) for '{}'",
             servers.len(),
             capability_id
@@ -2487,14 +2487,14 @@ impl MissingCapabilityResolver {
         let ranked_servers = self.rank_mcp_servers(capability_id, servers);
 
         if self.config.verbose_logging && !ranked_servers.is_empty() {
-            eprintln!(
+            ccos_eprintln!(
                 "📊 DISCOVERY: Ranked {} server(s) with score >= 0.3 for '{}'",
                 ranked_servers.len(),
                 capability_id
             );
             if ranked_servers.len() <= 5 {
                 for (i, ranked) in ranked_servers.iter().enumerate() {
-                    eprintln!(
+                    ccos_eprintln!(
                         "   {}. {} (score: {:.2})",
                         i + 1,
                         ranked.server.name,
@@ -2521,11 +2521,11 @@ impl MissingCapabilityResolver {
                 None,
             );
             if self.config.verbose_logging {
-                eprintln!(
+                ccos_eprintln!(
                     "❌ DISCOVERY: No suitable MCP servers found for '{}'",
                     capability_id
                 );
-                eprintln!(
+                ccos_eprintln!(
                     "💡 TIP: If you know the official server for this capability, you can add it to 'capabilities/mcp/overrides.json' so it's considered during discovery."
                 );
             }
@@ -2564,7 +2564,7 @@ impl MissingCapabilityResolver {
                 .any(|name| self.extract_domain_from_server_name(name) == *candidate_domain)
             {
                 trust_registry.approve_server(candidate_domain);
-                eprintln!(
+                ccos_eprintln!(
                     "✅ AUTO-APPROVE: Server '{}' from overrides.json (user-curated)",
                     candidate.domain
                 );
@@ -2611,7 +2611,7 @@ impl MissingCapabilityResolver {
         let remotes = if let Some(remotes) = &selected_server.remotes {
             remotes
         } else {
-            eprintln!(
+            ccos_eprintln!(
                 "⚠️ MCP DISCOVERY: Server '{}' has no remotes; cannot introspect tools",
                 selected_server.name
             );
@@ -2629,7 +2629,7 @@ impl MissingCapabilityResolver {
         {
             url
         } else {
-            eprintln!(
+            ccos_eprintln!(
                 "⚠️ MCP DISCOVERY: No usable remote URL for server '{}'",
                 selected_server.name
             );
@@ -2642,7 +2642,7 @@ impl MissingCapabilityResolver {
             return Ok(None);
         };
 
-        eprintln!(
+        ccos_eprintln!(
             "🔍 MCP DISCOVERY: Introspecting server '{}' at '{}' for capability '{}'",
             selected_server.name, server_url, capability_id
         );
@@ -2673,7 +2673,7 @@ impl MissingCapabilityResolver {
                 .feature_checker
                 .is_output_schema_introspection_enabled()
         {
-            eprintln!("🔍 Attempting output schema introspection for discovered tools...");
+            ccos_eprintln!("🔍 Attempting output schema introspection for discovered tools...");
             for manifest in &mut manifests {
                 if let Some(tool_name) = manifest.metadata.get("mcp_tool_name") {
                     // Find the corresponding tool from introspection
@@ -2694,7 +2694,7 @@ impl MissingCapabilityResolver {
                         {
                             if let Some(schema) = schema_opt {
                                 manifest.output_schema = Some(schema);
-                                eprintln!("✅ Updated output schema for '{}'", manifest.id);
+                                ccos_eprintln!("✅ Updated output schema for '{}'", manifest.id);
                             }
                             if let Some(sample) = sample_opt {
                                 manifest
@@ -2707,7 +2707,7 @@ impl MissingCapabilityResolver {
             }
         }
         if manifests.is_empty() {
-            eprintln!(
+            ccos_eprintln!(
                 "⚠️ MCP DISCOVERY: Server '{}' returned no tools during introspection (might need MCP_AUTH_TOKEN)",
                 selected_server.name
             );
@@ -2726,7 +2726,7 @@ impl MissingCapabilityResolver {
             return Ok(None);
         }
 
-        eprintln!(
+        ccos_eprintln!(
             "✅ MCP DISCOVERY: Introspection found {} tool(s) from '{}'",
             manifests.len(),
             selected_server.name
@@ -2770,12 +2770,12 @@ impl MissingCapabilityResolver {
         }
 
         if candidates.is_empty() {
-            eprintln!(
+            ccos_eprintln!(
                 "⚠️ MCP DISCOVERY: No tool candidates matched for '{}' from server '{}'",
                 capability_id, selected_server.name
             );
             if self.config.verbose_logging {
-                eprintln!(
+                ccos_eprintln!(
                     "⚠️ DISCOVERY: No tool metadata available for '{}'",
                     selected_server.name
                 );
@@ -2783,7 +2783,7 @@ impl MissingCapabilityResolver {
             return Ok(None);
         }
 
-        eprintln!(
+        ccos_eprintln!(
             "🔍 MCP DISCOVERY: Found {} tool candidate(s) from '{}', scoring against '{}'",
             candidates.len(),
             selected_server.name,
@@ -2799,7 +2799,7 @@ impl MissingCapabilityResolver {
         // Log top candidates for debugging
         if self.config.verbose_logging {
             for (i, candidate) in candidates.iter().take(3).enumerate() {
-                eprintln!(
+                ccos_eprintln!(
                     "  {}. {} (score: {:.2})",
                     i + 1,
                     candidate.tool_name,
@@ -2810,13 +2810,13 @@ impl MissingCapabilityResolver {
 
         if let Some(best) = candidates.first() {
             let overlap = Self::keyword_overlap(capability_id, &best.tool_name);
-            eprintln!(
+            ccos_eprintln!(
                 "🔍 MCP DISCOVERY: Best match '{}' (score: {:.2}, overlap: {:.2}, threshold: >=3.0 or >=0.75)",
                 best.tool_name, best.score, overlap
             );
             if best.score >= 3.0 || overlap >= 0.75 {
                 if self.config.verbose_logging {
-                    eprintln!(
+                    ccos_eprintln!(
                         "✅ DISCOVERY: Heuristic match '{}' (score {:.2}, overlap {:.2})",
                         best.tool_name, best.score, overlap
                     );
@@ -2959,7 +2959,7 @@ impl MissingCapabilityResolver {
 
         if let Some(best) = best_fallback {
             let overlap = Self::keyword_overlap(capability_id, &best.tool_name);
-            eprintln!(
+            ccos_eprintln!(
                 "🔄 FALLBACK: LLM returned nil, but using best semantic match '{}' (score: {:.2}, overlap: {:.2}, fallback_score: {:.2})",
                 best.tool_name, best.score, overlap, best_fallback_score
             );
@@ -3222,7 +3222,7 @@ impl MissingCapabilityResolver {
                     all_servers.extend(servers);
                 }
                 Err(e) => {
-                    eprintln!(
+                    ccos_eprintln!(
                         "⚠️ SEMANTIC SEARCH: Failed to search for '{}': {}",
                         keyword, e
                     );
@@ -3379,7 +3379,7 @@ impl MissingCapabilityResolver {
         capability_id: &str,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
         if self.config.verbose_logging {
-            eprintln!("🔍 DISCOVERY: Searching web for '{}'", capability_id);
+            ccos_eprintln!("🔍 DISCOVERY: Searching web for '{}'", capability_id);
         }
 
         // Use web search to find API specs and documentation
@@ -3391,7 +3391,7 @@ impl MissingCapabilityResolver {
 
         if search_results.is_empty() {
             if self.config.verbose_logging {
-                eprintln!(
+                ccos_eprintln!(
                     "🔍 DISCOVERY: No web search results found for '{}'",
                     capability_id
                 );
@@ -3402,7 +3402,7 @@ impl MissingCapabilityResolver {
         // Try to convert the best result to a capability manifest
         if let Some(best_result) = search_results.first() {
             if self.config.verbose_logging {
-                eprintln!(
+                ccos_eprintln!(
                     "🔍 DISCOVERY: Found web result: {} ({})",
                     best_result.title, best_result.result_type
                 );
@@ -3431,7 +3431,7 @@ impl MissingCapabilityResolver {
         capability_id: &str,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
         if self.config.verbose_logging {
-            eprintln!(
+            ccos_eprintln!(
                 "📥 DISCOVERY: Attempting to import OpenAPI spec from: {}",
                 url
             );
@@ -3444,19 +3444,19 @@ impl MissingCapabilityResolver {
         match importer.create_rtfs_capability(url, capability_id).await {
             Ok(manifest) => {
                 if self.config.verbose_logging {
-                    eprintln!(
+                    ccos_eprintln!(
                         "✅ DISCOVERY: Created RTFS capability from OpenAPI: {}",
                         manifest.id
                     );
                     if let Some(rtfs_code) = manifest.metadata.get("rtfs_code") {
-                        eprintln!("📝 RTFS Code generated ({} chars)", rtfs_code.len());
+                        ccos_eprintln!("📝 RTFS Code generated ({} chars)", rtfs_code.len());
                     }
                 }
                 Ok(Some(manifest))
             }
             Err(e) => {
                 if self.config.verbose_logging {
-                    eprintln!(
+                    ccos_eprintln!(
                         "⚠️ DISCOVERY: Failed to create RTFS capability from OpenAPI: {}",
                         e
                     );
@@ -3473,7 +3473,7 @@ impl MissingCapabilityResolver {
         capability_id: &str,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
         if self.config.verbose_logging {
-            eprintln!("📥 DISCOVERY: Attempting to import HTTP API from: {}", url);
+            ccos_eprintln!("📥 DISCOVERY: Attempting to import HTTP API from: {}", url);
         }
 
         let base_url = Self::infer_base_url(url);
@@ -3488,7 +3488,7 @@ impl MissingCapabilityResolver {
             .await
         {
             if self.config.verbose_logging {
-                eprintln!(
+                ccos_eprintln!(
                     "✅ DISCOVERY: Multi-capability synthesis generated {} capabilities",
                     multi_manifests.len()
                 );
@@ -3550,7 +3550,7 @@ impl MissingCapabilityResolver {
         };
 
         if self.config.verbose_logging {
-            eprintln!(
+            ccos_eprintln!(
                 "✅ DISCOVERY: Created generic HTTP API capability: {}",
                 manifest.id
             );
@@ -3575,7 +3575,7 @@ impl MissingCapabilityResolver {
             match self.delegating_arbiter.read() {
                 Ok(guard) => {
                     let val = guard.clone();
-                    eprintln!(
+                    ccos_eprintln!(
                         "🔧 MissingCapabilityResolver: read delegating_arbiter = {:?}",
                         if val.is_some() {
                             "Some(Arbiter)"
@@ -3586,20 +3586,20 @@ impl MissingCapabilityResolver {
                     val
                 }
                 Err(_) => {
-                    eprintln!("❌ MissingCapabilityResolver: failed to acquire read lock for delegating_arbiter");
+                    ccos_eprintln!("❌ MissingCapabilityResolver: failed to acquire read lock for delegating_arbiter");
                     None
                 }
             }
         };
 
         let strategy = if let Some(arbiter) = arbiter_opt {
-            eprintln!(
+            ccos_eprintln!(
                 "🧠 LLM synthesis: using delegating arbiter for '{}'",
                 capability_id_normalized
             );
             PureRtfsGenerationStrategy::new(config).with_arbiter(arbiter)
         } else {
-            eprintln!(
+            ccos_eprintln!(
                 "ℹ️ LLM synthesis: no arbiter available, falling back to template generation for '{}'",
                 capability_id_normalized
             );
@@ -3608,7 +3608,7 @@ impl MissingCapabilityResolver {
 
         match strategy.generate_pure_rtfs_implementation(request).await {
             Ok(rtfs_source) => {
-                eprintln!(
+                ccos_eprintln!(
                     "📝 Synthesis produced RTFS for '{}'; registering as pure_rtfs_generated",
                     capability_id_normalized
                 );
@@ -3685,7 +3685,7 @@ impl MissingCapabilityResolver {
                     .await
             }
             Err(e) => {
-                eprintln!("❌ LLM synthesis attempt failed: {}", e);
+                ccos_eprintln!("❌ LLM synthesis attempt failed: {}", e);
                 Ok(None)
             }
         }
@@ -3724,7 +3724,7 @@ impl MissingCapabilityResolver {
             .await
         {
             Ok(mut manifest) => {
-                eprintln!(
+                ccos_eprintln!(
                     "💾 Persisting generated capability '{}' (source: {})",
                     manifest.id, source_label
                 );
@@ -3747,7 +3747,7 @@ impl MissingCapabilityResolver {
                 Ok(Some(manifest))
             }
             Err(err) => {
-                eprintln!(
+                ccos_eprintln!(
                     "❌ RTFS generation produced invalid capability RTFS: {}",
                     err
                 );
@@ -3818,7 +3818,7 @@ impl MissingCapabilityResolver {
         })?;
 
         if self.config.verbose_logging {
-            eprintln!("💾 MULTI-CAPABILITY: Saved capability: {}", manifest.id);
+            ccos_eprintln!("💾 MULTI-CAPABILITY: Saved capability: {}", manifest.id);
         }
 
         Ok(())
@@ -3920,7 +3920,7 @@ impl MissingCapabilityResolver {
         })?;
 
         if self.config.verbose_logging {
-            eprintln!(
+            ccos_eprintln!(
                 "💾 MULTI-CAPABILITY: Saved capability with RTFS implementation: {} ({})",
                 manifest.id,
                 capability_file.display()
@@ -4010,14 +4010,14 @@ fn convert_expression_to_type_expr(expr: &Expression) -> Result<TypeExpr, String
             match std::panic::catch_unwind(|| parse_type_expression(&schema_src)) {
                 Ok(Ok(type_expr)) => Ok(type_expr),
                 Ok(Err(err)) => {
-                    eprintln!(
+                    ccos_eprintln!(
                         "⚠️  Type expression parse error for schema '{}': {:?}; defaulting to :any",
                         schema_src, err
                     );
                     Ok(TypeExpr::Any)
                 }
                 Err(_) => {
-                    eprintln!(
+                    ccos_eprintln!(
                         "⚠️  Type expression parsing panicked for schema '{}'; defaulting to :any",
                         schema_src
                     );
