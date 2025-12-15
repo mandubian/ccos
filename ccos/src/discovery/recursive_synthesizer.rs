@@ -63,14 +63,14 @@ impl RecursiveSynthesizer {
         let depth = context.current_depth;
         let indent = "  ".repeat(depth);
 
-        eprintln!(
+        ccos_eprintln!(
             "{}🔄 [Depth {}] Starting synthesis for: {}",
             indent, depth, need.capability_class
         );
 
         // Check depth limit first
         if !self.cycle_detector.can_go_deeper() {
-            eprintln!(
+            ccos_eprintln!(
                 "{}⚠️  [Depth {}] Max depth {} reached for {}",
                 indent, depth, self.default_max_depth, need.capability_class
             );
@@ -84,11 +84,11 @@ impl RecursiveSynthesizer {
         // This prevents re-synthesizing capabilities that were already created at a parent level
         let marketplace = self.discovery_engine.get_marketplace();
         if let Some(manifest) = marketplace.get_capability(&need.capability_class).await {
-            eprintln!(
+            ccos_eprintln!(
                 "{}  → Capability already exists in marketplace: {}",
                 indent, manifest.id
             );
-            eprintln!(
+            ccos_eprintln!(
                 "{}  ✓ Using existing capability (no re-synthesis needed)",
                 indent
             );
@@ -105,7 +105,7 @@ impl RecursiveSynthesizer {
         // Check cycle detection (only if not already in marketplace)
         // This prevents infinite loops when a capability needs itself
         if self.cycle_detector.has_cycle(&need.capability_class) {
-            eprintln!(
+            ccos_eprintln!(
                 "{}  ✗ Cycle detected: {} is already being synthesized in this path",
                 indent, need.capability_class
             );
@@ -125,7 +125,7 @@ impl RecursiveSynthesizer {
             .await;
         let related_cap_ids: Vec<String> = related_caps.iter().map(|m| m.id.clone()).collect();
         if !related_cap_ids.is_empty() {
-            eprintln!(
+            ccos_eprintln!(
                 "{}  → Found {} related capabilities in marketplace for reference",
                 indent,
                 related_cap_ids.len()
@@ -148,7 +148,7 @@ impl RecursiveSynthesizer {
                 }
             };
             if let Some(ref goal) = goal_opt {
-                eprintln!("{}  → Retrieved parent goal: \"{}\"", indent, goal);
+                ccos_eprintln!("{}  → Retrieved parent goal: \"{}\"", indent, goal);
             }
             goal_opt
         } else {
@@ -162,7 +162,7 @@ impl RecursiveSynthesizer {
             parent_goal_summary.as_deref(),
         );
 
-        eprintln!(
+        ccos_eprintln!(
             "{}  → Created intent: {} (parent: {:?})",
             indent, intent.intent_id, parent_intent_id
         );
@@ -209,15 +209,15 @@ impl RecursiveSynthesizer {
         }
 
         // Generate plan using delegating arbiter if available
-        eprintln!("{}  → Generating plan via delegating arbiter...", indent);
-        eprintln!("{}  📝 Intent sent to delegating arbiter:", indent);
-        eprintln!("{}    Goal: {}", indent, intent.goal);
-        eprintln!(
+        ccos_eprintln!("{}  → Generating plan via delegating arbiter...", indent);
+        ccos_eprintln!("{}  📝 Intent sent to delegating arbiter:", indent);
+        ccos_eprintln!("{}    Goal: {}", indent, intent.goal);
+        ccos_eprintln!(
             "{}    Constraints: {:?}",
             indent,
             intent.constraints.keys().collect::<Vec<_>>()
         );
-        eprintln!(
+        ccos_eprintln!(
             "{}    Preferences: {:?}",
             indent,
             intent.preferences.keys().collect::<Vec<_>>()
@@ -231,17 +231,17 @@ impl RecursiveSynthesizer {
                     intent.intent_id, e
                 ))
             })?;
-            eprintln!("{}  ✓ Plan generated successfully", indent);
-            eprintln!("{}  📥 Delegating arbiter response (RTFS plan):", indent);
+            ccos_eprintln!("{}  ✓ Plan generated successfully", indent);
+            ccos_eprintln!("{}  📥 Delegating arbiter response (RTFS plan):", indent);
             // Log the generated plan RTFS
             if let crate::types::PlanBody::Rtfs(rtfs) = &generated_plan.body {
-                eprintln!("{}  📄 Generated plan RTFS:", indent);
+                ccos_eprintln!("{}  📄 Generated plan RTFS:", indent);
                 for line in rtfs.lines().take(20) {
                     // Show first 20 lines
-                    eprintln!("{}    {}", indent, line);
+                    ccos_eprintln!("{}    {}", indent, line);
                 }
                 if rtfs.lines().count() > 20 {
-                    eprintln!(
+                    ccos_eprintln!(
                         "{}    ... ({} more lines)",
                         indent,
                         rtfs.lines().count() - 20
@@ -251,7 +251,7 @@ impl RecursiveSynthesizer {
             generated_plan
         } else {
             // No arbiter available - create minimal stub plan
-            eprintln!("{}  ⚠️  No arbiter available, creating stub plan", indent);
+            ccos_eprintln!("{}  ⚠️  No arbiter available, creating stub plan", indent);
             Plan::new_rtfs(
                 format!("(plan \"synthesized-{}\" :body (do (log \"Stub capability: {}\") {{:status \"stub\"}}))",
                     need.capability_class, need.capability_class),
@@ -260,7 +260,7 @@ impl RecursiveSynthesizer {
         };
 
         // Extract capability needs from the generated plan
-        eprintln!("{}  → Extracting sub-capability needs from plan...", indent);
+        ccos_eprintln!("{}  → Extracting sub-capability needs from plan...", indent);
         let sub_needs = CapabilityNeedExtractor::extract_from_plan(&plan);
 
         // Validate that the plan declares a service (not just asks questions)
@@ -277,21 +277,21 @@ impl RecursiveSynthesizer {
             sub_needs.len() == 1 && sub_needs[0].capability_class == need.capability_class;
 
         if has_user_ask_only || (sub_needs.is_empty() && !has_service_call) {
-            eprintln!(
+            ccos_eprintln!(
                 "{}  ⚠️  WARNING: Plan only asks questions but doesn't declare a service capability.",
                 indent
             );
-            eprintln!(
+            ccos_eprintln!(
                 "{}  ⚠️  Expected plan to declare and call a specific service (e.g., restaurant.api.search)",
                 indent
             );
         } else if self_reference_only {
-            eprintln!(
+            ccos_eprintln!(
                 "{}  ⚠️  WARNING: Plan only calls itself - this indicates incomplete synthesis",
                 indent
             );
         } else if has_service_call && !self_reference_only {
-            eprintln!(
+            ccos_eprintln!(
                 "{}  ✓ Plan validation passed: contains valid service calls",
                 indent
             );
@@ -300,27 +300,27 @@ impl RecursiveSynthesizer {
         // Check for self-referencing cycles: if the plan only calls itself, search remote registries
         let mut sub_needs = sub_needs;
         if sub_needs.len() == 1 && sub_needs[0].capability_class == need.capability_class {
-            eprintln!(
+            ccos_eprintln!(
                 "{}  ⚠️  WARNING: Plan only calls itself ({}) - searching remote registries...",
                 indent, need.capability_class
             );
 
             // Search MCP registry
-            eprintln!("{}  → Searching MCP registry...", indent);
+            ccos_eprintln!("{}  → Searching MCP registry...", indent);
             if let Some(mcp_manifest) = self
                 .discovery_engine
                 .search_mcp_registry(need)
                 .await
                 .map_err(|e| RuntimeError::Generic(format!("MCP search error: {}", e)))?
             {
-                eprintln!("{}  ✓ Found in MCP registry: {}", indent, mcp_manifest.id);
+                ccos_eprintln!("{}  ✓ Found in MCP registry: {}", indent, mcp_manifest.id);
                 // Register and return the MCP capability
                 let marketplace = self.discovery_engine.get_marketplace();
                 if let Err(e) = marketplace
                     .register_capability_manifest(mcp_manifest.clone())
                     .await
                 {
-                    eprintln!("{}  ⚠️  Failed to register MCP capability: {}", indent, e);
+                    ccos_eprintln!("{}  ⚠️  Failed to register MCP capability: {}", indent, e);
                 }
                 return Ok(SynthesizedCapability {
                     manifest: mcp_manifest,
@@ -333,14 +333,14 @@ impl RecursiveSynthesizer {
 
             // Search OpenAPI services
             // DISABLED: Web search and OpenAPI discovery temporarily disabled to avoid timeouts
-            // eprintln!("{}  → Searching OpenAPI services...", indent);
+            // ccos_eprintln!("{}  → Searching OpenAPI services...", indent);
             // if let Some(openapi_manifest) = self.discovery_engine.search_openapi(need).await
             //     .map_err(|e| RuntimeError::Generic(format!("OpenAPI search error: {}", e)))? {
-            //     eprintln!("{}  ✓ Found via OpenAPI: {}", indent, openapi_manifest.id);
+            //     ccos_eprintln!("{}  ✓ Found via OpenAPI: {}", indent, openapi_manifest.id);
             //     // Register and return the OpenAPI capability
             //     let marketplace = self.discovery_engine.get_marketplace();
             //     if let Err(e) = marketplace.register_capability_manifest(openapi_manifest.clone()).await {
-            //         eprintln!("{}  ⚠️  Failed to register OpenAPI capability: {}", indent, e);
+            //         ccos_eprintln!("{}  ⚠️  Failed to register OpenAPI capability: {}", indent, e);
             //     }
             //     return Ok(SynthesizedCapability {
             //         manifest: openapi_manifest,
@@ -354,7 +354,7 @@ impl RecursiveSynthesizer {
             // Try local RTFS synthesis for simple operations (ONLY if MCP didn't find anything)
             // IMPORTANT: We only synthesize if no MCP capability was found above - if MCP found something,
             // we would have returned early and never reached this point.
-            eprintln!(
+            ccos_eprintln!(
                 "{}  → Attempting local RTFS synthesis (MCP found nothing, using fallback)...",
                 indent
             );
@@ -363,7 +363,7 @@ impl RecursiveSynthesizer {
                     need,
                 ) {
                     Ok(local_manifest) => {
-                        eprintln!(
+                        ccos_eprintln!(
                             "{}  ✓ Synthesized as local RTFS capability: {}",
                             indent, local_manifest.id
                         );
@@ -371,12 +371,12 @@ impl RecursiveSynthesizer {
                         // Display the generated RTFS code
                         if let Some(rtfs_code) = local_manifest.metadata.get("rtfs_implementation")
                         {
-                            eprintln!("{}  📝 Generated RTFS code:", indent);
-                            eprintln!("{}  {}", indent, "─".repeat(74));
+                            ccos_eprintln!("{}  📝 Generated RTFS code:", indent);
+                            ccos_eprintln!("{}  {}", indent, "─".repeat(74));
                             for line in rtfs_code.lines() {
-                                eprintln!("{}  {}", indent, line);
+                                ccos_eprintln!("{}  {}", indent, line);
                             }
-                            eprintln!("{}  {}", indent, "─".repeat(74));
+                            ccos_eprintln!("{}  {}", indent, "─".repeat(74));
                         }
 
                         // Save the capability to disk
@@ -385,12 +385,12 @@ impl RecursiveSynthesizer {
                             .save_synthesized_capability(&local_manifest)
                             .await
                         {
-                            eprintln!(
+                            ccos_eprintln!(
                                 "{}  ⚠️  Failed to save synthesized capability: {}",
                                 indent, e
                             );
                         } else {
-                            eprintln!("{}  💾 Saved synthesized capability to disk", indent);
+                            ccos_eprintln!("{}  💾 Saved synthesized capability to disk", indent);
                         }
 
                         // Register and return the local capability
@@ -399,7 +399,7 @@ impl RecursiveSynthesizer {
                             .register_capability_manifest(local_manifest.clone())
                             .await
                         {
-                            eprintln!("{}  ⚠️  Failed to register local capability: {}", indent, e);
+                            ccos_eprintln!("{}  ⚠️  Failed to register local capability: {}", indent, e);
                         }
                         return Ok(SynthesizedCapability {
                             manifest: local_manifest,
@@ -410,16 +410,16 @@ impl RecursiveSynthesizer {
                         });
                     }
                     Err(e) => {
-                        eprintln!("{}  ⚠️  Local synthesis failed: {}", indent, e);
-                        eprintln!("{}  → Falling back to incomplete marking", indent);
+                        ccos_eprintln!("{}  ⚠️  Local synthesis failed: {}", indent, e);
+                        ccos_eprintln!("{}  → Falling back to incomplete marking", indent);
                     }
                 }
             } else {
-                eprintln!("{}  → Capability is not a simple local operation", indent);
+                ccos_eprintln!("{}  → Capability is not a simple local operation", indent);
             }
 
             // Not found anywhere - mark as incomplete/not_found
-            eprintln!(
+            ccos_eprintln!(
                 "{}  ✗ Not found in MCP registry (OpenAPI search disabled) - marking as incomplete/not_found",
                 indent
             );
@@ -430,16 +430,16 @@ impl RecursiveSynthesizer {
                 .register_capability_manifest(incomplete_manifest.clone())
                 .await
             {
-                eprintln!(
+                ccos_eprintln!(
                     "{}  ⚠️  Failed to register incomplete capability: {}",
                     indent, e
                 );
             } else {
-                eprintln!(
+                ccos_eprintln!(
                     "{}  ⚠️  Registered incomplete capability: {} (status: incomplete/not_found)",
                     indent, incomplete_manifest.id
                 );
-                eprintln!(
+                ccos_eprintln!(
                     "{}  → User notification: Capability '{}' is needed but not found. It requires manual implementation or external service integration.",
                     indent, need.capability_class
                 );
@@ -458,13 +458,13 @@ impl RecursiveSynthesizer {
             });
         }
 
-        eprintln!(
+        ccos_eprintln!(
             "{}  ✓ Found {} sub-capability needs",
             indent,
             sub_needs.len()
         );
         for sub_need in &sub_needs {
-            eprintln!(
+            ccos_eprintln!(
                 "{}    • {} (inputs: {:?}, outputs: {:?})",
                 indent,
                 sub_need.capability_class,
@@ -490,7 +490,7 @@ impl RecursiveSynthesizer {
 
         // Process queue until empty or max depth reached
         if !processing_queue.is_empty() {
-            eprintln!(
+            ccos_eprintln!(
                 "{}  → Processing {} sub-capabilities in queue...",
                 indent,
                 processing_queue.len()
@@ -502,7 +502,7 @@ impl RecursiveSynthesizer {
 
             // Check depth limit
             if depth > self.default_max_depth {
-                eprintln!(
+                ccos_eprintln!(
                     "{}⚠️  [Depth {}] Max depth {} reached for {}",
                     sub_indent, depth, self.default_max_depth, sub_need.capability_class
                 );
@@ -517,7 +517,7 @@ impl RecursiveSynthesizer {
             // we rely on depth limits and the cycle detector in synthesize_as_intent
 
             // Try to discover the sub-capability in marketplace first
-            eprintln!(
+            ccos_eprintln!(
                 "{}  → [Depth {}] Checking marketplace for: {}",
                 sub_indent, depth, sub_need.capability_class
             );
@@ -527,7 +527,7 @@ impl RecursiveSynthesizer {
                 .is_some()
             {
                 // Found in marketplace - no need to synthesize
-                eprintln!(
+                ccos_eprintln!(
                     "{}    ✓ Found in marketplace, skipping synthesis",
                     sub_indent
                 );
@@ -539,11 +539,11 @@ impl RecursiveSynthesizer {
             // If so, it's a true cycle (capability needs itself) - skip it gracefully
             // Note: go_deeper() clones the visited set, so we can check what would be in the deeper detector
             if self.cycle_detector.has_cycle(&sub_need.capability_class) {
-                eprintln!(
+                ccos_eprintln!(
                     "{}    ⚠️  Skipping: {} is already being synthesized in this path",
                     sub_indent, sub_need.capability_class
                 );
-                eprintln!(
+                ccos_eprintln!(
                     "{}      (Cycle detected - capability would depend on itself)",
                     sub_indent
                 );
@@ -555,7 +555,7 @@ impl RecursiveSynthesizer {
             }
 
             // Not found - synthesize it using queue-based approach
-            eprintln!("{}    → Not found, synthesizing...", sub_indent);
+            ccos_eprintln!("{}    → Not found, synthesizing...", sub_indent);
             // Create a new context for this depth level
             let mut sub_context = DiscoveryContext::new(self.default_max_depth);
             sub_context.current_depth = depth;
@@ -577,11 +577,11 @@ impl RecursiveSynthesizer {
                         .unwrap_or(false);
 
                     if is_incomplete {
-                        eprintln!(
+                        ccos_eprintln!(
                             "{}    ⚠️  [Depth {}] Synthesized incomplete capability: {}",
                             sub_indent, depth, synthesized.manifest.id
                         );
-                        eprintln!(
+                        ccos_eprintln!(
                             "{}      → Parent capability will be marked incomplete",
                             sub_indent
                         );
@@ -590,7 +590,7 @@ impl RecursiveSynthesizer {
                             "sub-capability incomplete".to_string(),
                         ));
                     } else {
-                        eprintln!(
+                        ccos_eprintln!(
                             "{}    ✓ [Depth {}] Successfully synthesized: {}",
                             sub_indent, depth, synthesized.manifest.id
                         );
@@ -602,12 +602,12 @@ impl RecursiveSynthesizer {
                         .register_capability_manifest(synthesized.manifest.clone())
                         .await
                     {
-                        eprintln!(
+                        ccos_eprintln!(
                             "{}    ⚠️  Warning: Failed to register synthesized sub-capability {}: {}",
                             sub_indent, sub_need.capability_class, e
                         );
                     } else if !is_incomplete {
-                        eprintln!("{}    ✓ Registered in marketplace", sub_indent);
+                        ccos_eprintln!("{}    ✓ Registered in marketplace", sub_indent);
                     }
 
                     // Extract sub-needs from the synthesized capability's plan and add to queue
@@ -616,7 +616,7 @@ impl RecursiveSynthesizer {
                         let sub_sub_needs = CapabilityNeedExtractor::extract_from_plan(sub_plan);
 
                         if !sub_sub_needs.is_empty() {
-                            eprintln!(
+                            ccos_eprintln!(
                                 "{}    → Found {} sub-sub-capabilities, adding to queue...",
                                 sub_indent,
                                 sub_sub_needs.len()
@@ -629,7 +629,7 @@ impl RecursiveSynthesizer {
                             let mut new_visited = visited.clone();
                             new_visited.push(synthesized.manifest.id.clone());
                             processing_queue.push((sub_sub_need, depth + 1, new_visited));
-                            eprintln!(
+                            ccos_eprintln!(
                                 "{}      • Queued: {} (depth {})",
                                 sub_indent,
                                 capability_class,
@@ -639,7 +639,7 @@ impl RecursiveSynthesizer {
                     }
                 }
                 Err(e) => {
-                    eprintln!(
+                    ccos_eprintln!(
                         "{}    ✗ [Depth {}] Failed to synthesize {}: {}",
                         sub_indent, depth, sub_need.capability_class, e
                     );
@@ -648,7 +648,7 @@ impl RecursiveSynthesizer {
         }
 
         if sub_intents.is_empty() && !processing_queue.is_empty() {
-            eprintln!("{}  → All sub-capabilities processed", indent);
+            ccos_eprintln!("{}  → All sub-capabilities processed", indent);
         }
 
         // Extract RTFS orchestrator from plan
@@ -716,7 +716,7 @@ impl RecursiveSynthesizer {
             );
         }
 
-        eprintln!(
+        ccos_eprintln!(
             "{}✓ [Depth {}] Synthesis complete for: {} (sub-capabilities: {}, skipped: {}){}",
             indent,
             depth,
@@ -731,7 +731,7 @@ impl RecursiveSynthesizer {
         );
         if !skipped_capabilities.is_empty() {
             for (cap, reason) in &skipped_capabilities {
-                eprintln!("{}  ⚠️  Skipped: {} ({})", indent, cap, reason);
+                ccos_eprintln!("{}  ⚠️  Skipped: {} ({})", indent, cap, reason);
             }
         }
 
