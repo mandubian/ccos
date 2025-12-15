@@ -235,10 +235,6 @@ where
 {
     fn store(&self, entity: T) -> Result<String, String> {
         let hash = entity.content_hash();
-        println!(
-            "🔍 FileArchive::store called for entity with hash: {}",
-            hash
-        );
 
         // Determine deterministic relative path; prefer existing index entry
         let rel = {
@@ -251,25 +247,12 @@ where
                 .unwrap_or_else(|| Self::default_rel_path(&hash))
         };
         let path = self.base_dir.join(&rel);
-        println!("🔍 FileArchive::store writing to path: {:?}", path);
 
         // Serialize to JSON
-        let json = serde_json::to_string_pretty(&entity).map_err(|e| {
-            println!("❌ FileArchive::store JSON serialization failed: {}", e);
-            e.to_string()
-        })?;
-        println!(
-            "🔍 FileArchive::store JSON serialized, length: {}",
-            json.len()
-        );
+        let json = serde_json::to_string_pretty(&entity).map_err(|e| e.to_string())?;
 
         // Ensure directories and atomically write file
-        self.atomic_write_with_lock(&path, json.as_bytes())
-            .map_err(|e| {
-                println!("❌ FileArchive::store atomic_write_with_lock failed: {}", e);
-                e
-            })?;
-        println!("✅ FileArchive::store atomic_write succeeded");
+        self.atomic_write_with_lock(&path, json.as_bytes())?;
 
         // Update metadata
         let mut meta = self
