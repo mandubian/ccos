@@ -339,12 +339,12 @@ impl DecompositionStrategy for GroundedLlmDecomposition {
         let prompt = self.build_grounded_prompt(goal, &filtered_tools, context);
 
         // Print tool count always, but prompt/response only if verbose
-        println!(
+        ccos_println!(
             "\n📋 Grounded LLM decomposition: {} tools available for grounding",
             filtered_tools.len()
         );
         if !filtered_tools.is_empty() {
-            println!(
+            ccos_println!(
                 "   Tools: {}",
                 filtered_tools
                     .iter()
@@ -356,24 +356,24 @@ impl DecompositionStrategy for GroundedLlmDecomposition {
 
         // DEBUG: Print prompt if show_prompt, verbose_llm, or confirm_llm is enabled
         if context.show_prompt || context.verbose_llm || context.confirm_llm {
-            println!("\n🤖 LLM Prompt:\n══════════════════════════════════════════════════════════════════════════════\n{}\n══════════════════════════════════════════════════════════════════════════════", prompt);
+            ccos_println!("\n🤖 LLM Prompt:\n══════════════════════════════════════════════════════════════════════════════\n{}\n══════════════════════════════════════════════════════════════════════════════", prompt);
         }
 
         // If confirm_llm is enabled, wait for user confirmation before calling LLM
         if context.confirm_llm {
-            println!("\n⏸️  Press Enter to send this prompt to LLM, or Ctrl+C to cancel...");
+            ccos_println!("\n⏸️  Press Enter to send this prompt to LLM, or Ctrl+C to cancel...");
             let mut input = String::new();
             std::io::stdin()
                 .read_line(&mut input)
                 .expect("Failed to read line");
-            println!("   Sending to LLM...");
+            ccos_println!("   Sending to LLM...");
         }
 
         let response = self.llm_provider.generate_text(&prompt).await?;
 
         // DEBUG: Print response only if verbose_llm is enabled
         if context.verbose_llm {
-            println!("\n🤖 LLM Response:\n──────────────────────────────────────────────────────────────────────────────\n{}\n──────────────────────────────────────────────────────────────────────────────", response);
+            ccos_println!("\n🤖 LLM Response:\n──────────────────────────────────────────────────────────────────────────────\n{}\n──────────────────────────────────────────────────────────────────────────────", response);
         }
 
         // Parse response (reuse logic from intent_first)
