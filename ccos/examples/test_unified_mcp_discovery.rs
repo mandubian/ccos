@@ -192,8 +192,8 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
                 headers.insert("Authorization".to_string(), format!("Bearer {}", token));
                 headers
             }),
-            retry_policy: ccos::mcp::types::RetryPolicy::default(),
-            rate_limit: ccos::mcp::types::RateLimitConfig::default(),
+            retry_policy: ccos::mcp::RetryPolicy::default(),
+            rate_limit: ccos::mcp::RateLimitConfig::default(),
             max_parallel_discoveries: 5,
             lazy_output_schemas: true,
             ignore_approved_files: false,
@@ -258,8 +258,8 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
                 headers.insert("Authorization".to_string(), format!("Bearer {}", token));
                 headers
             }),
-            retry_policy: ccos::mcp::types::RetryPolicy::default(),
-            rate_limit: ccos::mcp::types::RateLimitConfig::default(),
+            retry_policy: ccos::mcp::RetryPolicy::default(),
+            rate_limit: ccos::mcp::RateLimitConfig::default(),
             max_parallel_discoveries: 5,
             lazy_output_schemas: true,
             ignore_approved_files: false,

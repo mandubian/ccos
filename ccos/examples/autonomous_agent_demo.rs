@@ -2856,6 +2856,18 @@ async fn run_modular_planner(
                     reason
                 );
             }
+            ModularTraceEvent::LlmCalled {
+                model,
+                tokens_prompt,
+                tokens_response,
+                duration_ms,
+                ..
+            } => {
+                println!(
+                    "   🤖 LLM called: {} ({}+{} tokens, {}ms)",
+                    model, tokens_prompt, tokens_response, duration_ms
+                );
+            }
         }
     }
 
