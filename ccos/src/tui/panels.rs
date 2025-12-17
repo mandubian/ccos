@@ -502,13 +502,14 @@ fn render_discover_input(f: &mut Frame, state: &AppState, area: Rect) {
 
 /// Render the capability list from all servers, grouped by source
 fn render_capability_list(f: &mut Frame, state: &AppState, area: Rect) {
-    // Show all discovered capabilities without local filtering
-    // The registry search already filters by the query
-    let filtered_caps: Vec<(usize, &super::state::DiscoveredCapability)> =
-        state.discovered_capabilities.iter().enumerate().collect();
-
-    // Count visible capabilities
+    // Apply local filtering based on the search hint
+    let filtered_caps = state.filtered_discovered_caps();
     let total_count = filtered_caps.len();
+    let selected_idx = if total_count > 0 {
+        state.discover_selected.min(total_count - 1)
+    } else {
+        0
+    };
 
     let block_style = if state.active_panel == ActivePanel::DiscoverList {
         Style::default().fg(theme::MAUVE)
@@ -529,60 +530,78 @@ fn render_capability_list(f: &mut Frame, state: &AppState, area: Rect) {
         Vec<(usize, &super::state::DiscoveredCapability)>,
     > = std::collections::BTreeMap::new();
 
-    for (i, cap) in &filtered_caps {
+    for (display_idx, (_, cap)) in filtered_caps.iter().enumerate() {
         by_source
             .entry(cap.source.clone())
             .or_default()
-            .push((*i, cap));
+            .push((display_idx, *cap));
     }
 
     // First show Local/Builtin capabilities
-    if let Some(builtin_caps) = by_source.remove("Local") {
+    let mut local_caps = by_source.remove("Local Registry");
+    if local_caps.is_none() {
+        local_caps = by_source.remove("Local");
+    }
+
+    if let Some(builtin_caps) = local_caps {
+        let local_key = "Local Capabilities".to_string();
+        let collapsed = state.discover_local_collapsed
+            || state.discover_collapsed_sources.contains(&local_key);
+        let indicator = if collapsed { "▶" } else { "▼" };
         items.push(ListItem::new(Line::from(vec![Span::styled(
-            "── Local Capabilities ──",
+            format!("{} Local Capabilities", indicator),
             Style::default()
                 .fg(theme::SAPPHIRE)
                 .add_modifier(Modifier::BOLD),
         )])));
 
-        for (i, cap) in builtin_caps {
-            let is_selected = i == state.discover_selected;
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme::MAUVE)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT)
-            };
-            let prefix = if is_selected { "► " } else { "  " };
-            let category_icon = match cap.category {
-                CapabilityCategory::McpTool => "🔧",
-                CapabilityCategory::RtfsFunction => "λ",
-                CapabilityCategory::Builtin => "⚙️",
-                CapabilityCategory::Synthesized => "✨",
-            };
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(prefix, style),
-                Span::styled(
-                    format!("{} ", category_icon),
-                    Style::default().fg(theme::PEACH),
-                ),
-                Span::styled(&cap.name, style),
-            ])));
+        if !collapsed {
+            for (display_idx, cap) in builtin_caps {
+                let is_selected = display_idx == selected_idx;
+                let style = if is_selected {
+                    Style::default()
+                        .fg(theme::MAUVE)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme::TEXT)
+                };
+                let prefix = if is_selected { "► " } else { "  " };
+                let category_icon = match cap.category {
+                    CapabilityCategory::McpTool => "🔧",
+                    CapabilityCategory::RtfsFunction => "λ",
+                    CapabilityCategory::Builtin => "⚙️",
+                    CapabilityCategory::Synthesized => "✨",
+                };
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled(prefix, style),
+                    Span::styled(
+                        format!("{} ", category_icon),
+                        Style::default().fg(theme::PEACH),
+                    ),
+                    Span::styled(&cap.name, style),
+                ])));
+            }
         }
     }
 
     // Then show MCP server capabilities grouped by server
     for (source, caps) in by_source {
+        let collapsed = state.discover_collapsed_sources.contains(&source);
+        let indicator = if collapsed { "▶" } else { "▼" };
+
         items.push(ListItem::new(Line::from(vec![Span::styled(
-            format!("── {} ──", source),
+            format!("{} {}", indicator, source),
             Style::default()
                 .fg(theme::TEAL)
                 .add_modifier(Modifier::BOLD),
         )])));
 
-        for (i, cap) in caps {
-            let is_selected = i == state.discover_selected;
+        if collapsed {
+            continue;
+        }
+
+        for (display_idx, cap) in caps {
+            let is_selected = display_idx == selected_idx;
             let style = if is_selected {
                 Style::default()
                     .fg(theme::MAUVE)
@@ -639,11 +658,15 @@ fn render_capability_details(f: &mut Frame, state: &AppState, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::PANEL_BORDER));
 
+    let filtered_caps = state.filtered_discovered_caps();
+    let selected_idx = if filtered_caps.is_empty() {
+        0
+    } else {
+        state.discover_selected.min(filtered_caps.len() - 1)
+    };
+
     // Get the currently selected capability's details
-    let lines = if !state.discovered_capabilities.is_empty()
-        && state.discover_selected < state.discovered_capabilities.len()
-    {
-        let cap = &state.discovered_capabilities[state.discover_selected];
+    let lines = if let Some((_, cap)) = filtered_caps.get(selected_idx) {
         vec![
             Line::from(vec![
                 Span::styled("Name:     ", Style::default().fg(theme::SUBTEXT0)),
@@ -678,50 +701,10 @@ fn render_capability_details(f: &mut Frame, state: &AppState, area: Rect) {
             )]),
         ]
     } else {
-        // Fallback: show details from server tools
-        let mut selected_tool: Option<(&str, &str)> = None;
-        let mut idx = 0;
-        for server in &state.servers {
-            for tool in &server.tools {
-                if idx == state.discover_selected {
-                    selected_tool = Some((tool.as_str(), server.name.as_str()));
-                    break;
-                }
-                idx += 1;
-            }
-            if selected_tool.is_some() {
-                break;
-            }
-        }
-
-        if let Some((name, source)) = selected_tool {
-            vec![
-                Line::from(vec![
-                    Span::styled("Name:     ", Style::default().fg(theme::SUBTEXT0)),
-                    Span::styled(
-                        name,
-                        Style::default()
-                            .fg(theme::TEXT)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("Source:   ", Style::default().fg(theme::SUBTEXT0)),
-                    Span::styled(source, Style::default().fg(theme::TEAL)),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("Type:     ", Style::default().fg(theme::SUBTEXT0)),
-                    Span::styled("MCP Tool", Style::default().fg(theme::PEACH)),
-                ]),
-            ]
-        } else {
-            vec![Line::from(vec![Span::styled(
-                "Select a capability to view details",
-                Style::default().fg(theme::SUBTEXT0),
-            )])]
-        }
+        vec![Line::from(vec![Span::styled(
+            "Select a capability to view details",
+            Style::default().fg(theme::SUBTEXT0),
+        )])]
     };
 
     let paragraph = Paragraph::new(lines)

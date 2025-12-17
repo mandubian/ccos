@@ -9,6 +9,7 @@
 //! - LLM prompts and responses
 
 use std::collections::VecDeque;
+use std::collections::HashSet;
 use std::time::Instant;
 
 /// Maximum number of events to retain
@@ -428,6 +429,8 @@ pub struct AppState {
     pub discover_search_hint: String, // Formerly discover_filter
     pub discover_input_active: bool,
     pub discover_popup: DiscoverPopup,
+    pub discover_local_collapsed: bool,
+    pub discover_collapsed_sources: HashSet<String>,
 }
 
 /// A discovered capability for the Discover view
@@ -509,6 +512,8 @@ impl Default for AppState {
             discover_search_hint: String::new(),
             discover_input_active: false,
             discover_popup: DiscoverPopup::None,
+            discover_local_collapsed: false,
+            discover_collapsed_sources: HashSet::new(),
         }
     }
 }
@@ -604,5 +609,32 @@ impl AppState {
             self.mode,
             ExecutionMode::Received | ExecutionMode::Planning | ExecutionMode::Executing
         )
+    }
+
+    /// Return discovered capabilities filtered by the current search hint
+    pub fn filtered_discovered_caps(
+        &self,
+    ) -> Vec<(usize, &DiscoveredCapability)> {
+        if self.discover_search_hint.trim().is_empty() {
+            return self.discovered_capabilities.iter().enumerate().collect();
+        }
+
+        let query = self.discover_search_hint.to_lowercase();
+        self.discovered_capabilities
+            .iter()
+            .enumerate()
+            .filter(|(_, cap)| {
+                let name = cap.name.to_lowercase();
+                let desc = cap.description.to_lowercase();
+                let source = cap.source.to_lowercase();
+
+                name.contains(&query) || desc.contains(&query) || source.contains(&query)
+            })
+            .collect()
+    }
+
+    /// Count of filtered discovered capabilities for selection bounds
+    pub fn filtered_discovered_count(&self) -> usize {
+        self.filtered_discovered_caps().len()
     }
 }
