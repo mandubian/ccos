@@ -4216,8 +4216,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             repair_options.additional_context = Some(context_lines.join("\n"));
             repair_options.debug_responses = args.debug_prompts;
 
+            let _repair_options = repair_options;
+
             match ccos
-                .validate_and_execute_plan_with_auto_repair(plan.clone(), &context, repair_options)
+                .validate_and_execute_plan(plan.clone(), &context)
                 .await
             {
                 Ok(result) => {

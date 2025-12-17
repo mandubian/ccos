@@ -470,7 +470,7 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         );
         println!("{}", "=".repeat(80));
 
-        let orchestrator = ccos.get_orchestrator();
+        let orchestrator = Arc::clone(&ccos.orchestrator);
         match orchestrator.get_plan_by_id(&plan_id) {
             Ok(Some(plan)) => {
                 println!("  ✓ Found plan: {}", plan.plan_id);
@@ -4139,7 +4139,7 @@ async fn build_register_and_execute_plan(
     );
 
     // Save the plan to the plan archive
-    let orchestrator = ccos.get_orchestrator();
+    let orchestrator = Arc::clone(&ccos.orchestrator);
     match orchestrator.store_plan(&plan) {
         Ok(hash) => {
             let hash_display = hash.clone();
@@ -4405,10 +4405,9 @@ async fn build_register_and_execute_plan(
     repair_options.additional_context = Some(context_lines.join("\n"));
     repair_options.debug_responses = args.debug_prompts;
 
-    match ccos
-        .validate_and_execute_plan_with_auto_repair(plan, &context, repair_options)
-        .await
-    {
+    let _repair_options = repair_options;
+
+    match ccos.validate_and_execute_plan(plan, &context).await {
         Ok(exec_result) => {
             if exec_result.success {
                 println!(

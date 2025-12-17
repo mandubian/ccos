@@ -285,6 +285,18 @@ fn print_plan_result(result: &PlanResult, verbose: bool) {
                         reason
                     );
                 }
+                TraceEvent::LlmCalled {
+                    model,
+                    tokens_prompt,
+                    tokens_response,
+                    duration_ms,
+                    ..
+                } => {
+                    println!(
+                        "   🤖 LLM called: {} ({}+{} tokens, {}ms)",
+                        model, tokens_prompt, tokens_response, duration_ms
+                    );
+                }
             }
         }
     }
