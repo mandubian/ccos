@@ -1405,7 +1405,7 @@ fn load_local_capabilities_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
         // Get all capability IDs from the registry
         let capability_ids = registry.list_capabilities();
         
-        let capabilities: Vec<DiscoveredCapability> = capability_ids
+        let mut capabilities: Vec<DiscoveredCapability> = capability_ids
             .into_iter()
             .map(|id| {
                 // Determine category based on capability ID prefix
@@ -1437,9 +1437,68 @@ fn load_local_capabilities_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
                 }
             })
             .collect();
+
+        // Add known API endpoints when authorization is available
+        capabilities.extend(load_known_api_capabilities());
         
         let _ = event_tx.send(TuiEvent::LocalCapabilitiesLoaded(capabilities));
     });
+}
+
+fn load_known_api_capabilities() -> Vec<DiscoveredCapability> {
+    use ccos::synthesis::introspection::known_apis::KnownApisRegistry;
+    use std::collections::HashMap;
+
+    let registry = match KnownApisRegistry::new() {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("Failed to load known APIs: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let mut caps = Vec::new();
+
+    for api in registry.list_apis() {
+        // Skip APIs that require auth if we do not have the required token
+        let authorized = match &api.auth {
+            Some(auth) if auth.required => match &auth.env_var {
+                Some(var) => std::env::var(var).is_ok(),
+                None => false,
+            },
+            _ => true,
+        };
+
+        if !authorized {
+            continue;
+        }
+
+        for ep in &api.endpoints {
+            let mut metadata = HashMap::new();
+            metadata.insert("base_url".to_string(), api.api.base_url.clone());
+            metadata.insert("path".to_string(), ep.path.clone());
+            metadata.insert("method".to_string(), ep.method.clone());
+
+            let name = format!("{}::{}", api.api.name, ep.id);
+            let description = format!("{} [{} {}]", ep.description, ep.method, ep.path);
+
+            caps.push(DiscoveredCapability {
+                id: name.clone(),
+                name,
+                description,
+                source: format!("Known API: {}", api.api.title),
+                category: CapabilityCategory::Builtin,
+                version: Some(api.api.version.clone()),
+                input_schema: None,
+                output_schema: None,
+                permissions: Vec::new(),
+                effects: Vec::new(),
+                metadata,
+            });
+        }
+    }
+
+    caps
 }
 
 fn search_discovery_async(query: String, event_tx: mpsc::UnboundedSender<TuiEvent>) {
@@ -1583,18 +1642,22 @@ fn handle_discover_input(state: &mut AppState, key: event::KeyEvent, event_tx: m
                 // Move focus to list while loading
                 state.active_panel = ActivePanel::DiscoverList;
                 state.discover_input_active = false;
+                state.discover_selected = 0;
             }
         }
         KeyCode::Esc => {
             state.discover_input_active = false;
             state.active_panel = ActivePanel::DiscoverList;
             state.discover_search_hint.clear();
+            state.discover_selected = 0;
         }
         KeyCode::Backspace => {
             state.discover_search_hint.pop();
+            state.discover_selected = 0;
         }
         KeyCode::Char(c) => {
             state.discover_search_hint.push(c);
+            state.discover_selected = 0;
         }
         _ => {}
     }
@@ -1718,34 +1781,59 @@ fn handle_discover_popup_key(state: &mut AppState, key: event::KeyEvent, event_t
 }
 
 fn handle_discover_list(state: &mut AppState, key: event::KeyEvent) {
+    let filtered_len = state.filtered_discovered_count();
+
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
             state.discover_selected = state.discover_selected.saturating_sub(1);
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if !state.discovered_capabilities.is_empty() {
-                state.discover_selected = (state.discover_selected + 1).min(state.discovered_capabilities.len() - 1);
+            if filtered_len > 0 {
+                state.discover_selected = (state.discover_selected + 1).min(filtered_len - 1);
             }
         }
         KeyCode::PageUp => {
             state.discover_selected = state.discover_selected.saturating_sub(10);
         }
         KeyCode::PageDown => {
-             if !state.discovered_capabilities.is_empty() {
-                state.discover_selected = (state.discover_selected + 10).min(state.discovered_capabilities.len() - 1);
+             if filtered_len > 0 {
+                state.discover_selected = (state.discover_selected + 10).min(filtered_len - 1);
             }
         }
         KeyCode::Home | KeyCode::Char('g') => {
             state.discover_selected = 0;
         }
         KeyCode::End | KeyCode::Char('G') => {
-            if !state.discovered_capabilities.is_empty() {
-                state.discover_selected = state.discovered_capabilities.len() - 1;
+            if filtered_len > 0 {
+                state.discover_selected = filtered_len - 1;
             }
         }
         KeyCode::Char('/') | KeyCode::Char('s') => {
             state.active_panel = ActivePanel::DiscoverInput;
             state.discover_input_active = true;
+            state.discover_selected = 0;
+        }
+        KeyCode::Char('c') => {
+            // Toggle collapse for the currently selected source
+            if let Some((_, cap)) = state
+                .filtered_discovered_caps()
+                .get(state.discover_selected.min(filtered_len.saturating_sub(1)))
+            {
+                let source = cap.source.clone();
+                if source == "Local" || source == "Local Registry" {
+                    state.discover_local_collapsed = !state.discover_local_collapsed;
+                    if state.discover_local_collapsed {
+                        state.discover_collapsed_sources.insert("Local Capabilities".to_string());
+                    } else {
+                        state.discover_collapsed_sources.remove("Local Capabilities");
+                    }
+                } else if state.discover_collapsed_sources.contains(&source) {
+                    state.discover_collapsed_sources.remove(&source);
+                } else {
+                    state.discover_collapsed_sources.insert(source);
+                }
+            }
+            state.discover_selected = 0;
         }
         _ => {}
     }
