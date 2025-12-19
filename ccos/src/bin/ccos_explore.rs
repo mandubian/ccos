@@ -21,6 +21,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc;
 use tokio::task::LocalSet;
 
+use ccos::ccos_eprintln;
 use ccos::examples_common::builder::ModularPlannerBuilder;
 use ccos::planner::modular_planner::decomposition::llm_adapter::LlmInteractionCapture;
 use ccos::planner::modular_planner::orchestrator::TraceEvent;
@@ -28,11 +29,90 @@ use ccos::tui::{
     panels,
     state::{
         ActivePanel, AppState, CapabilityCategory, CapabilityResolution, CapabilitySource,
-        DecompNode, DiscoverPopup, DiscoveredCapability, DiscoverySearchResult, ExecutionMode,
+        DecompNode, DiscoverPopup, DiscoveredCapability, DiscoveryEntry, DiscoverySearchResult, ExecutionMode,
         LlmInteraction, NodeStatus, ServerInfo, ServerStatus, TraceEventType, View,
     },
 };
 use ccos::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
+
+/// Format a JSON schema into a compact "field: type" format
+fn format_schema_compact(json_value: &serde_json::Value) -> String {
+    let mut lines = Vec::new();
+    
+    if let Some(props) = json_value.get("properties").and_then(|p| p.as_object()) {
+        let required: std::collections::HashSet<&str> = json_value
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        
+        for (field, schema) in props {
+            let type_str = extract_type_string(schema);
+            let req_marker = if required.contains(field.as_str()) { "*" } else { "?" };
+            lines.push(format!("  {}{}: {}", field, req_marker, type_str));
+        }
+    } else {
+        // Not an object schema, just show the type
+        let type_str = extract_type_string(json_value);
+        lines.push(type_str);
+    }
+    
+    lines.join("\n")
+}
+
+/// Extract a simple type string from a JSON schema
+fn extract_type_string(schema: &serde_json::Value) -> String {
+    // Handle anyOf (nullable types)
+    if let Some(any_of) = schema.get("anyOf").and_then(|a| a.as_array()) {
+        let types: Vec<String> = any_of
+            .iter()
+            .map(|s| extract_type_string(s))
+            .filter(|t| t != "null")
+            .collect();
+        if types.len() == 1 {
+            return types[0].clone();
+        }
+        return types.join(" | ");
+    }
+    
+    // Handle oneOf
+    if let Some(one_of) = schema.get("oneOf").and_then(|a| a.as_array()) {
+        let types: Vec<String> = one_of
+            .iter()
+            .map(|s| extract_type_string(s))
+            .collect();
+        return types.join(" | ");
+    }
+    
+    // Get the type field
+    match schema.get("type").and_then(|t| t.as_str()) {
+        Some("string") => "string".to_string(),
+        Some("integer") => "int".to_string(),
+        Some("number") => "number".to_string(),
+        Some("boolean") => "bool".to_string(),
+        Some("null") => "null".to_string(),
+        Some("array") => {
+            if let Some(items) = schema.get("items") {
+                format!("[{}]", extract_type_string(items))
+            } else {
+                "[]".to_string()
+            }
+        }
+        Some("object") => {
+            if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+                let fields: Vec<String> = props.keys().take(3).cloned().collect();
+                if fields.len() < props.len() {
+                    format!("{{{},...}}", fields.join(", "))
+                } else {
+                    format!("{{{}}}", fields.join(", "))
+                }
+            } else {
+                "object".to_string()
+            }
+        }
+        _ => "any".to_string(),
+    }
+}
 
 /// CCOS Control Center TUI - Explore goal decomposition and capability resolution
 #[derive(Parser, Debug)]
@@ -1182,8 +1262,11 @@ fn handle_mouse_event(state: &mut AppState, mouse: crossterm::event::MouseEvent,
                     }
                 }
                 MouseEventKind::ScrollDown => {
-                    if state.active_panel == ActivePanel::DiscoverList && !state.discovered_capabilities.is_empty() {
-                         state.discover_selected = (state.discover_selected + 3).min(state.discovered_capabilities.len() - 1);
+                    if state.active_panel == ActivePanel::DiscoverList {
+                         let visible_len = state.visible_discovery_entries().len();
+                         if visible_len > 0 {
+                             state.discover_selected = (state.discover_selected + 3).min(visible_len - 1);
+                         }
                     }
                 }
                 _ => {}
@@ -1397,6 +1480,8 @@ fn load_local_capabilities_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
     
     tokio::task::spawn_local(async move {
         use ccos::capabilities::registry::CapabilityRegistry;
+        use ccos::mcp::core::MCPDiscoveryService;
+        use ccos::mcp::types::DiscoveryOptions;
         use std::collections::HashMap;
         
         // Create a capability registry and get all registered capabilities
@@ -1422,15 +1507,26 @@ fn load_local_capabilities_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
                 // Extract a human-readable name from the ID
                 let name = id.split('.').last().unwrap_or(id).to_string();
                 
+                // Try to get the full capability to extract schemas and description
+                let (description, input_schema, output_schema) = registry.get_capability(id)
+                    .map(|cap| {
+                        let desc = cap.description.clone()
+                            .unwrap_or_else(|| format!("Built-in capability: {}", id));
+                        let input = cap.input_schema.as_ref().map(|s| s.to_string());
+                        let output = cap.output_schema.as_ref().map(|s| s.to_string());
+                        (desc, input, output)
+                    })
+                    .unwrap_or_else(|| (format!("Built-in capability: {}", id), None, None));
+                
                 DiscoveredCapability {
                     id: id.to_string(),
                     name,
-                    description: format!("Built-in capability: {}", id),
+                    description,
                     source: "Local Registry".to_string(),
                     category,
                     version: Some("1.0.0".to_string()),
-                    input_schema: None,
-                    output_schema: None,
+                    input_schema,
+                    output_schema,
                     permissions: vec![],
                     effects: vec![],
                     metadata: HashMap::new(),
@@ -1440,6 +1536,42 @@ fn load_local_capabilities_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
 
         // Add known API endpoints when authorization is available
         capabilities.extend(load_known_api_capabilities());
+
+        // Add core capabilities from files
+        capabilities.extend(load_core_capabilities());
+
+        // Load capabilities from approved MCP servers
+        let service = MCPDiscoveryService::new();
+        let servers = service.list_known_servers();
+        let options = DiscoveryOptions::default();
+
+        for server in servers {
+            if let Ok(tools) = service.discover_tools(&server, &options).await {
+                for tool in tools {
+                    capabilities.push(DiscoveredCapability {
+                        id: format!("mcp:{}:{}", server.name, tool.tool_name),
+                        name: tool.tool_name.clone(),
+                        description: tool.description.unwrap_or_default(),
+                        source: server.name.clone(),
+                        category: CapabilityCategory::McpTool,
+                        version: None,
+                        input_schema: tool.input_schema_json.as_ref()
+                            .map(|v| format_schema_compact(v))
+                            .or_else(|| tool.input_schema.as_ref()
+                                .and_then(|s| s.to_json().ok())
+                                .map(|v| format_schema_compact(&v)))
+                            .or_else(|| tool.input_schema.as_ref().map(|s| s.to_string())),
+                        output_schema: tool.output_schema.as_ref()
+                            .and_then(|s| s.to_json().ok())
+                            .map(|v| format_schema_compact(&v))
+                            .or_else(|| tool.output_schema.as_ref().map(|s| s.to_string())),
+                        permissions: Vec::new(),
+                        effects: Vec::new(),
+                        metadata: HashMap::new(),
+                    });
+                }
+            }
+        }
         
         let _ = event_tx.send(TuiEvent::LocalCapabilitiesLoaded(capabilities));
     });
@@ -1498,6 +1630,83 @@ fn load_known_api_capabilities() -> Vec<DiscoveredCapability> {
         }
     }
 
+    caps
+}
+
+fn load_core_capabilities() -> Vec<DiscoveredCapability> {
+    use ccos::capability_marketplace::mcp_discovery::MCPDiscoveryProvider;
+    use ccos::capability_marketplace::mcp_discovery::MCPServerConfig;
+    use ccos::examples_common::builder::load_agent_config;
+    use ccos::utils::fs::resolve_workspace_path;
+
+    let mut caps = Vec::new();
+
+    // Load config to get capabilities directory
+    let config = match load_agent_config("config/agent_config.toml") {
+        Ok(c) => c,
+        Err(e) => {
+            ccos_eprintln!("load_core_capabilities: Failed to load config: {}", e);
+            return caps;
+        }
+    };
+
+    // Use capabilities_dir from config, relative to workspace root (config/ directory)
+    let core_dir = resolve_workspace_path(&config.storage.capabilities_dir).join("core");
+    ccos_eprintln!("load_core_capabilities: Looking for core capabilities in {:?}", core_dir);
+
+    let parser = match MCPDiscoveryProvider::new(MCPServerConfig::default()) {
+        Ok(p) => p,
+        Err(e) => {
+            ccos_eprintln!("load_core_capabilities: Failed to create parser: {}", e);
+            return caps;
+        }
+    };
+
+    if core_dir.exists() && core_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&core_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().map_or(false, |ext| ext == "rtfs") {
+                    ccos_eprintln!("load_core_capabilities: Loading {:?}", path);
+                    match parser.load_rtfs_capabilities(path.to_str().unwrap_or_default()) {
+                        Ok(module) => {
+                            ccos_eprintln!("load_core_capabilities: Loaded module with {} capabilities from {:?}", module.capabilities.len(), path);
+                            for cap_def in module.capabilities {
+                                match parser.rtfs_to_capability_manifest(&cap_def) {
+                                    Ok(manifest) => {
+                                        ccos_eprintln!("load_core_capabilities: Converted manifest for {}", manifest.id);
+                                        caps.push(DiscoveredCapability {
+                                            id: manifest.id.clone(),
+                                            name: manifest.name.clone(),
+                                            description: manifest.description.clone(),
+                                            source: "Core".to_string(),
+                                            category: CapabilityCategory::RtfsFunction,
+                                            version: Some(manifest.version.clone()),
+                                            input_schema: manifest.input_schema.as_ref().map(|s| s.to_string()),
+                                            output_schema: manifest.output_schema.as_ref().map(|s| s.to_string()),
+                                            permissions: Vec::new(),
+                                            effects: Vec::new(),
+                                            metadata: manifest.metadata.clone(),
+                                        });
+                                    }
+                                    Err(e) => {
+                                        ccos_eprintln!("load_core_capabilities: Failed to convert manifest for cap in {:?}: {}", path, e);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            ccos_eprintln!("load_core_capabilities: Failed to load RTFS from {:?}: {}", path, e);
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        ccos_eprintln!("load_core_capabilities: core_dir does not exist: {:?}", core_dir);
+    }
+    
+    ccos_eprintln!("load_core_capabilities: Loaded {} core capabilities total", caps.len());
     caps
 }
 
@@ -1781,31 +1990,32 @@ fn handle_discover_popup_key(state: &mut AppState, key: event::KeyEvent, event_t
 }
 
 fn handle_discover_list(state: &mut AppState, key: event::KeyEvent) {
-    let filtered_len = state.filtered_discovered_count();
+    let visible_entries = state.visible_discovery_entries();
+    let visible_len = visible_entries.len();
 
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
             state.discover_selected = state.discover_selected.saturating_sub(1);
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if filtered_len > 0 {
-                state.discover_selected = (state.discover_selected + 1).min(filtered_len - 1);
+            if visible_len > 0 {
+                state.discover_selected = (state.discover_selected + 1).min(visible_len - 1);
             }
         }
         KeyCode::PageUp => {
             state.discover_selected = state.discover_selected.saturating_sub(10);
         }
         KeyCode::PageDown => {
-             if filtered_len > 0 {
-                state.discover_selected = (state.discover_selected + 10).min(filtered_len - 1);
+             if visible_len > 0 {
+                state.discover_selected = (state.discover_selected + 10).min(visible_len - 1);
             }
         }
         KeyCode::Home | KeyCode::Char('g') => {
             state.discover_selected = 0;
         }
         KeyCode::End | KeyCode::Char('G') => {
-            if filtered_len > 0 {
-                state.discover_selected = filtered_len - 1;
+            if visible_len > 0 {
+                state.discover_selected = visible_len - 1;
             }
         }
         KeyCode::Char('/') | KeyCode::Char('s') => {
@@ -1813,27 +2023,52 @@ fn handle_discover_list(state: &mut AppState, key: event::KeyEvent) {
             state.discover_input_active = true;
             state.discover_selected = 0;
         }
-        KeyCode::Char('c') => {
+        KeyCode::Char('c') | KeyCode::Char(' ') | KeyCode::Enter => {
             // Toggle collapse for the currently selected source
-            if let Some((_, cap)) = state
-                .filtered_discovered_caps()
-                .get(state.discover_selected.min(filtered_len.saturating_sub(1)))
-            {
-                let source = cap.source.clone();
-                if source == "Local" || source == "Local Registry" {
-                    state.discover_local_collapsed = !state.discover_local_collapsed;
-                    if state.discover_local_collapsed {
-                        state.discover_collapsed_sources.insert("Local Capabilities".to_string());
-                    } else {
-                        state.discover_collapsed_sources.remove("Local Capabilities");
+            if let Some(entry) = visible_entries.get(state.discover_selected.min(visible_len.saturating_sub(1))) {
+                match entry {
+                    DiscoveryEntry::Header { name, is_local } => {
+                        if *is_local {
+                            state.discover_local_collapsed = !state.discover_local_collapsed;
+                            if state.discover_local_collapsed {
+                                state.discover_collapsed_sources.insert("Local Capabilities".to_string());
+                            } else {
+                                state.discover_collapsed_sources.remove("Local Capabilities");
+                            }
+                        } else if state.discover_collapsed_sources.contains(name) {
+                            state.discover_collapsed_sources.remove(name);
+                        } else {
+                            state.discover_collapsed_sources.insert(name.clone());
+                        }
                     }
-                } else if state.discover_collapsed_sources.contains(&source) {
-                    state.discover_collapsed_sources.remove(&source);
-                } else {
-                    state.discover_collapsed_sources.insert(source);
+                    DiscoveryEntry::Capability(idx) => {
+                        if let KeyCode::Char('c') = key.code {
+                             if let Some((_, cap)) = state.filtered_discovered_caps().get(*idx) {
+                                let source = cap.source.clone();
+                                if source == "Local" || source == "Local Registry" || source == "Core" {
+                                    state.discover_local_collapsed = !state.discover_local_collapsed;
+                                    if state.discover_local_collapsed {
+                                        state.discover_collapsed_sources.insert("Local Capabilities".to_string());
+                                    } else {
+                                        state.discover_collapsed_sources.remove("Local Capabilities");
+                                    }
+                                } else if state.discover_collapsed_sources.contains(&source) {
+                                    state.discover_collapsed_sources.remove(&source);
+                                } else {
+                                    state.discover_collapsed_sources.insert(source);
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            state.discover_selected = 0;
+            // Ensure selection remains in bounds after collapse
+            let new_visible_len = state.visible_discovery_entries().len();
+            if new_visible_len > 0 {
+                state.discover_selected = state.discover_selected.min(new_visible_len - 1);
+            } else {
+                state.discover_selected = 0;
+            }
         }
         _ => {}
     }

@@ -13,8 +13,8 @@ use rtfs::ast::{
 use rtfs::runtime::environment::Environment;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::evaluator::Evaluator;
-use rtfs::runtime::module_runtime::ModuleRegistry;
 use rtfs::runtime::host_interface::HostInterface;
+use rtfs::runtime::module_runtime::ModuleRegistry;
 use rtfs::runtime::pure_host;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::{Runtime, TreeWalkingStrategy};
@@ -114,9 +114,8 @@ pub struct MCPDiscoveryProvider {
     /// Unified discovery service - always used for discovery
     discovery_service: std::sync::Arc<crate::mcp::core::MCPDiscoveryService>,
     /// Factory used to create a Host for executing RTFS capabilities
-    rtfs_host_factory: std::sync::Arc<
-        dyn Fn() -> std::sync::Arc<dyn HostInterface + Send + Sync> + Send + Sync,
-    >,
+    rtfs_host_factory:
+        std::sync::Arc<dyn Fn() -> std::sync::Arc<dyn HostInterface + Send + Sync> + Send + Sync>,
 }
 
 impl MCPDiscoveryProvider {
@@ -265,11 +264,14 @@ impl MCPDiscoveryProvider {
     ///
     /// Internally creates an `MCPDiscoveryService` for all discovery operations.
     pub fn new(config: MCPServerConfig) -> RuntimeResult<Self> {
-        Self::new_with_rtfs_host_factory(config, std::sync::Arc::new(|| {
-            let host: std::sync::Arc<dyn HostInterface + Send + Sync> =
-                std::sync::Arc::new(pure_host::PureHost::new());
-            host
-        }))
+        Self::new_with_rtfs_host_factory(
+            config,
+            std::sync::Arc::new(|| {
+                let host: std::sync::Arc<dyn HostInterface + Send + Sync> =
+                    std::sync::Arc::new(pure_host::PureHost::new());
+                host
+            }),
+        )
     }
 
     /// Create a new MCP discovery provider with a custom RTFS Host factory
@@ -556,7 +558,8 @@ impl MCPDiscoveryProvider {
             Err(err) => {
                 ccos_eprintln!(
                     "⚠️ MCP Discovery: Output schema introspection failed for '{}': {}",
-                    tool.name, err
+                    tool.name,
+                    err
                 );
                 Ok((None, None))
             }
@@ -944,9 +947,10 @@ impl MCPDiscoveryProvider {
     fn extract_module_from_individual_capability(
         &self,
         top_levels: Vec<TopLevel>,
-        file_path: &str,
+        _file_path: &str,
     ) -> RuntimeResult<RTFSModuleDefinition> {
-        // Individual capability files have (capability "id" ...) at top level
+        let mut capabilities = Vec::new();
+
         for (i, top_level) in top_levels.iter().enumerate() {
             match top_level {
                 TopLevel::Capability(cap_def) => {
@@ -973,24 +977,10 @@ impl MCPDiscoveryProvider {
                         .get(&MapKey::Keyword(Keyword("output-schema".to_string())))
                         .and_then(|e| self.extract_type_expr(e));
 
-                    let capability_def = RTFSCapabilityDefinition {
+                    capabilities.push(RTFSCapabilityDefinition {
                         capability: Expression::Map(capability_map),
                         input_schema,
                         output_schema,
-                    };
-
-                    // Wrap in a synthetic module for compatibility
-                    return Ok(RTFSModuleDefinition {
-                        module_type: "ccos.capabilities.individual:v1".to_string(),
-                        server_config: MCPServerConfig {
-                            name: "individual".to_string(),
-                            endpoint: "".to_string(),
-                            auth_token: None,
-                            timeout_seconds: 30,
-                            protocol_version: "2024-11-05".to_string(),
-                        },
-                        capabilities: vec![capability_def],
-                        generated_at: chrono::Utc::now().to_rfc3339(),
                     });
                 }
                 TopLevel::Expression(expr) => {
@@ -1010,51 +1000,37 @@ impl MCPDiscoveryProvider {
                     if let Some(items) = items_opt {
                         if let Some(Expression::Symbol(sym)) = items.first() {
                             if sym.0 == "capability" {
-                                // This is an individual capability
-                                let capability_def = self.parse_individual_capability(&items)?;
-
-                                // Wrap in a synthetic module for compatibility
-                                return Ok(RTFSModuleDefinition {
-                                    module_type: "ccos.capabilities.individual:v1".to_string(),
-                                    server_config: MCPServerConfig {
-                                        name: "individual".to_string(),
-                                        endpoint: "".to_string(),
-                                        auth_token: None,
-                                        timeout_seconds: 30,
-                                        protocol_version: "2024-11-05".to_string(),
-                                    },
-                                    capabilities: vec![capability_def],
-                                    generated_at: chrono::Utc::now().to_rfc3339(),
-                                });
-                            } else {
-                                ccos_eprintln!(
-                                    "Found symbol '{}' instead of 'capability' at top level",
-                                    sym.0
-                                );
+                                if let Ok(capability_def) = self.parse_individual_capability(&items)
+                                {
+                                    capabilities.push(capability_def);
+                                }
                             }
-                        } else {
-                            ccos_eprintln!("Empty list at top level");
                         }
-                    } else {
-                        ccos_eprintln!(
-                            "Top level item {} is not a List or FunctionCall: {:?}",
-                            i, expr
-                        );
                     }
                 }
-                _ => {
-                    ccos_eprintln!(
-                        "Top level item {} is not a Capability or Expression: {:?}",
-                        i, top_level
-                    );
-                }
+                _ => {}
             }
         }
 
-        Err(RuntimeError::Generic(format!(
-            "File '{}' is neither a module nor an individual capability",
-            file_path
-        )))
+        if capabilities.is_empty() {
+            return Err(RuntimeError::Generic(
+                "No capabilities found in individual capability file".to_string(),
+            ));
+        }
+
+        // Wrap in a synthetic module for compatibility
+        Ok(RTFSModuleDefinition {
+            module_type: "ccos.capabilities.individual:v1".to_string(),
+            server_config: MCPServerConfig {
+                name: "individual".to_string(),
+                endpoint: "".to_string(),
+                auth_token: None,
+                timeout_seconds: 30,
+                protocol_version: "2024-11-05".to_string(),
+            },
+            capabilities,
+            generated_at: chrono::Utc::now().to_rfc3339(),
+        })
     }
 
     /// Parse an individual capability from (capability "id" :key value ...) format
@@ -1243,13 +1219,27 @@ impl MCPDiscoveryProvider {
                         if let Some(capability_expr) =
                             cap_map.get(&MapKey::Keyword(Keyword("capability".to_string())))
                         {
-                            let input_schema = cap_map
-                                .get(&MapKey::Keyword(Keyword("input-schema".to_string())))
-                                .and_then(|e| self.extract_type_expr(e));
-
-                            let output_schema = cap_map
-                                .get(&MapKey::Keyword(Keyword("output-schema".to_string())))
-                                .and_then(|e| self.extract_type_expr(e));
+                            // The :input-schema and :output-schema are INSIDE the :capability map,
+                            // not as siblings to it. Extract from capability_expr if it's a Map.
+                            let (input_schema, output_schema) =
+                                if let Expression::Map(inner_cap_map) = capability_expr {
+                                    let input = inner_cap_map
+                                        .get(&MapKey::Keyword(Keyword("input-schema".to_string())))
+                                        .and_then(|e| self.extract_type_expr(e));
+                                    let output = inner_cap_map
+                                        .get(&MapKey::Keyword(Keyword("output-schema".to_string())))
+                                        .and_then(|e| self.extract_type_expr(e));
+                                    (input, output)
+                                } else {
+                                    // Fall back to looking in outer cap_map for backwards compatibility
+                                    let input = cap_map
+                                        .get(&MapKey::Keyword(Keyword("input-schema".to_string())))
+                                        .and_then(|e| self.extract_type_expr(e));
+                                    let output = cap_map
+                                        .get(&MapKey::Keyword(Keyword("output-schema".to_string())))
+                                        .and_then(|e| self.extract_type_expr(e));
+                                    (input, output)
+                                };
 
                             capabilities.push(RTFSCapabilityDefinition {
                                 capability: capability_expr.clone(),
@@ -1783,7 +1773,13 @@ impl MCPDiscoveryProvider {
                 MapKey::Keyword(k) if k.0 == "effects" => {
                     if let Expression::Vector(effect_vec) = value {
                         for effect in effect_vec {
-                            if let Expression::Literal(Literal::String(s)) = effect {
+                            let effect_str = match effect {
+                                Expression::Literal(Literal::String(s)) => Some(s.clone()),
+                                Expression::Literal(Literal::Keyword(k)) => Some(k.0.clone()),
+                                _ => None,
+                            };
+
+                            if let Some(s) = effect_str {
                                 if let Some(normalized) = Self::normalize_effect_label(&s) {
                                     effects.push(normalized);
                                 }
@@ -1841,8 +1837,8 @@ impl MCPDiscoveryProvider {
 
         let id =
             id.ok_or_else(|| RuntimeError::Generic("RTFS capability missing id".to_string()))?;
-        let name =
-            name.ok_or_else(|| RuntimeError::Generic("RTFS capability missing name".to_string()))?;
+        // If name is missing, use ID as name
+        let name = name.unwrap_or_else(|| id.clone());
         let description = description.ok_or_else(|| {
             RuntimeError::Generic("RTFS capability missing description".to_string())
         })?;
@@ -2416,7 +2412,8 @@ impl CapabilityDiscovery for MCPDiscoveryProvider {
             Err(e) => {
                 ccos_eprintln!(
                     "MCP tools discovery failed for server {}: {}",
-                    self.config.name, e
+                    self.config.name,
+                    e
                 );
             }
         }
@@ -2434,7 +2431,8 @@ impl CapabilityDiscovery for MCPDiscoveryProvider {
             Err(e) => {
                 ccos_eprintln!(
                     "MCP resources discovery failed for server {}: {}",
-                    self.config.name, e
+                    self.config.name,
+                    e
                 );
             }
         }

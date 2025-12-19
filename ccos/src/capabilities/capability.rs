@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use rtfs::ast::Symbol;
+use rtfs::ast::{Symbol, TypeExpr};
 use rtfs::runtime::environment::Environment;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::{Arity, BuiltinFunction, Function, Value};
@@ -18,16 +18,48 @@ pub struct Capability {
     pub arity: Arity,
     /// Actual implementation
     pub func: Arc<dyn Fn(Vec<Value>) -> RuntimeResult<Value> + Send + Sync>,
+    /// Human-readable description of the capability
+    pub description: Option<String>,
+    /// Schema describing the expected input
+    pub input_schema: Option<TypeExpr>,
+    /// Schema describing the expected output
+    pub output_schema: Option<TypeExpr>,
 }
 
 impl Capability {
-    /// Helper constructor for Capability
+    /// Helper constructor for Capability (backwards-compatible, no schemas)
     pub fn new(
         id: String,
         arity: Arity,
         func: Arc<dyn Fn(Vec<Value>) -> RuntimeResult<Value> + Send + Sync>,
     ) -> Self {
-        Self { id, arity, func }
+        Self {
+            id,
+            arity,
+            func,
+            description: None,
+            input_schema: None,
+            output_schema: None,
+        }
+    }
+
+    /// Constructor with full metadata including schemas
+    pub fn with_metadata(
+        id: String,
+        arity: Arity,
+        func: Arc<dyn Fn(Vec<Value>) -> RuntimeResult<Value> + Send + Sync>,
+        description: Option<String>,
+        input_schema: Option<TypeExpr>,
+        output_schema: Option<TypeExpr>,
+    ) -> Self {
+        Self {
+            id,
+            arity,
+            func,
+            description,
+            input_schema,
+            output_schema,
+        }
     }
     /// Convert this capability into a regular RTFS `Value::Function` that
     /// records provenance via the given logger.
@@ -84,6 +116,9 @@ where
                         ))
                     }),
                 },
+                description: None,
+                input_schema: None,
+                output_schema: None,
             };
             env.define(&sym, cap.into_value(logger));
         }

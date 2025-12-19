@@ -24,7 +24,7 @@ use crate::mcp::registry::MCPRegistryClient;
 use crate::mcp::types::*;
 use crate::planner::modular_planner::types::DomainHint;
 use crate::synthesis::mcp_introspector::MCPIntrospector;
-use crate::utils::fs::find_workspace_root;
+use crate::utils::fs::get_workspace_root;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -62,12 +62,26 @@ impl MCPDiscoveryService {
                 .unwrap_or_else(|_| reqwest::Client::new()), // Fallback if builder fails
         );
 
+        let workspace_root = get_workspace_root();
+        // If the workspace root is set to the config directory, the approval queue
+        // (which looks for "capabilities/servers/approved") needs to look in the parent.
+        let approval_base = if workspace_root.ends_with("config") {
+            workspace_root
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(workspace_root.clone())
+        } else {
+            workspace_root.clone()
+        };
+
+        ccos_eprintln!("🔍 MCPDiscoveryService: workspace_root={:?}, approval_base={:?}", workspace_root, approval_base);
+
         Self {
             http_client: Arc::clone(&http_client),
             session_manager: Arc::new(MCPSessionManager::with_client(http_client, None)),
             registry_client: MCPRegistryClient::new(),
             config_discovery: LocalConfigMcpDiscovery::new(),
-            approval_queue: ApprovalQueue::new(crate::utils::fs::find_workspace_root()),
+            approval_queue: ApprovalQueue::new(approval_base),
             introspector: MCPIntrospector::new(),
             cache: Arc::new(MCPCache::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
@@ -88,12 +102,26 @@ impl MCPDiscoveryService {
                 .unwrap_or_else(|_| reqwest::Client::new()), // Fallback if builder fails
         );
 
+        let workspace_root = get_workspace_root();
+        // If the workspace root is set to the config directory, the approval queue
+        // (which looks for "capabilities/servers/approved") needs to look in the parent.
+        let approval_base = if workspace_root.ends_with("config") {
+            workspace_root
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(workspace_root.clone())
+        } else {
+            workspace_root.clone()
+        };
+
+        ccos_eprintln!("🔍 MCPDiscoveryService: workspace_root={:?}, approval_base={:?}", workspace_root, approval_base);
+
         Self {
             http_client: Arc::clone(&http_client),
             session_manager: Arc::new(MCPSessionManager::with_client(http_client, auth_headers)),
             registry_client: MCPRegistryClient::new(),
             config_discovery: LocalConfigMcpDiscovery::new(),
-            approval_queue: ApprovalQueue::new(crate::utils::fs::find_workspace_root()),
+            approval_queue: ApprovalQueue::new(approval_base),
             introspector: MCPIntrospector::new(),
             cache: Arc::new(MCPCache::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
@@ -1256,25 +1284,38 @@ impl MCPDiscoveryService {
     /// List all known servers (from config and approval queue)
     pub fn list_known_servers(&self) -> Vec<MCPServerConfig> {
         let mut servers = self.config_discovery.get_all_server_configs();
+        ccos_eprintln!("📋 Config discovery found {} server(s)", servers.len());
 
         // Add approved servers from queue
-        if let Ok(approved) = self.approval_queue.list_approved() {
-            for server in approved {
-                // Check for duplicates (by name or endpoint)
-                if !servers.iter().any(|s| {
-                    s.name == server.server_info.name || s.endpoint == server.server_info.endpoint
-                }) {
-                    servers.push(MCPServerConfig {
-                        name: server.server_info.name,
-                        endpoint: server.server_info.endpoint,
-                        auth_token: None,    // Will fallback to env vars if needed
-                        timeout_seconds: 30, // Default
-                        protocol_version: "2024-11-05".to_string(), // Default
+        match self.approval_queue.list_approved() {
+            Ok(approved) => {
+                ccos_eprintln!("📋 Approval queue found {} approved server(s)", approved.len());
+                for server in approved {
+                    // Check for duplicates (by name or endpoint)
+                    let is_duplicate = servers.iter().any(|s| {
+                        s.name == server.server_info.name || s.endpoint == server.server_info.endpoint
                     });
+
+                    if !is_duplicate {
+                        ccos_eprintln!("✅ Adding approved server: {} ({})", server.server_info.name, server.server_info.endpoint);
+                        servers.push(MCPServerConfig {
+                            name: server.server_info.name,
+                            endpoint: server.server_info.endpoint,
+                            auth_token: None,    // Will fallback to env vars if needed
+                            timeout_seconds: 30, // Default
+                            protocol_version: "2024-11-05".to_string(), // Default
+                        });
+                    } else {
+                        ccos_eprintln!("⏭️ Skipping duplicate server: {} ({})", server.server_info.name, server.server_info.endpoint);
+                    }
                 }
+            }
+            Err(e) => {
+                ccos_eprintln!("❌ Failed to list approved servers: {}", e);
             }
         }
 
+        ccos_eprintln!("📋 Total known servers: {}", servers.len());
         servers
     }
 
@@ -1504,7 +1545,7 @@ impl MCPDiscoveryService {
             session_manager: Arc::clone(&self.session_manager),
             registry_client: MCPRegistryClient::new(), // Registry client is stateless
             config_discovery: LocalConfigMcpDiscovery::new(), // Config discovery is stateless
-            approval_queue: ApprovalQueue::new(crate::utils::fs::find_workspace_root()), // Approval queue is stateless (file-based)
+            approval_queue: ApprovalQueue::new(get_workspace_root()), // Approval queue is stateless (file-based)
             introspector: MCPIntrospector::new(), // Introspector is stateless
             cache: Arc::clone(&self.cache),       // Share cache
             rate_limiter: Arc::clone(&self.rate_limiter), // Share rate limiter

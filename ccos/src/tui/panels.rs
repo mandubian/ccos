@@ -11,8 +11,8 @@ use ratatui::{
 };
 
 use super::state::{
-    ActivePanel, AppState, CapabilityCategory, DiscoverPopup, DiscoverySearchResult, ExecutionMode,
-    NodeStatus, ServerStatus, TraceEventType, View,
+    ActivePanel, AppState, CapabilityCategory, DiscoverPopup, DiscoveryEntry,
+    DiscoverySearchResult, ExecutionMode, NodeStatus, ServerStatus, TraceEventType, View,
 };
 use super::theme;
 
@@ -505,11 +505,6 @@ fn render_capability_list(f: &mut Frame, state: &AppState, area: Rect) {
     // Apply local filtering based on the search hint
     let filtered_caps = state.filtered_discovered_caps();
     let total_count = filtered_caps.len();
-    let selected_idx = if total_count > 0 {
-        state.discover_selected.min(total_count - 1)
-    } else {
-        0
-    };
 
     let block_style = if state.active_panel == ActivePanel::DiscoverList {
         Style::default().fg(theme::MAUVE)
@@ -523,107 +518,66 @@ fn render_capability_list(f: &mut Frame, state: &AppState, area: Rect) {
         .border_style(block_style);
 
     let mut items: Vec<ListItem> = Vec::new();
+    let visible_entries = state.visible_discovery_entries();
 
-    // Group filtered capabilities by source
-    let mut by_source: std::collections::BTreeMap<
-        String,
-        Vec<(usize, &super::state::DiscoveredCapability)>,
-    > = std::collections::BTreeMap::new();
+    for (i, entry) in visible_entries.iter().enumerate() {
+        let is_selected = i == state.discover_selected;
 
-    for (display_idx, (_, cap)) in filtered_caps.iter().enumerate() {
-        by_source
-            .entry(cap.source.clone())
-            .or_default()
-            .push((display_idx, *cap));
-    }
+        match entry {
+            DiscoveryEntry::Header { name, .. } => {
+                let indicator = if state.discover_collapsed_sources.contains(name)
+                    || (name == "Local Capabilities" && state.discover_local_collapsed)
+                {
+                    "▶"
+                } else {
+                    "▼"
+                };
 
-    // First show Local/Builtin capabilities
-    let mut local_caps = by_source.remove("Local Registry");
-    if local_caps.is_none() {
-        local_caps = by_source.remove("Local");
-    }
-
-    if let Some(builtin_caps) = local_caps {
-        let local_key = "Local Capabilities".to_string();
-        let collapsed = state.discover_local_collapsed
-            || state.discover_collapsed_sources.contains(&local_key);
-        let indicator = if collapsed { "▶" } else { "▼" };
-        items.push(ListItem::new(Line::from(vec![Span::styled(
-            format!("{} Local Capabilities", indicator),
-            Style::default()
-                .fg(theme::SAPPHIRE)
-                .add_modifier(Modifier::BOLD),
-        )])));
-
-        if !collapsed {
-            for (display_idx, cap) in builtin_caps {
-                let is_selected = display_idx == selected_idx;
                 let style = if is_selected {
                     Style::default()
                         .fg(theme::MAUVE)
-                        .add_modifier(Modifier::BOLD)
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
                 } else {
-                    Style::default().fg(theme::TEXT)
+                    Style::default()
+                        .fg(if name == "Local Capabilities" {
+                            theme::SAPPHIRE
+                        } else {
+                            theme::TEAL
+                        })
+                        .add_modifier(Modifier::BOLD)
                 };
-                let prefix = if is_selected { "► " } else { "  " };
-                let category_icon = match cap.category {
-                    CapabilityCategory::McpTool => "🔧",
-                    CapabilityCategory::RtfsFunction => "λ",
-                    CapabilityCategory::Builtin => "⚙️",
-                    CapabilityCategory::Synthesized => "✨",
-                };
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled(prefix, style),
-                    Span::styled(
-                        format!("{} ", category_icon),
-                        Style::default().fg(theme::PEACH),
-                    ),
-                    Span::styled(&cap.name, style),
-                ])));
+
+                items.push(ListItem::new(Line::from(vec![Span::styled(
+                    format!("{} {}", indicator, name),
+                    style,
+                )])));
             }
-        }
-    }
-
-    // Then show MCP server capabilities grouped by server
-    for (source, caps) in by_source {
-        let collapsed = state.discover_collapsed_sources.contains(&source);
-        let indicator = if collapsed { "▶" } else { "▼" };
-
-        items.push(ListItem::new(Line::from(vec![Span::styled(
-            format!("{} {}", indicator, source),
-            Style::default()
-                .fg(theme::TEAL)
-                .add_modifier(Modifier::BOLD),
-        )])));
-
-        if collapsed {
-            continue;
-        }
-
-        for (display_idx, cap) in caps {
-            let is_selected = display_idx == selected_idx;
-            let style = if is_selected {
-                Style::default()
-                    .fg(theme::MAUVE)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT)
-            };
-            let prefix = if is_selected { "► " } else { "  " };
-            let category_icon = match cap.category {
-                CapabilityCategory::McpTool => "🔧",
-                CapabilityCategory::RtfsFunction => "λ",
-                CapabilityCategory::Builtin => "⚙️",
-                CapabilityCategory::Synthesized => "✨",
-            };
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(prefix, style),
-                Span::styled(
-                    format!("{} ", category_icon),
-                    Style::default().fg(theme::PEACH),
-                ),
-                Span::styled(&cap.name, style),
-            ])));
+            DiscoveryEntry::Capability(idx) => {
+                if let Some((_, cap)) = filtered_caps.get(*idx) {
+                    let style = if is_selected {
+                        Style::default()
+                            .fg(theme::MAUVE)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(theme::TEXT)
+                    };
+                    let prefix = if is_selected { "► " } else { "  " };
+                    let category_icon = match cap.category {
+                        CapabilityCategory::McpTool => "🔧",
+                        CapabilityCategory::RtfsFunction => "λ",
+                        CapabilityCategory::Builtin => "⚙️",
+                        CapabilityCategory::Synthesized => "✨",
+                    };
+                    items.push(ListItem::new(Line::from(vec![
+                        Span::styled(prefix, style),
+                        Span::styled(
+                            format!("{} ", category_icon),
+                            Style::default().fg(theme::PEACH),
+                        ),
+                        Span::styled(&cap.name, style),
+                    ])));
+                }
+            }
         }
     }
     // If no items, show empty state
@@ -659,45 +613,98 @@ fn render_capability_details(f: &mut Frame, state: &AppState, area: Rect) {
         .border_style(Style::default().fg(theme::PANEL_BORDER));
 
     let filtered_caps = state.filtered_discovered_caps();
-    let selected_idx = if filtered_caps.is_empty() {
-        0
-    } else {
-        state.discover_selected.min(filtered_caps.len() - 1)
-    };
 
     // Get the currently selected capability's details
-    let lines = if let Some((_, cap)) = filtered_caps.get(selected_idx) {
+    let visible_entries = state.visible_discovery_entries();
+    let selected_entry = visible_entries.get(state.discover_selected);
+
+    let lines = if let Some(DiscoveryEntry::Capability(idx)) = selected_entry {
+        if let Some((_, cap)) = filtered_caps.get(*idx) {
+            let mut lines = vec![
+                Line::from(vec![Span::styled(
+                    "Name:     ",
+                    Style::default().fg(theme::SUBTEXT0),
+                )]),
+                Line::from(vec![Span::styled(
+                    &cap.name,
+                    Style::default()
+                        .fg(theme::TEXT)
+                        .add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Source:   ", Style::default().fg(theme::SUBTEXT0)),
+                    Span::styled(&cap.source, Style::default().fg(theme::TEAL)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Category: ", Style::default().fg(theme::SUBTEXT0)),
+                    Span::styled(
+                        format!("{:?}", cap.category),
+                        Style::default().fg(theme::PEACH),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(vec![Span::styled(
+                    "Description:",
+                    Style::default().fg(theme::SUBTEXT0),
+                )]),
+                Line::from(vec![Span::styled(
+                    &cap.description,
+                    Style::default().fg(theme::TEXT),
+                )]),
+            ];
+
+            if let Some(schema) = &cap.input_schema {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![Span::styled(
+                    "Input Schema:",
+                    Style::default().fg(theme::SUBTEXT0),
+                )]));
+                for schema_line in schema.lines() {
+                    lines.push(Line::from(vec![Span::styled(
+                        schema_line.to_string(),
+                        Style::default().fg(theme::MAROON),
+                    )]));
+                }
+            }
+
+            if let Some(schema) = &cap.output_schema {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![Span::styled(
+                    "Output Schema:",
+                    Style::default().fg(theme::SUBTEXT0),
+                )]));
+                for schema_line in schema.lines() {
+                    lines.push(Line::from(vec![Span::styled(
+                        schema_line.to_string(),
+                        Style::default().fg(theme::SAPPHIRE),
+                    )]));
+                }
+            }
+
+            lines
+        } else {
+            vec![Line::from(vec![Span::styled(
+                "Select a capability to view details",
+                Style::default().fg(theme::SUBTEXT0),
+            )])]
+        }
+    } else if let Some(DiscoveryEntry::Header { name, .. }) = selected_entry {
         vec![
             Line::from(vec![
-                Span::styled("Name:     ", Style::default().fg(theme::SUBTEXT0)),
+                Span::styled("Source:   ", Style::default().fg(theme::SUBTEXT0)),
                 Span::styled(
-                    &cap.name,
+                    name,
                     Style::default()
                         .fg(theme::TEXT)
                         .add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(""),
-            Line::from(vec![
-                Span::styled("Source:   ", Style::default().fg(theme::SUBTEXT0)),
-                Span::styled(&cap.source, Style::default().fg(theme::TEAL)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Category: ", Style::default().fg(theme::SUBTEXT0)),
-                Span::styled(
-                    format!("{:?}", cap.category),
-                    Style::default().fg(theme::PEACH),
-                ),
-            ]),
-            Line::from(""),
             Line::from(vec![Span::styled(
-                "Description:",
+                "Press 'c' or 'Space' to toggle collapse",
                 Style::default().fg(theme::SUBTEXT0),
-            )]),
-            Line::from(vec![Span::styled(
-                &cap.description,
-                Style::default().fg(theme::TEXT),
             )]),
         ]
     } else {
