@@ -8,8 +8,8 @@
 //! - Trace events timeline
 //! - LLM prompts and responses
 
-use std::collections::VecDeque;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::time::Instant;
 
 /// Maximum number of events to retain
@@ -340,6 +340,13 @@ pub enum DiscoverPopup {
     Error { title: String, message: String },
 }
 
+/// Entry in the discovery list (header or capability)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiscoveryEntry {
+    Header { name: String, is_local: bool },
+    Capability(usize), // index into discovered_capabilities
+}
+
 /// A server found in a discovery search (from MCP registry)
 #[derive(Debug, Clone)]
 pub struct DiscoverySearchResult {
@@ -612,9 +619,7 @@ impl AppState {
     }
 
     /// Return discovered capabilities filtered by the current search hint
-    pub fn filtered_discovered_caps(
-        &self,
-    ) -> Vec<(usize, &DiscoveredCapability)> {
+    pub fn filtered_discovered_caps(&self) -> Vec<(usize, &DiscoveredCapability)> {
         if self.discover_search_hint.trim().is_empty() {
             return self.discovered_capabilities.iter().enumerate().collect();
         }
@@ -636,5 +641,80 @@ impl AppState {
     /// Count of filtered discovered capabilities for selection bounds
     pub fn filtered_discovered_count(&self) -> usize {
         self.filtered_discovered_caps().len()
+    }
+
+    /// Return all visible discovery entries (headers + non-collapsed capabilities)
+    pub fn visible_discovery_entries(&self) -> Vec<DiscoveryEntry> {
+        let filtered_caps = self.filtered_discovered_caps();
+        let mut entries = Vec::new();
+
+        // Group filtered capabilities by source
+        let mut by_source: std::collections::BTreeMap<String, Vec<usize>> =
+            std::collections::BTreeMap::new();
+
+        for (display_idx, (_, cap)) in filtered_caps.iter().enumerate() {
+            by_source
+                .entry(cap.source.clone())
+                .or_default()
+                .push(display_idx);
+        }
+
+        // First handle Local/Builtin capabilities (grouping multiple sources)
+        let mut local_caps_indices = Vec::new();
+        let local_source_names = ["Local Registry", "Local", "Core"];
+        for name in local_source_names {
+            if let Some(mut indices) = by_source.remove(name) {
+                local_caps_indices.append(&mut indices);
+            }
+        }
+
+        // Also handle "Known API: ..." sources as local
+        let known_api_sources: Vec<String> = by_source
+            .keys()
+            .filter(|s| s.starts_with("Known API:"))
+            .cloned()
+            .collect();
+        for name in known_api_sources {
+            if let Some(mut indices) = by_source.remove(&name) {
+                local_caps_indices.append(&mut indices);
+            }
+        }
+
+        if !local_caps_indices.is_empty() {
+            let header_name = "Local Capabilities".to_string();
+            let collapsed = self.discover_local_collapsed
+                || self.discover_collapsed_sources.contains(&header_name);
+
+            entries.push(DiscoveryEntry::Header {
+                name: header_name,
+                is_local: true,
+            });
+
+            if !collapsed {
+                // Sort local indices to keep display consistent
+                local_caps_indices.sort();
+                for idx in local_caps_indices {
+                    entries.push(DiscoveryEntry::Capability(idx));
+                }
+            }
+        }
+
+        // Then handle MCP server capabilities
+        for (source, caps_indices) in by_source {
+            let collapsed = self.discover_collapsed_sources.contains(&source);
+
+            entries.push(DiscoveryEntry::Header {
+                name: source.clone(),
+                is_local: false,
+            });
+
+            if !collapsed {
+                for idx in caps_indices {
+                    entries.push(DiscoveryEntry::Capability(idx));
+                }
+            }
+        }
+
+        entries
     }
 }
