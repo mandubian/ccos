@@ -11,13 +11,14 @@ use ratatui::{
 };
 
 use super::state::{
-    ActivePanel, AppState, CapabilityCategory, DiscoverPopup, DiscoveryEntry,
-    DiscoverySearchResult, ExecutionMode, NodeStatus, ServerStatus, TraceEventType, View,
+    ActivePanel, AppState, ApprovalsTab, AuthStatus, CapabilityCategory, DiscoverPopup,
+    DiscoveryEntry, DiscoverySearchResult, ExecutionMode, NodeStatus, ServerStatus,
+    TraceEventType, View,
 };
 use super::theme;
 
 /// Render the complete TUI
-pub fn render(f: &mut Frame, state: &AppState) {
+pub fn render(f: &mut Frame, state: &mut AppState) {
     // Main layout: header | [nav menu | content] | status bar
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -59,10 +60,15 @@ pub fn render(f: &mut Frame, state: &AppState) {
     if !matches!(state.discover_popup, DiscoverPopup::None) {
         render_discover_popup(f, state);
     }
+
+    // Auth token popup overlay (global, works in any view)
+    if let Some(ref popup) = state.auth_token_popup {
+        render_auth_token_popup(f, popup);
+    }
 }
 
 /// Render the top header bar
-fn render_header(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_header(f: &mut Frame, state: &mut AppState, area: Rect) {
     let mode_color = match state.mode {
         ExecutionMode::Idle => theme::SUBTEXT0,
         ExecutionMode::Received => theme::TEAL,
@@ -112,7 +118,7 @@ fn render_header(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render the left navigation menu
-fn render_nav_menu(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_nav_menu(f: &mut Frame, state: &mut AppState, area: Rect) {
     let views = [
         (View::Goals, "Goals", "1"),
         (View::Plans, "Plans", "2"),
@@ -155,7 +161,7 @@ fn render_nav_menu(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render view-specific content in the main area
-fn render_view_content(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_view_content(f: &mut Frame, state: &mut AppState, area: Rect) {
     match state.current_view {
         View::Goals => {
             // Goals view: goal input + decomposition tree + LLM inspector
@@ -183,7 +189,7 @@ fn render_view_content(f: &mut Frame, state: &AppState, area: Rect) {
             render_discover_view(f, state, area);
         }
         View::Approvals => {
-            render_placeholder_view(f, View::Approvals, area);
+            render_approvals_view(f, state, area);
         }
         View::Config => {
             render_placeholder_view(f, View::Config, area);
@@ -192,7 +198,7 @@ fn render_view_content(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render the goal input panel
-fn render_goal_input(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_goal_input(f: &mut Frame, state: &mut AppState, area: Rect) {
     let is_active = state.active_panel == ActivePanel::GoalInput;
 
     let border_color = if is_active {
@@ -250,7 +256,7 @@ fn render_placeholder_view(f: &mut Frame, view: View, area: Rect) {
 }
 
 /// Render the Servers view - MCP server management
-fn render_servers_view(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_servers_view(f: &mut Frame, state: &mut AppState, area: Rect) {
     // Two-column layout: Server list (left) | Server details (right)
     let cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -262,7 +268,7 @@ fn render_servers_view(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render the list of MCP servers
-fn render_server_list(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_server_list(f: &mut Frame, state: &mut AppState, area: Rect) {
     let title = if state.servers_loading {
         "MCP Servers [Loading...]".to_string()
     } else {
@@ -339,7 +345,7 @@ fn render_server_list(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render details for the selected server
-fn render_server_details(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
     let block = Block::default()
         .title("Server Details")
         .borders(Borders::ALL)
@@ -444,8 +450,588 @@ fn render_server_details(f: &mut Frame, state: &AppState, area: Rect) {
     f.render_widget(paragraph, area);
 }
 
+// =========================================
+// Approvals View
+// =========================================
+
+/// Render the Approvals view - pending and approved servers
+fn render_approvals_view(f: &mut Frame, state: &mut AppState, area: Rect) {
+    // Layout: Tab bar (top) | Content (bottom)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Tab bar
+            Constraint::Min(1),    // Content
+        ])
+        .split(area);
+
+    render_approvals_tabs(f, state, chunks[0]);
+
+    // Two-column layout: List (left) | Details (right)
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(chunks[1]);
+
+    match state.approvals_tab {
+        ApprovalsTab::Pending => {
+            render_pending_list(f, state, cols[0]);
+            render_pending_details(f, state, cols[1]);
+        }
+        ApprovalsTab::Approved => {
+            render_approved_list(f, state, cols[0]);
+            render_approved_details(f, state, cols[1]);
+        }
+    }
+}
+
+/// Render the tab bar for Approvals view
+fn render_approvals_tabs(f: &mut Frame, state: &AppState, area: Rect) {
+    let pending_count = state.pending_servers.len();
+    let approved_count = state.approved_servers.len();
+
+    let pending_style = if state.approvals_tab == ApprovalsTab::Pending {
+        Style::default()
+            .fg(theme::BASE)
+            .bg(theme::MAUVE)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::SUBTEXT1)
+    };
+
+    let approved_style = if state.approvals_tab == ApprovalsTab::Approved {
+        Style::default()
+            .fg(theme::BASE)
+            .bg(theme::GREEN)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::SUBTEXT1)
+    };
+
+    let loading_indicator = if state.approvals_loading { " ⟳" } else { "" };
+
+    let tabs = Line::from(vec![
+        Span::styled(
+            format!(" [1] Pending ({}) ", pending_count),
+            pending_style,
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!(" [2] Approved ({}) ", approved_count),
+            approved_style,
+        ),
+        Span::styled(loading_indicator, Style::default().fg(theme::YELLOW)),
+    ]);
+
+    let block = Block::default()
+        .title("Server Approvals")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::PANEL_BORDER_ACTIVE));
+
+    let paragraph = Paragraph::new(tabs).block(block);
+    f.render_widget(paragraph, area);
+}
+
+/// Render the pending servers list
+fn render_pending_list(f: &mut Frame, state: &AppState, area: Rect) {
+    let is_active = state.active_panel == ActivePanel::ApprovalsPendingList;
+    let border_color = if is_active {
+        theme::PANEL_BORDER_ACTIVE
+    } else {
+        theme::PANEL_BORDER
+    };
+
+    let block = Block::default()
+        .title(format!("Pending [{}]", state.pending_servers.len()))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    if state.pending_servers.is_empty() {
+        let content = if state.approvals_loading {
+            "Loading pending servers..."
+        } else {
+            "No pending servers.\n\nUse Discover view to find and add new servers."
+        };
+        let paragraph = Paragraph::new(content)
+            .style(Style::default().fg(theme::SUBTEXT0))
+            .block(block);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = state
+        .pending_servers
+        .iter()
+        .enumerate()
+        .map(|(i, server)| {
+            let is_selected = i == state.pending_selected;
+
+            let auth_icon = match server.auth_status {
+                AuthStatus::NotRequired => "○",
+                AuthStatus::TokenPresent => "🔑",
+                AuthStatus::TokenMissing => "⚠",
+                AuthStatus::Unknown => "?",
+            };
+
+            let auth_color = match server.auth_status {
+                AuthStatus::NotRequired => theme::GREEN,
+                AuthStatus::TokenPresent => theme::GREEN,
+                AuthStatus::TokenMissing => theme::YELLOW,
+                AuthStatus::Unknown => theme::SUBTEXT0,
+            };
+
+            let risk_color = match server.risk_level.as_str() {
+                "low" => theme::GREEN,
+                "medium" => theme::YELLOW,
+                "high" => theme::PEACH,
+                "critical" => theme::RED,
+                _ => theme::SUBTEXT0,
+            };
+
+            let line = Line::from(vec![
+                Span::styled(auth_icon, Style::default().fg(auth_color)),
+                Span::raw(" "),
+                Span::styled(
+                    truncate(&server.name, 25),
+                    if is_selected {
+                        Style::default()
+                            .fg(theme::TEXT)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(theme::SUBTEXT1)
+                    },
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    format!("[{}]", server.risk_level),
+                    Style::default().fg(risk_color),
+                ),
+            ]);
+
+            let mut item = ListItem::new(line);
+            if is_selected {
+                item = item.style(
+                    Style::default()
+                        .bg(theme::SURFACE0)
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            item
+        })
+        .collect();
+
+    let list = List::new(items).block(block);
+    f.render_widget(list, area);
+}
+
+/// Render details for the selected pending server
+fn render_pending_details(f: &mut Frame, state: &AppState, area: Rect) {
+    let is_active = state.active_panel == ActivePanel::ApprovalsDetails;
+    let border_color = if is_active {
+        theme::PANEL_BORDER_ACTIVE
+    } else {
+        theme::PANEL_BORDER
+    };
+
+    let block = Block::default()
+        .title("Pending Server Details")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    if state.pending_servers.is_empty() || state.pending_selected >= state.pending_servers.len() {
+        let paragraph = Paragraph::new("Select a server to view details")
+            .style(Style::default().fg(theme::SUBTEXT0))
+            .block(block);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
+    let server = &state.pending_servers[state.pending_selected];
+
+    let auth_status_text = match server.auth_status {
+        AuthStatus::NotRequired => ("Not Required", theme::GREEN),
+        AuthStatus::TokenPresent => ("Token Present ✓", theme::GREEN),
+        AuthStatus::TokenMissing => ("Token Missing ⚠", theme::YELLOW),
+        AuthStatus::Unknown => ("Unknown", theme::SUBTEXT0),
+    };
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Name:       ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(
+                &server.name,
+                Style::default()
+                    .fg(theme::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Endpoint:   ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(&server.endpoint, Style::default().fg(theme::SAPPHIRE)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Auth:       ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(auth_status_text.0, Style::default().fg(auth_status_text.1)),
+        ]),
+    ];
+
+    if let Some(ref env_var) = server.auth_env_var {
+        lines.push(Line::from(vec![
+            Span::styled("  Env var:  ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(env_var, Style::default().fg(theme::PEACH)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("Risk:       ", Style::default().fg(theme::SUBTEXT0)),
+        Span::styled(
+            &server.risk_level,
+            Style::default().fg(match server.risk_level.as_str() {
+                "low" => theme::GREEN,
+                "medium" => theme::YELLOW,
+                "high" => theme::PEACH,
+                "critical" => theme::RED,
+                _ => theme::SUBTEXT0,
+            }),
+        ),
+    ]));
+
+    if let Some(ref desc) = server.description {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Description:", Style::default().fg(theme::SUBTEXT0)),
+        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}", desc),
+            Style::default().fg(theme::TEXT),
+        )]));
+    }
+
+    if let Some(ref goal) = server.requesting_goal {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Requested for goal:", Style::default().fg(theme::SUBTEXT0)),
+        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  \"{}\"", truncate(goal, 50)),
+            Style::default().fg(theme::LAVENDER),
+        )]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled(
+        "Actions:",
+        Style::default().fg(theme::SUBTEXT0),
+    )]));
+    lines.push(Line::from(vec![
+        Span::styled("  [a] ", Style::default().fg(theme::GREEN)),
+        Span::raw("Approve server"),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  [r] ", Style::default().fg(theme::RED)),
+        Span::raw("Reject server"),
+    ]));
+    if server.auth_status == AuthStatus::TokenMissing {
+        lines.push(Line::from(vec![
+            Span::styled("  [t] ", Style::default().fg(theme::YELLOW)),
+            Span::raw("Set auth token"),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        Span::styled("  [i] ", Style::default().fg(theme::BLUE)),
+        Span::raw("Introspect tools"),
+    ]));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, area);
+}
+
+/// Render the approved servers list
+fn render_approved_list(f: &mut Frame, state: &AppState, area: Rect) {
+    let is_active = state.active_panel == ActivePanel::ApprovalsApprovedList;
+    let border_color = if is_active {
+        theme::PANEL_BORDER_ACTIVE
+    } else {
+        theme::PANEL_BORDER
+    };
+
+    let block = Block::default()
+        .title(format!("Approved [{}]", state.approved_servers.len()))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    if state.approved_servers.is_empty() {
+        let content = if state.approvals_loading {
+            "Loading approved servers..."
+        } else {
+            "No approved servers.\n\nApprove pending servers to add them here."
+        };
+        let paragraph = Paragraph::new(content)
+            .style(Style::default().fg(theme::SUBTEXT0))
+            .block(block);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = state
+        .approved_servers
+        .iter()
+        .enumerate()
+        .map(|(i, server)| {
+            let is_selected = i == state.approved_selected;
+
+            let health_icon = if server.error_rate > 0.5 {
+                "⚠"
+            } else if server.total_calls > 0 {
+                "●"
+            } else {
+                "○"
+            };
+
+            let health_color = if server.error_rate > 0.5 {
+                theme::RED
+            } else if server.total_calls > 0 {
+                theme::GREEN
+            } else {
+                theme::SUBTEXT0
+            };
+
+            let tools_str = server
+                .tool_count
+                .map(|c| format!(" [{}]", c))
+                .unwrap_or_default();
+
+            let line = Line::from(vec![
+                Span::styled(health_icon, Style::default().fg(health_color)),
+                Span::raw(" "),
+                Span::styled(
+                    truncate(&server.name, 25),
+                    if is_selected {
+                        Style::default()
+                            .fg(theme::TEXT)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(theme::SUBTEXT1)
+                    },
+                ),
+                Span::styled(tools_str, Style::default().fg(theme::PEACH)),
+            ]);
+
+            let mut item = ListItem::new(line);
+            if is_selected {
+                item = item.style(
+                    Style::default()
+                        .bg(theme::SURFACE0)
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            item
+        })
+        .collect();
+
+    let list = List::new(items).block(block);
+    f.render_widget(list, area);
+}
+
+/// Render details for the selected approved server
+fn render_approved_details(f: &mut Frame, state: &AppState, area: Rect) {
+    let is_active = state.active_panel == ActivePanel::ApprovalsDetails;
+    let border_color = if is_active {
+        theme::PANEL_BORDER_ACTIVE
+    } else {
+        theme::PANEL_BORDER
+    };
+
+    let block = Block::default()
+        .title("Approved Server Details")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    if state.approved_servers.is_empty() || state.approved_selected >= state.approved_servers.len()
+    {
+        let paragraph = Paragraph::new("Select a server to view details")
+            .style(Style::default().fg(theme::SUBTEXT0))
+            .block(block);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
+    let server = &state.approved_servers[state.approved_selected];
+
+    let health_text = if server.error_rate > 0.5 {
+        ("Unhealthy", theme::RED)
+    } else if server.total_calls > 0 {
+        ("Healthy", theme::GREEN)
+    } else {
+        ("No calls yet", theme::SUBTEXT0)
+    };
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Name:       ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(
+                &server.name,
+                Style::default()
+                    .fg(theme::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Endpoint:   ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(&server.endpoint, Style::default().fg(theme::SAPPHIRE)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Health:     ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(health_text.0, Style::default().fg(health_text.1)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Calls:      ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(
+                format!("{}", server.total_calls),
+                Style::default().fg(theme::TEXT),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Error rate: ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(
+                format!("{:.1}%", server.error_rate * 100.0),
+                Style::default().fg(if server.error_rate > 0.5 {
+                    theme::RED
+                } else if server.error_rate > 0.1 {
+                    theme::YELLOW
+                } else {
+                    theme::GREEN
+                }),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Approved:   ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(&server.approved_at, Style::default().fg(theme::TEXT)),
+        ]),
+    ];
+
+    if let Some(ref desc) = server.description {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Description:", Style::default().fg(theme::SUBTEXT0)),
+        ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  {}", desc),
+            Style::default().fg(theme::TEXT),
+        )]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled(
+        "Actions:",
+        Style::default().fg(theme::SUBTEXT0),
+    )]));
+    lines.push(Line::from(vec![
+        Span::styled("  [d] ", Style::default().fg(theme::RED)),
+        Span::raw("Dismiss server"),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  [i] ", Style::default().fg(theme::BLUE)),
+        Span::raw("Re-introspect tools"),
+    ]));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, area);
+}
+
+/// Render the auth token input popup
+fn render_auth_token_popup(f: &mut Frame, popup: &super::state::AuthTokenPopup) {
+    let area = centered_rect(60, 20, f.size()); // Increased height from 12% to 20%
+
+    // Clear the area
+    f.render_widget(ratatui::widgets::Clear, area);
+
+    let block = Block::default()
+        .title(format!(" Set Auth Token: {} ", popup.server_name))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::MAUVE));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(1), // Instruction
+            Constraint::Length(1), // Env var name
+            Constraint::Length(1), // Spacer
+            Constraint::Length(5), // Token input (increased from 3 to 5 for better visibility)
+            Constraint::Length(3), // Error or hint (increased to 3 lines for better error visibility)
+            Constraint::Min(1),    // Actions
+        ])
+        .split(inner);
+
+    // Instruction
+    let instruction = Paragraph::new("Enter token value (will be set for current session):")
+        .style(Style::default().fg(theme::SUBTEXT1));
+    f.render_widget(instruction, chunks[0]);
+
+    // Env var name
+    let env_var_line = Line::from(vec![
+        Span::styled("Environment variable: ", Style::default().fg(theme::SUBTEXT0)),
+        Span::styled(&popup.env_var, Style::default().fg(theme::PEACH)),
+    ]);
+    f.render_widget(Paragraph::new(env_var_line), chunks[1]);
+
+    // Token input (masked) - show cursor position indicator
+    let masked_token = "*".repeat(popup.token_input.len());
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::SAPPHIRE));
+    let input = Paragraph::new(masked_token)
+        .block(input_block)
+        .scroll((0, 0)); // Allow horizontal scrolling if token is very long
+    f.render_widget(input, chunks[3]);
+
+    // Error or hint
+    if let Some(ref error) = popup.error_message {
+        let error_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::RED))
+            .style(Style::default().bg(theme::MANTLE).fg(theme::RED));
+        let error_paragraph = Paragraph::new(error.as_str())
+            .style(Style::default().fg(theme::RED).add_modifier(Modifier::BOLD))
+            .wrap(Wrap { trim: true })
+            .block(error_block);
+        f.render_widget(error_paragraph, chunks[4]);
+    } else {
+        let hint = Paragraph::new("Token will be stored in memory only (not saved to disk)")
+            .style(Style::default().fg(theme::SUBTEXT0))
+            .wrap(Wrap { trim: true });
+        f.render_widget(hint, chunks[4]);
+    }
+
+    // Actions
+    let actions = Line::from(vec![
+        Span::styled("[Enter] ", Style::default().fg(theme::GREEN)),
+        Span::raw("Set token  "),
+        Span::styled("[Esc] ", Style::default().fg(theme::RED)),
+        Span::raw("Cancel"),
+    ]);
+    f.render_widget(Paragraph::new(actions), chunks[5]);
+}
+
 /// Render the Discover view - capability browser
-fn render_discover_view(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_discover_view(f: &mut Frame, state: &mut AppState, area: Rect) {
     // Vertical split: Search input (top) | Results (bottom)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -467,7 +1053,7 @@ fn render_discover_view(f: &mut Frame, state: &AppState, area: Rect) {
     render_capability_details(f, state, cols[1]);
 }
 
-fn render_discover_input(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_discover_input(f: &mut Frame, state: &mut AppState, area: Rect) {
     let focus_style = if state.discover_input_active {
         Style::default()
             .fg(theme::MAUVE)
@@ -501,7 +1087,11 @@ fn render_discover_input(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render the capability list from all servers, grouped by source
-fn render_capability_list(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_capability_list(f: &mut Frame, state: &mut AppState, area: Rect) {
+    // Calculate visible height (accounting for borders)
+    let visible_height = area.height.saturating_sub(2) as usize;
+    state.discover_panel_height = visible_height;
+
     // Apply local filtering based on the search hint
     let filtered_caps = state.filtered_discovered_caps();
     let total_count = filtered_caps.len();
@@ -512,26 +1102,52 @@ fn render_capability_list(f: &mut Frame, state: &AppState, area: Rect) {
         Style::default().fg(theme::PANEL_BORDER)
     };
 
+    let visible_entries = state.visible_discovery_entries();
+    let entry_count = visible_entries.len();
+
+    // Show scroll indicator in title if needed
+    let title = if entry_count > visible_height {
+        format!(
+            "Capabilities ({} found) [{}/{}]",
+            total_count,
+            state.discover_scroll + 1,
+            entry_count
+        )
+    } else {
+        format!("Capabilities ({} found)", total_count)
+    };
+
     let block = Block::default()
-        .title(format!("Capabilities ({} found)", total_count))
+        .title(title)
         .borders(Borders::ALL)
         .border_style(block_style);
 
     let mut items: Vec<ListItem> = Vec::new();
-    let visible_entries = state.visible_discovery_entries();
 
-    for (i, entry) in visible_entries.iter().enumerate() {
-        let is_selected = i == state.discover_selected;
+    // Apply scrolling - skip items before scroll offset and take only visible_height items
+    for (display_idx, (_, entry)) in visible_entries
+        .iter()
+        .enumerate()
+        .skip(state.discover_scroll)
+        .take(visible_height)
+        .enumerate()
+    {
+        let real_idx = display_idx + state.discover_scroll;
+        let is_selected = real_idx == state.discover_selected;
 
         match entry {
-            DiscoveryEntry::Header { name, .. } => {
-                let indicator = if state.discover_collapsed_sources.contains(name)
-                    || (name == "Local Capabilities" && state.discover_local_collapsed)
-                {
-                    "▶"
+            DiscoveryEntry::Header { name, is_local } => {
+                // Determine collapsed state matching visible_discovery_entries() logic
+                let is_collapsed = if *is_local || name == "Local Capabilities" {
+                    state.discover_local_collapsed
+                        || state.discover_collapsed_sources.contains(name)
                 } else {
-                    "▼"
+                    // Non-local: collapsed if explicitly collapsed OR (all_collapsed_by_default AND not explicitly expanded)
+                    state.discover_collapsed_sources.contains(name)
+                        || (state.discover_all_collapsed_by_default
+                            && !state.discover_expanded_sources.contains(name))
                 };
+                let indicator = if is_collapsed { "▶" } else { "▼" };
 
                 let style = if is_selected {
                     Style::default()
@@ -606,7 +1222,7 @@ fn render_capability_list(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render capability details panel
-fn render_capability_details(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_capability_details(f: &mut Frame, state: &mut AppState, area: Rect) {
     let block = Block::default()
         .title("Capability Details")
         .borders(Borders::ALL)
@@ -721,7 +1337,7 @@ fn render_capability_details(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render the Goals view with RTFS Plan, Decomposition Tree, etc.
-fn render_goals_view(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_goals_view(f: &mut Frame, state: &mut AppState, area: Rect) {
     // Two-column layout: RTFS Plan (left) | Tree + Resolution (right)
     let cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -757,7 +1373,7 @@ fn render_goals_view(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render the RTFS Plan panel
-fn render_rtfs_plan(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_rtfs_plan(f: &mut Frame, state: &mut AppState, area: Rect) {
     let is_active = state.active_panel == ActivePanel::RtfsPlan;
     let border_color = if is_active {
         theme::PANEL_BORDER_ACTIVE
@@ -866,7 +1482,7 @@ fn highlight_rtfs_line(line: &str) -> Vec<Span<'static>> {
 }
 
 /// Render the decomposition tree panel
-fn render_decomposition_tree(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_decomposition_tree(f: &mut Frame, state: &mut AppState, area: Rect) {
     let is_active = state.active_panel == ActivePanel::DecompositionTree;
     let border_color = if is_active {
         theme::PANEL_BORDER_ACTIVE
@@ -934,7 +1550,7 @@ fn render_decomposition_tree(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render the capability resolution panel
-fn render_capability_resolution(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_capability_resolution(f: &mut Frame, state: &mut AppState, area: Rect) {
     let is_active = state.active_panel == ActivePanel::CapabilityResolution;
     let border_color = if is_active {
         theme::PANEL_BORDER_ACTIVE
@@ -1000,7 +1616,7 @@ fn render_capability_resolution(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render the trace timeline panel
-fn render_trace_timeline(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_trace_timeline(f: &mut Frame, state: &mut AppState, area: Rect) {
     let is_active = state.active_panel == ActivePanel::TraceTimeline;
     let border_color = if is_active {
         theme::PANEL_BORDER_ACTIVE
@@ -1132,7 +1748,7 @@ fn smart_truncate(s: &str, max_len: usize) -> String {
 }
 
 /// Render the LLM inspector panel
-fn render_llm_inspector(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_llm_inspector(f: &mut Frame, state: &mut AppState, area: Rect) {
     let is_active = state.active_panel == ActivePanel::LlmInspector;
     let border_color = if is_active {
         theme::PANEL_BORDER_ACTIVE
@@ -1243,7 +1859,7 @@ fn render_llm_inspector(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Render the status bar
-fn render_status_bar(f: &mut Frame, state: &AppState, area: Rect) {
+fn render_status_bar(f: &mut Frame, state: &mut AppState, area: Rect) {
     let mode_style = match state.mode {
         ExecutionMode::Idle => Style::default().fg(theme::SUBTEXT0).bg(theme::SURFACE0),
         ExecutionMode::Received => Style::default().fg(theme::BASE).bg(theme::TEAL),
@@ -1384,7 +2000,7 @@ fn render_help_overlay(f: &mut Frame) {
 }
 
 /// Render trace detail popup
-fn render_trace_popup(f: &mut Frame, state: &AppState) {
+fn render_trace_popup(f: &mut Frame, state: &mut AppState) {
     let area = f.size();
     let popup_area = centered_rect(80, 70, area);
 
@@ -1498,8 +2114,9 @@ fn render_trace_popup(f: &mut Frame, state: &AppState) {
 }
 
 /// Render discovery popup based on current state
-fn render_discover_popup(f: &mut Frame, state: &AppState) {
-    match &state.discover_popup {
+fn render_discover_popup(f: &mut Frame, state: &mut AppState) {
+    let popup = state.discover_popup.clone();
+    match &popup {
         DiscoverPopup::None => {}
         DiscoverPopup::SearchResults { servers, selected } => {
             render_search_results_popup(f, servers, *selected);
@@ -1518,7 +2135,14 @@ fn render_discover_popup(f: &mut Frame, state: &AppState) {
             selected_tools,
             ..
         } => {
-            render_introspection_results_popup(f, server_name, tools, *selected, selected_tools);
+            render_introspection_results_popup(
+                f,
+                server_name,
+                tools,
+                *selected,
+                selected_tools,
+                state,
+            );
         }
         DiscoverPopup::Error { title, message } => {
             render_error_popup(f, title, message);
@@ -1579,7 +2203,7 @@ fn render_introspecting_popup(
     server_name: &str,
     endpoint: &str,
     logs: &[String],
-    state: &AppState,
+    state: &mut AppState,
 ) {
     let area = f.size();
     let popup_area = centered_rect(60, 40, area);
@@ -1651,6 +2275,7 @@ fn render_introspection_results_popup(
     tools: &[super::state::DiscoveredCapability],
     selected: usize,
     selected_tools: &std::collections::HashSet<usize>,
+    state: &mut AppState,
 ) {
     let area = f.size();
     let popup_area = centered_rect(75, 70, area);
@@ -1686,7 +2311,7 @@ fn render_introspection_results_popup(
 
     let selected_count = selected_tools.len();
     let title = format!(
-        " {} Tools ({} selected) - Space: Toggle, Enter: Add Server, Esc: Back ",
+        " {} Tools ({} selected) - Space: Toggle | Enter: Add | p: Add to Pending | Esc: Back ",
         server_name, selected_count
     );
 
@@ -1800,7 +2425,7 @@ fn truncate(s: &str, max_len: usize) -> String {
 }
 
 /// Render intent detail popup
-fn render_intent_popup(f: &mut Frame, state: &AppState) {
+fn render_intent_popup(f: &mut Frame, state: &mut AppState) {
     let area = f.size();
     let popup_area = centered_rect(80, 70, area);
 
