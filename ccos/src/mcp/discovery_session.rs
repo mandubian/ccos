@@ -109,8 +109,7 @@ impl MCPSessionManager {
             .client
             .post(server_url)
             .json(&init_request)
-            .header("Accept", "application/json")
-            .header("Accept", "text/event-stream")
+            .header("Accept", "application/json, text/event-stream")
             .timeout(std::time::Duration::from_secs(30));
 
         // Add authentication headers if provided
@@ -139,6 +138,13 @@ impl MCPSessionManager {
 
         // Check response status
         let status = response.status();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
         if !status.is_success() {
             let error_text = response
                 .text()
@@ -163,9 +169,30 @@ impl MCPSessionManager {
         }
 
         // Parse initialize result
-        let init_response: serde_json::Value = response.json().await.map_err(|e| {
-            RuntimeError::Generic(format!("Failed to parse initialize response: {}", e))
+        let body_text = response.text().await.map_err(|e| {
+            RuntimeError::Generic(format!("Failed to read initialize response body: {}", e))
         })?;
+
+        // Try parsing as raw JSON first (even if content-type says SSE)
+        let init_response: serde_json::Value = match serde_json::from_str(&body_text) {
+            Ok(v) => v,
+            Err(_) => {
+                // If raw JSON fails, try SSE extraction
+                if let Some(data) = extract_sse_data(&body_text) {
+                    serde_json::from_str(&data).map_err(|e| {
+                        RuntimeError::Generic(format!(
+                            "Failed to parse SSE initialization data: {}\n\nRaw body: {}\n\nExtracted data: {}",
+                            e, body_text, data
+                        ))
+                    })?
+                } else {
+                    return Err(RuntimeError::Generic(format!(
+                        "Failed to parse initialize response as JSON and no SSE data found.\n\nRaw response body: {}",
+                        body_text
+                    )));
+                }
+            }
+        };
 
         // Extract server info and capabilities from result
         let result = init_response.get("result").ok_or_else(|| {
@@ -231,8 +258,7 @@ impl MCPSessionManager {
             .client
             .post(&session.server_url)
             .json(&request_payload)
-            .header("Accept", "application/json")
-            .header("Accept", "text/event-stream")
+            .header("Accept", "application/json, text/event-stream")
             .timeout(std::time::Duration::from_secs(30));
 
         // Add session ID header if present (required by spec for stateful sessions)
@@ -253,6 +279,12 @@ impl MCPSessionManager {
             .map_err(|e| RuntimeError::Generic(format!("MCP request failed: {}", e)))?;
 
         let status = response.status();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("")
+            .to_string();
 
         // Handle session expiration (404) according to spec
         if status == reqwest::StatusCode::NOT_FOUND && session.session_id.is_some() {
@@ -276,13 +308,27 @@ impl MCPSessionManager {
             .text()
             .await
             .map_err(|e| RuntimeError::Generic(format!("Failed to read MCP response: {}", e)))?;
-        serde_json::from_str(&body_text).map_err(|e| {
-            RuntimeError::Generic(format!(
-                "Failed to parse MCP response: {} (body: {})",
-                e,
-                &body_text[..body_text.len().min(200)]
-            ))
-        })
+
+        // Try parsing as raw JSON first
+        match serde_json::from_str(&body_text) {
+            Ok(v) => Ok(v),
+            Err(_) => {
+                // If raw JSON fails, try SSE extraction
+                if let Some(data) = extract_sse_data(&body_text) {
+                    serde_json::from_str(&data).map_err(|e| {
+                        RuntimeError::Generic(format!(
+                            "Failed to parse SSE data: {}\n\nRaw body: {}\n\nExtracted data: {}",
+                            e, body_text, data
+                        ))
+                    })
+                } else {
+                    Err(RuntimeError::Generic(format!(
+                        "Failed to parse MCP response as JSON and no SSE data found.\n\nRaw response body: {}",
+                        body_text
+                    )))
+                }
+            }
+        }
     }
 
     /// Terminate an MCP session gracefully
@@ -321,4 +367,48 @@ impl MCPSessionManager {
 
         Ok(())
     }
+}
+
+/// Helper to extract last `data: ...` JSON chunk from SSE-like bodies, including multi-line data
+fn extract_sse_data(body: &str) -> Option<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    let mut collecting = false;
+    let mut buf = String::new();
+    for line in body.lines() {
+        let line = line.trim_end_matches(['\r', '\n']);
+        
+        // Handle "data: " or "data:" prefix
+        let data_opt = if line.starts_with("data: ") {
+            Some(&line[6..])
+        } else if line.starts_with("data:") {
+            Some(&line[5..])
+        } else {
+            None
+        };
+
+        if let Some(data) = data_opt {
+            // Start new data block
+            buf.clear();
+            buf.push_str(data.trim());
+            collecting = true;
+            continue;
+        }
+        if collecting {
+            // Accumulate until blank line ends the event
+            if line.trim().is_empty() {
+                candidates.push(buf.clone());
+                collecting = false;
+            } else {
+                buf.push_str(line.trim());
+            }
+        }
+    }
+    if collecting && !buf.is_empty() {
+        candidates.push(buf);
+    }
+    // Prefer the last JSON-looking candidate (most likely the final result)
+    candidates
+        .into_iter()
+        .rev()
+        .find(|s| s.trim_start().starts_with('{') || s.trim_start().starts_with('['))
 }

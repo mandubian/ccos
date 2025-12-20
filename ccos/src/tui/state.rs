@@ -67,7 +67,7 @@ impl View {
     }
 
     pub fn is_implemented(&self) -> bool {
-        matches!(self, Self::Goals | Self::Servers)
+        matches!(self, Self::Goals | Self::Servers | Self::Discover | Self::Approvals)
     }
 }
 
@@ -90,6 +90,11 @@ pub enum ActivePanel {
     // Servers View Panels
     ServersList,
     ServerDetails,
+
+    // Approvals View Panels
+    ApprovalsPendingList,
+    ApprovalsApprovedList,
+    ApprovalsDetails,
 }
 
 impl ActivePanel {
@@ -111,6 +116,11 @@ impl ActivePanel {
             // Servers View Navigation
             Self::ServersList => Self::ServerDetails,
             Self::ServerDetails => Self::ServersList,
+
+            // Approvals View Navigation
+            Self::ApprovalsPendingList => Self::ApprovalsApprovedList,
+            Self::ApprovalsApprovedList => Self::ApprovalsDetails,
+            Self::ApprovalsDetails => Self::ApprovalsPendingList,
         }
     }
 
@@ -132,6 +142,11 @@ impl ActivePanel {
             // Servers View Navigation
             Self::ServersList => Self::ServerDetails,
             Self::ServerDetails => Self::ServersList,
+
+            // Approvals View Navigation
+            Self::ApprovalsPendingList => Self::ApprovalsDetails,
+            Self::ApprovalsApprovedList => Self::ApprovalsPendingList,
+            Self::ApprovalsDetails => Self::ApprovalsApprovedList,
         }
     }
 }
@@ -437,7 +452,25 @@ pub struct AppState {
     pub discover_input_active: bool,
     pub discover_popup: DiscoverPopup,
     pub discover_local_collapsed: bool,
+    pub discover_all_collapsed_by_default: bool, // When true, all groups are collapsed unless explicitly expanded
     pub discover_collapsed_sources: HashSet<String>,
+    pub discover_expanded_sources: HashSet<String>, // Explicitly expanded sources (overrides all_collapsed_by_default)
+    pub discover_scroll: usize, // Scroll offset for capability list
+    pub discover_details_scroll: usize, // Scroll offset for details panel
+    pub discover_panel_height: usize, // Actual visible height of the panel
+    pub discover_auth_retry: Option<(String, String)>, // (server_name, endpoint) to retry introspection after auth token is set
+
+    // =========================================
+    // Approvals View State
+    // =========================================
+    pub pending_servers: Vec<PendingServerEntry>,
+    pub approved_servers: Vec<ApprovedServerEntry>,
+    pub pending_selected: usize,
+    pub approved_selected: usize,
+    pub approvals_loading: bool,
+    pub approvals_details_scroll: usize,
+    pub approvals_tab: ApprovalsTab, // Which tab is active (Pending or Approved)
+    pub auth_token_popup: Option<AuthTokenPopup>, // Popup for entering auth token
 }
 
 /// A discovered capability for the Discover view
@@ -463,6 +496,64 @@ pub enum CapabilityCategory {
     RtfsFunction,
     Builtin,
     Synthesized,
+}
+
+/// Tab selection for Approvals view
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ApprovalsTab {
+    #[default]
+    Pending,
+    Approved,
+}
+
+/// A pending server entry for the Approvals view
+#[derive(Debug, Clone)]
+pub struct PendingServerEntry {
+    pub id: String,
+    pub name: String,
+    pub endpoint: String,
+    pub description: Option<String>,
+    pub auth_env_var: Option<String>,
+    pub auth_status: AuthStatus,
+    pub tool_count: Option<usize>,
+    pub risk_level: String,
+    pub requested_at: String,
+    pub requesting_goal: Option<String>,
+}
+
+/// An approved server entry for the Approvals view
+#[derive(Debug, Clone)]
+pub struct ApprovedServerEntry {
+    pub id: String,
+    pub name: String,
+    pub endpoint: String,
+    pub description: Option<String>,
+    pub auth_env_var: Option<String>,
+    pub tool_count: Option<usize>,
+    pub approved_at: String,
+    pub total_calls: u64,
+    pub error_rate: f64,
+}
+
+/// Authentication status for a server
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AuthStatus {
+    #[default]
+    Unknown,
+    NotRequired,
+    TokenMissing,
+    TokenPresent,
+}
+
+/// Popup state for entering auth token
+#[derive(Debug, Clone)]
+pub struct AuthTokenPopup {
+    pub server_name: String,
+    pub env_var: String,
+    pub token_input: String,
+    pub cursor_position: usize,
+    pub error_message: Option<String>,
+    pub pending_id: String, // ID of the pending server this is for
 }
 
 impl Default for AppState {
@@ -519,8 +610,24 @@ impl Default for AppState {
             discover_search_hint: String::new(),
             discover_input_active: false,
             discover_popup: DiscoverPopup::None,
-            discover_local_collapsed: false,
+            discover_local_collapsed: true, // Collapsed by default
+            discover_all_collapsed_by_default: true, // All groups collapsed by default
             discover_collapsed_sources: HashSet::new(),
+            discover_expanded_sources: HashSet::new(), // Tracks explicitly expanded groups
+            discover_scroll: 0,
+            discover_details_scroll: 0,
+            discover_panel_height: 20,
+            discover_auth_retry: None,
+
+            // Approvals View
+            pending_servers: Vec::new(),
+            approved_servers: Vec::new(),
+            pending_selected: 0,
+            approved_selected: 0,
+            approvals_loading: false,
+            approvals_details_scroll: 0,
+            approvals_tab: ApprovalsTab::Pending,
+            auth_token_popup: None,
         }
     }
 }
@@ -701,7 +808,10 @@ impl AppState {
 
         // Then handle MCP server capabilities
         for (source, caps_indices) in by_source {
-            let collapsed = self.discover_collapsed_sources.contains(&source);
+            // Collapsed if: explicitly collapsed OR (all_collapsed_by_default AND not explicitly expanded)
+            let collapsed = self.discover_collapsed_sources.contains(&source)
+                || (self.discover_all_collapsed_by_default
+                    && !self.discover_expanded_sources.contains(&source));
 
             entries.push(DiscoveryEntry::Header {
                 name: source.clone(),
