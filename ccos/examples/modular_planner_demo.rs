@@ -297,6 +297,12 @@ fn print_plan_result(result: &PlanResult, verbose: bool) {
                         model, tokens_prompt, tokens_response, duration_ms
                     );
                 }
+                TraceEvent::DiscoverySearchCompleted { query, num_results } => {
+                    println!(
+                        "   🔍 Discovery search: '{}' ({} results)",
+                        query, num_results
+                    );
+                }
             }
         }
     }

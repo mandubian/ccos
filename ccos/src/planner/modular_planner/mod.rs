@@ -39,6 +39,7 @@ pub mod decomposition;
 pub mod orchestrator;
 pub mod resolution;
 pub mod safe_executor;
+pub mod steps;
 pub mod types;
 
 // Re-exports
@@ -53,6 +54,15 @@ pub use resolution::{
     ResolvedCapability, SemanticResolution,
 };
 
-pub use orchestrator::{ModularPlanner, PlanResult, PlannerConfig, PlannerError, PlanningTrace};
+pub use orchestrator::{
+    ModularPlanner, PlanResult, PlannerConfig, PlannerError, PlanningTrace, TraceEvent,
+};
 
 pub use types::{ApiAction, DomainHint, IntentType, SubIntent, ToolSummary};
+
+// Step functions for testability and meta-capabilities
+pub use steps::{
+    step_archive_plan, step_create_fallback_resolutions, step_decompose, step_discover_tools,
+    step_resolve_intents, step_store_intents, ArchiveResult, IntentStorageResult,
+    PlanGenerationResult, ResolutionResult, SafeExecutionResult, ToolDiscoveryResult,
+};

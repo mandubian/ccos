@@ -1,9 +1,26 @@
 # Missing Capability Resolution System
 
 **Status**: Authoritative  
-**Version**: 1.0  
-**Last Updated**: 2025-11-29  
+**Version**: 1.1  
+**Last Updated**: 2025-12-22  
 **Scope**: Complete missing capability detection, resolution, and registration system
+
+---
+
+## Implementation Status
+
+| Feature | Status | Location |
+|---------|--------|----------|
+| `MissingCapabilityResolver` | ✅ Implemented | `synthesis/core/missing_capability_resolver.rs` |
+| `MissingCapabilityStrategy` trait | ✅ Implemented | `synthesis/core/missing_capability_strategies.rs` |
+| `PureRtfsGenerationStrategy` | ✅ Implemented | `synthesis/core/missing_capability_strategies.rs` |
+| `ExternalLlmHintStrategy` | ✅ Implemented | `synthesis/core/missing_capability_strategies.rs` |
+| Planner integration via `step_discover_new_tools` | ✅ Implemented | `planner/modular_planner/steps.rs` |
+| Planner retry loop `step_resolve_with_discovery` | ✅ Implemented | `planner/modular_planner/steps.rs` |
+| `planner.discover_tools` capability | ✅ Implemented | `planner/capabilities_v2.rs` |
+| Meta-planner discovery integration | ✅ Implemented | `capabilities/core/meta-planner.rtfs` |
+| Continuous resolution loop | 🔄 Partial | `synthesis/runtime/continuous_resolution.rs` |
+| Deferred execution checkpoints | 📋 Planned | - |
 
 ---
 

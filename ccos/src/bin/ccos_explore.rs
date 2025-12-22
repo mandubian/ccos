@@ -1192,6 +1192,14 @@ fn send_trace_event(tx: &mpsc::UnboundedSender<TuiEvent>, event: &TraceEvent) {
             format!("LLM Call: {} ({} tokens → {} tokens, {}ms)", model, tokens_prompt, tokens_response, duration_ms),
             Some(format!("Prompt:\n{}\n\nResponse:\n{}", prompt, response.as_deref().unwrap_or("(pending)"))),
         ),
+        TraceEvent::DiscoverySearchCompleted {
+            query,
+            num_results,
+        } => (
+            TraceEventType::Info,
+            format!("Discovery search for '{}': {} results", query, num_results),
+            None,
+        ),
     };
 
     let _ = tx.send(TuiEvent::Trace(event_type, message, details));

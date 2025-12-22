@@ -748,10 +748,12 @@ fn _format_param_type(param_type: &ParamTypeInfo) -> String {
 }
 
 // ---- RTFS serializer helpers (small and pragmatic) ----
+#[allow(dead_code)]
 fn rtfs_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+#[allow(dead_code)]
 fn rtfs_str(s: &str) -> String {
     format!("\"{}\"", rtfs_escape(s))
 }

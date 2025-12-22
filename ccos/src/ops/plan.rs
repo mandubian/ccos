@@ -909,6 +909,49 @@ fn get_llm_config_from_env() -> RuntimeResult<LlmProviderConfig> {
     })
 }
 
+/// Test the discovery step with a query
+///
+/// This function can be used to test the new `step_discover_new_tools`
+/// functionality without requiring full plan creation.
+///
+/// # Arguments
+/// * `query` - Search query (e.g., "GitHub issues", "weather api")
+///
+/// # Returns
+/// A formatted string with discovery results
+pub async fn test_discovery_step(query: &str) -> RuntimeResult<String> {
+    use crate::discovery::registry_search::RegistrySearcher;
+
+    let searcher = RegistrySearcher::new();
+    let results = searcher.search(query).await?;
+
+    let mut output = format!("Discovery results for '{}':\n", query);
+    output.push_str(&format!(
+        "Found {} potential servers/APIs\n\n",
+        results.len()
+    ));
+
+    for (i, result) in results.iter().take(10).enumerate() {
+        output.push_str(&format!(
+            "{}. {} (source: {:?}, score: {:.2})\n",
+            i + 1,
+            result.server_info.name,
+            result.source,
+            result.match_score
+        ));
+        if let Some(ref desc) = result.server_info.description {
+            let short_desc = if desc.len() > 80 {
+                format!("{}...", &desc[..80])
+            } else {
+                desc.clone()
+            };
+            output.push_str(&format!("   {}\n", short_desc));
+        }
+    }
+
+    Ok(output)
+}
+
 /// Validate capabilities in RTFS code against marketplace
 async fn validate_capabilities_in_code(
     rtfs_code: &str,
@@ -1057,4 +1100,253 @@ async fn load_generated_capabilities(
     }
 
     Ok(())
+}
+
+/// Step testing module for CLI debugging
+pub mod step_testing {
+    use super::*;
+    use crate::planner::modular_planner::decomposition::DecompositionResult;
+    use crate::planner::modular_planner::resolution::ResolvedCapability;
+    use crate::planner::modular_planner::steps::ToolDiscoveryResult;
+
+    /// Test tool discovery for a goal
+    pub async fn test_discover(goal: &str, _verbose: bool) -> RuntimeResult<ToolDiscoveryResult> {
+        let (decomposition, resolution, _config) = build_planner_components(false).await?;
+
+        crate::planner::modular_planner::steps::step_discover_tools(goal, resolution.as_ref())
+            .await
+            .map_err(|e| RuntimeError::Generic(e.to_string()))
+    }
+
+    /// Test decomposition for a goal
+    pub async fn test_decompose(
+        goal: &str,
+        verbose: bool,
+        force_llm: bool,
+        show_prompt: bool,
+    ) -> RuntimeResult<DecompositionResult> {
+        let (decomposition, resolution, config) = build_planner_components(force_llm).await?;
+
+        // First discover tools
+        let tools_result =
+            crate::planner::modular_planner::steps::step_discover_tools(goal, resolution.as_ref())
+                .await
+                .map_err(|e| RuntimeError::Generic(e.to_string()))?;
+
+        let mut trace = crate::planner::modular_planner::PlanningTrace::default();
+        let grounding_params = HashMap::new();
+
+        let config = crate::planner::modular_planner::PlannerConfig {
+            verbose_llm: verbose,
+            show_prompt,
+            ..config
+        };
+
+        crate::planner::modular_planner::steps::step_decompose(
+            goal,
+            Some(&tools_result.tools),
+            decomposition.as_ref(),
+            &config,
+            &grounding_params,
+            &mut trace,
+        )
+        .await
+        .map_err(|e| RuntimeError::Generic(e.to_string()))
+    }
+
+    /// Test resolution for a goal (includes decomposition)
+    pub async fn test_resolve(
+        goal: &str,
+        verbose: bool,
+    ) -> RuntimeResult<(
+        DecompositionResult,
+        HashMap<String, ResolvedCapability>,
+        Vec<String>,
+    )> {
+        let (decomposition, resolution, config) = build_planner_components(false).await?;
+
+        // First discover tools
+        let tools_result =
+            crate::planner::modular_planner::steps::step_discover_tools(goal, resolution.as_ref())
+                .await
+                .map_err(|e| RuntimeError::Generic(e.to_string()))?;
+
+        let mut trace = crate::planner::modular_planner::PlanningTrace::default();
+        let grounding_params = HashMap::new();
+
+        let config = crate::planner::modular_planner::PlannerConfig {
+            verbose_llm: verbose,
+            ..config
+        };
+
+        // Decompose
+        let decomp_result = crate::planner::modular_planner::steps::step_decompose(
+            goal,
+            Some(&tools_result.tools),
+            decomposition.as_ref(),
+            &config,
+            &grounding_params,
+            &mut trace,
+        )
+        .await
+        .map_err(|e| RuntimeError::Generic(e.to_string()))?;
+
+        // Generate intent IDs
+        let intent_ids: Vec<String> = decomp_result
+            .sub_intents
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("test:step-{}", i))
+            .collect();
+
+        // Resolve
+        let resolution_result = crate::planner::modular_planner::steps::step_resolve_intents(
+            &decomp_result.sub_intents,
+            &intent_ids,
+            resolution.as_ref(),
+            &mut trace,
+        )
+        .await
+        .map_err(|e| RuntimeError::Generic(e.to_string()))?;
+
+        Ok((
+            decomp_result,
+            resolution_result.resolutions,
+            resolution_result.unresolved,
+        ))
+    }
+
+    /// Test full pipeline with detailed output
+    pub async fn test_full_pipeline(
+        goal: &str,
+        verbose: bool,
+        force_llm: bool,
+    ) -> RuntimeResult<()> {
+        println!("\n📍 Step 1: Tool Discovery");
+        let tools = test_discover(goal, verbose).await?;
+        println!(
+            "   Found {} tools, {} domains",
+            tools.tools.len(),
+            tools.domain_hints.len()
+        );
+
+        println!("\n📍 Step 2: Decomposition");
+        let decomp = test_decompose(goal, verbose, force_llm, false).await?;
+        println!(
+            "   Decomposed into {} sub-intents",
+            decomp.sub_intents.len()
+        );
+        for (i, intent) in decomp.sub_intents.iter().enumerate() {
+            println!("   {}. {}", i + 1, intent.description);
+        }
+
+        println!("\n📍 Step 3: Resolution");
+        let (_, resolutions, unresolved) = test_resolve(goal, verbose).await?;
+        println!(
+            "   Resolved: {}, Unresolved: {}",
+            resolutions.len(),
+            unresolved.len()
+        );
+
+        println!("\n✅ Pipeline complete!");
+        Ok(())
+    }
+
+    /// Create CCOS instance and LLM configuration for step testing
+    async fn create_ccos_and_llm_config() -> RuntimeResult<(Arc<CCOS>, LlmProviderConfig)> {
+        // Get LLM config from environment
+        let llm_config = get_llm_config_from_env()?;
+
+        // Initialize CCOS runtime
+        let ccos = Arc::new(CCOS::new().await?);
+        let marketplace = ccos.get_capability_marketplace();
+
+        // Ensure native capabilities are registered
+        crate::ops::native::register_native_capabilities(&marketplace).await?;
+        load_approved_capabilities(&marketplace).await?;
+        load_generated_capabilities(&marketplace).await?;
+
+        // Keep catalog in sync
+        ccos.get_catalog().ingest_marketplace(&marketplace).await;
+
+        // Configure MCP session pool
+        configure_mcp_session_pool(&marketplace).await?;
+
+        Ok((ccos, llm_config))
+    }
+
+    /// Build the planner components (reused across steps)
+    async fn build_planner_components(
+        force_llm: bool,
+    ) -> RuntimeResult<(
+        Box<dyn DecompositionStrategy>,
+        Box<dyn crate::planner::modular_planner::ResolutionStrategy>,
+        crate::planner::modular_planner::PlannerConfig,
+    )> {
+        let (ccos, llm_config) = create_ccos_and_llm_config().await?;
+
+        // Build decomposition strategy based on LLM availability
+        let decomposition: Box<dyn DecompositionStrategy> =
+            match LlmProviderFactory::create_provider(llm_config).await {
+                Ok(provider) => {
+                    let adapter = Arc::new(CcosLlmAdapter::new(provider));
+                    if force_llm {
+                        use crate::planner::modular_planner::decomposition::IntentFirstDecomposition;
+                        Box::new(IntentFirstDecomposition::new(adapter))
+                    } else {
+                        let hybrid = HybridDecomposition::new()
+                            .with_llm(adapter)
+                            .with_config(HybridConfig::default());
+                        Box::new(hybrid)
+                    }
+                }
+                Err(e) => {
+                    println!(
+                        "⚠️  LLM provider unavailable ({}). Using pattern-only decomposition.",
+                        e
+                    );
+                    Box::new(PatternDecomposition::new())
+                }
+            };
+
+        // Build resolution strategy
+        let resolution = build_resolution_strategy(&ccos).await?;
+
+        let config = crate::planner::modular_planner::PlannerConfig {
+            max_depth: 5,
+            persist_intents: false,
+            create_edges: false,
+            intent_namespace: "test".to_string(),
+            ..Default::default()
+        };
+
+        Ok((decomposition, resolution, config))
+    }
+
+    /// Build resolution strategy (catalog + MCP)
+    async fn build_resolution_strategy(
+        ccos: &Arc<CCOS>,
+    ) -> RuntimeResult<Box<dyn crate::planner::modular_planner::ResolutionStrategy>> {
+        let catalog_adapter = Arc::new(CcosCatalogAdapter::new(ccos.get_catalog()));
+        let mut composite = CompositeResolution::new();
+        composite.add_strategy(Box::new(CatalogResolution::new(catalog_adapter)));
+
+        // Try to set up MCP discovery
+        let discovery_service = Arc::new(
+            MCPDiscoveryService::with_auth_headers(mcp_auth_headers())
+                .with_marketplace(ccos.get_capability_marketplace())
+                .with_catalog(ccos.get_catalog()),
+        );
+
+        let mcp_discovery = Arc::new(
+            RuntimeMcpDiscovery::with_discovery_service(
+                ccos.get_capability_marketplace(),
+                discovery_service,
+            )
+            .with_catalog(ccos.get_catalog()),
+        );
+        composite.add_strategy(Box::new(McpResolution::new(mcp_discovery)));
+
+        Ok(Box::new(composite))
+    }
 }

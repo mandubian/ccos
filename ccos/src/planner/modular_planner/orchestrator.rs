@@ -287,6 +287,11 @@ pub enum TraceEvent {
         tokens_response: usize,
         duration_ms: u64,
     },
+    /// Discovery search completed for a query
+    DiscoverySearchCompleted {
+        query: String,
+        num_results: usize,
+    },
 }
 
 /// The main modular planner orchestrator.
@@ -374,6 +379,7 @@ impl ModularPlanner {
 
     /// Emit a trace event - pushes to the Vec AND calls the callback if set.
     /// This enables real-time streaming of trace events to the TUI.
+    #[allow(dead_code)]
     fn emit_trace(&self, trace: &mut PlanningTrace, event: TraceEvent) {
         // Call the callback first (for real-time streaming)
         if let Some(ref callback) = self.trace_callback {

@@ -78,3 +78,12 @@ A dedicated discovery agent that replaces hard-coded heuristics with intelligent
     - Added `repair_plan` method to `IterativePlanner` which takes the failed plan and error message, and asks the LLM to fix the RTFS code.
     - Verified the "happy path" still works correctly.
 - **Next**: Simulate failures to verify the repair logic actually fixes broken plans.
+
+## 10. TUI Interactive Discovery & Approvals (Phase 2 - Production Ready)
+- **Goal**: Provide a full-featured Terminal User Interface (TUI) for interactive discovery, introspection, and approval of new capabilities.
+- **Approvals View**: Implemented a new view for managing the lifecycle of discovered servers (Pending, Approved, Rejected).
+- **Interactive Tool Selection**: Users can now browse introspection results, select specific tools, and save them to the pending queue with a single key press ('p').
+- **Auth Token Management**: Added interactive authentication token prompts. The TUI detects 401/403 errors, pops up an input box for the required token (e.g., `GITHUB_MCP_TOKEN`), and retries the operation automatically.
+- **Config-Driven Storage**: Aligned the TUI with `agent_config.toml`, ensuring discovered servers and RTFS manifests are saved in the correct `capabilities_dir` (e.g., `../capabilities`).
+- **MCP Session Stability**: Rewrote the MCP session handler to correctly handle SSE (Server-Sent Events) and `Accept` headers, ensuring compatibility with standard MCP servers.
+- **Files Modified**: `ccos/src/bin/ccos_explore.rs`, `ccos/src/mcp/discovery_session.rs`, `ccos/src/tui/state.rs`, `ccos/src/tui/panels.rs`.

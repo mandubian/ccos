@@ -39,50 +39,65 @@
                :confidence (:confidence resolution)
                :intent intent}
               
-              ;; Not found - try to decompose further
-              (if (:needs_synthesis resolution)
-                ;; Decompose into sub-intents
-                (let [sub-result (call "planner.decompose" 
-                                       {:goal (:description intent)
-                                        :max_depth depth})
-                      sub-intents (:sub_intents sub-result)]
-                  
-                  (if (empty? sub-intents)
-                    ;; Can't decompose - try synthesis
-                    (let [synth-result (call "planner.synthesize_capability"
-                                             {:description (:description intent)})]
-                      (if (:success synth-result)
-                        {:resolved true
-                         :capability_id (:capability_id synth-result)
-                         :synthesized true
-                         :intent intent}
-                        {:resolved false
-                         :error (:error synth-result)
-                         :intent intent}))
-                    
-                    ;; Recursively resolve each sub-intent
-                    (let [resolved-subs (map (fn [sub]
-                                               (resolve-or-decompose sub (- depth 1)))
-                                             sub-intents)
-                          failures (filter (fn [r] (not (:resolved r))) resolved-subs)]
-                      
-                      (if (empty? failures)
-                        ;; All resolved - compose
-                        {:resolved true
-                         :composed true
-                         :sub-resolutions resolved-subs
-                         :intent intent}
-                        ;; Some failed
-                        {:resolved false
-                         :partial true
-                         :failures failures
-                         :successes (filter :resolved resolved-subs)
-                         :intent intent}))))
+              ;; Not found - try discovery first, then decompose
+              (let [;; NEW: Try discovering tools before falling back
+                    discovery (call "planner.discover_tools"
+                                    {:query (:description intent) :max_results 5})
+                    discovered-tools (:tools discovery)]
                 
-                ;; Shouldn't need synthesis but not resolved - error
-                {:resolved false 
-                 :error "Could not resolve intent"
-                 :intent intent})))))
+                (if (and (not (empty? discovered-tools))
+                         (> (:score (first discovered-tools)) 0.7))
+                  ;; Found a good match via discovery
+                  {:resolved true
+                   :capability_id (:name (first discovered-tools))
+                   :discovered true
+                   :source (:source (first discovered-tools))
+                   :intent intent}
+                  
+                  ;; Discovery didn't help - decompose or synthesize
+                  (if (:needs_synthesis resolution)
+                    ;; Decompose into sub-intents
+                    (let [sub-result (call "planner.decompose" 
+                                           {:goal (:description intent)
+                                            :max_depth depth})
+                          sub-intents (:sub_intents sub-result)]
+                      
+                      (if (empty? sub-intents)
+                        ;; Can't decompose - try synthesis
+                        (let [synth-result (call "planner.synthesize_capability"
+                                                 {:description (:description intent)})]
+                          (if (:success synth-result)
+                            {:resolved true
+                             :capability_id (:capability_id synth-result)
+                             :synthesized true
+                             :intent intent}
+                            {:resolved false
+                             :error (:error synth-result)
+                             :intent intent}))
+                        
+                        ;; Recursively resolve each sub-intent
+                        (let [resolved-subs (map (fn [sub]
+                                                   (resolve-or-decompose sub (- depth 1)))
+                                                 sub-intents)
+                              failures (filter (fn [r] (not (:resolved r))) resolved-subs)]
+                          
+                          (if (empty? failures)
+                            ;; All resolved - compose
+                            {:resolved true
+                             :composed true
+                             :sub-resolutions resolved-subs
+                             :intent intent}
+                            ;; Some failed
+                            {:resolved false
+                             :partial true
+                             :failures failures
+                             :successes (filter :resolved resolved-subs)
+                             :intent intent}))))
+                    
+                    ;; Shouldn't need synthesis but not resolved - error
+                    {:resolved false 
+                     :error "Could not resolve intent"
+                     :intent intent})))))
       
       ;; Main entry: create root intent and resolve
       (let [root-intent {:description goal :id "root"}
