@@ -616,6 +616,57 @@ Instructions:
         )
         .await?;
 
+    // planner.discover_tools - Search for new tools when resolution fails
+    let discover_tools_handler = Arc::new(|input: &Value| {
+        let payload: DiscoverToolsInput = parse_payload("planner.discover_tools", input)?;
+
+        // Capture Tokio handle for async execution
+        let rt_handle = tokio::runtime::Handle::current();
+        let query = payload.query.clone();
+
+        let result = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                use crate::discovery::registry_search::RegistrySearcher;
+
+                let searcher = RegistrySearcher::new();
+                let results = searcher.search(&query).await?;
+
+                let tools: Vec<DiscoveredToolDto> = results
+                    .iter()
+                    .take(payload.max_results.unwrap_or(10))
+                    .map(|r| DiscoveredToolDto {
+                        name: r.server_info.name.clone(),
+                        description: r.server_info.description.clone(),
+                        source: format!("{:?}", r.source),
+                        score: r.match_score as f64,
+                        endpoints: r.alternative_endpoints.clone(),
+                    })
+                    .collect();
+
+                Ok::<DiscoverToolsOutput, RuntimeError>(DiscoverToolsOutput {
+                    tools,
+                    query: query.clone(),
+                })
+            })
+        })
+        .join()
+        .map_err(|_| {
+            RuntimeError::Generic("Thread join error in planner.discover_tools".to_string())
+        })??;
+
+        produce_value("planner.discover_tools", result)
+    });
+
+    marketplace
+        .register_local_capability(
+            "planner.discover_tools".to_string(),
+            "Planner / Discover Tools".to_string(),
+            "Search MCP Registry, APIs.guru, and other sources for tools matching a query."
+                .to_string(),
+            discover_tools_handler,
+        )
+        .await?;
+
     Ok(())
 }
 
@@ -723,6 +774,30 @@ struct SynthesizeCapabilityOutput {
     capability_id: Option<String>,
     rtfs_code: Option<String>,
     error: Option<String>,
+}
+
+// --- Discovery DTOs ---
+
+#[derive(Debug, Deserialize)]
+struct DiscoverToolsInput {
+    query: String,
+    #[serde(default)]
+    max_results: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct DiscoverToolsOutput {
+    tools: Vec<DiscoveredToolDto>,
+    query: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DiscoveredToolDto {
+    name: String,
+    description: Option<String>,
+    source: String,
+    score: f64,
+    endpoints: Vec<String>,
 }
 
 // --- Helpers ---

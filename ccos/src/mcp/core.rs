@@ -74,7 +74,11 @@ impl MCPDiscoveryService {
             workspace_root.clone()
         };
 
-        ccos_eprintln!("🔍 MCPDiscoveryService: workspace_root={:?}, approval_base={:?}", workspace_root, approval_base);
+        ccos_eprintln!(
+            "🔍 MCPDiscoveryService: workspace_root={:?}, approval_base={:?}",
+            workspace_root,
+            approval_base
+        );
 
         Self {
             http_client: Arc::clone(&http_client),
@@ -114,7 +118,11 @@ impl MCPDiscoveryService {
             workspace_root.clone()
         };
 
-        ccos_eprintln!("🔍 MCPDiscoveryService: workspace_root={:?}, approval_base={:?}", workspace_root, approval_base);
+        ccos_eprintln!(
+            "🔍 MCPDiscoveryService: workspace_root={:?}, approval_base={:?}",
+            workspace_root,
+            approval_base
+        );
 
         Self {
             http_client: Arc::clone(&http_client),
@@ -180,7 +188,8 @@ impl MCPDiscoveryService {
                         if matches {
                             ccos_eprintln!(
                                 "✅ Found approved server match: {} (normalized: {})",
-                                s.server_info.name, approved_name_normalized
+                                s.server_info.name,
+                                approved_name_normalized
                             );
                             log::debug!(
                                 "Found approved server match: {} (normalized: {})",
@@ -1079,9 +1088,7 @@ impl MCPDiscoveryService {
                     if path.is_absolute() {
                         path
                     } else {
-                        std::env::current_dir()
-                            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                            .join(&path)
+                        get_workspace_root().join(&path)
                     }
                 })
                 .unwrap_or_else(|| {
@@ -1092,16 +1099,10 @@ impl MCPDiscoveryService {
                             if path.is_absolute() {
                                 path
                             } else {
-                                std::env::current_dir()
-                                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                                    .join(&path)
+                                get_workspace_root().join(&path)
                             }
                         })
-                        .unwrap_or_else(|| {
-                            std::env::current_dir()
-                                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                                .join("capabilities/discovered")
-                        })
+                        .unwrap_or_else(|| get_workspace_root().join("capabilities/discovered"))
                 });
             let server_dir = export_dir.join("mcp").join(&server_config.name);
             let module_file = server_dir.join("capabilities.rtfs");
@@ -1181,10 +1182,8 @@ impl MCPDiscoveryService {
                 if path.is_absolute() {
                     path
                 } else {
-                    // Make relative to current working directory
-                    std::env::current_dir()
-                        .unwrap_or_else(|_| PathBuf::from("."))
-                        .join(&path)
+                    // Make relative to workspace root
+                    get_workspace_root().join(&path)
                 }
             })
             .unwrap_or_else(|| {
@@ -1195,16 +1194,12 @@ impl MCPDiscoveryService {
                         if path.is_absolute() {
                             path
                         } else {
-                            std::env::current_dir()
-                                .unwrap_or_else(|_| PathBuf::from("."))
-                                .join(&path)
+                            get_workspace_root().join(&path)
                         }
                     })
                     .unwrap_or_else(|_| {
-                        // Default to capabilities/discovered in current working directory
-                        std::env::current_dir()
-                            .unwrap_or_else(|_| PathBuf::from("."))
-                            .join("capabilities/discovered")
+                        // Default to capabilities/discovered in workspace root
+                        get_workspace_root().join("capabilities/discovered")
                     })
             });
 
@@ -1289,24 +1284,36 @@ impl MCPDiscoveryService {
         // Add approved servers from queue
         match self.approval_queue.list_approved() {
             Ok(approved) => {
-                ccos_eprintln!("📋 Approval queue found {} approved server(s)", approved.len());
+                ccos_eprintln!(
+                    "📋 Approval queue found {} approved server(s)",
+                    approved.len()
+                );
                 for server in approved {
                     // Check for duplicates (by name or endpoint)
                     let is_duplicate = servers.iter().any(|s| {
-                        s.name == server.server_info.name || s.endpoint == server.server_info.endpoint
+                        s.name == server.server_info.name
+                            || s.endpoint == server.server_info.endpoint
                     });
 
                     if !is_duplicate {
-                        ccos_eprintln!("✅ Adding approved server: {} ({})", server.server_info.name, server.server_info.endpoint);
+                        ccos_eprintln!(
+                            "✅ Adding approved server: {} ({})",
+                            server.server_info.name,
+                            server.server_info.endpoint
+                        );
                         servers.push(MCPServerConfig {
                             name: server.server_info.name,
                             endpoint: server.server_info.endpoint,
-                            auth_token: None,    // Will fallback to env vars if needed
+                            auth_token: None, // Will fallback to env vars if needed
                             timeout_seconds: 30, // Default
                             protocol_version: "2024-11-05".to_string(), // Default
                         });
                     } else {
-                        ccos_eprintln!("⏭️ Skipping duplicate server: {} ({})", server.server_info.name, server.server_info.endpoint);
+                        ccos_eprintln!(
+                            "⏭️ Skipping duplicate server: {} ({})",
+                            server.server_info.name,
+                            server.server_info.endpoint
+                        );
                     }
                 }
             }
@@ -1546,9 +1553,9 @@ impl MCPDiscoveryService {
             registry_client: MCPRegistryClient::new(), // Registry client is stateless
             config_discovery: LocalConfigMcpDiscovery::new(), // Config discovery is stateless
             approval_queue: ApprovalQueue::new(get_workspace_root()), // Approval queue is stateless (file-based)
-            introspector: MCPIntrospector::new(), // Introspector is stateless
-            cache: Arc::clone(&self.cache),       // Share cache
-            rate_limiter: Arc::clone(&self.rate_limiter), // Share rate limiter
+            introspector: MCPIntrospector::new(),                     // Introspector is stateless
+            cache: Arc::clone(&self.cache),                           // Share cache
+            rate_limiter: Arc::clone(&self.rate_limiter),             // Share rate limiter
             marketplace: self.marketplace.as_ref().map(Arc::clone),
             catalog: self.catalog.as_ref().map(Arc::clone),
         }

@@ -35,6 +35,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 
 // Strong guidance to ensure LLM emits (plan ...) top-level RTFS instead of (do ...)
+#[allow(dead_code)]
 const PLAN_FORMAT_GUIDANCE: &str = r#"
 CRITICAL OUTPUT RULES (RTFS PLANNING):
 1. Top-level form MUST be: (plan ...). NEVER output a top-level (do ...) form. If you draft (do ...), rewrite it as (plan ...).

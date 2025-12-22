@@ -2868,6 +2868,12 @@ async fn run_modular_planner(
                     model, tokens_prompt, tokens_response, duration_ms
                 );
             }
+            ModularTraceEvent::DiscoverySearchCompleted { query, num_results } => {
+                println!(
+                    "   🔍 Discovery search: '{}' ({} results)",
+                    query, num_results
+                );
+            }
         }
     }
 

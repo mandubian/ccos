@@ -82,6 +82,61 @@ pub enum PlanCommand {
         /// Plan ID, prefix, or name/goal substring
         plan: String,
     },
+
+    /// Test individual planning steps (for debugging/development)
+    Step {
+        #[command(subcommand)]
+        step: StepCommand,
+    },
+}
+
+/// Individual planning step commands for testing
+#[derive(Subcommand)]
+pub enum StepCommand {
+    /// Test tool discovery for a goal
+    Discover {
+        /// Goal description
+        goal: String,
+        /// Show verbose output
+        #[arg(long, short)]
+        verbose: bool,
+    },
+
+    /// Test goal decomposition
+    Decompose {
+        /// Goal description
+        goal: String,
+        /// Show verbose output (LLM prompts/responses)
+        #[arg(long, short)]
+        verbose: bool,
+        /// Force LLM decomposition (skip pattern path)
+        #[arg(long)]
+        force_llm: bool,
+        /// Show LLM prompt only
+        #[arg(long)]
+        show_prompt: bool,
+    },
+
+    /// Test intent resolution
+    Resolve {
+        /// Goal description (will decompose first, then resolve)
+        goal: String,
+        /// Show verbose output
+        #[arg(long, short)]
+        verbose: bool,
+    },
+
+    /// Run all steps in sequence with detailed output
+    Full {
+        /// Goal description
+        goal: String,
+        /// Show verbose output
+        #[arg(long, short)]
+        verbose: bool,
+        /// Force LLM decomposition
+        #[arg(long)]
+        force_llm: bool,
+    },
 }
 
 pub async fn execute(_ctx: &mut CliContext, command: PlanCommand) -> RuntimeResult<()> {
@@ -180,6 +235,91 @@ pub async fn execute(_ctx: &mut CliContext, command: PlanCommand) -> RuntimeResu
         PlanCommand::Delete { plan } => {
             let removed = crate::ops::plan::delete_plan_by_hint(&plan)?;
             println!("🗑️  Deleted plan {}", removed);
+        }
+        PlanCommand::Step { step } => {
+            execute_step_command(step).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Execute a step testing command
+async fn execute_step_command(step: StepCommand) -> RuntimeResult<()> {
+    use crate::ops::plan::step_testing;
+
+    match step {
+        StepCommand::Discover { goal, verbose } => {
+            println!("🔍 Discovering tools for: {}", goal);
+            let result = step_testing::test_discover(&goal, verbose).await?;
+            println!("\n📋 Domain hints: {:?}", result.domain_hints);
+            println!("\n🛠️  Found {} tools:", result.tools.len());
+            for (i, tool) in result.tools.iter().take(20).enumerate() {
+                println!(
+                    "   {}. {} - {} ({:?})",
+                    i + 1,
+                    tool.id,
+                    tool.description.chars().take(50).collect::<String>(),
+                    tool.action
+                );
+            }
+            if result.tools.len() > 20 {
+                println!("   ... and {} more", result.tools.len() - 20);
+            }
+        }
+        StepCommand::Decompose {
+            goal,
+            verbose,
+            force_llm,
+            show_prompt,
+        } => {
+            println!("🧩 Decomposing goal: {}", goal);
+            let result =
+                step_testing::test_decompose(&goal, verbose, force_llm, show_prompt).await?;
+            println!(
+                "\n✅ Decomposed into {} sub-intents (confidence: {:.2}):",
+                result.sub_intents.len(),
+                result.confidence
+            );
+            for (i, intent) in result.sub_intents.iter().enumerate() {
+                println!(
+                    "   {}. {} [{:?}]",
+                    i + 1,
+                    intent.description,
+                    intent.intent_type
+                );
+                if !intent.dependencies.is_empty() {
+                    println!("      depends on: {:?}", intent.dependencies);
+                }
+            }
+        }
+        StepCommand::Resolve { goal, verbose } => {
+            println!("🎯 Resolving goal: {}", goal);
+            let (decomp, resolutions, unresolved) =
+                step_testing::test_resolve(&goal, verbose).await?;
+            println!(
+                "\n📦 Resolved {} of {} intents:",
+                resolutions.len(),
+                decomp.sub_intents.len()
+            );
+            for (id, resolved) in &resolutions {
+                if let Some(cap_id) = resolved.capability_id() {
+                    println!("   ✅ {} → {}", id.split(':').last().unwrap_or(id), cap_id);
+                }
+            }
+            if !unresolved.is_empty() {
+                println!("\n❌ Unresolved:");
+                for id in &unresolved {
+                    println!("   • {}", id);
+                }
+            }
+        }
+        StepCommand::Full {
+            goal,
+            verbose,
+            force_llm,
+        } => {
+            println!("🚀 Full planning pipeline for: {}", goal);
+            step_testing::test_full_pipeline(&goal, verbose, force_llm).await?;
         }
     }
     Ok(())

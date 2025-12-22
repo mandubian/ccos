@@ -527,15 +527,33 @@ pub fn load_agent_config(config_path: &str) -> Result<AgentConfig, Box<dyn Error
         }
     };
 
-    // Set workspace root to config file's parent directory
-    // This makes all relative paths in storage config resolve correctly
+    // Set workspace root to the PARENT of config file's directory
+    // Config file is at <workspace>/config/agent_config.toml
+    // So config_dir is <workspace>/config/, and we want <workspace>/
+    // This makes paths like "capabilities/discovered" resolve to <workspace>/capabilities/discovered
     if let Some(config_dir) = actual_path.parent() {
-        let workspace_root = if config_dir.is_absolute() {
-            config_dir.to_path_buf()
+        let workspace_root = if let Some(parent) = config_dir.parent() {
+            // Go up one level from config/ to get actual workspace root
+            if parent.is_absolute() {
+                parent.to_path_buf()
+            } else if parent.as_os_str().is_empty() {
+                // config_dir was something like "config", so parent is ""
+                // This means we're in the workspace root already
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(parent))
+                    .unwrap_or_else(|_| parent.to_path_buf())
+            }
         } else {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(config_dir))
-                .unwrap_or_else(|_| config_dir.to_path_buf())
+            // Fallback to config_dir if no parent (shouldn't happen normally)
+            if config_dir.is_absolute() {
+                config_dir.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(config_dir))
+                    .unwrap_or_else(|_| config_dir.to_path_buf())
+            }
         };
         crate::utils::fs::set_workspace_root(workspace_root);
     }
