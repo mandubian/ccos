@@ -76,3 +76,11 @@ filetime = "0.2"
 name = "test_macros"
 path = "tests/test_macros.rs"
 
+[[test]]
+name = "parser_robustness_tests"
+path = "tests/robustness/parser_robustness_tests.rs"
+
+[[test]]
+name = "runtime_error_tests"
+path = "tests/robustness/runtime_error_tests.rs"
+
