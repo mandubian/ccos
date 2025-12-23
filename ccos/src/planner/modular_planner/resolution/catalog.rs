@@ -98,8 +98,26 @@ impl CatalogResolution {
         match &intent.intent_type {
             IntentType::UserInput { prompt_topic } => {
                 let mut args = std::collections::HashMap::new();
-                // Generate a more descriptive prompt based on common parameter names and domain
-                let prompt = Self::humanize_prompt(prompt_topic, intent.domain_hint.as_ref());
+
+                // First, check if the LLM already provided a detailed prompt in extracted_params
+                // LLM may use "prompt" or "message" key - check both
+                let llm_prompt = intent
+                    .extracted_params
+                    .get("prompt")
+                    .or_else(|| intent.extracted_params.get("message"));
+
+                let prompt = if let Some(llm_text) = llm_prompt {
+                    // Use the LLM-provided text if it's not empty and looks meaningful
+                    if !llm_text.is_empty() && llm_text.len() > 10 {
+                        llm_text.clone()
+                    } else {
+                        // Fallback to humanized prompt if LLM text is too short
+                        Self::humanize_prompt(prompt_topic, intent.domain_hint.as_ref())
+                    }
+                } else {
+                    // Generate a descriptive prompt based on topic and domain when no LLM prompt
+                    Self::humanize_prompt(prompt_topic, intent.domain_hint.as_ref())
+                };
                 args.insert("prompt".to_string(), prompt);
 
                 Some(ResolvedCapability::BuiltIn {
@@ -814,6 +832,13 @@ impl ResolutionStrategy for CatalogResolution {
         intent: &SubIntent,
         _context: &ResolutionContext,
     ) -> Result<ResolvedCapability, ResolutionError> {
+        // Check if LLM explicitly said "no tool" (grounded decomposition returned null)
+        if intent.extracted_params.contains_key("_grounded_no_tool") {
+            return Err(ResolutionError::GroundedNoTool(
+                "Grounded planner explicitly returned no tool".to_string(),
+            ));
+        }
+
         // Check for built-in first
         if let Some(builtin) = self.check_builtin(intent) {
             return Ok(builtin);
