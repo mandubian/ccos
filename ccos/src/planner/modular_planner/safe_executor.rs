@@ -157,21 +157,22 @@ impl SafeCapabilityExecutor {
         // Build Value::Map from params, injecting _previous_result if available
         let mut map = std::collections::HashMap::new();
         for (k, v) in params {
-            // Try to parse JSON for all parameters
-            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(v) {
-                if let Ok(rtfs_val) = crate::utils::value_conversion::json_to_rtfs_value(&json_val)
-                {
-                    // Only use parsed value if it's structural (Map/Array) or Bool/Number
-                    // Avoid parsing simple strings that happen to be valid JSON (like "true") if type inference is ambiguous,
-                    // but generally parsing is safer for grounding.
-                    // However, we must be careful not to parse "foo" as string "foo" (which is valid JSON)
-                    // if the capability expects a raw string.
-                    // Actually, json_to_rtfs_value handles types well.
-                    map.insert(MapKey::String(k.clone()), rtfs_val);
-                    continue;
+            // Parameter normalization should be schema-driven, not hardcoded
+            let k = k.clone();
+
+            let rtfs_val = if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(v) {
+                if let Ok(rv) = crate::utils::value_conversion::json_to_rtfs_value(&json_val) {
+                    rv
+                } else {
+                    Value::String(v.clone())
                 }
-            }
-            map.insert(MapKey::String(k.clone()), Value::String(v.clone()));
+            } else {
+                Value::String(v.clone())
+            };
+
+            // Insert both string and keyword keys for compatibility
+            map.insert(MapKey::String(k.clone()), rtfs_val.clone());
+            map.insert(MapKey::Keyword(Keyword(k.clone())), rtfs_val);
         }
 
         // Inject _previous_result for data pipeline support

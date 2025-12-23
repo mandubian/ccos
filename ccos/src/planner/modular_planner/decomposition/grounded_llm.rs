@@ -158,10 +158,27 @@ impl GroundedLlmDecomposition {
             "{}".to_string()
         };
 
+        // Extract required parameter names for explicit mention
+        let required_params = if let Some(ref schema) = tool.input_schema {
+            if let Some(req) = schema.get("required").and_then(|r| r.as_array()) {
+                let names: Vec<&str> = req.iter().filter_map(|v| v.as_str()).collect();
+                if !names.is_empty() {
+                    format!(" required_params=\"{}\"", names.join(", "))
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
         format!(
-            r#"<tool name="{}" description="{}" input_schema='{}'/>"#,
+            r#"<tool name="{}"{} description="{}" input_schema='{}'/>"#,
             // Use fully qualified id so the LLM returns executable capability ids
             tool.id,
+            required_params,
             tool.description.replace('"', "'"), // Escape quotes in description
             schema_str
         )
@@ -256,7 +273,7 @@ RULES:
 1. Examine the available tools above - each has a name, description, and input_schema.
 2. For each step, if a tool matches, set "tool" to the exact tool name.
 3. Extract parameters from the goal that match the tool's input_schema.
-4. Avoid intent_type "user_input" unless critical parameters are missing or ambiguous. Do NOT ask the user just to reformat or summarize; prefer data_transform/output with existing data.
+4. **If the goal does NOT provide the actual value for a parameter, create a user_input step to ask for it.** Do not invent content - ask the user!
 5. If no tool matches exactly, use intent_type "api_call" or "data_transform" without a tool.
    - IMPORTANT: Do NOT force a tool match if the tool's description doesn't fit the goal.
    - It is BETTER to leave "tool" as null than to pick a wrong tool.
@@ -276,6 +293,18 @@ INTENT TYPES:
 - "data_transform": Process/filter/sort data locally
 - "output": Display results to user
 
+RTFS STEP REFERENCES (use this syntax when a param needs output from a previous step):
+- Reference step output variable: step_0, step_1, step_2... (0-indexed)
+- Access map key: (get step_0 :issues)
+- Access array element: (nth step_0 0)
+- Chained access: (get (nth (get step_0 :items) 0) :number)
+- Example: if step 1 filters issues from step 0, use: "data": "step_0"
+- Example: to get issue number from first item: "issue_number": "(get (nth step_0 0) :number)"
+
+IMPORTANT OUTPUT BEHAVIORS:
+- ccos.data.select with count=1 returns the ITEM DIRECTLY (not a list), so use (get step_N :field) not (nth step_N 0)
+- ccos.data.sort/filter/select automatically extract lists from nested map structures - no separate extraction step needed
+
 GOAL: "{goal}"
 {params_hint}{sibling_context}
 
@@ -288,7 +317,7 @@ Respond with ONLY valid JSON:
       "action": "search|list|get|create|filter|sort|display|...",
       "tool": "exact_tool_name_from_list_or_null",
       "depends_on": [0],
-      "params": {{"param_name": "value_from_goal"}}
+      "params": {{"param_name": "value_or_rtfs_step_ref"}}
     }}
   ]
 }}

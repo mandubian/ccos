@@ -620,7 +620,7 @@ impl ResolutionStrategy for McpResolution {
             ccos_println!(
                 "   ⚠️ Grounded planner found no tool for this step. Skipping fallback scoring."
             );
-            return Err(ResolutionError::NotFound(
+            return Err(ResolutionError::GroundedNoTool(
                 "Grounded planner explicitly returned no tool".to_string(),
             ));
         }

@@ -28,10 +28,14 @@ pub struct HybridConfig {
 impl Default for HybridConfig {
     fn default() -> Self {
         Self {
-            pattern_confidence_threshold: 0.7,
+            // NOTE: Pattern decomposition is fast but doesn't select specific tools.
+            // LLM-based decomposition (grounded_llm) provides much better tool selection.
+            // Threshold 2.0 effectively disables patterns, preferring LLM.
+            // Pattern code kept for future use cases where speed > accuracy is desired.
+            pattern_confidence_threshold: 2.0,
             prefer_grounded: true,
             max_grounded_tools: 0, // 0 = unlimited (like real MCP behavior)
-            force_llm: false,
+            force_llm: true,
         }
     }
 }

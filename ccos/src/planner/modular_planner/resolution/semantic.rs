@@ -152,30 +152,49 @@ impl SemanticResolution {
 
     /// Simple keyword-based scoring fallback
     fn keyword_score(&self, intent: &SubIntent, capability: &CapabilityInfo) -> f64 {
-        let cap_lower = format!("{} {}", capability.name, capability.description).to_lowercase();
+        let cap_name_lower = capability.name.to_lowercase();
+        let cap_desc_lower = capability.description.to_lowercase();
         let desc_lower = intent.description.to_lowercase();
 
         let mut score = 0.0;
-        let mut matches = 0;
         let words: Vec<&str> = desc_lower.split_whitespace().collect();
 
-        for word in &words {
-            if word.len() > 2 && cap_lower.contains(word) {
-                matches += 1;
+        // Extract action keywords if this is an API call intent
+        let action_keywords: Vec<&'static str> = match &intent.intent_type {
+            IntentType::ApiCall { action } => action.matching_keywords().to_vec(),
+            _ => Vec::new(),
+        };
+
+        // Identify significant nouns (words that are likely object targets, not prepositions/articles)
+        let stop_words = [
+            "the", "a", "an", "in", "on", "to", "for", "my", "your", "new", "from", "with",
+        ];
+        let significant_words: Vec<&str> = words
+            .iter()
+            .filter(|w| w.len() > 2 && !stop_words.contains(&w.to_lowercase().as_str()))
+            .cloned()
+            .collect();
+
+        // Score based on word matches, with strong preference for name matches
+        for word in &significant_words {
+            // Strong boost for matching in capability NAME (the most important signal)
+            if cap_name_lower.contains(*word) {
+                score += 0.5; // High value for name match
+            } else if cap_desc_lower.contains(*word) {
+                score += 0.1; // Lower value for description match
             }
         }
 
-        if !words.is_empty() {
-            score = matches as f64 / words.len() as f64;
-        }
-
-        // Boost for action match
-        if let IntentType::ApiCall { ref action } = intent.intent_type {
-            for kw in action.matching_keywords() {
-                if capability.name.to_lowercase().contains(kw) {
-                    score += 0.2;
-                    break;
-                }
+        // Boost for action keyword match in capability name (e.g., "create" in "issue_write")
+        // Note: issue_write doesn't have "create" in name, but description says "Create"
+        for kw in &action_keywords {
+            if cap_name_lower.contains(kw) {
+                score += 0.3;
+                break;
+            }
+            // Also check description for action keywords
+            if cap_desc_lower.contains(kw) {
+                score += 0.15;
             }
         }
 
@@ -187,6 +206,11 @@ impl SemanticResolution {
                     break;
                 }
             }
+        }
+
+        // Normalize by number of significant words to avoid penalizing longer queries
+        if !significant_words.is_empty() {
+            score = score / (1.0 + (significant_words.len() as f64 * 0.1));
         }
 
         score.min(1.0)
@@ -221,6 +245,13 @@ impl ResolutionStrategy for SemanticResolution {
         intent: &SubIntent,
         _context: &ResolutionContext,
     ) -> Result<ResolvedCapability, ResolutionError> {
+        // Check if LLM explicitly said "no tool" (grounded decomposition returned null)
+        if intent.extracted_params.contains_key("_grounded_no_tool") {
+            return Err(ResolutionError::GroundedNoTool(
+                "Grounded planner explicitly returned no tool".to_string(),
+            ));
+        }
+
         let query = self.build_query(intent);
 
         // Search catalog

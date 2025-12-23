@@ -139,6 +139,56 @@ fn generated_capability_id_from_description(desc: &str) -> String {
     format!("generated/{}-{:016x}", slug, hash)
 }
 
+/// Sanitize LLM-generated RTFS expressions to fix common patterns that RTFS doesn't support.
+///
+/// This is a generic post-processor that handles:
+/// 1. Namespace prefixes: `str/split` → `split` (remove any `foo/` prefix)
+/// 2. Regex literals: `#"..."` → `"..."` (remove the `#` prefix from strings)
+///
+/// This allows the LLM to generate Clojure-like syntax while producing valid RTFS.
+fn sanitize_llm_rtfs(expr: &str) -> String {
+    lazy_static::lazy_static! {
+        // Match namespace/function patterns like str/split, clojure.string/join
+        static ref NAMESPACE_FN: Regex = Regex::new(r"\b([a-zA-Z][a-zA-Z0-9._-]*)/([a-zA-Z][a-zA-Z0-9_-]*)").unwrap();
+        // Match regex literals like #"pattern" - convert to regular strings
+        static ref REGEX_LITERAL: Regex = Regex::new(r#"#"([^"\\]*(?:\\.[^"\\]*)*)""#).unwrap();
+    }
+
+    let mut result = expr.to_string();
+
+    // Remove namespace prefixes: str/split → split
+    result = NAMESPACE_FN.replace_all(&result, "$2").to_string();
+
+    // Convert regex literals to regular strings: #"..." → "..."
+    result = REGEX_LITERAL.replace_all(&result, r#""$1""#).to_string();
+
+    if result != expr {
+        log::debug!(
+            "[sanitize_llm_rtfs] Cleaned LLM expression:\n  Before: {}\n  After:  {}",
+            expr,
+            result
+        );
+    }
+
+    result
+}
+
+/// Normalize parameter names for common API naming variations.
+///
+/// This handles cases where the LLM uses different names than the API expects,
+/// without hardcoding specific mappings in generic code.
+fn normalize_param_name(name: &str) -> String {
+    match name {
+        // Common variations - these are generic patterns, not specific to any API
+        "repository" | "name" => "repo".to_string(),
+        "issue" => "issue_number".to_string(),
+        // Internal params pass through
+        s if s.starts_with('_') => name.to_string(),
+        // Everything else unchanged
+        _ => name.to_string(),
+    }
+}
+
 // Inline RTFS synthesis has been removed. Missing capabilities are now resolved
 // exclusively via the MissingCapabilityResolver to ensure a single source of truth
 // (LLM + persistence + logging).
@@ -312,6 +362,8 @@ pub struct ModularPlanner {
     safe_executor: Option<SafeCapabilityExecutor>,
     /// Optional missing capability resolver for immediate synthesis
     missing_capability_resolver: Option<Arc<MissingCapabilityResolver>>,
+    /// Optional delegating arbiter for LLM-based adapter generation
+    delegating_arbiter: Option<Arc<crate::arbiter::DelegatingArbiter>>,
     /// Optional callback for real-time trace event streaming
     trace_callback: Option<Box<dyn Fn(&TraceEvent) + Send + Sync>>,
 }
@@ -330,6 +382,7 @@ impl ModularPlanner {
             config: PlannerConfig::default(),
             safe_executor: None,
             missing_capability_resolver: None,
+            delegating_arbiter: None,
             trace_callback: None,
         }
     }
@@ -337,12 +390,17 @@ impl ModularPlanner {
     /// Create with default hybrid decomposition (pattern-only, no LLM)
     pub fn with_patterns(intent_graph: Arc<Mutex<IntentGraph>>) -> Self {
         Self {
-            decomposition: Box::new(HybridDecomposition::pattern_only()),
-            resolution: Box::new(CompositeResolution::new()),
+            decomposition: Box::new(
+                crate::planner::modular_planner::decomposition::HybridDecomposition::pattern_only(),
+            ),
+            resolution: Box::new(
+                crate::planner::modular_planner::resolution::CompositeResolution::new(),
+            ),
             intent_graph,
             config: PlannerConfig::default(),
             safe_executor: None,
             missing_capability_resolver: None,
+            delegating_arbiter: None,
             trace_callback: None,
         }
     }
@@ -368,6 +426,15 @@ impl ModularPlanner {
         resolver: Arc<MissingCapabilityResolver>,
     ) -> Self {
         self.missing_capability_resolver = Some(resolver);
+        self
+    }
+
+    /// Inject a delegating arbiter for LLM-based adapter generation.
+    pub fn with_delegating_arbiter(
+        mut self,
+        arbiter: Arc<crate::arbiter::DelegatingArbiter>,
+    ) -> Self {
+        self.delegating_arbiter = Some(arbiter);
         self
     }
 
@@ -438,7 +505,6 @@ impl ModularPlanner {
                         sub_intent.description
                     ),
                 );
-
                 ResolvedCapability::BuiltIn {
                     capability_id: "ccos.user.ask".to_string(),
                     arguments: args,
@@ -829,12 +895,14 @@ impl ModularPlanner {
         }
 
         // 5. Generate RTFS plan from resolved intents
-        let mut rtfs_plan = self.generate_rtfs_plan(
-            &decomp_result.sub_intents,
-            &intent_ids,
-            &resolutions,
-            &grounding_params,
-        )?;
+        let mut rtfs_plan = self
+            .generate_rtfs_plan(
+                &decomp_result.sub_intents,
+                &intent_ids,
+                &resolutions,
+                &grounding_params,
+            )
+            .await?;
 
         // 5b. LLM Plan Validation (if enabled)
         if self.config.enable_plan_validation {
@@ -1241,7 +1309,7 @@ impl ModularPlanner {
     }
 
     /// Generate RTFS plan code from resolved intents
-    fn generate_rtfs_plan(
+    pub(crate) async fn generate_rtfs_plan(
         &self,
         sub_intents: &[SubIntent],
         intent_ids: &[String],
@@ -1250,6 +1318,46 @@ impl ModularPlanner {
     ) -> Result<String, PlannerError> {
         if sub_intents.is_empty() {
             return Ok("nil".to_string());
+        }
+
+        // Log grounding summary
+        let grounded_steps: Vec<(usize, &str)> = intent_ids
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, id)| {
+                if grounding_params.contains_key(&format!("result_{}", id)) {
+                    Some((
+                        idx + 1,
+                        sub_intents
+                            .get(idx)
+                            .map(|s| s.description.as_str())
+                            .unwrap_or("?"),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !grounded_steps.is_empty() {
+            ccos_println!(
+                "📊 Grounding Summary: {} of {} steps grounded",
+                grounded_steps.len(),
+                sub_intents.len()
+            );
+            for (step_num, desc) in &grounded_steps {
+                let desc_preview: String = desc.chars().take(50).collect();
+                ccos_println!(
+                    "   ✅ step_{}: {}{}",
+                    step_num,
+                    desc_preview,
+                    if desc.len() > 50 { "..." } else { "" }
+                );
+            }
+        } else {
+            ccos_println!(
+                "📊 Grounding Summary: 0 steps grounded (no safe-exec results available)"
+            );
         }
 
         // Build variable bindings for each step
@@ -1280,10 +1388,51 @@ impl ModularPlanner {
                     ResolvedCapability::NeedsReferral {
                         suggested_action, ..
                     } => {
-                        format!(
-                            r#"(call "ccos.user.ask" {{:prompt "Cannot proceed: {}"}})"#,
-                            suggested_action.replace('"', "\\\"")
-                        )
+                        let mut resolved_expr = None;
+
+                        // Try LLM fallback if we have an arbiter and exactly one dependency with grounding data
+                        if let Some(arbiter) = &self.delegating_arbiter {
+                            if sub_intent.dependencies.len() == 1 {
+                                let dep_idx = sub_intent.dependencies[0];
+                                let dep_intent_id = &intent_ids[dep_idx];
+                                if let Some(grounded_str) =
+                                    grounding_params.get(&format!("raw_result_{}", dep_intent_id))
+                                {
+                                    if let Ok(grounded_json) =
+                                        serde_json::from_str::<serde_json::Value>(grounded_str)
+                                    {
+                                        let dep_desc = &sub_intents[dep_idx].description;
+                                        if let Some(adapter) = self
+                                            .request_llm_adapter(
+                                                dep_desc,
+                                                &grounded_json,
+                                                None,
+                                                &sub_intent.description,
+                                                &logical_bindings,
+                                            )
+                                            .await
+                                        {
+                                            let dep_var = format!("step_{}", dep_idx + 1);
+                                            resolved_expr =
+                                                Some(adapter.replace("input", &dep_var));
+
+                                            ccos_println!(
+                                                "   🧠 LLM solved intent: {} → {}",
+                                                sub_intent.description,
+                                                resolved_expr.as_ref().unwrap()
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        resolved_expr.unwrap_or_else(|| {
+                            format!(
+                                r#"(call "ccos.user.ask" {{:prompt "Cannot proceed: {}"}})"#,
+                                suggested_action.replace('"', "\\\"")
+                            )
+                        })
                     }
                 },
                 None => {
@@ -1294,26 +1443,48 @@ impl ModularPlanner {
                 }
             };
 
-            // Optionally annotate with grounded preview as a harmless let (no context writes)
-            if let Some(grounded) = grounding_params.get(&format!("result_{}", intent_id)) {
-                let grounded = truncate_grounding(grounded);
-                let escaped = grounded.replace('"', "\\\"");
-                call_expr = format!(
-                    "(let [:_grounding_comment \"{}\"]\n  {})",
-                    escaped, call_expr
-                );
-            }
+            // DISABLED:             // Optionally annotate with grounded preview as a harmless let (no context writes)
+            // DISABLED:             if let Some(grounded) = grounding_params.get(&format!("result_{}", intent_id)) {
+            // DISABLED:                 let grounded = truncate_grounding(grounded);
+            // DISABLED:                 let escaped = grounded.replace('"', "\\\"");
+            // DISABLED:                 call_expr = format!(
+            // DISABLED:                     "(let [_grounding_comment \"{}\"]\n  {})",
+            // DISABLED:                     escaped, call_expr
+            // DISABLED:                 );
+            // DISABLED:             }
 
             bindings.push((var_name, call_expr));
         }
 
         // Post-process: detect schema mismatches and insert inline adapters
         // For each step with grounding data, check if downstream consumers expect a different type
-        let mut adapter_mappings: HashMap<String, String> = HashMap::new();
+        let mut adapter_mappings: HashMap<String, (String, String)> = HashMap::new();
+        let logical_bindings: Vec<(String, String)> = bindings
+            .iter()
+            .filter(|(name, _)| !name.starts_with('_'))
+            .cloned()
+            .collect();
 
         for (idx, _) in sub_intents.iter().enumerate() {
             let intent_id = &intent_ids[idx];
+            let sub_intent = &sub_intents[idx];
             let var_name = format!("step_{}", idx + 1);
+
+            // Skip adapter generation if this step's dependencies already have adapters
+            // This prevents redundant extraction: if step_1_data already extracted the list,
+            // step_2 shouldn't try to extract again from the same source
+            let has_adapted_dependency = sub_intent.dependencies.iter().any(|dep_idx| {
+                let dep_var = format!("step_{}", dep_idx + 1);
+                adapter_mappings.contains_key(&dep_var)
+            });
+
+            if has_adapted_dependency {
+                log::debug!(
+                    "   ⏭️ Skipping adapter for {} (dependency already adapted)",
+                    var_name
+                );
+                continue;
+            }
 
             // Get raw grounding data if available (not the preview format)
             if let Some(grounded_str) = grounding_params.get(&format!("raw_result_{}", intent_id)) {
@@ -1336,22 +1507,46 @@ impl ModularPlanner {
                             // Detect if we need an adapter
                             let bridge =
                                 SchemaBridge::detect(None, consumer_schema, Some(&grounded_json));
+
+                            let mut adapter_expr = None;
+                            let mut bridge_desc = String::new();
+
                             if bridge.needs_adapter() {
+                                adapter_expr = Some(bridge.generate_rtfs_expr(&var_name));
+                                bridge_desc = bridge.description.clone();
+                            } else if self.delegating_arbiter.is_some() {
+                                // Fallback: try LLM if static bridge didn't find anything
+                                if let Some(llm_adapter) = self
+                                    .request_llm_adapter(
+                                        &sub_intent.description,
+                                        &grounded_json,
+                                        consumer_schema,
+                                        &consumer_intent.description,
+                                        &logical_bindings,
+                                    )
+                                    .await
+                                {
+                                    adapter_expr = Some(llm_adapter.replace("input", &var_name));
+                                    bridge_desc = "LLM-generated adapter".to_string();
+                                }
+                            }
+
+                            if let Some(expr) = adapter_expr {
                                 let adapted_var = format!("{}_data", var_name);
-                                let adapter_expr = bridge.generate_rtfs_expr(&var_name);
-                                adapter_mappings.insert(var_name.clone(), adapted_var.clone());
+                                adapter_mappings
+                                    .insert(var_name.clone(), (adapted_var.clone(), expr.clone()));
 
                                 log::debug!(
                                     "🔌 Inserting adapter for {}: {} → {}",
                                     var_name,
-                                    bridge.description,
-                                    adapter_expr
+                                    bridge_desc,
+                                    expr
                                 );
                                 ccos_println!(
                                     "   🔌 Adapter: {} → {} ({})",
                                     var_name,
                                     adapted_var,
-                                    bridge.description
+                                    bridge_desc
                                 );
                                 break; // Only need one adapter per producer
                             }
@@ -1369,27 +1564,8 @@ impl ModularPlanner {
                 new_bindings.push((var_name.clone(), call_expr.clone()));
 
                 // If this step needs an adapter, add it right after
-                if let Some(adapted_var) = adapter_mappings.get(var_name) {
-                    // Parse grounding to detect the right field to extract
-                    let producer_idx: usize = var_name
-                        .strip_prefix("step_")
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(1)
-                        - 1;
-
-                    if let Some(intent_id) = intent_ids.get(producer_idx) {
-                        if let Some(grounded_str) =
-                            grounding_params.get(&format!("raw_result_{}", intent_id))
-                        {
-                            if let Ok(grounded_json) =
-                                serde_json::from_str::<serde_json::Value>(grounded_str)
-                            {
-                                let bridge = SchemaBridge::detect(None, None, Some(&grounded_json));
-                                let adapter_expr = bridge.generate_rtfs_expr(var_name);
-                                new_bindings.push((adapted_var.clone(), adapter_expr));
-                            }
-                        }
-                    }
+                if let Some((adapted_var, adapter_expr)) = adapter_mappings.get(var_name) {
+                    new_bindings.push((adapted_var.clone(), adapter_expr.clone()));
                 }
             }
 
@@ -1398,7 +1574,7 @@ impl ModularPlanner {
                 .into_iter()
                 .map(|(name, mut expr)| {
                     // Replace references to original vars with adapted vars in call expressions
-                    for (orig, adapted) in &adapter_mappings {
+                    for (orig, (adapted, _)) in &adapter_mappings {
                         // Only replace in argument positions, not in the variable binding itself
                         if !name.ends_with("_data") {
                             expr =
@@ -1434,13 +1610,44 @@ impl ModularPlanner {
         schema: Option<&serde_json::Value>,
         previous_bindings: &[(String, String)],
     ) -> String {
-        // Check for LLM-generated step references like {{step0.result}}
-        // The LLM sometimes generates 0-based step indices in handlebars syntax
-        // We need to convert these to actual variable names (step_1, step_2, etc.)
+        // Check for RTFS step variable references like "step_0", "step_1"
+        // These are 0-indexed from LLM but need to map to actual binding names
         lazy_static::lazy_static! {
-            static ref STEP_REF: Regex = Regex::new(r"\{\{step(\d+)\.result\}\}").unwrap();
+            static ref RTFS_STEP_VAR: Regex = Regex::new(r"^step_(\d+)$").unwrap();
+            // Match any expression starting with ( that contains step_N anywhere inside
+            // This handles nested cases like (get (nth step_2 0) :number)
+            static ref RTFS_STEP_IN_EXPR: Regex = Regex::new(r"step_\d+").unwrap();
+            static ref STEP_REF: Regex = Regex::new(r"\{\{step(\d+)\.(result|output)\}\}").unwrap();
         }
 
+        // Handle pure RTFS step variable: "step_0" -> step_1 (unquoted)
+        if let Some(captures) = RTFS_STEP_VAR.captures(value) {
+            if let Some(idx_str) = captures.get(1) {
+                if let Ok(idx) = idx_str.as_str().parse::<usize>() {
+                    if idx < previous_bindings.len() {
+                        let var_name = &previous_bindings[idx].0;
+                        return format!(":{} {}", key, var_name);
+                    }
+                }
+            }
+        }
+
+        // Handle RTFS expressions like "(get step_0 :issues)", "(nth step_0 0)",
+        // or nested ones like "(get (nth step_2 0) :number)"
+        // Replace step_N with actual binding name and output unquoted
+        if value.starts_with('(') && value.ends_with(')') && RTFS_STEP_IN_EXPR.is_match(value) {
+            let mut expr = value.to_string();
+            // Replace all step_N references with actual binding names
+            for (i, (binding_name, _)) in previous_bindings.iter().enumerate() {
+                let pattern = format!("step_{}", i);
+                expr = expr.replace(&pattern, binding_name);
+            }
+            return format!(":{} {}", key, expr);
+        }
+
+        // Check for LLM-generated step references like {{step0.result}} (legacy handlebars)
+        // The LLM sometimes generates 0-based step indices in handlebars syntax
+        // We need to convert these to actual variable names (step_1, step_2, etc.)
         if let Some(captures) = STEP_REF.captures(value) {
             if let Some(idx_str) = captures.get(1) {
                 if let Ok(idx) = idx_str.as_str().parse::<usize>() {
@@ -1499,7 +1706,21 @@ impl ModularPlanner {
         all_sub_intents: &[SubIntent],
     ) -> String {
         let capability_id = resolved_capability.capability_id().unwrap_or("unknown");
-        let arguments = resolved_capability.arguments().unwrap();
+        let resolved_args = resolved_capability.arguments().unwrap();
+
+        // Merge resolved arguments with sub_intent.extracted_params as fallback
+        // This ensures LLM-provided params reach the RTFS plan even if resolution
+        // didn't copy them (common when capability is found by ID match but params weren't copied)
+        let mut arguments: std::collections::HashMap<String, String> = sub_intent
+            .extracted_params
+            .iter()
+            .filter(|(k, _)| !k.starts_with('_')) // Skip internal params like _suggested_tool
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        // Override with resolved args (they take precedence)
+        for (k, v) in resolved_args {
+            arguments.insert(k.clone(), v.clone());
+        }
 
         // Get input schema if available (for type coercion)
         let input_schema = match resolved_capability {
@@ -1515,7 +1736,11 @@ impl ModularPlanner {
         let mut args_parts: Vec<String> = Vec::new();
 
         // Add explicit arguments (with type coercion and ref replacement)
-        for (key, value) in arguments {
+        for (key, value) in &arguments {
+            // Normalize parameter name (e.g. repository -> repo) at the start
+            let key = normalize_param_name(key);
+            let key = key.as_str();
+
             // If the LLM emitted a placeholder like "$0" and we have a single dependency,
             // map it directly to that dependency variable (common for output/println).
             if value == "$0" && has_dependencies && sub_intent.dependencies.len() == 1 {
@@ -1543,7 +1768,7 @@ impl ModularPlanner {
 
             // Check if this argument consumed a dependency
             lazy_static::lazy_static! {
-                static ref STEP_REF: Regex = Regex::new(r"\{\{step(\d+)\.result\}\}").unwrap();
+                static ref STEP_REF: Regex = Regex::new(r"\{\{step(\d+)\.(result|output)\}\}").unwrap();
             }
             if let Some(captures) = STEP_REF.captures(value) {
                 if let Some(idx_str) = captures.get(1) {
@@ -1564,7 +1789,6 @@ impl ModularPlanner {
                 if dep_idx < previous_bindings.len() {
                     let dep_var = &previous_bindings[dep_idx].0;
 
-                    // Only inject if:
                     // 1. We haven't used this dependency in an explicit argument (via {{step.result}})
                     // 2. We don't have an explicit argument that matches the variable name (old logic)
                     let already_used_explicitly = used_dependency_vars.contains(dep_var);
@@ -1578,7 +1802,14 @@ impl ModularPlanner {
                             // Default to a generic name instead of _previous_result
                             "_previous_result".to_string()
                         };
-                        args_parts.push(format!(":{} {}", param_name, dep_var));
+
+                        // IMPORTANT: Don't inject if the LLM already provided this param name
+                        // This prevents duplicate keys like `:data "$.path" :data step_1`
+                        let param_name_already_exists = arguments.contains_key(&param_name);
+
+                        if !param_name_already_exists {
+                            args_parts.push(format!(":{} {}", param_name, dep_var));
+                        }
                     }
                 }
             }
@@ -1724,8 +1955,24 @@ impl ModularPlanner {
             }
         }
 
-        // Build params, threading previous_result into map if present and serializing it to JSON string.
-        let mut params = sub_intent.extracted_params.clone();
+        // Build params from both sources (matching generate_call_expr logic):
+        // 1. Start with sub_intent.extracted_params
+        // 2. Override with resolved_capability.arguments() (takes precedence)
+        let mut params: std::collections::HashMap<String, String> = sub_intent
+            .extracted_params
+            .iter()
+            .filter(|(k, _)| !k.starts_with('_')) // Skip internal params
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        // Merge resolved arguments (they take precedence)
+        if let Some(resolved_args) = resolved.arguments() {
+            for (k, v) in resolved_args {
+                params.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Thread previous_result if present
         if let Some(prev) = previous_result {
             if let Ok(prev_json) = rtfs_value_to_json(prev) {
                 if let Ok(s) = serde_json::to_string(&prev_json) {
@@ -1882,6 +2129,8 @@ impl ModularPlanner {
 
         // Store execution results by step index
         let mut step_results: HashMap<usize, Value> = HashMap::new();
+        // Track skipped/failed steps to cascade skip to dependents
+        let mut skipped_steps: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
         for step_idx in order {
             if step_idx >= sub_intents.len() {
@@ -1902,6 +2151,28 @@ impl ModularPlanner {
 
             let cap_id = resolved.capability_id().unwrap_or("unknown");
 
+            // Check if any dependency was skipped - if so, skip this step too
+            let has_skipped_dependency = sub_intent
+                .dependencies
+                .iter()
+                .any(|dep_idx| skipped_steps.contains(dep_idx));
+
+            ccos_println!(
+                "\n▶️  Step {}/{}: {}",
+                step_idx + 1,
+                sub_intents.len(),
+                sub_intent.description
+            );
+            ccos_println!("   ├─ Intent ID: {}", intent_id);
+            ccos_println!("   ├─ Capability: {}", cap_id);
+            ccos_println!("   ├─ Dependencies: {:?}", sub_intent.dependencies);
+
+            if has_skipped_dependency {
+                ccos_println!("   ╰─ ⏭️  Skipped (dependency was skipped/failed)");
+                skipped_steps.insert(step_idx);
+                continue;
+            }
+
             // Get the previous result from the most recent dependency
             let previous_result: Option<&Value> = if !sub_intent.dependencies.is_empty() {
                 // Use the result from the last dependency (most recent in pipeline)
@@ -1914,15 +2185,6 @@ impl ModularPlanner {
                 None
             };
 
-            ccos_println!(
-                "\n▶️  Step {}/{}: {}",
-                step_idx + 1,
-                sub_intents.len(),
-                sub_intent.description
-            );
-            ccos_println!("   ├─ Intent ID: {}", intent_id);
-            ccos_println!("   ├─ Capability: {}", cap_id);
-            ccos_println!("   ├─ Dependencies: {:?}", sub_intent.dependencies);
             if previous_result.is_some() {
                 ccos_println!("   ├─ Input: Received _previous_result from upstream");
             }
@@ -1967,9 +2229,11 @@ impl ModularPlanner {
                 }
                 Ok(None) => {
                     ccos_println!("   ╰─ ⏭️  Skipped (Not safe to execute or no manifest)");
+                    skipped_steps.insert(step_idx);
                 }
                 Err(e) => {
                     ccos_println!("   ╰─ ❌ Error: {}", e);
+                    skipped_steps.insert(step_idx);
                     // Continue with other steps
                 }
             }
@@ -2036,6 +2300,111 @@ impl ModularPlanner {
         }
 
         result
+    }
+
+    /// Request an LLM-generated RTFS adapter between two steps
+    async fn request_llm_adapter(
+        &self,
+        source_desc: &str,
+        source_data: &serde_json::Value,
+        target_schema: Option<&serde_json::Value>,
+        target_desc: &str,
+        bindings_context: &[(String, String)], // (var_name, expression)
+    ) -> Option<String> {
+        let arbiter = self.delegating_arbiter.as_ref()?;
+
+        let source_preview =
+            truncate_grounding(&serde_json::to_string(source_data).unwrap_or_default());
+        let target_schema_str = target_schema
+            .map(|s| serde_json::to_string_pretty(s).unwrap_or_default())
+            .unwrap_or_else(|| "Unknown (match data naturally)".to_string());
+
+        // Build bindings context string to show LLM what variables already exist
+        let bindings_str = if bindings_context.is_empty() {
+            "None (you have access only to 'input')".to_string()
+        } else {
+            bindings_context
+                .iter()
+                .map(|(var, expr)| {
+                    let truncated = if expr.len() > 100 {
+                        format!("{}...", &expr[..97])
+                    } else {
+                        expr.clone()
+                    };
+                    format!("  - {}: {}", var, truncated)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let input_type_desc = match source_data {
+            serde_json::Value::Object(_) => "Map (Object)",
+            serde_json::Value::Array(_) => "List (Vector)",
+            _ => "Scalar",
+        };
+
+        let prompt = format!(
+            "Synthesize a small, pure RTFS expression to achieve this goal: '{}'.\n\n\
+             INPUT DATA TYPE: {}\n\
+             EXISTING BINDINGS (already defined - DO NOT re-extract if already done!):\n{}\n\n\
+             Input data sample: {}\n\n\
+             SCHEMA REQUIREMENT: {}\n\n\
+             RULES:\n\
+             1. Use 'input' as the variable for the upstream data.\n\
+             2. RETURN ONLY the expression. No markdown, no commentary.\n\
+             3. NO Clojure namespaces (e.g. avoid 'str/split', just use 'split').\n\
+             4. NO Regex literals (e.g. avoid #\"/...\"). Use string functions instead.\n\
+             5. RTFS 'get' syntax: (get map :key) NOT (get :key map) - map comes FIRST.\n\
+             6. Use RTFS functions: 'map', 'filter', 'get', 'assoc', 'str', 'split', 'substring', 'join'.\n\
+             7. IMPORTANT: If INPUT DATA TYPE is 'Map' but you need to iterate, you MUST extract the array field first (e.g. (get input :issues)).\n\
+             8. IMPORTANT: If INPUT DATA TYPE is 'List', work on it directly with 'map' or 'filter'.\n\n\
+             Example (if input is already a list of issues):\n\
+             (map (fn [x] (let [t (get x :title)] (assoc x :title (str (substring t 1) (substring t 0 1) \"ay\")))) input)",
+            target_desc,
+            input_type_desc,
+            bindings_str,
+            source_preview,
+            target_schema_str
+        );
+
+        log::debug!(
+            "[request_llm_adapter] Requesting adapter with prompt: {}",
+            prompt
+        );
+        let response = arbiter.generate_raw_text(&prompt).await.ok()?;
+        let adapter = response.trim().to_string();
+
+        if adapter.is_empty() || (!adapter.starts_with('(') && !adapter.starts_with('[')) {
+            log::warn!(
+                "[request_llm_adapter] LLM returned invalid adapter: {}",
+                adapter
+            );
+            return None;
+        }
+
+        // Reject bare function definitions - adapter must be an expression, not a fn
+        if adapter.starts_with("(fn ") {
+            log::warn!(
+                "[request_llm_adapter] LLM returned bare function instead of expression: {}",
+                adapter
+            );
+            return None;
+        }
+
+        // Verify the adapter references 'input' - otherwise it can't transform the data
+        if !adapter.contains("input") {
+            log::warn!(
+                "[request_llm_adapter] LLM adapter doesn't reference 'input': {}",
+                adapter
+            );
+            return None;
+        }
+
+        // Sanitize common LLM patterns that RTFS doesn't support
+        let adapter = sanitize_llm_rtfs(&adapter);
+
+        log::info!("[request_llm_adapter] LLM generated adapter: {}", adapter);
+        Some(adapter)
     }
 }
 

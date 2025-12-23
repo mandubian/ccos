@@ -41,6 +41,9 @@ pub enum ResolutionError {
     #[error("Cache I/O error: {0}")]
     CacheError(String),
 
+    #[error("Grounded planner explicitly returned no tool: {0}")]
+    GroundedNoTool(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -242,6 +245,14 @@ impl ResolutionStrategy for CompositeResolution {
                         resolved.capability_id()
                     );
                     return Ok(resolved);
+                }
+                Err(ResolutionError::GroundedNoTool(msg)) => {
+                    log::debug!(
+                        "[composite] Strategy '{}' returned explicit NO TOOL: {}",
+                        strategy.name(),
+                        msg
+                    );
+                    return Err(ResolutionError::GroundedNoTool(msg));
                 }
                 Err(e) => {
                     log::debug!("[composite] Strategy '{}' failed: {}", strategy.name(), e);
