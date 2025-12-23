@@ -417,6 +417,7 @@ mod discovery_options_tests {
             retry_policy: RetryPolicy::aggressive(),
             rate_limit: RateLimitConfig::strict(),
             ignore_approved_files: false,
+            force_refresh: false,
         };
 
         assert!(options.introspect_output_schemas);

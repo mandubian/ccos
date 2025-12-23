@@ -350,7 +350,7 @@ impl CapabilityMarketplace {
         }
     }
 
-    fn get_rtfs_host_factory(
+    pub fn get_rtfs_host_factory(
         &self,
     ) -> Arc<dyn Fn() -> Arc<dyn HostInterface + Send + Sync> + Send + Sync> {
         self.rtfs_host_factory
@@ -489,7 +489,10 @@ impl CapabilityMarketplace {
     /// Bootstrap the marketplace with discovered capabilities from the registry
     /// This method is called during startup to populate the marketplace with
     /// built-in capabilities and any discovered from external sources
-    pub async fn bootstrap(&self) -> RuntimeResult<()> {
+    pub async fn bootstrap(
+        &self,
+        marketplace_arc: Arc<CapabilityMarketplace>,
+    ) -> RuntimeResult<()> {
         // Register default capabilities first
         crate::capabilities::register_default_capabilities(self).await?;
 
@@ -567,7 +570,7 @@ impl CapabilityMarketplace {
 
         // Run discovery agents to find additional capabilities
         for agent in &self.discovery_agents {
-            match agent.discover().await {
+            match agent.discover(Some(marketplace_arc.clone())).await {
                 Ok(discovered_capabilities) => {
                     let mut caps = self.capabilities.write().await;
                     for capability in discovered_capabilities {
@@ -647,7 +650,7 @@ impl CapabilityMarketplace {
 
         for agent in &self.discovery_agents {
             if agent.name() == "NetworkDiscovery" {
-                match agent.discover().await {
+                match agent.discover(None).await {
                     Ok(capabilities) => {
                         ccos_eprintln!(
                             "Discovered {} capabilities from network source",
@@ -1882,7 +1885,8 @@ impl CapabilityMarketplace {
                     {
                         ccos_eprintln!(
                             "Warning: Failed to queue missing capability '{}': {}",
-                            id, e
+                            id,
+                            e
                         );
                     }
                 }
@@ -1931,8 +1935,12 @@ impl CapabilityMarketplace {
                     // 5. Returns result
                     return pool.execute_with_session(id, &manifest.metadata, &args);
                 } else {
-                    ccos_eprintln!("⚠️  Session management required but no session pool configured");
-                    ccos_eprintln!("   Falling through to normal execution (will likely fail with 401)");
+                    ccos_eprintln!(
+                        "⚠️  Session management required but no session pool configured"
+                    );
+                    ccos_eprintln!(
+                        "   Falling through to normal execution (will likely fail with 401)"
+                    );
                 }
             }
         }

@@ -5,7 +5,7 @@
 
 use super::session_pool::{SessionHandler, SessionId};
 use crate::utils::value_conversion;
-use rtfs::ast::MapKey;
+use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
@@ -187,6 +187,10 @@ impl MCPSessionHandler {
                             MapKey::Integer(i) => i.to_string(),
                         };
 
+                        // Normalize parameter names for known variations
+                        // This handles cases where the LLM generates "repository" but the API expects "repo"
+                        let normalized_key = normalize_param_name(&key_str);
+
                         // Convert value to JSON
                         let json_val = value_conversion::rtfs_value_to_json(value)
                             .unwrap_or_else(|_| serde_json::Value::Null);
@@ -195,7 +199,7 @@ impl MCPSessionHandler {
                         // This handles cases where optional parameters are passed as nil (null)
                         // but the MCP server expects them to be omitted if not present.
                         if !json_val.is_null() {
-                            json_map.insert(key_str, json_val);
+                            json_map.insert(normalized_key, json_val);
                         }
                     }
                     serde_json::Value::Object(json_map)
@@ -370,17 +374,24 @@ impl MCPSessionHandler {
             }
 
             // MCP protocol returns results in a "content" array with text blocks.
-            // We should return the raw result structure so downstream adapters can handle it
-            // instead of trying to be too smart and unwrapping it automatically.
-            // The adapter `adapters.mcp.parse-json-from-text-content` expects the raw structure
-            // with a "content" array containing text blocks.
+            // Auto-extract JSON from content[0].text for easier downstream processing.
+            // This is an adapter at the entry point rather than requiring explicit adapter calls.
+            if let Some(content_array) = result.get("content").and_then(|c| c.as_array()) {
+                if let Some(first_block) = content_array.first() {
+                    if first_block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                        if let Some(text) = first_block.get("text").and_then(|t| t.as_str()) {
+                            // Try to parse the text as JSON and return that instead
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
+                                return value_conversion::json_to_rtfs_value(&parsed)
+                                    .map(normalize_map_keys);
+                            }
+                        }
+                    }
+                }
+            }
 
-            // Fallback: Check for structuredContent field (if MCP server provides it)
-            // Note: The MCP spec allows structuredContent, but most tools return content array.
-            // We preserve the original structure unless structuredContent is explicitly present.
-
-            // Default: Convert JSON to RTFS Value as-is, preserving 'content' or 'structuredContent' keys
-            value_conversion::json_to_rtfs_value(result)
+            // Fallback: Return normalized raw structure if auto-extraction didn't work
+            value_conversion::json_to_rtfs_value(result).map(normalize_map_keys)
         } else if let Some(error) = json.get("error") {
             Err(RuntimeError::Generic(format!("MCP error: {}", error)))
         } else {
@@ -523,5 +534,54 @@ impl SessionHandler for MCPSessionHandler {
 impl Default for MCPSessionHandler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Normalize parameter names for known variations
+///
+/// This is a lightweight adapter that handles common naming mismatches between
+/// LLM-generated parameter names and API-expected names. Related to issue #178
+/// (Planner: lightweight adapters between capabilities).
+///
+/// Examples:
+/// - "repository" → "repo" (GitHub API convention)
+/// - "issue" → "issue_number" (when API expects number not object)
+fn normalize_param_name(name: &str) -> String {
+    match name {
+        // GitHub API naming conventions
+        "repository" | "name" => "repo".to_string(),
+        "issue" => "issue_number".to_string(),
+        // Skip internal params (handled separately)
+        s if s.starts_with('_') => name.to_string(),
+        // Pass through unchanged
+        _ => name.to_string(),
+    }
+}
+
+/// Normalize map keys in an RTFS value from string to keyword type.
+///
+/// This is an adapter that ensures MCP JSON responses (which have string keys)
+/// can be accessed with RTFS keyword syntax like `(get result :number)`.
+///
+/// Recursively processes nested maps and lists.
+fn normalize_map_keys(value: Value) -> Value {
+    match value {
+        Value::Map(map) => {
+            let mut new_map = HashMap::new();
+            for (key, val) in map.into_iter() {
+                // Convert string keys to keyword keys
+                let new_key = match key {
+                    MapKey::String(s) => MapKey::Keyword(Keyword(s)),
+                    other => other,
+                };
+                // Recursively normalize nested values
+                new_map.insert(new_key, normalize_map_keys(val));
+            }
+            Value::Map(new_map)
+        }
+        Value::List(list) => Value::List(list.into_iter().map(normalize_map_keys).collect()),
+        Value::Vector(vec) => Value::Vector(vec.into_iter().map(normalize_map_keys).collect()),
+        // Other value types pass through unchanged
+        other => other,
     }
 }

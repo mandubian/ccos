@@ -1176,24 +1176,18 @@ pub struct CapabilityMarketplace {
     /// Optional catalog service for indexing capabilities
     pub(crate) catalog: Arc<RwLock<Option<Arc<crate::catalog::CatalogService>>>>,
     /// Optional factory to create a Host for RTFS capability execution (defaults to PureHost)
-    pub(crate) rtfs_host_factory: Arc<
-        StdRwLock<
-            Option<
-                Arc<
-                    dyn Fn() -> Arc<dyn HostInterface + Send + Sync>
-                        + Send
-                        + Sync,
-                >,
-            >,
-        >,
-    >,
+    pub(crate) rtfs_host_factory:
+        Arc<StdRwLock<Option<Arc<dyn Fn() -> Arc<dyn HostInterface + Send + Sync> + Send + Sync>>>>,
 }
 
 /// Trait for capability discovery providers
 #[async_trait::async_trait]
 pub trait CapabilityDiscovery: Send + Sync {
     /// Discover capabilities and return their manifests
-    async fn discover(&self) -> RuntimeResult<Vec<CapabilityManifest>>;
+    async fn discover(
+        &self,
+        marketplace: Option<Arc<CapabilityMarketplace>>,
+    ) -> RuntimeResult<Vec<CapabilityManifest>>;
 
     /// Get the name of this discovery provider
     fn name(&self) -> &str;

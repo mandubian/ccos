@@ -138,7 +138,10 @@ impl LocalConfigMcpDiscovery {
 
 #[async_trait]
 impl CapabilityDiscovery for LocalConfigMcpDiscovery {
-    async fn discover(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
+    async fn discover(
+        &self,
+        marketplace: Option<Arc<crate::capability_marketplace::CapabilityMarketplace>>,
+    ) -> RuntimeResult<Vec<CapabilityManifest>> {
         let configs = self.get_all_server_configs();
         let mut all_manifests = Vec::new();
 
@@ -148,12 +151,20 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
         );
 
         // Create unified service once for all servers (more efficient)
-        let unified_service = Arc::new(crate::mcp::core::MCPDiscoveryService::new());
+        let mut unified_service = crate::mcp::core::MCPDiscoveryService::new();
+
+        // Inject marketplace if available
+        if let Some(ref marketplace) = marketplace {
+            unified_service = unified_service.with_marketplace(marketplace.clone());
+        }
+
+        let unified_service = Arc::new(unified_service);
 
         for config in configs {
             ccos_println!(
                 "   👉 Discovering from server: {} ({})",
-                config.name, config.endpoint
+                config.name,
+                config.endpoint
             );
 
             // Use unified service for discovery

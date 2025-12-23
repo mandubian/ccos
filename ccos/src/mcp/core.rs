@@ -13,6 +13,7 @@
 //! - Rate limiting and retry policies
 
 use crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery;
+use crate::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogService, CatalogSource};
@@ -973,6 +974,90 @@ impl MCPDiscoveryService {
         server_config: &MCPServerConfig,
         options: &DiscoveryOptions,
     ) -> RuntimeResult<Vec<CapabilityManifest>> {
+        // If caching is enabled and no force refresh, check if we already have an export file
+        if options.use_cache && !options.force_refresh {
+            let export_dir = options
+                .export_directory
+                .as_ref()
+                .map(|s| {
+                    let path = std::path::PathBuf::from(s);
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        get_workspace_root().join(&path)
+                    }
+                })
+                .unwrap_or_else(|| {
+                    std::env::var("CCOS_CAPABILITY_STORAGE")
+                        .ok()
+                        .map(|s| {
+                            let path = std::path::PathBuf::from(s);
+                            if path.is_absolute() {
+                                path
+                            } else {
+                                get_workspace_root().join(&path)
+                            }
+                        })
+                        .unwrap_or_else(|| get_workspace_root().join("capabilities/discovered"))
+                });
+            let server_dir = export_dir.join("mcp").join(&server_config.name);
+            let module_file = server_dir.join("capabilities.rtfs");
+
+            if module_file.exists() {
+                ccos_eprintln!(
+                    "ℹ️  Found existing capability export for {}: {}",
+                    server_config.name,
+                    module_file.display()
+                );
+
+                // Try to load manifests from this file instead of re-discovering
+                if let Some(ref marketplace) = self.marketplace {
+                    let path_str = module_file.to_str().unwrap_or_default();
+                    let parser = MCPDiscoveryProvider::new_with_rtfs_host_factory(
+                        server_config.clone(),
+                        marketplace.get_rtfs_host_factory(),
+                    )
+                    .map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to initialize RTFS parser: {}", e))
+                    })?;
+
+                    if let Ok(module) = parser.load_rtfs_capabilities(path_str) {
+                        let mut manifests = Vec::new();
+                        for cap_def in module.capabilities {
+                            if let Ok(manifest) = parser.rtfs_to_capability_manifest(&cap_def) {
+                                manifests.push(manifest);
+                            }
+                        }
+
+                        if !manifests.is_empty() {
+                            ccos_eprintln!(
+                                "   ✅ Loaded {} capabilities from export file",
+                                manifests.len()
+                            );
+
+                            // Ensure they are registered in marketplace if requested
+                            if options.register_in_marketplace {
+                                for manifest in &manifests {
+                                    self.register_capability(manifest).await?;
+                                }
+                            }
+
+                            return Ok(manifests);
+                        } else {
+                            ccos_eprintln!("   ⚠️  Loaded 0 capabilities from export file");
+                        }
+                    } else if let Err(e) = parser.load_rtfs_capabilities(path_str) {
+                        ccos_eprintln!(
+                            "   ⚠️  Failed to load RTFS capabilities from export file: {}",
+                            e
+                        );
+                    }
+                } else {
+                    ccos_eprintln!("   ⚠️  Marketplace not available for loading export file");
+                }
+            }
+        }
+
         // Check if this server is approved and has RTFS files - if so, skip export
         let is_approved_with_files = {
             if let Ok(approved) = self.approval_queue.list_approved() {
