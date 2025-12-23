@@ -60,9 +60,9 @@ struct Args {
     #[arg(long)]
     no_execute: bool,
 
-    /// Force pure LLM decomposition (skip patterns)
+    /// Use fast pattern-based decomposition instead of LLM (faster but less accurate)
     #[arg(long)]
-    pure_llm: bool,
+    pattern_mode: bool,
 
     /// Use embedding-based scoring (default: true, use --no-embeddings to disable)
     #[arg(long, default_value_t = true)]
@@ -102,8 +102,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             args.use_embeddings,
             args.discover_mcp,
             args.no_cache,
-            args.pure_llm,
+            args.pattern_mode,
         )
+        .with_safe_exec(true)
         .with_debug_options(args.verbose_llm, args.show_prompt, args.confirm_llm)
         .build()
         .await?;
