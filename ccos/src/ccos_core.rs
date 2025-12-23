@@ -295,7 +295,7 @@ impl CCOS {
         ));
 
         // Pass the full CCOS capability registry to the marketplace
-        let mut capability_marketplace =
+        let mut capability_marketplace_orig =
             CapabilityMarketplace::with_causal_chain_and_debug_callback(
                 Arc::clone(&capability_registry),
                 Some(Arc::clone(&causal_chain)),
@@ -303,14 +303,16 @@ impl CCOS {
             );
 
         // Add Local Config MCP Discovery (centralized discovery)
-        capability_marketplace.add_discovery_agent(Box::new(
+        capability_marketplace_orig.add_discovery_agent(Box::new(
             crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery::new(),
         ));
 
-        // Bootstrap the marketplace with discovered capabilities
-        capability_marketplace.bootstrap().await?;
+        let capability_marketplace = Arc::new(capability_marketplace_orig);
 
-        let capability_marketplace = Arc::new(capability_marketplace);
+        // Bootstrap the marketplace with discovered capabilities
+        capability_marketplace
+            .bootstrap(Arc::clone(&capability_marketplace))
+            .await?;
 
         // RuntimeHost factory moved to after Orchestrator creation for unified governance path
 

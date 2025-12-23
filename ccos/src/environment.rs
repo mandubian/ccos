@@ -147,9 +147,15 @@ impl CCOSEnvironment {
             .map_err(|e| RuntimeError::Generic(format!("Failed to create Tokio runtime: {}", e)))?;
 
         tokio_rt.block_on(async move {
-            marketplace_for_bootstrap.bootstrap().await.map_err(|e| {
-                RuntimeError::Generic(format!("Failed to bootstrap capability marketplace: {}", e))
-            })
+            marketplace_for_bootstrap
+                .bootstrap(Arc::clone(&marketplace_for_bootstrap))
+                .await
+                .map_err(|e| {
+                    RuntimeError::Generic(format!(
+                        "Failed to bootstrap capability marketplace: {}",
+                        e
+                    ))
+                })
         })?;
 
         // Note: registry configuration removed during RTFS/CCOS separation
