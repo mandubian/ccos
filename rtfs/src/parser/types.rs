@@ -143,10 +143,20 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                             }
                         }
 
+                        // Build the type expression
+                        let parsed_type = build_type_expr(type_pair)?;
+
+                        // Handle case where the type itself is Optional (e.g., [:vector :string]?)
+                        // Unwrap it and set the entry's optional flag
+                        let (value_type, entry_optional) = match parsed_type {
+                            TypeExpr::Optional(inner) => (*inner, true),
+                            other => (other, optional),
+                        };
+
                         entries.push(MapTypeEntry {
                             key: build_keyword(key_pair)?,
-                            value_type: Box::new(build_type_expr(type_pair)?),
-                            optional,
+                            value_type: Box::new(value_type),
+                            optional: entry_optional,
                         });
                     }
                     Rule::map_type_wildcard => {
@@ -169,15 +179,26 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                                 Rule::keyword => {
                                     current_key = Some(build_keyword(entry_pair)?);
                                 }
-                                Rule::type_expr => {
+                                Rule::optional_marker => {
+                                    // An optional marker applies to the PREVIOUSLY pushed entry
+                                    if let Some(last_entry) = entries.last_mut() {
+                                        last_entry.optional = true;
+                                    }
+                                }
+                                Rule::WHITESPACE | Rule::COMMENT => {}
+                                _ => {
+                                    // Anything else is treated as a type expression
                                     if let Some(key) = current_key.take() {
-                                        // Check for optional marker in the remaining pairs
-                                        let optional = false;
-                                        // Note: We can't easily check for optional markers here since we're iterating
-                                        // For now, assume no optional markers in braced form
+                                        let parsed_type = build_type_expr(entry_pair)?;
+                                        // If the type itself is Optional (e.g. string?), unwrap it and set optional: true
+                                        let (value_type, optional) = match parsed_type {
+                                            TypeExpr::Optional(inner) => (*inner, true),
+                                            other => (other, false),
+                                        };
+
                                         entries.push(MapTypeEntry {
                                             key,
-                                            value_type: Box::new(build_type_expr(entry_pair)?),
+                                            value_type: Box::new(value_type),
                                             optional,
                                         });
                                     } else {

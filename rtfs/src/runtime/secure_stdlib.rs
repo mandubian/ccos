@@ -1807,10 +1807,10 @@ impl SecureStandardLibrary {
         let function = &args[0];
         let collection = &args[1];
         let collection_vec = match collection {
-            Value::Vector(v) => v.clone(),
+            Value::Vector(v) | Value::List(v) => v.clone(),
             _ => {
                 return Err(RuntimeError::TypeError {
-                    expected: "vector".to_string(),
+                    expected: "vector or list".to_string(),
                     actual: collection.type_name().to_string(),
                     operation: "map".to_string(),
                 })
@@ -1877,10 +1877,10 @@ impl SecureStandardLibrary {
         let function = &args[0];
         let collection = &args[1];
         let collection_vec = match collection {
-            Value::Vector(v) => v.clone(),
+            Value::Vector(v) | Value::List(v) => v.clone(),
             _ => {
                 return Err(RuntimeError::TypeError {
-                    expected: "vector".to_string(),
+                    expected: "vector or list".to_string(),
                     actual: collection.type_name().to_string(),
                     operation: "filter".to_string(),
                 })
@@ -2262,10 +2262,10 @@ impl SecureStandardLibrary {
         };
 
         let collection = match &args[1] {
-            Value::Vector(v) => v.clone(),
+            Value::Vector(v) | Value::List(v) => v.clone(),
             _ => {
                 return Err(RuntimeError::TypeError {
-                    expected: "vector".to_string(),
+                    expected: "vector or list".to_string(),
                     actual: args[1].type_name().to_string(),
                     operation: "partition collection".to_string(),
                 })
@@ -3468,10 +3468,10 @@ impl SecureStandardLibrary {
         let collection = &args[1];
 
         let collection_vec = match collection {
-            Value::Vector(v) => v.clone(),
+            Value::Vector(v) | Value::List(v) => v.clone(),
             _ => {
                 return Err(RuntimeError::TypeError {
-                    expected: "vector".to_string(),
+                    expected: "vector or list".to_string(),
                     actual: collection.type_name().to_string(),
                     operation: "map-indexed".to_string(),
                 })
