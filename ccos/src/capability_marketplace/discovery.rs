@@ -2,7 +2,7 @@ use super::types::*;
 use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 use async_trait::async_trait;
 use chrono::Utc;
-use rtfs::runtime::error::RuntimeError;
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use serde_json::Value as JsonValue;
 use std::any::Any;
@@ -65,7 +65,10 @@ impl StaticDiscoveryProvider {
 
 #[async_trait::async_trait]
 impl CapabilityDiscovery for StaticDiscoveryProvider {
-    async fn discover(&self) -> Result<Vec<CapabilityManifest>, RuntimeError> {
+    async fn discover(
+        &self,
+        _marketplace: Option<Arc<super::super::capability_marketplace::CapabilityMarketplace>>,
+    ) -> RuntimeResult<Vec<CapabilityManifest>> {
         Ok(self.capabilities.clone())
     }
 
@@ -91,7 +94,10 @@ impl FileManifestDiscoveryProvider {
 
 #[async_trait::async_trait]
 impl CapabilityDiscovery for FileManifestDiscoveryProvider {
-    async fn discover(&self) -> Result<Vec<CapabilityManifest>, RuntimeError> {
+    async fn discover(
+        &self,
+        _marketplace: Option<Arc<super::super::capability_marketplace::CapabilityMarketplace>>,
+    ) -> RuntimeResult<Vec<CapabilityManifest>> {
         if !Path::new(&self.manifest_path).exists() {
             return Ok(vec![]); // Return empty if file doesn't exist
         }
@@ -135,7 +141,10 @@ impl NetworkDiscoveryProvider {
 
 #[async_trait::async_trait]
 impl CapabilityDiscovery for NetworkDiscoveryProvider {
-    async fn discover(&self) -> Result<Vec<CapabilityManifest>, RuntimeError> {
+    async fn discover(
+        &self,
+        _marketplace: Option<Arc<super::super::capability_marketplace::CapabilityMarketplace>>,
+    ) -> RuntimeResult<Vec<CapabilityManifest>> {
         // Placeholder implementation - in real implementation, this would:
         // 1. Make HTTP request to endpoint_url
         // 2. Parse response for capability manifests
@@ -258,7 +267,10 @@ impl NetworkDiscoveryAgent {
 
 #[async_trait]
 impl CapabilityDiscovery for NetworkDiscoveryAgent {
-    async fn discover(&self) -> Result<Vec<CapabilityManifest>, RuntimeError> {
+    async fn discover(
+        &self,
+        _marketplace: Option<Arc<super::super::capability_marketplace::CapabilityMarketplace>>,
+    ) -> RuntimeResult<Vec<CapabilityManifest>> {
         if self.last_discovery.elapsed() < self.refresh_interval {
             return Ok(vec![]);
         }
@@ -337,7 +349,10 @@ impl LocalFileDiscoveryAgent {
 
 #[async_trait]
 impl CapabilityDiscovery for LocalFileDiscoveryAgent {
-    async fn discover(&self) -> Result<Vec<CapabilityManifest>, RuntimeError> {
+    async fn discover(
+        &self,
+        _marketplace: Option<Arc<super::super::capability_marketplace::CapabilityMarketplace>>,
+    ) -> RuntimeResult<Vec<CapabilityManifest>> {
         let mut manifests = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&self.discovery_path) {
             for entry in entries {

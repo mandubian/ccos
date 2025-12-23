@@ -1,12 +1,14 @@
-use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use rtfs::runtime::capability_marketplace::types::{CapabilityManifest, ProviderType, A2ACapability};
-use rtfs::runtime::capability_marketplace::types::CapabilityDiscovery;
 use async_trait::async_trait;
+use rtfs::runtime::capability_marketplace::types::CapabilityDiscovery;
+use rtfs::runtime::capability_marketplace::types::{
+    A2ACapability, CapabilityManifest, ProviderType,
+};
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
+use std::any::Any;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::timeout;
-use std::any::Any;
 
 /// A2A Agent configuration for discovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,8 +84,8 @@ pub struct A2ADiscoveryProvider {
 impl A2ADiscoveryProvider {
     /// Create a new A2A discovery provider
     pub fn new(config: A2AAgentConfig) -> RuntimeResult<Self> {
-        let mut client_builder = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.timeout_seconds));
+        let mut client_builder =
+            reqwest::Client::builder().timeout(Duration::from_secs(config.timeout_seconds));
 
         // Add A2A-specific headers
         let mut headers = reqwest::header::HeaderMap::new();
@@ -102,9 +104,9 @@ impl A2ADiscoveryProvider {
 
         client_builder = client_builder.default_headers(headers);
 
-        let client = client_builder
-            .build()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to create A2A HTTP client: {}", e)))?;
+        let client = client_builder.build().map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create A2A HTTP client: {}", e))
+        })?;
 
         Ok(Self { config, client })
     }
@@ -112,7 +114,7 @@ impl A2ADiscoveryProvider {
     /// Discover capabilities from the A2A agent
     pub async fn discover_capabilities(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
         let capabilities_url = format!("{}/capabilities", self.config.endpoint);
-        
+
         let mut request_builder = self.client.get(&capabilities_url);
 
         // Add authentication if provided
@@ -147,7 +149,8 @@ impl A2ADiscoveryProvider {
             RuntimeError::Generic(format!("Failed to read A2A capabilities response: {}", e))
         })?;
 
-        let capabilities_response: A2ACapabilitiesResponse = serde_json::from_str(&response_text).map_err(|e| {
+        let capabilities_response: A2ACapabilitiesResponse = serde_json::from_str(&response_text)
+            .map_err(|e| {
             RuntimeError::Generic(format!("Failed to parse A2A capabilities response: {}", e))
         })?;
 
@@ -168,7 +171,7 @@ impl A2ADiscoveryProvider {
     /// Get agent status and basic information
     pub async fn get_agent_status(&self) -> RuntimeResult<A2AStatusResponse> {
         let status_url = format!("{}/status", self.config.endpoint);
-        
+
         let mut request_builder = self.client.get(&status_url);
 
         // Add authentication if provided
@@ -209,13 +212,18 @@ impl A2ADiscoveryProvider {
     }
 
     /// Convert an A2A capability definition to a capability manifest
-    fn convert_capability_to_manifest(&self, capability_def: A2ACapabilityDefinition) -> CapabilityManifest {
+    fn convert_capability_to_manifest(
+        &self,
+        capability_def: A2ACapabilityDefinition,
+    ) -> CapabilityManifest {
         let capability_id = format!("a2a.{}.{}", self.config.name, capability_def.name);
-        
+
         CapabilityManifest {
             id: capability_id.clone(),
             name: capability_def.name.clone(),
-            description: capability_def.description.unwrap_or_else(|| format!("A2A capability: {}", capability_def.name)),
+            description: capability_def
+                .description
+                .unwrap_or_else(|| format!("A2A capability: {}", capability_def.name)),
             provider: ProviderType::A2A(A2ACapability {
                 agent_id: self.config.name.clone(),
                 endpoint: self.config.endpoint.clone(),
@@ -226,33 +234,40 @@ impl A2ADiscoveryProvider {
             input_schema: capability_def.input_schema,
             output_schema: capability_def.output_schema,
             attestation: None,
-            provenance: Some(rtfs::runtime::capability_marketplace::types::CapabilityProvenance {
-                source: "a2a_discovery".to_string(),
-                version: Some("1.0.0".to_string()),
-                content_hash: format!("a2a_{}_{}", self.config.name, capability_def.name),
-                custody_chain: vec!["a2a_discovery".to_string()],
-                registered_at: chrono::Utc::now(),
-            }),
+            provenance: Some(
+                rtfs::runtime::capability_marketplace::types::CapabilityProvenance {
+                    source: "a2a_discovery".to_string(),
+                    version: Some("1.0.0".to_string()),
+                    content_hash: format!("a2a_{}_{}", self.config.name, capability_def.name),
+                    custody_chain: vec!["a2a_discovery".to_string()],
+                    registered_at: chrono::Utc::now(),
+                },
+            ),
             permissions: vec![],
             effects: vec![],
             metadata: {
                 let mut metadata = HashMap::new();
                 metadata.insert("a2a_agent".to_string(), self.config.name.clone());
-                metadata.insert("a2a_protocol_version".to_string(), self.config.protocol_version.clone());
+                metadata.insert(
+                    "a2a_protocol_version".to_string(),
+                    self.config.protocol_version.clone(),
+                );
                 metadata.insert("capability_type".to_string(), "a2a_capability".to_string());
-                
+
                 // Add parameter information if available
                 if let Some(parameters) = capability_def.parameters {
-                    let param_names: Vec<String> = parameters.iter().map(|p| p.name.clone()).collect();
+                    let param_names: Vec<String> =
+                        parameters.iter().map(|p| p.name.clone()).collect();
                     metadata.insert("parameters".to_string(), param_names.join(","));
-                    
-                    let required_params: Vec<String> = parameters.iter()
+
+                    let required_params: Vec<String> = parameters
+                        .iter()
                         .filter(|p| p.required)
                         .map(|p| p.name.clone())
                         .collect();
                     metadata.insert("required_parameters".to_string(), required_params.join(","));
                 }
-                
+
                 metadata
             },
             domains: Vec::new(),
@@ -264,7 +279,7 @@ impl A2ADiscoveryProvider {
     pub async fn discover_static_capabilities(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
         if let Some(known_caps) = &self.config.known_capabilities {
             let mut capabilities = Vec::new();
-            
+
             for cap_name in known_caps {
                 let capability_def = A2ACapabilityDefinition {
                     name: cap_name.clone(),
@@ -273,11 +288,11 @@ impl A2ADiscoveryProvider {
                     output_schema: None,
                     parameters: None,
                 };
-                
+
                 let capability = self.convert_capability_to_manifest(capability_def);
                 capabilities.push(capability);
             }
-            
+
             Ok(capabilities)
         } else {
             Ok(vec![])
@@ -287,11 +302,10 @@ impl A2ADiscoveryProvider {
     /// Health check for the A2A agent
     pub async fn health_check(&self) -> RuntimeResult<bool> {
         let health_url = format!("{}/health", self.config.endpoint);
-        
-        let request = self.client
-            .get(&health_url)
-            .build()
-            .map_err(|e| RuntimeError::Generic(format!("Failed to build A2A health check request: {}", e)))?;
+
+        let request = self.client.get(&health_url).build().map_err(|e| {
+            RuntimeError::Generic(format!("Failed to build A2A health check request: {}", e))
+        })?;
 
         match timeout(
             Duration::from_secs(5), // Shorter timeout for health checks
@@ -300,39 +314,61 @@ impl A2ADiscoveryProvider {
         .await
         {
             Ok(Ok(response)) => Ok(response.status().is_success()),
-            Ok(Err(e)) => Err(RuntimeError::Generic(format!("A2A health check failed: {}", e))),
-            Err(_) => Err(RuntimeError::Generic("A2A health check timeout".to_string())),
+            Ok(Err(e)) => Err(RuntimeError::Generic(format!(
+                "A2A health check failed: {}",
+                e
+            ))),
+            Err(_) => Err(RuntimeError::Generic(
+                "A2A health check timeout".to_string(),
+            )),
         }
     }
 }
 
 #[async_trait]
 impl CapabilityDiscovery for A2ADiscoveryProvider {
-    async fn discover(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
+    async fn discover(
+        &self,
+        _marketplace: Option<Arc<CapabilityMarketplace>>,
+    ) -> RuntimeResult<Vec<CapabilityManifest>> {
         let mut all_capabilities = Vec::new();
-        
+
         // Try dynamic discovery first
         match self.discover_capabilities().await {
             Ok(capabilities) => {
-                eprintln!("Discovered {} A2A capabilities from agent: {}", capabilities.len(), self.config.name);
+                eprintln!(
+                    "Discovered {} A2A capabilities from agent: {}",
+                    capabilities.len(),
+                    self.config.name
+                );
                 all_capabilities.extend(capabilities);
             }
             Err(e) => {
-                eprintln!("A2A dynamic discovery failed for agent {}: {}", self.config.name, e);
-                
+                eprintln!(
+                    "A2A dynamic discovery failed for agent {}: {}",
+                    self.config.name, e
+                );
+
                 // Fall back to static discovery
                 match self.discover_static_capabilities().await {
                     Ok(static_capabilities) => {
-                        eprintln!("Using {} static A2A capabilities for agent: {}", static_capabilities.len(), self.config.name);
+                        eprintln!(
+                            "Using {} static A2A capabilities for agent: {}",
+                            static_capabilities.len(),
+                            self.config.name
+                        );
                         all_capabilities.extend(static_capabilities);
                     }
                     Err(static_e) => {
-                        eprintln!("A2A static discovery also failed for agent {}: {}", self.config.name, static_e);
+                        eprintln!(
+                            "A2A static discovery also failed for agent {}: {}",
+                            self.config.name, static_e
+                        );
                     }
                 }
             }
         }
-        
+
         Ok(all_capabilities)
     }
 
@@ -433,9 +469,9 @@ mod tests {
             protocol_version: "1.0".to_string(),
             known_capabilities: None,
         };
-        
+
         let provider = A2ADiscoveryProvider::new(config).unwrap();
-        
+
         let capability_def = A2ACapabilityDefinition {
             name: "test_capability".to_string(),
             description: Some("A test A2A capability".to_string()),
@@ -443,12 +479,15 @@ mod tests {
             output_schema: None,
             parameters: None,
         };
-        
+
         let capability = provider.convert_capability_to_manifest(capability_def);
-        
+
         assert_eq!(capability.id, "a2a.test_agent.test_capability");
         assert_eq!(capability.name, "test_capability");
-        assert_eq!(capability.metadata.get("capability_type").unwrap(), "a2a_capability");
+        assert_eq!(
+            capability.metadata.get("capability_type").unwrap(),
+            "a2a_capability"
+        );
     }
 
     #[tokio::test]
@@ -461,11 +500,11 @@ mod tests {
             protocol_version: "1.0".to_string(),
             known_capabilities: Some(vec!["static_cap1".to_string(), "static_cap2".to_string()]),
         };
-        
+
         let provider = A2ADiscoveryProvider::new(config).unwrap();
-        
+
         let capabilities = provider.discover_static_capabilities().await.unwrap();
-        
+
         assert_eq!(capabilities.len(), 2);
         assert_eq!(capabilities[0].id, "a2a.test_agent.static_cap1");
         assert_eq!(capabilities[1].id, "a2a.test_agent.static_cap2");

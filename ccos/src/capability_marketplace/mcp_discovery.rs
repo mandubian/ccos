@@ -1,6 +1,6 @@
 use crate::capability_marketplace::types::CapabilityDiscovery;
 use crate::capability_marketplace::types::{
-    CapabilityManifest, LocalCapability, MCPCapability, ProviderType,
+    CapabilityManifest, CapabilityMarketplace, LocalCapability, MCPCapability, ProviderType,
 };
 use crate::mcp::types::DiscoveredMCPTool;
 use crate::synthesis::mcp_introspector::MCPIntrospector;
@@ -21,6 +21,7 @@ use rtfs::runtime::{Runtime, TreeWalkingStrategy};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -393,30 +394,40 @@ impl MCPDiscoveryProvider {
                 let key = entry.key.0.as_str();
                 match key {
                     "state" => {
-                        // Force state to be Optional(Enum(OPEN, CLOSED))
-                        // Discard whatever was there if it was wrong (e.g. containing ALL)
+                        // Force state to be Optional(Enum(OPEN, CLOSED, open, closed))
+                        // Include both cases to handle AI-generated lowercase values
                         entry.value_type =
                             Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
                                 Literal::String("OPEN".to_string()),
                                 Literal::String("CLOSED".to_string()),
+                                Literal::String("open".to_string()),
+                                Literal::String("closed".to_string()),
                             ]))));
+                        entry.optional = true;
                     }
                     "direction" => {
-                        // Force direction to be Optional(Enum(ASC, DESC))
+                        // Force direction to be Optional(Enum(ASC, DESC, asc, desc))
                         entry.value_type =
                             Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
                                 Literal::String("ASC".to_string()),
                                 Literal::String("DESC".to_string()),
+                                Literal::String("asc".to_string()),
+                                Literal::String("desc".to_string()),
                             ]))));
+                        entry.optional = true;
                     }
                     "orderBy" => {
-                        // Force orderBy to be Optional(Enum(CREATED_AT, UPDATED_AT, COMMENTS))
+                        // Force orderBy to be Optional(Enum(...))
                         entry.value_type =
                             Box::new(TypeExpr::Optional(Box::new(TypeExpr::Enum(vec![
                                 Literal::String("CREATED_AT".to_string()),
                                 Literal::String("UPDATED_AT".to_string()),
                                 Literal::String("COMMENTS".to_string()),
+                                Literal::String("created_at".to_string()),
+                                Literal::String("updated_at".to_string()),
+                                Literal::String("comments".to_string()),
                             ]))));
+                        entry.optional = true;
                     }
                     _ => {}
                 }
@@ -984,23 +995,46 @@ impl MCPDiscoveryProvider {
                     });
                 }
                 TopLevel::Expression(expr) => {
-                    // Handle both List (if quoted) and FunctionCall (if unquoted)
-                    let items_opt = match expr {
-                        Expression::List(items) => Some(items.clone()),
-                        Expression::FunctionCall { callee, arguments } => {
-                            // Convert function call back to list format for parsing
-                            let mut items = Vec::with_capacity(arguments.len() + 1);
-                            items.push(*callee.clone());
-                            items.extend(arguments.clone());
-                            Some(items)
+                    // Handle (do ...) wrapper which contains capability definitions
+                    if let Expression::Do(do_expr) = expr {
+                        // Iterate through expressions inside the do block
+                        for inner_expr in &do_expr.expressions {
+                            if let Some(capability_def) =
+                                self.try_parse_capability_expression(inner_expr)
+                            {
+                                capabilities.push(capability_def);
+                            }
                         }
-                        _ => None,
-                    };
-
-                    if let Some(items) = items_opt {
+                    }
+                    // Handle FunctionCall with "do" as callee (alternative representation)
+                    else if let Expression::FunctionCall { callee, arguments } = expr {
+                        if let Expression::Symbol(sym) = &**callee {
+                            if sym.0 == "do" {
+                                // Handle (do ...) as a function call - capabilities are in arguments
+                                for arg in arguments {
+                                    if let Some(capability_def) =
+                                        self.try_parse_capability_expression(arg)
+                                    {
+                                        capabilities.push(capability_def);
+                                    }
+                                }
+                            } else if sym.0 == "capability" {
+                                // Handle standalone (capability ...) call
+                                let mut items = Vec::with_capacity(arguments.len() + 1);
+                                items.push(*callee.clone());
+                                items.extend(arguments.clone());
+                                if let Ok(capability_def) = self.parse_individual_capability(&items)
+                                {
+                                    capabilities.push(capability_def);
+                                }
+                            }
+                        }
+                    }
+                    // Handle both List (if quoted) and direct capability calls
+                    else if let Expression::List(items) = expr {
                         if let Some(Expression::Symbol(sym)) = items.first() {
                             if sym.0 == "capability" {
-                                if let Ok(capability_def) = self.parse_individual_capability(&items)
+                                if let Ok(capability_def) = self.parse_individual_capability(items)
                                 {
                                     capabilities.push(capability_def);
                                 }
@@ -1031,6 +1065,37 @@ impl MCPDiscoveryProvider {
             capabilities,
             generated_at: chrono::Utc::now().to_rfc3339(),
         })
+    }
+
+    /// Helper to try parsing a capability expression from various formats
+    fn try_parse_capability_expression(
+        &self,
+        expr: &Expression,
+    ) -> Option<RTFSCapabilityDefinition> {
+        match expr {
+            // Handle (capability "id" :key value ...) as a FunctionCall
+            Expression::FunctionCall { callee, arguments } => {
+                if let Expression::Symbol(sym) = &**callee {
+                    if sym.0 == "capability" {
+                        let mut items = Vec::with_capacity(arguments.len() + 1);
+                        items.push(*callee.clone());
+                        items.extend(arguments.clone());
+                        return self.parse_individual_capability(&items).ok();
+                    }
+                }
+                None
+            }
+            // Handle quoted list (capability ...)
+            Expression::List(items) => {
+                if let Some(Expression::Symbol(sym)) = items.first() {
+                    if sym.0 == "capability" {
+                        return self.parse_individual_capability(items).ok();
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
     }
 
     /// Parse an individual capability from (capability "id" :key value ...) format
@@ -2157,14 +2222,56 @@ impl MCPDiscoveryProvider {
 
     /// Convert JSON Schema to RTFS type expression
     fn convert_json_schema_to_rtfs(&self, schema: &serde_json::Value) -> RuntimeResult<Expression> {
+        // Check for enum first (can exist without "type")
+        if let Some(enum_values) = schema.get("enum") {
+            if let Some(arr) = enum_values.as_array() {
+                let mut variants = vec![Expression::Literal(Literal::Keyword(Keyword(
+                    "enum".to_string(),
+                )))];
+                for val in arr {
+                    if let Some(s) = val.as_str() {
+                        variants.push(Expression::Literal(Literal::String(s.to_string())));
+                    } else if let Some(i) = val.as_i64() {
+                        variants.push(Expression::Literal(Literal::Integer(i)));
+                    } else if let Some(b) = val.as_bool() {
+                        variants.push(Expression::Literal(Literal::Boolean(b)));
+                    }
+                }
+                return Ok(Expression::Vector(variants));
+            }
+        }
+
         match schema.get("type") {
             Some(serde_json::Value::String(type_str)) => match type_str.as_str() {
                 "object" => {
                     let mut properties = Vec::new();
+                    let required_fields: Vec<String> = schema
+                        .get("required")
+                        .and_then(|r| r.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|s| s.as_str())
+                                .map(|s| s.to_string())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
                     if let Some(props) = schema.get("properties") {
                         if let Some(obj) = props.as_object() {
                             for (key, value) in obj {
-                                if let Ok(rtfs_type) = self.convert_json_schema_to_rtfs(value) {
+                                if let Ok(mut rtfs_type) = self.convert_json_schema_to_rtfs(value) {
+                                    // If field is not required, wrap in [:union T :nil]
+                                    if !required_fields.contains(key) {
+                                        rtfs_type = Expression::Vector(vec![
+                                            Expression::Literal(Literal::Keyword(Keyword(
+                                                "union".to_string(),
+                                            ))),
+                                            rtfs_type,
+                                            Expression::Literal(Literal::Keyword(Keyword(
+                                                "nil".to_string(),
+                                            ))),
+                                        ]);
+                                    }
                                     properties.push((MapKey::String(key.clone()), rtfs_type));
                                 }
                             }
@@ -2175,21 +2282,42 @@ impl MCPDiscoveryProvider {
                 "array" => {
                     if let Some(items) = schema.get("items") {
                         if let Ok(item_type) = self.convert_json_schema_to_rtfs(items) {
-                            Ok(Expression::Vector(vec![item_type]))
+                            Ok(Expression::Vector(vec![
+                                Expression::Literal(Literal::Keyword(Keyword(
+                                    "vector".to_string(),
+                                ))),
+                                item_type,
+                            ]))
                         } else {
-                            Ok(Expression::Symbol(Symbol("array".to_string())))
+                            Ok(Expression::Vector(vec![Expression::Literal(
+                                Literal::Keyword(Keyword("vector".to_string())),
+                            )]))
                         }
                     } else {
-                        Ok(Expression::Symbol(Symbol("array".to_string())))
+                        Ok(Expression::Vector(vec![Expression::Literal(
+                            Literal::Keyword(Keyword("vector".to_string())),
+                        )]))
                     }
                 }
-                "string" => Ok(Expression::Symbol(Symbol("string".to_string()))),
-                "number" => Ok(Expression::Symbol(Symbol("number".to_string()))),
-                "integer" => Ok(Expression::Symbol(Symbol("integer".to_string()))),
-                "boolean" => Ok(Expression::Symbol(Symbol("boolean".to_string()))),
-                _ => Ok(Expression::Symbol(Symbol("any".to_string()))),
+                "string" => Ok(Expression::Literal(Literal::Keyword(Keyword(
+                    "string".to_string(),
+                )))),
+                "number" => Ok(Expression::Literal(Literal::Keyword(Keyword(
+                    "float".to_string(),
+                )))),
+                "integer" => Ok(Expression::Literal(Literal::Keyword(Keyword(
+                    "int".to_string(),
+                )))),
+                "boolean" => Ok(Expression::Literal(Literal::Keyword(Keyword(
+                    "bool".to_string(),
+                )))),
+                _ => Ok(Expression::Literal(Literal::Keyword(Keyword(
+                    "any".to_string(),
+                )))),
             },
-            _ => Ok(Expression::Symbol(Symbol("any".to_string()))),
+            _ => Ok(Expression::Literal(Literal::Keyword(Keyword(
+                "any".to_string(),
+            )))),
         }
     }
 
@@ -2236,12 +2364,33 @@ impl MCPDiscoveryProvider {
                 })
             }
             Expression::Vector(vec) => {
-                // Check for special type forms like [:enum ...] or [:optional ...]
-                if let Some(Expression::Literal(Literal::Keyword(kw))) = vec.first() {
+                if vec.is_empty() {
+                    return Ok(TypeExpr::Vector(Box::new(TypeExpr::Any)));
+                }
+
+                // Check for trailing '?' (it would be a separate symbol/keyword)
+                let mut is_optional_marker = false;
+                let mut effective_vec_len = vec.len();
+                if let Some(last) = vec.last() {
+                    if let Expression::Symbol(Symbol(s))
+                    | Expression::Literal(Literal::Keyword(Keyword(s))) = last
+                    {
+                        if s == "?" {
+                            is_optional_marker = true;
+                            effective_vec_len -= 1;
+                        }
+                    }
+                }
+                let effective_vec = &vec[..effective_vec_len];
+
+                // Check for special type forms
+                let base_type = if let Some(Expression::Literal(Literal::Keyword(kw))) =
+                    effective_vec.first()
+                {
                     match kw.0.as_str() {
                         "map" => {
                             let mut entries = Vec::new();
-                            for entry_expr in vec.iter().skip(1) {
+                            for entry_expr in effective_vec.iter().skip(1) {
                                 if let Expression::Vector(entry_vec) = entry_expr {
                                     if entry_vec.len() >= 2 {
                                         if let Expression::Literal(Literal::Keyword(key_kw)) =
@@ -2249,26 +2398,54 @@ impl MCPDiscoveryProvider {
                                         {
                                             let value_type =
                                                 self.convert_rtfs_to_type_expr(&entry_vec[1])?;
-                                            // Treat as optional entry if the value type is optional
-                                            let is_optional =
+
+                                            // Check for optional marker in the entry vector itself: [:key type ?]
+                                            let mut is_optional =
                                                 matches!(value_type, TypeExpr::Optional(_));
+                                            if !is_optional && entry_vec.len() >= 3 {
+                                                if let Expression::Symbol(Symbol(s))
+                                                | Expression::Literal(Literal::Keyword(
+                                                    Keyword(s),
+                                                )) = &entry_vec[2]
+                                                {
+                                                    if s == "?" {
+                                                        is_optional = true;
+                                                    }
+                                                }
+                                            }
 
                                             entries.push(MapTypeEntry {
                                                 key: Keyword(key_kw.0.clone()),
-                                                value_type: Box::new(value_type),
+                                                value_type: Box::new(if is_optional {
+                                                    match value_type {
+                                                        TypeExpr::Optional(inner) => *inner,
+                                                        other => other,
+                                                    }
+                                                } else {
+                                                    value_type
+                                                }),
                                                 optional: is_optional,
                                             });
                                         }
                                     }
                                 }
                             }
-                            return Ok(TypeExpr::Map {
+                            TypeExpr::Map {
                                 entries,
                                 wildcard: None,
-                            });
+                            }
+                        }
+                        "vector" => {
+                            if effective_vec.len() >= 2 {
+                                let element_type =
+                                    self.convert_rtfs_to_type_expr(&effective_vec[1])?;
+                                TypeExpr::Vector(Box::new(element_type))
+                            } else {
+                                TypeExpr::Vector(Box::new(TypeExpr::Any))
+                            }
                         }
                         "enum" => {
-                            let variants = vec
+                            let variants = effective_vec
                                 .iter()
                                 .skip(1)
                                 .filter_map(|e| match e {
@@ -2276,23 +2453,56 @@ impl MCPDiscoveryProvider {
                                     _ => None,
                                 })
                                 .collect();
-                            return Ok(TypeExpr::Enum(variants));
+                            TypeExpr::Enum(variants)
                         }
                         "optional" => {
-                            if vec.len() >= 2 {
-                                let inner_type = self.convert_rtfs_to_type_expr(&vec[1])?;
-                                return Ok(TypeExpr::Optional(Box::new(inner_type)));
+                            if effective_vec.len() >= 2 {
+                                let inner_type =
+                                    self.convert_rtfs_to_type_expr(&effective_vec[1])?;
+                                TypeExpr::Optional(Box::new(inner_type))
+                            } else {
+                                TypeExpr::Any
                             }
                         }
-                        _ => {}
+                        "union" => {
+                            // [:union T1 T2 ...] - convert all variants
+                            let variants: Result<Vec<TypeExpr>, _> = effective_vec
+                                .iter()
+                                .skip(1)
+                                .map(|e| self.convert_rtfs_to_type_expr(e))
+                                .collect();
+                            let variants = variants?;
+                            // Special case: [:union T :nil] is equivalent to Optional(T)
+                            if variants.len() == 2 {
+                                if let Some(TypeExpr::Primitive(PrimitiveType::Nil)) =
+                                    variants.get(1)
+                                {
+                                    return Ok(TypeExpr::Optional(Box::new(variants[0].clone())));
+                                }
+                            }
+                            TypeExpr::Union(variants)
+                        }
+                        _ => {
+                            if effective_vec.len() == 1 {
+                                let element_type =
+                                    self.convert_rtfs_to_type_expr(&effective_vec[0])?;
+                                TypeExpr::Vector(Box::new(element_type))
+                            } else {
+                                TypeExpr::Vector(Box::new(TypeExpr::Any))
+                            }
+                        }
                     }
-                }
-
-                if vec.len() == 1 {
-                    let element_type = self.convert_rtfs_to_type_expr(&vec[0])?;
-                    Ok(TypeExpr::Vector(Box::new(element_type)))
+                } else if effective_vec.len() == 1 {
+                    let element_type = self.convert_rtfs_to_type_expr(&effective_vec[0])?;
+                    TypeExpr::Vector(Box::new(element_type))
                 } else {
-                    Ok(TypeExpr::Vector(Box::new(TypeExpr::Any)))
+                    TypeExpr::Vector(Box::new(TypeExpr::Any))
+                };
+
+                if is_optional_marker {
+                    Ok(TypeExpr::Optional(Box::new(base_type)))
+                } else {
+                    Ok(base_type)
                 }
             }
             _ => Ok(TypeExpr::Any), // Default fallback
@@ -2396,7 +2606,10 @@ impl MCPDiscoveryProvider {
 
 #[async_trait]
 impl CapabilityDiscovery for MCPDiscoveryProvider {
-    async fn discover(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
+    async fn discover(
+        &self,
+        _marketplace: Option<Arc<CapabilityMarketplace>>,
+    ) -> RuntimeResult<Vec<CapabilityManifest>> {
         let mut all_capabilities = Vec::new();
 
         // Discover tools

@@ -66,6 +66,8 @@ pub struct DiscoveryOptions {
     pub lazy_output_schemas: bool,
     /// Whether to ignore approved capability files and force network discovery
     pub ignore_approved_files: bool,
+    /// Whether to force discovery even if export file exists
+    pub force_refresh: bool,
 }
 
 impl Default for DiscoveryOptions {
@@ -82,6 +84,7 @@ impl Default for DiscoveryOptions {
             max_parallel_discoveries: 5, // Conservative default to avoid rate limits
             lazy_output_schemas: true,   // Skip expensive introspection by default
             ignore_approved_files: false,
+            force_refresh: false,
         }
     }
 }
