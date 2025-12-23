@@ -52,7 +52,7 @@ impl Default for ValidationConfig {
 }
 
 /// Result of a validation attempt.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationResult {
     pub is_valid: bool,
     pub errors: Vec<ValidationError>,
@@ -60,7 +60,7 @@ pub struct ValidationResult {
 }
 
 /// A specific validation error.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationError {
     pub error_type: ValidationErrorType,
     pub message: String,
@@ -68,7 +68,8 @@ pub struct ValidationError {
     pub suggested_fix: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ValidationErrorType {
     SchemaMismatch,
     MissingParameter,

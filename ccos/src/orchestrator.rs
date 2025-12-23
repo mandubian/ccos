@@ -1966,9 +1966,24 @@ impl Orchestrator {
 
     /// Helper to log an action to the Causal Chain.
     /// Validates that referenced plan and intent exist before logging to ensure consistency.
+    /// Governance checkpoint actions are exempt from plan validation since they reference
+    /// capability IDs rather than plan IDs.
     fn log_action(&self, action: Action) -> RuntimeResult<String> {
-        // Validate prerequisites before logging - ensures causal chain consistency
-        self.validate_action_prerequisites(&action.plan_id, &action.intent_id)?;
+        // Skip validation for governance actions that use capability_id as plan_id
+        // These are stateless audit events without associated plans
+        let skip_plan_validation = matches!(
+            action.action_type,
+            ActionType::GovernanceCheckpointDecision
+                | ActionType::GovernanceCheckpointOutcome
+                | ActionType::GovernanceApprovalRequested
+                | ActionType::GovernanceApprovalGranted
+                | ActionType::GovernanceApprovalDenied
+        );
+
+        if !skip_plan_validation {
+            // Validate prerequisites before logging - ensures causal chain consistency
+            self.validate_action_prerequisites(&action.plan_id, &action.intent_id)?;
+        }
 
         let mut chain = self
             .causal_chain

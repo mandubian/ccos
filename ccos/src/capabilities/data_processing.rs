@@ -3,6 +3,7 @@ use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> RuntimeResult<()> {
@@ -16,7 +17,38 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                 let (data, criteria) = extract_data_and_params(input, "ccos.data.filter", "criteria")?;
 
                 let criteria_map = match criteria {
-                    Some(Value::Map(m)) => Some(m),
+                    Some(Value::Map(m)) => Some(m.clone()),
+                    Some(Value::String(s)) => {
+                        // Parse JSON string to map - LLMs often pass criteria as JSON strings
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&s) {
+                            if let Some(obj) = json.as_object() {
+                                let mut map: HashMap<MapKey, Value> = HashMap::new();
+                                for (k, v) in obj {
+                                    let map_key = rtfs::ast::MapKey::String(k.clone());
+                                    let value = match v {
+                                        serde_json::Value::String(s) => Value::String(s.clone()),
+                                        serde_json::Value::Number(n) => {
+                                            if let Some(i) = n.as_i64() {
+                                                Value::Integer(i)
+                                            } else if let Some(f) = n.as_f64() {
+                                                Value::Float(f)
+                                            } else {
+                                                Value::String(n.to_string())
+                                            }
+                                        },
+                                        serde_json::Value::Bool(b) => Value::Boolean(*b),
+                                        _ => Value::String(v.to_string()),
+                                    };
+                                    map.insert(map_key, value);
+                                }
+                                Some(map)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
                     None => None,
                     Some(_) => return Err(RuntimeError::TypeError {
                         expected: "map".to_string(),
@@ -25,6 +57,7 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                     }),
                 };
 
+
                 // Extract list from data - handle both direct lists and wrapped results
                 let items = extract_list_from_value(data)?;
 
@@ -32,7 +65,22 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                     let filtered: Vec<Value> = items.iter().filter(|item| {
                         if let Value::Map(item_map) = item {
                             crit.iter().all(|(k, v)| {
-                                item_map.get(k).map_or(false, |val| val == v)
+                                // Try direct lookup, then try alternative key type (string↔keyword)
+                                let item_val = item_map.get(k).or_else(|| {
+                                    match k {
+                                        MapKey::String(s) => item_map.get(&MapKey::Keyword(Keyword(s.clone()))),
+                                        MapKey::Keyword(kw) => item_map.get(&MapKey::String(kw.0.clone())),
+                                        MapKey::Integer(_) => None, // No fallback for integer keys
+                                    }
+                                });
+                                
+                                item_val.map_or(false, |val| {
+                                    // Case-insensitive comparison for strings (e.g., "OPEN" vs "open")
+                                    match (val, v) {
+                                        (Value::String(a), Value::String(b)) => a.eq_ignore_ascii_case(b),
+                                        _ => val == v,
+                                    }
+                                })
                             })
                         } else {
                             false
@@ -76,6 +124,13 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
                 // Extract list from data - handle both direct lists and wrapped results like {"items": [...]}
                 let items = extract_list_from_value(data)?;
 
+                ccos_println!(
+                    "   📊 [ccos.data.sort] Sorting {} items by key '{:?}' in {} order",
+                    items.len(),
+                    key,
+                    order
+                );
+
                 let mut sorted = items.clone();
                 sorted.sort_by(|a, b| {
                     let val_a = if let Some(ref k) = key {
@@ -113,7 +168,7 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
         .register_local_capability_with_effects(
             "ccos.data.select".to_string(),
             "Select Data".to_string(),
-            "Selects items from a list. Params: data (list), count (int)".to_string(),
+            "Selects items from a list. Params: data (list), count (int). Note: if count=1, returns the single item directly (not a list), so use (get step_N :field) not (get (nth step_N 0) :field).".to_string(),
             Arc::new(|input| {
                 let (data, params_val) =
                     extract_data_and_params(input, "ccos.data.select", "params")?;
@@ -134,6 +189,11 @@ pub async fn register_data_capabilities(marketplace: &CapabilityMarketplace) -> 
 
                 // Extract list from data - handle both direct lists and wrapped results
                 let items = extract_list_from_value(data)?;
+                ccos_println!(
+                    "   📊 [ccos.data.select] Selecting {} items from list of {}",
+                    count,
+                    items.len()
+                );
 
                 let selected: Vec<Value> = items.iter().take(count).cloned().collect();
 
@@ -277,12 +337,65 @@ fn extract_data_and_params<'a>(
 fn get_path<'a>(val: &'a Value, path: &str) -> Option<&'a Value> {
     // Simple top-level key for now. Could support dot notation.
     if let Value::Map(m) = val {
+        // Try exact match first (both string and keyword)
         m.get(&MapKey::String(path.to_string()))
             .or_else(|| m.get(&MapKey::Keyword(Keyword(path.to_string()))))
+            // Try camelCase conversion if path is snake_case
+            .or_else(|| {
+                if path.contains('_') {
+                    let camel = snake_to_camel(path);
+                    m.get(&MapKey::String(camel.clone()))
+                        .or_else(|| m.get(&MapKey::Keyword(Keyword(camel))))
+                } else {
+                    None
+                }
+            })
+            // Try snake_case conversion if path is camelCase
+            .or_else(|| {
+                let snake = camel_to_snake(path);
+                if snake != path {
+                    m.get(&MapKey::String(snake.clone()))
+                        .or_else(|| m.get(&MapKey::Keyword(Keyword(snake))))
+                } else {
+                    None
+                }
+            })
     } else {
         None
     }
 }
+
+/// Convert snake_case to camelCase
+fn snake_to_camel(s: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize_next = false;
+    for c in s.chars() {
+        if c == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(c.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Convert camelCase to snake_case
+fn camel_to_snake(s: &str) -> String {
+    let mut result = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_ascii_uppercase() && i > 0 {
+            result.push('_');
+            result.push(c.to_ascii_lowercase());
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 
 fn compare_values(a: &Value, b: &Value) -> Ordering {
     match (a, b) {

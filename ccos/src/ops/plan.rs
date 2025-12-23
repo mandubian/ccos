@@ -392,7 +392,8 @@ async fn build_cli_modular_planner(
 
     let mut planner =
         ModularPlanner::new(decomposition, Box::new(composite_resolution), intent_graph)
-            .with_config(config);
+            .with_config(config)
+            .with_delegating_arbiter(ccos.arbiter.clone());
 
     if options.enable_safe_exec {
         planner = planner.with_safe_executor(ccos.get_capability_marketplace());

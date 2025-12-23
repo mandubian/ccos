@@ -12,7 +12,9 @@ use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogEntryKind, CatalogFilter, CatalogService};
 use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 // Note: Using local SubIntentDto instead of importing private SubIntent
-use crate::synthesis::core::MissingCapabilityResolver;
+use crate::synthesis::validation::llm_validator::{
+    auto_repair_plan, validate_plan, ValidationConfig, ValidationError,
+};
 use crate::CCOS;
 
 /// Register granular planner capabilities (v2) for the autonomous agent loop.
@@ -33,10 +35,23 @@ pub async fn register_planner_capabilities_v2(
         let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
         let hits = catalog.search_semantic(&payload.goal, Some(&filter), 10);
 
+        let is_meta_goal = payload.goal.to_lowercase().contains("plan")
+            || payload.goal.to_lowercase().contains("meta");
+
         let mut menu = Vec::new();
         for hit in hits {
-            // Filter out internal planner capabilities to avoid infinite recursion
-            if !hit.entry.id.starts_with("planner.") {
+            // Allow planner capabilities, but skip the very high-level ones
+            // from the menu unless we are specifically doing meta-planning
+            // to avoid confusing a standard planner.
+            if hit.entry.id.starts_with("planner.") {
+                if is_meta_goal
+                    || hit.entry.id.contains("validate")
+                    || hit.entry.id.contains("repair")
+                    || hit.entry.id.contains("discover")
+                {
+                    menu.push(hit.entry.id);
+                }
+            } else {
                 menu.push(hit.entry.id);
             }
         }
@@ -616,54 +631,89 @@ Instructions:
         )
         .await?;
 
-    // planner.discover_tools - Search for new tools when resolution fails
-    let discover_tools_handler = Arc::new(|input: &Value| {
-        let payload: DiscoverToolsInput = parse_payload("planner.discover_tools", input)?;
+    // 5. planner.validate_with_llm
+    // High-level plan validation using LLM.
+    let validate_with_llm_handler = Arc::new(move |input: &Value| {
+        let payload: ValidateWithLlmInput = parse_payload("planner.validate_with_llm", input)?;
 
         // Capture Tokio handle for async execution
         let rt_handle = tokio::runtime::Handle::current();
-        let query = payload.query.clone();
+        let plan = payload.plan;
+        let goal = payload.goal;
+        let resolutions = payload.resolutions;
 
         let result = std::thread::spawn(move || {
             rt_handle.block_on(async {
-                use crate::discovery::registry_search::RegistrySearcher;
-
-                let searcher = RegistrySearcher::new();
-                let results = searcher.search(&query).await?;
-
-                let tools: Vec<DiscoveredToolDto> = results
-                    .iter()
-                    .take(payload.max_results.unwrap_or(10))
-                    .map(|r| DiscoveredToolDto {
-                        name: r.server_info.name.clone(),
-                        description: r.server_info.description.clone(),
-                        source: format!("{:?}", r.source),
-                        score: r.match_score as f64,
-                        endpoints: r.alternative_endpoints.clone(),
-                    })
-                    .collect();
-
-                Ok::<DiscoverToolsOutput, RuntimeError>(DiscoverToolsOutput {
-                    tools,
-                    query: query.clone(),
-                })
+                let config = ValidationConfig::default();
+                validate_plan(&plan, &resolutions, &goal, &config)
+                    .await
+                    .map_err(|e| RuntimeError::Generic(e))
             })
         })
         .join()
         .map_err(|_| {
-            RuntimeError::Generic("Thread join error in planner.discover_tools".to_string())
+            RuntimeError::Generic("Thread join error in planner.validate_with_llm".to_string())
         })??;
 
-        produce_value("planner.discover_tools", result)
+        produce_value(
+            "planner.validate_with_llm",
+            ValidateWithLlmOutput {
+                valid: result.is_valid,
+                errors: result.errors,
+                suggestions: result.suggestions,
+            },
+        )
     });
 
     marketplace
         .register_local_capability(
-            "planner.discover_tools".to_string(),
-            "Planner / Discover Tools".to_string(),
-            "Search MCP Registry, APIs.guru, and other sources for tools matching a query."
-                .to_string(),
-            discover_tools_handler,
+            "planner.validate_with_llm".to_string(),
+            "Planner / Validate with LLM".to_string(),
+            "Validates an RTFS plan using an LLM for schema compatibility and logic.".to_string(),
+            validate_with_llm_handler,
+        )
+        .await?;
+
+    // 6. planner.repair_plan
+    // Attempts to repair a plan based on validation errors.
+    let repair_plan_handler = Arc::new(move |input: &Value| {
+        let payload: RepairPlanInput = parse_payload("planner.repair_plan", input)?;
+
+        // Capture Tokio handle for async execution
+        let rt_handle = tokio::runtime::Handle::current();
+        let plan = payload.plan;
+        let errors = payload.errors;
+        let attempt = payload.attempt;
+
+        let result = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                let config = ValidationConfig::default();
+                auto_repair_plan(&plan, &errors, attempt, &config)
+                    .await
+                    .map_err(|e| RuntimeError::Generic(e))
+            })
+        })
+        .join()
+        .map_err(|_| {
+            RuntimeError::Generic("Thread join error in planner.repair_plan".to_string())
+        })??;
+
+        let success = result.is_some();
+        produce_value(
+            "planner.repair_plan",
+            RepairPlanOutput {
+                repaired_plan: result,
+                success,
+            },
+        )
+    });
+
+    marketplace
+        .register_local_capability(
+            "planner.repair_plan".to_string(),
+            "Planner / Repair Plan".to_string(),
+            "Attempts to repair an RTFS plan using validation error feedback.".to_string(),
+            repair_plan_handler,
         )
         .await?;
 
@@ -798,6 +848,35 @@ struct DiscoveredToolDto {
     source: String,
     score: f64,
     endpoints: Vec<String>,
+}
+
+// --- Validation & Repair DTOs ---
+
+#[derive(Debug, Deserialize)]
+struct ValidateWithLlmInput {
+    plan: String,
+    goal: String,
+    resolutions: HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ValidateWithLlmOutput {
+    valid: bool,
+    errors: Vec<ValidationError>,
+    suggestions: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RepairPlanInput {
+    plan: String,
+    errors: Vec<ValidationError>,
+    attempt: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RepairPlanOutput {
+    repaired_plan: Option<String>,
+    success: bool,
 }
 
 // --- Helpers ---
