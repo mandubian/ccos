@@ -239,7 +239,9 @@ pub struct ModularPlannerBuilder {
     pub use_embeddings: bool,
     pub discover_mcp: bool,
     pub no_cache: bool,
-    pub pure_llm: bool,
+    /// Use fast pattern-based decomposition instead of LLM (less accurate but faster)
+    pub pattern_mode: bool,
+    pub enable_safe_exec: bool,
     pub verbose_llm: bool,
     pub show_prompt: bool,
     pub confirm_llm: bool,
@@ -259,7 +261,8 @@ impl Default for ModularPlannerBuilder {
             use_embeddings: true,
             discover_mcp: false,
             no_cache: false,
-            pure_llm: false,
+            pattern_mode: false,
+            enable_safe_exec: false,
             verbose_llm: false,
             show_prompt: false,
             confirm_llm: false,
@@ -285,12 +288,12 @@ impl ModularPlannerBuilder {
         use_embeddings: bool,
         discover_mcp: bool,
         no_cache: bool,
-        pure_llm: bool,
+        pattern_mode: bool,
     ) -> Self {
         self.use_embeddings = use_embeddings;
         self.discover_mcp = discover_mcp;
         self.no_cache = no_cache;
-        self.pure_llm = pure_llm;
+        self.pattern_mode = pattern_mode;
         self
     }
 
@@ -325,6 +328,11 @@ impl ModularPlannerBuilder {
         self
     }
 
+    pub fn with_safe_exec(mut self, enabled: bool) -> Self {
+        self.enable_safe_exec = enabled;
+        self
+    }
+
     pub async fn build(self) -> Result<ModularPlannerEnv, Box<dyn Error + Send + Sync>> {
         // 1. Build base CCOS environment
         let env = self.env_builder.build().await?;
@@ -346,16 +354,15 @@ impl ModularPlannerBuilder {
                     };
                     let mut hybrid = HybridDecomposition::new().with_llm(adapter);
 
-                    // If pure LLM requested, configure hybrid to skip patterns
-                    if self.pure_llm {
-                        ccos_println!("   🤖 Pure LLM mode enabled (skipping patterns)");
-                        // Set pattern threshold > 1.0 to ensure patterns never match
+                    // If pattern mode requested, configure hybrid to prefer patterns over LLM
+                    // (default is LLM-based decomposition which is more accurate)
+                    if self.pattern_mode {
+                        ccos_println!("   ⚡ Pattern mode enabled (fast but less accurate)");
                         hybrid = hybrid.with_config(HybridConfig {
-                            pattern_confidence_threshold: 2.0,
-                            prefer_grounded: true,
-                            max_grounded_tools: 20,
-                            force_llm: true,
-                            ..HybridConfig::default()
+                            pattern_confidence_threshold: 0.6, // Lower threshold to prefer patterns
+                            prefer_grounded: false,
+                            max_grounded_tools: 0,
+                            force_llm: false,
                         });
                     }
 
@@ -486,7 +493,7 @@ impl ModularPlannerBuilder {
             show_prompt: self.show_prompt,
             confirm_llm: self.confirm_llm,
             eager_discovery: true,
-            enable_safe_exec: false,
+            enable_safe_exec: self.enable_safe_exec,
             initial_grounding_params: HashMap::new(),
             allow_grounding_context: true,
             hybrid_config: Some(HybridConfig::default()),
@@ -499,7 +506,14 @@ impl ModularPlannerBuilder {
             Box::new(composite_resolution),
             env.intent_graph.clone(),
         )
-        .with_config(config);
+        .with_config(config)
+        .with_delegating_arbiter(env.ccos.arbiter.clone());
+
+        let mut planner = if self.enable_safe_exec {
+            planner.with_safe_executor(env.ccos.get_capability_marketplace())
+        } else {
+            planner
+        };
 
         Ok(ModularPlannerEnv {
             ccos: env.ccos,
