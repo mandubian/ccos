@@ -6,6 +6,6 @@
 pub mod llm_validator;
 
 pub use llm_validator::{
-    auto_repair_plan, validate_plan, validate_schema, ValidationConfig, ValidationError,
-    ValidationErrorType, ValidationResult,
+    auto_repair_plan, llm_repair_runtime_error, validate_plan, validate_schema, ValidationConfig,
+    ValidationError, ValidationErrorType, ValidationResult,
 };

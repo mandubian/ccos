@@ -350,6 +350,27 @@ impl SecureStandardLibrary {
             })),
         );
 
+        // String join function
+        // Signature: (join sep coll)
+        env.define(
+            &Symbol("join".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "join".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::join),
+            })),
+        );
+
+        // Alias to make intent explicit in plans/prompts
+        env.define(
+            &Symbol("string-join".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "string-join".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::join),
+            })),
+        );
+
         // String upper case function
         env.define(
             &Symbol("string-upper".to_string()),
@@ -379,6 +400,37 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::string_trim),
             })),
         );
+
+        // Regex functions (only available with regex feature)
+        #[cfg(feature = "regex")]
+        {
+            env.define(
+                &Symbol("re-matches".to_string()),
+                Value::Function(Function::Builtin(BuiltinFunction {
+                    name: "re-matches".to_string(),
+                    arity: Arity::Fixed(2),
+                    func: Arc::new(Self::re_matches),
+                })),
+            );
+
+            env.define(
+                &Symbol("re-find".to_string()),
+                Value::Function(Function::Builtin(BuiltinFunction {
+                    name: "re-find".to_string(),
+                    arity: Arity::Fixed(2),
+                    func: Arc::new(Self::re_find),
+                })),
+            );
+
+            env.define(
+                &Symbol("re-seq".to_string()),
+                Value::Function(Function::Builtin(BuiltinFunction {
+                    name: "re-seq".to_string(),
+                    arity: Arity::Fixed(2),
+                    func: Arc::new(Self::re_seq),
+                })),
+            );
+        }
     }
 
     pub(crate) fn load_collection_functions(env: &mut Environment) {
@@ -1298,6 +1350,54 @@ impl SecureStandardLibrary {
         Ok(Value::String(result))
     }
 
+    fn join(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "join".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let sep = match &args[0] {
+            Value::String(s) => s,
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "join".to_string(),
+                })
+            }
+        };
+
+        let elements: Vec<String> = match &args[1] {
+            Value::Vector(items) => items.iter().map(Self::value_to_string_for_str).collect(),
+            Value::List(items) => items.iter().map(Self::value_to_string_for_str).collect(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector or list".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "join".to_string(),
+                })
+            }
+        };
+
+        Ok(Value::String(elements.join(sep)))
+    }
+
+    fn value_to_string_for_str(value: &Value) -> String {
+        match value {
+            Value::String(s) => s.clone(),
+            Value::Integer(n) => n.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Boolean(b) => b.to_string(),
+            Value::Keyword(k) => format!(":{}", k.0),
+            Value::Nil => "nil".to_string(),
+            _ => value.to_string(),
+        }
+    }
+
     fn substring(args: Vec<Value>) -> RuntimeResult<Value> {
         let args = args.as_slice();
         if args.len() < 2 || args.len() > 3 {
@@ -1500,6 +1600,153 @@ impl SecureStandardLibrary {
         };
 
         Ok(Value::Vector(parts))
+    }
+
+    /// Regex match - checks if pattern matches text
+    /// Signature: (re-matches pattern text)
+    /// Returns: true if pattern matches entire text, false otherwise
+    #[cfg(feature = "regex")]
+    fn re_matches(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "re-matches".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let pattern = match &args[0] {
+            Value::String(s) => s.as_str(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string (pattern)".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "re-matches".to_string(),
+                })
+            }
+        };
+
+        let text = match &args[1] {
+            Value::String(s) => s.as_str(),
+            Value::Nil => return Ok(Value::Boolean(false)),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string (text)".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "re-matches".to_string(),
+                })
+            }
+        };
+
+        match regex::Regex::new(pattern) {
+            Ok(re) => Ok(Value::Boolean(re.is_match(text))),
+            Err(e) => Err(RuntimeError::Generic(format!(
+                "Invalid regex pattern '{}': {}",
+                pattern, e
+            ))),
+        }
+    }
+
+    /// Regex find - finds first match of pattern in text
+    /// Signature: (re-find pattern text)
+    /// Returns: matched string or nil if no match
+    #[cfg(feature = "regex")]
+    fn re_find(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "re-find".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let pattern = match &args[0] {
+            Value::String(s) => s.as_str(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string (pattern)".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "re-find".to_string(),
+                })
+            }
+        };
+
+        let text = match &args[1] {
+            Value::String(s) => s.as_str(),
+            Value::Nil => return Ok(Value::Nil),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string (text)".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "re-find".to_string(),
+                })
+            }
+        };
+
+        match regex::Regex::new(pattern) {
+            Ok(re) => match re.find(text) {
+                Some(m) => Ok(Value::String(m.as_str().to_string())),
+                None => Ok(Value::Nil),
+            },
+            Err(e) => Err(RuntimeError::Generic(format!(
+                "Invalid regex pattern '{}': {}",
+                pattern, e
+            ))),
+        }
+    }
+
+    /// Regex sequence - finds all matches of pattern in text
+    /// Signature: (re-seq pattern text)
+    /// Returns: vector of all matched strings
+    #[cfg(feature = "regex")]
+    fn re_seq(args: Vec<Value>) -> RuntimeResult<Value> {
+        let args = args.as_slice();
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "re-seq".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let pattern = match &args[0] {
+            Value::String(s) => s.as_str(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string (pattern)".to_string(),
+                    actual: args[0].type_name().to_string(),
+                    operation: "re-seq".to_string(),
+                })
+            }
+        };
+
+        let text = match &args[1] {
+            Value::String(s) => s.as_str(),
+            Value::Nil => return Ok(Value::Vector(vec![])),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "string (text)".to_string(),
+                    actual: args[1].type_name().to_string(),
+                    operation: "re-seq".to_string(),
+                })
+            }
+        };
+
+        match regex::Regex::new(pattern) {
+            Ok(re) => {
+                let matches: Vec<Value> = re
+                    .find_iter(text)
+                    .map(|m| Value::String(m.as_str().to_string()))
+                    .collect();
+                Ok(Value::Vector(matches))
+            }
+            Err(e) => Err(RuntimeError::Generic(format!(
+                "Invalid regex pattern '{}': {}",
+                pattern, e
+            ))),
+        }
     }
 
     fn vector(args: Vec<Value>) -> RuntimeResult<Value> {

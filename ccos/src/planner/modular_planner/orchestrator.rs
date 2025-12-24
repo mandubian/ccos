@@ -13,13 +13,12 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::planner::adapters::SchemaBridge;
+use serde_json::json;
 
 use super::decomposition::hybrid::HybridConfig;
-use super::decomposition::{
-    DecompositionContext, DecompositionError, DecompositionStrategy, HybridDecomposition,
-};
+use super::decomposition::{DecompositionContext, DecompositionError, DecompositionStrategy};
 use super::resolution::{
-    CompositeResolution, ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability,
+    ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapability,
 };
 use super::safe_executor::SafeCapabilityExecutor;
 use super::types::ToolSummary;
@@ -115,6 +114,12 @@ fn slugify_description(desc: &str) -> String {
         }
     }
     let slug = slug.trim_matches('-').to_string();
+    // Truncate to max 30 chars for shorter capability IDs
+    let slug = if slug.len() > 30 {
+        slug[..30].trim_end_matches('-').to_string()
+    } else {
+        slug
+    };
     if slug.is_empty() {
         "generated".to_string()
     } else {
@@ -142,10 +147,11 @@ fn generated_capability_id_from_description(desc: &str) -> String {
 /// Sanitize LLM-generated RTFS expressions to fix common patterns that RTFS doesn't support.
 ///
 /// This is a generic post-processor that handles:
-/// 1. Namespace prefixes: `str/split` → `split` (remove any `foo/` prefix)
-/// 2. Regex literals: `#"..."` → `"..."` (remove the `#` prefix from strings)
+/// 1. **Namespace prefixes**: `str/split` → `split` (remove any `foo/` prefix)
+/// 2. **Regex literals**: `#"..."` → `"..."` (remove the `#` prefix)
+/// 3. **Python-style methods**: `.lower()`, `.upper()` → `(lower ...)`, `(upper ...)`
 ///
-/// This allows the LLM to generate Clojure-like syntax while producing valid RTFS.
+/// This allows the LLM to generate Clojure-like or Python-like syntax while producing valid RTFS.
 fn sanitize_llm_rtfs(expr: &str) -> String {
     lazy_static::lazy_static! {
         // Match namespace/function patterns like str/split, clojure.string/join
@@ -155,22 +161,125 @@ fn sanitize_llm_rtfs(expr: &str) -> String {
     }
 
     let mut result = expr.to_string();
+    let mut changes: Vec<&str> = vec![];
 
     // Remove namespace prefixes: str/split → split
-    result = NAMESPACE_FN.replace_all(&result, "$2").to_string();
+    let after_ns = NAMESPACE_FN.replace_all(&result, "$2").to_string();
+    if after_ns != result {
+        changes.push("namespace_prefix");
+        result = after_ns;
+    }
 
     // Convert regex literals to regular strings: #"..." → "..."
-    result = REGEX_LITERAL.replace_all(&result, r#""$1""#).to_string();
+    let after_regex = REGEX_LITERAL.replace_all(&result, r#""$1""#).to_string();
+    if after_regex != result {
+        changes.push("regex_literal");
+        result = after_regex;
+    }
 
-    if result != expr {
+    if !changes.is_empty() {
+        log::info!(
+            "[sanitize_llm_rtfs] Applied {} fix(es): [{}]",
+            changes.len(),
+            changes.join(", ")
+        );
         log::debug!(
-            "[sanitize_llm_rtfs] Cleaned LLM expression:\n  Before: {}\n  After:  {}",
-            expr,
-            result
+            "[sanitize_llm_rtfs] Before: {}\n              After:  {}",
+            &expr[..expr.len().min(100)],
+            &result[..result.len().min(100)]
         );
     }
 
     result
+}
+
+/// Detect unresolved capabilities in an RTFS expression.
+///
+/// Scans the expression for `(call "generated/..." ...)` or `(call "pending/..." ...)`
+/// patterns and returns the list of capability IDs that need synthesis.
+///
+/// This is used to identify when an LLM-generated expression references
+/// capabilities that don't exist yet and need to be created.
+pub fn detect_unresolved_capabilities(expr: &str) -> Vec<String> {
+    use rtfs::ast::{Expression, Literal, Symbol};
+
+    fn collect_unresolved(expr: &Expression, acc: &mut Vec<String>) {
+        match expr {
+            Expression::FunctionCall { callee, arguments } => {
+                // Check if this is a (call "generated/..." ...) or (call "pending/..." ...)
+                if let Expression::Symbol(Symbol(sym)) = callee.as_ref() {
+                    if sym == "call" {
+                        if let Some(Expression::Literal(Literal::String(cap_id))) =
+                            arguments.first()
+                        {
+                            if cap_id.starts_with("generated/") || cap_id.starts_with("pending/") {
+                                if !acc.contains(cap_id) {
+                                    acc.push(cap_id.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                // Recurse into callee and arguments
+                collect_unresolved(callee, acc);
+                for arg in arguments {
+                    collect_unresolved(arg, acc);
+                }
+            }
+            Expression::List(items) | Expression::Vector(items) => {
+                for item in items {
+                    collect_unresolved(item, acc);
+                }
+            }
+            Expression::Map(map) => {
+                for (_, v) in map {
+                    collect_unresolved(v, acc);
+                }
+            }
+            Expression::If(if_expr) => {
+                collect_unresolved(&if_expr.condition, acc);
+                collect_unresolved(&if_expr.then_branch, acc);
+                if let Some(else_branch) = &if_expr.else_branch {
+                    collect_unresolved(else_branch, acc);
+                }
+            }
+            Expression::Let(let_expr) => {
+                for binding in &let_expr.bindings {
+                    collect_unresolved(&binding.value, acc);
+                }
+                for body_expr in &let_expr.body {
+                    collect_unresolved(body_expr, acc);
+                }
+            }
+            Expression::Do(do_expr) => {
+                for e in &do_expr.expressions {
+                    collect_unresolved(e, acc);
+                }
+            }
+            Expression::Fn(fn_expr) => {
+                for body_expr in &fn_expr.body {
+                    collect_unresolved(body_expr, acc);
+                }
+            }
+            Expression::Quasiquote(inner)
+            | Expression::Unquote(inner)
+            | Expression::UnquoteSplicing(inner)
+            | Expression::Deref(inner) => {
+                collect_unresolved(inner, acc);
+            }
+            Expression::WithMetadata { expr, .. } => {
+                collect_unresolved(expr, acc);
+            }
+            // Other expressions don't contain nested calls
+            _ => {}
+        }
+    }
+
+    let mut unresolved = Vec::new();
+    if let Ok(parsed) = rtfs::parser::parse_expression(expr) {
+        collect_unresolved(&parsed, &mut unresolved);
+    }
+    unresolved
 }
 
 /// Normalize parameter names for common API naming variations.
@@ -284,6 +393,8 @@ pub struct PlanResult {
     pub rtfs_plan: String,
     /// Planning trace for debugging
     pub trace: PlanningTrace,
+    /// Plan status (Draft, Ready, PendingSynthesis, etc.)
+    pub plan_status: PlanStatus,
     /// Optional plan_id assigned when the plan is archived
     pub plan_id: Option<String>,
     /// Optional content-addressable hash returned by the archive
@@ -1050,6 +1161,7 @@ impl ModularPlanner {
             resolutions,
             rtfs_plan,
             trace,
+            plan_status,
             plan_id: archived_plan_id,
             archive_hash: archived_hash,
             archive_path,
@@ -1384,6 +1496,8 @@ impl ModularPlanner {
                         sub_intent,
                         &logical_bindings,
                         sub_intents,
+                        Some(grounding_params),
+                        &intent_ids,
                     ),
                     ResolvedCapability::NeedsReferral {
                         suggested_action, ..
@@ -1406,6 +1520,9 @@ impl ModularPlanner {
                                             .request_llm_adapter(
                                                 dep_desc,
                                                 &grounded_json,
+                                                grounding_params
+                                                    .get(&format!("rtfs_schema_{}", dep_intent_id))
+                                                    .map(|s| s.as_str()),
                                                 None,
                                                 &sub_intent.description,
                                                 &logical_bindings,
@@ -1428,16 +1545,23 @@ impl ModularPlanner {
                         }
 
                         resolved_expr.unwrap_or_else(|| {
+                            // Generate a pending capability call for synthesis queue
+                            let cap_id =
+                                generated_capability_id_from_description(&suggested_action);
                             format!(
-                                r#"(call "ccos.user.ask" {{:prompt "Cannot proceed: {}"}})"#,
+                                r#"(call "pending/{}" {{:description "{}"}})"#,
+                                cap_id,
                                 suggested_action.replace('"', "\\\"")
                             )
                         })
                     }
                 },
                 None => {
+                    // Generate a pending capability call for synthesis queue
+                    let cap_id = generated_capability_id_from_description(&sub_intent.description);
                     format!(
-                        r#"(call "ccos.user.ask" {{:prompt "No resolution for step: {}"}})"#,
+                        r#"(call "pending/{}" {{:description "{}"}})"#,
+                        cap_id,
                         sub_intent.description.replace('"', "\\\"")
                     )
                 }
@@ -1504,9 +1628,59 @@ impl ModularPlanner {
                                 }
                             });
 
+                            // Try to narrow the schema to the *specific param* that references this producer.
+                            // This matters for object-shaped inputs like {:data [...], :criteria ...} where
+                            // the overall schema is "object" but the param schema is "array".
+                            let producer_ref = format!("step_{}", idx);
+                            let consumer_param_name =
+                                consumer_intent.extracted_params.iter().find_map(|(k, v)| {
+                                    if k.starts_with('_') {
+                                        return None;
+                                    }
+                                    if v == &producer_ref {
+                                        Some(k.clone())
+                                    } else {
+                                        None
+                                    }
+                                });
+
+                            let mut synthetic_target_schema: Option<serde_json::Value> = None;
+                            let target_param_schema: Option<&serde_json::Value> =
+                                consumer_param_name.as_ref().and_then(|param| {
+                                    consumer_schema
+                                        .and_then(|s| s.get("properties"))
+                                        .and_then(|props| props.get(param))
+                                });
+
+                            // If we don't have a formal schema (e.g. local capability), use a minimal
+                            // hint based on common list-carrying param names.
+                            let target_input_schema: Option<&serde_json::Value> =
+                                if target_param_schema.is_some() {
+                                    target_param_schema
+                                } else if consumer_schema.is_some() {
+                                    consumer_schema
+                                } else if matches!(
+                                    consumer_param_name.as_deref(),
+                                    Some("data")
+                                        | Some("items")
+                                        | Some("rows")
+                                        | Some("issues")
+                                        | Some("results")
+                                        | Some("records")
+                                        | Some("entries")
+                                ) {
+                                    synthetic_target_schema = Some(json!({ "type": "array" }));
+                                    synthetic_target_schema.as_ref()
+                                } else {
+                                    None
+                                };
+
                             // Detect if we need an adapter
-                            let bridge =
-                                SchemaBridge::detect(None, consumer_schema, Some(&grounded_json));
+                            let bridge = SchemaBridge::detect(
+                                None,
+                                target_input_schema,
+                                Some(&grounded_json),
+                            );
 
                             let mut adapter_expr = None;
                             let mut bridge_desc = String::new();
@@ -1520,6 +1694,9 @@ impl ModularPlanner {
                                     .request_llm_adapter(
                                         &sub_intent.description,
                                         &grounded_json,
+                                        grounding_params
+                                            .get(&format!("rtfs_schema_{}", intent_id))
+                                            .map(|s| s.as_str()),
                                         consumer_schema,
                                         &consumer_intent.description,
                                         &logical_bindings,
@@ -1574,9 +1751,35 @@ impl ModularPlanner {
                 .into_iter()
                 .map(|(name, mut expr)| {
                     // Replace references to original vars with adapted vars in call expressions
-                    for (orig, (adapted, _)) in &adapter_mappings {
+                    for (orig, (adapted, adapter_expr)) in &adapter_mappings {
                         // Only replace in argument positions, not in the variable binding itself
                         if !name.ends_with("_data") {
+                            // If the adapter is a simple field extraction like `(get step_1 :issues)`,
+                            // replace the *whole extraction expression* with the adapted var.
+                            // This prevents generating invalid expressions like `(get step_1_data :issues)`.
+                            if let Ok(re) =
+                                regex::Regex::new(r"^\(get\s+([^\s\)]+)\s+(:[^\s\)]+)\)$")
+                            {
+                                if let Some(caps) = re.captures(adapter_expr) {
+                                    if let (Some(src_var), Some(keyword)) =
+                                        (caps.get(1), caps.get(2))
+                                    {
+                                        if src_var.as_str() == orig {
+                                            let pattern = format!(
+                                                r"\(\s*get\s+{}\s+{}\s*\)",
+                                                regex::escape(orig),
+                                                regex::escape(keyword.as_str())
+                                            );
+                                            if let Ok(expr_re) = regex::Regex::new(&pattern) {
+                                                expr = expr_re
+                                                    .replace_all(&expr, adapted.as_str())
+                                                    .to_string();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             expr =
                                 expr.replace(&format!(" {}}}", orig), &format!(" {}}}", adapted));
                             expr = expr.replace(&format!(" {} ", orig), &format!(" {} ", adapted));
@@ -1597,6 +1800,26 @@ impl ModularPlanner {
 
         for (var, call) in bindings.iter().rev() {
             expr = format!("(let [{} {}]\n  {})", var, call, expr);
+        }
+
+        // Proactive validation: check for type mismatches and auto-repair
+        let var_schemas: std::collections::HashMap<String, String> = grounding_params
+            .iter()
+            .filter_map(|(k, v)| {
+                if k.starts_with("rtfs_schema_") {
+                    // Extract var name from "rtfs_schema_{intent_id}"
+                    // Map intent_id to step_N variable
+                    // For simplicity, check if any binding contains a vector schema
+                    Some((k.replace("rtfs_schema_", "step_"), v.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if let Some(repaired) = super::repair_rules::validate_get_expression(&expr, &var_schemas) {
+            log::info!("[generate_rtfs_plan] Proactive repair applied: type mismatch corrected");
+            return Ok(repaired);
         }
 
         Ok(expr)
@@ -1704,6 +1927,8 @@ impl ModularPlanner {
         sub_intent: &SubIntent,
         previous_bindings: &[(String, String)],
         all_sub_intents: &[SubIntent],
+        grounding_params: Option<&HashMap<String, String>>,
+        all_intent_ids: &[String],
     ) -> String {
         let capability_id = resolved_capability.capability_id().unwrap_or("unknown");
         let resolved_args = resolved_capability.arguments().unwrap();
@@ -1808,6 +2033,50 @@ impl ModularPlanner {
                         let param_name_already_exists = arguments.contains_key(&param_name);
 
                         if !param_name_already_exists {
+                            // If safe-exec inferred the dependency's RTFS schema and the consumer
+                            // has a JSON input schema, use deterministic cardinality hinting to
+                            // decide whether to wrap this call in a (map ...) over the dependency.
+                            if let (Some(grounding_params), Some(consumer_schema)) =
+                                (grounding_params, input_schema)
+                            {
+                                if dep_idx < all_intent_ids.len() {
+                                    let dep_intent_id = &all_intent_ids[dep_idx];
+                                    if let Some(source_rtfs_schema) = grounding_params
+                                        .get(&format!("rtfs_schema_{}", dep_intent_id))
+                                    {
+                                        use crate::utils::schema_cardinality::{
+                                            cardinality_action, CardinalityAction,
+                                        };
+
+                                        if cardinality_action(
+                                            source_rtfs_schema,
+                                            consumer_schema,
+                                            &param_name,
+                                        ) == CardinalityAction::Map
+                                        {
+                                            // Build an inner call that consumes a scalar `item`.
+                                            let mut mapped_args = args_parts.clone();
+                                            mapped_args.push(format!(":{} item", param_name));
+
+                                            let inner_call = if mapped_args.is_empty() {
+                                                format!(r#"(call "{}" {{}})"#, capability_id)
+                                            } else {
+                                                format!(
+                                                    r#"(call "{}" {{{}}})"#,
+                                                    capability_id,
+                                                    mapped_args.join(" ")
+                                                )
+                                            };
+
+                                            return format!(
+                                                "(map (fn [item] {}) {})",
+                                                inner_call, dep_var
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+
                             args_parts.push(format!(":{} {}", param_name, dep_var));
                         }
                     }
@@ -2220,6 +2489,14 @@ impl ModularPlanner {
                         .insert(format!("step_{}_result", step_idx), grounded_text.clone());
                     grounding_params.insert("latest_result".to_string(), grounded_text);
 
+                    // Store inferred RTFS schema (from safe-exec result) for schema-guided adapter synthesis
+                    let inferred_rtfs_schema =
+                        crate::synthesis::introspection::schema_inferrer::infer_schema_from_value(
+                            &result,
+                        );
+                    grounding_params
+                        .insert(format!("rtfs_schema_{}", intent_id), inferred_rtfs_schema);
+
                     // Also store raw JSON for adapter detection
                     if let Ok(raw_json) = rtfs_value_to_json(&result) {
                         if let Ok(raw_str) = serde_json::to_string(&raw_json) {
@@ -2307,64 +2584,20 @@ impl ModularPlanner {
         &self,
         source_desc: &str,
         source_data: &serde_json::Value,
+        source_rtfs_schema: Option<&str>,
         target_schema: Option<&serde_json::Value>,
         target_desc: &str,
         bindings_context: &[(String, String)], // (var_name, expression)
     ) -> Option<String> {
         let arbiter = self.delegating_arbiter.as_ref()?;
 
-        let source_preview =
-            truncate_grounding(&serde_json::to_string(source_data).unwrap_or_default());
-        let target_schema_str = target_schema
-            .map(|s| serde_json::to_string_pretty(s).unwrap_or_default())
-            .unwrap_or_else(|| "Unknown (match data naturally)".to_string());
-
-        // Build bindings context string to show LLM what variables already exist
-        let bindings_str = if bindings_context.is_empty() {
-            "None (you have access only to 'input')".to_string()
-        } else {
-            bindings_context
-                .iter()
-                .map(|(var, expr)| {
-                    let truncated = if expr.len() > 100 {
-                        format!("{}...", &expr[..97])
-                    } else {
-                        expr.clone()
-                    };
-                    format!("  - {}: {}", var, truncated)
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-
-        let input_type_desc = match source_data {
-            serde_json::Value::Object(_) => "Map (Object)",
-            serde_json::Value::Array(_) => "List (Vector)",
-            _ => "Scalar",
-        };
-
-        let prompt = format!(
-            "Synthesize a small, pure RTFS expression to achieve this goal: '{}'.\n\n\
-             INPUT DATA TYPE: {}\n\
-             EXISTING BINDINGS (already defined - DO NOT re-extract if already done!):\n{}\n\n\
-             Input data sample: {}\n\n\
-             SCHEMA REQUIREMENT: {}\n\n\
-             RULES:\n\
-             1. Use 'input' as the variable for the upstream data.\n\
-             2. RETURN ONLY the expression. No markdown, no commentary.\n\
-             3. NO Clojure namespaces (e.g. avoid 'str/split', just use 'split').\n\
-             4. NO Regex literals (e.g. avoid #\"/...\"). Use string functions instead.\n\
-             5. RTFS 'get' syntax: (get map :key) NOT (get :key map) - map comes FIRST.\n\
-             6. Use RTFS functions: 'map', 'filter', 'get', 'assoc', 'str', 'split', 'substring', 'join'.\n\
-             7. IMPORTANT: If INPUT DATA TYPE is 'Map' but you need to iterate, you MUST extract the array field first (e.g. (get input :issues)).\n\
-             8. IMPORTANT: If INPUT DATA TYPE is 'List', work on it directly with 'map' or 'filter'.\n\n\
-             Example (if input is already a list of issues):\n\
-             (map (fn [x] (let [t (get x :title)] (assoc x :title (str (substring t 1) (substring t 0 1) \"ay\")))) input)",
+        let prompt = build_llm_adapter_prompt(
+            source_desc,
+            source_data,
+            source_rtfs_schema,
+            target_schema,
             target_desc,
-            input_type_desc,
-            bindings_str,
-            source_preview,
-            target_schema_str
+            bindings_context,
         );
 
         log::debug!(
@@ -2372,7 +2605,7 @@ impl ModularPlanner {
             prompt
         );
         let response = arbiter.generate_raw_text(&prompt).await.ok()?;
-        let adapter = response.trim().to_string();
+        let mut adapter = response.trim().to_string();
 
         if adapter.is_empty() || (!adapter.starts_with('(') && !adapter.starts_with('[')) {
             log::warn!(
@@ -2401,11 +2634,82 @@ impl ModularPlanner {
         }
 
         // Sanitize common LLM patterns that RTFS doesn't support
-        let adapter = sanitize_llm_rtfs(&adapter);
+        adapter = sanitize_llm_rtfs(&adapter);
 
         log::info!("[request_llm_adapter] LLM generated adapter: {}", adapter);
         Some(adapter)
     }
+}
+
+fn build_llm_adapter_prompt(
+    _source_desc: &str,
+    source_data: &serde_json::Value,
+    source_rtfs_schema: Option<&str>,
+    target_schema: Option<&serde_json::Value>,
+    target_desc: &str,
+    bindings_context: &[(String, String)],
+) -> String {
+    let source_preview =
+        truncate_grounding(&serde_json::to_string(source_data).unwrap_or_default());
+
+    let source_rtfs_schema_str = source_rtfs_schema
+        .map(truncate_grounding)
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let target_schema_str = target_schema
+        .map(|s| serde_json::to_string_pretty(s).unwrap_or_default())
+        .unwrap_or_else(|| "Unknown (match data naturally)".to_string());
+
+    // Build bindings context string to show LLM what variables already exist
+    let bindings_str = if bindings_context.is_empty() {
+        "None (you have access only to 'input')".to_string()
+    } else {
+        bindings_context
+            .iter()
+            .map(|(var, expr)| {
+                let truncated = if expr.len() > 100 {
+                    format!("{}...", &expr[..97])
+                } else {
+                    expr.clone()
+                };
+                format!("  - {}: {}", var, truncated)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let input_type_desc = match source_data {
+        serde_json::Value::Object(_) => "Map (Object)",
+        serde_json::Value::Array(_) => "List (Vector)",
+        _ => "Scalar",
+    };
+
+    format!(
+        "Synthesize a small, pure RTFS expression to achieve this goal: '{}'.\n\n\
+         INPUT DATA TYPE: {}\n\
+         EXISTING BINDINGS (already defined - DO NOT re-extract if already done!):\n{}\n\n\
+         Input data sample: {}\n\n\
+         SOURCE REFINED SCHEMA (RTFS type inferred from safe-exec): {}\n\n\
+         TARGET INPUT SCHEMA REQUIREMENT: {}\n\n\
+         RULES:\n\
+         1. Use 'input' as the variable for the upstream data.\n\
+         2. RETURN ONLY the expression. No markdown, no commentary.\n\
+         3. NO Clojure namespaces (e.g. avoid 'str/split', just use 'split').\n\
+            4. Regex IS supported. Use: (re-matches pattern text), (re-find pattern text), (re-seq pattern text).\n\
+               Pattern syntax follows Rust regex. Example: (re-matches \"[A-Z]+\" title)\n\
+         5. RTFS 'get' syntax: (get map :key) NOT (get :key map) - map comes FIRST.\n\
+         6. Use RTFS functions: 'map', 'filter', 'get', 'assoc', 'str', 'split', 'substring', 'join', 're-matches', 're-find', 're-seq'.\n\
+         7. IMPORTANT: If INPUT DATA TYPE is 'Map' but you need to iterate, you MUST extract the array field first (e.g. (get input :issues)).\n\
+         8. IMPORTANT: If INPUT DATA TYPE is 'List', work on it directly with 'map' or 'filter'.\n\n\
+         Example (if input is already a list of issues):\n\
+         (map (fn [x] (let [t (get x :title)] (assoc x :title (str (substring t 1) (substring t 0 1) \"ay\")))) input)",
+        target_desc,
+        input_type_desc,
+        bindings_str,
+        source_preview,
+        source_rtfs_schema_str,
+        target_schema_str
+    )
 }
 
 #[cfg(test)]
@@ -2474,6 +2778,67 @@ mod tests {
     }
 
     #[test]
+    fn test_adapter_rewrite_replaces_get_expression() {
+        let mut adapter_mappings: HashMap<String, (String, String)> = HashMap::new();
+        adapter_mappings.insert(
+            "step_1".to_string(),
+            (
+                "step_1_data".to_string(),
+                "(get step_1 :issues)".to_string(),
+            ),
+        );
+
+        let name = "step_2";
+        let mut expr = "(map (fn [x] x) (get step_1 :issues))".to_string();
+
+        for (orig, (adapted, adapter_expr)) in &adapter_mappings {
+            if !name.ends_with("_data") {
+                if let Ok(re) = regex::Regex::new(r"^\(get\s+([^\s\)]+)\s+(:[^\s\)]+)\)$") {
+                    if let Some(caps) = re.captures(adapter_expr) {
+                        if let (Some(src_var), Some(keyword)) = (caps.get(1), caps.get(2)) {
+                            if src_var.as_str() == orig {
+                                let pattern = format!(
+                                    r"\(\s*get\s+{}\s+{}\s*\)",
+                                    regex::escape(orig),
+                                    regex::escape(keyword.as_str())
+                                );
+                                if let Ok(expr_re) = regex::Regex::new(&pattern) {
+                                    expr = expr_re.replace_all(&expr, adapted.as_str()).to_string();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                expr = expr.replace(&format!(" {}}}", orig), &format!(" {}}}", adapted));
+                expr = expr.replace(&format!(" {} ", orig), &format!(" {} ", adapted));
+            }
+        }
+
+        assert!(expr.contains(" step_1_data"));
+        assert!(!expr.contains("(get step_1_data :issues)"));
+        assert!(!expr.contains("(get step_1 :issues)"));
+    }
+
+    #[test]
+    fn test_build_llm_adapter_prompt_includes_regex_support() {
+        let prompt = build_llm_adapter_prompt(
+            "source",
+            &serde_json::json!({"issues": []}),
+            None,
+            None,
+            "target",
+            &[],
+        );
+
+        // Regex IS supported in the adapter prompt
+        assert!(prompt.contains("Regex IS supported"));
+        assert!(prompt.contains("re-matches"));
+        assert!(prompt.contains("re-find"));
+        assert!(prompt.contains("re-seq"));
+    }
+
+    #[test]
     fn test_generate_call_expr() {
         let intent_graph = Arc::new(Mutex::new(
             IntentGraph::with_config(IntentGraphConfig::with_in_memory_storage()).unwrap(),
@@ -2504,10 +2869,102 @@ mod tests {
             confidence: 1.0,
         };
 
-        let expr = planner.generate_call_expr(&resolved, &sub_intent, &[], &[sub_intent.clone()]);
+        let expr = planner.generate_call_expr(
+            &resolved,
+            &sub_intent,
+            &[],
+            &[sub_intent.clone()],
+            None,
+            &[],
+        );
 
         assert!(expr.contains("mcp.github.list_issues"));
         assert!(expr.contains(":owner"));
         assert!(expr.contains("mandubian"));
+    }
+
+    #[test]
+    fn test_generate_call_expr_wraps_map_for_collection_dependency() {
+        let intent_graph = Arc::new(Mutex::new(
+            IntentGraph::with_config(IntentGraphConfig::with_in_memory_storage()).unwrap(),
+        ));
+        let catalog = Arc::new(MockCatalog);
+        let planner = ModularPlanner::new(
+            Box::new(PatternDecomposition::new()),
+            Box::new(CatalogResolution::new(catalog)),
+            intent_graph,
+        );
+
+        // Producer (idx 0) is a prior step whose safe-exec schema we treat as a collection.
+        let producer = SubIntent::new(
+            "producer",
+            IntentType::ApiCall {
+                action: crate::planner::modular_planner::types::ApiAction::List,
+            },
+        );
+
+        // Consumer depends on producer and has a schema where the inferred injected param "data"
+        // is a scalar (string), which should trigger a map wrapper.
+        let consumer = SubIntent::new(
+            "consumer",
+            IntentType::ApiCall {
+                action: crate::planner::modular_planner::types::ApiAction::Get,
+            },
+        )
+        .with_dependencies(vec![0]);
+
+        let consumer_schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "data": {"type": "string"}
+            }
+        });
+
+        let resolved = ResolvedCapability::Remote {
+            capability_id: "mcp.test.consume".to_string(),
+            server_url: "http://test".to_string(),
+            arguments: HashMap::new(),
+            input_schema: Some(consumer_schema),
+            confidence: 1.0,
+        };
+
+        let mut grounding_params: HashMap<String, String> = HashMap::new();
+        grounding_params.insert(
+            "rtfs_schema_intent0".to_string(),
+            "[:vector [:map {:x :string}]]".to_string(),
+        );
+
+        let expr = planner.generate_call_expr(
+            &resolved,
+            &consumer,
+            &[(
+                "step_1".to_string(),
+                "(call \"mcp.test.produce\" {})".to_string(),
+            )],
+            &[producer, consumer.clone()],
+            Some(&grounding_params),
+            &["intent0".to_string(), "intent1".to_string()],
+        );
+
+        assert!(expr.starts_with("(map (fn [item]"));
+        assert!(expr.contains("mcp.test.consume"));
+        assert!(expr.contains(":data item"));
+        assert!(expr.contains("step_1"));
+    }
+
+    #[test]
+    fn test_build_llm_adapter_prompt_includes_source_schema() {
+        let source_data = serde_json::json!([{ "title": "hello" }]);
+        let prompt = build_llm_adapter_prompt(
+            "source",
+            &source_data,
+            Some("[:vector [:map {:title :string}]]"),
+            None,
+            "target",
+            &[],
+        );
+
+        assert!(prompt.contains("SOURCE REFINED SCHEMA"));
+        assert!(prompt.contains("[:vector"));
     }
 }

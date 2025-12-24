@@ -35,10 +35,6 @@ static PATTERN_ACTION_WITH_TRANSFORM: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
-static OWNER_REPO_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?:(?:owner\s+)?(\w+)[/\\](\w+))|(?:(?:user|owner)\s+(\w+).*?(?:repo(?:sitory)?)\s+(\w+))|(?:(?:repo(?:sitory)?)\s+(\w+).*?(?:user|owner)\s+(\w+))").unwrap()
-});
-
 /// A pattern with name and handler
 struct PatternDef {
     name: &'static str,
@@ -112,26 +108,6 @@ impl PatternDecomposition {
             || PATTERN_SEQUENTIAL_ACTIONS.is_match(goal)
             || PATTERN_ACTION_WITH_TRANSFORM.is_match(goal)
     }
-
-    /// Extract parameters from goal (owner/repo, etc.)
-    fn extract_common_params(goal: &str) -> HashMap<String, String> {
-        let mut params = HashMap::new();
-
-        if let Some(caps) = OWNER_REPO_REGEX.captures(goal) {
-            if let (Some(owner), Some(repo)) = (caps.get(1), caps.get(2)) {
-                params.insert("owner".to_string(), owner.as_str().to_string());
-                params.insert("repo".to_string(), repo.as_str().to_string());
-            } else if let (Some(owner), Some(repo)) = (caps.get(3), caps.get(4)) {
-                params.insert("owner".to_string(), owner.as_str().to_string());
-                params.insert("repo".to_string(), repo.as_str().to_string());
-            } else if let (Some(repo), Some(owner)) = (caps.get(5), caps.get(6)) {
-                params.insert("owner".to_string(), owner.as_str().to_string());
-                params.insert("repo".to_string(), repo.as_str().to_string());
-            }
-        }
-
-        params
-    }
 }
 
 impl Default for PatternDecomposition {
@@ -165,13 +141,10 @@ impl DecompositionStrategy for PatternDecomposition {
         _available_tools: Option<&[ToolSummary]>,
         context: &DecompositionContext,
     ) -> Result<DecompositionResult, DecompositionError> {
-        // Merge pre-extracted params with newly extracted ones
-        let mut all_params = Self::extract_common_params(goal);
-        for (k, v) in &context.pre_extracted_params {
-            all_params.insert(k.clone(), v.clone());
-        }
+        // Use pre-extracted params from context (no longer extracting owner/repo here)
+        let all_params = context.pre_extracted_params.clone();
 
-        // Create context with merged params
+        // Create context with params
         let enriched_context = DecompositionContext {
             pre_extracted_params: all_params.clone(),
             ..context.clone()
@@ -432,7 +405,14 @@ mod tests {
     #[tokio::test]
     async fn test_action_with_user_input_pattern() {
         let strategy = PatternDecomposition::new();
-        let context = DecompositionContext::new();
+        // Provide params via context since auto-extraction was removed
+        let mut context = DecompositionContext::new();
+        context
+            .pre_extracted_params
+            .insert("owner".to_string(), "mandubian".to_string());
+        context
+            .pre_extracted_params
+            .insert("repo".to_string(), "ccos".to_string());
 
         let result = strategy
             .decompose(
@@ -459,7 +439,7 @@ mod tests {
         ));
         assert_eq!(result.sub_intents[1].dependencies, vec![0]);
 
-        // Should extract owner/repo
+        // Params come from context now (not auto-extracted)
         assert_eq!(
             result.sub_intents[1].extracted_params.get("owner"),
             Some(&"mandubian".to_string())
@@ -487,7 +467,10 @@ mod tests {
                 action: ApiAction::List
             }
         ));
-        assert_eq!(result.sub_intents[0].domain_hint, Some(DomainHint::GitHub));
+        assert_eq!(
+            result.sub_intents[0].domain_hint,
+            Some(DomainHint::Custom("github".to_string()))
+        );
     }
 
     #[tokio::test]
@@ -531,13 +514,9 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_common_params() {
-        let params = PatternDecomposition::extract_common_params("list issues in mandubian/ccos");
-        assert_eq!(params.get("owner"), Some(&"mandubian".to_string()));
-        assert_eq!(params.get("repo"), Some(&"ccos".to_string()));
-
-        let params2 = PatternDecomposition::extract_common_params("user mandubian repository ccos");
-        assert_eq!(params2.get("owner"), Some(&"mandubian".to_string()));
-        assert_eq!(params2.get("repo"), Some(&"ccos".to_string()));
+    fn test_no_pattern_match() {
+        // Goals that don't match patterns should return error with pattern strategy
+        let strategy = PatternDecomposition::new();
+        assert!(strategy.can_handle("just do something random") < 0.5);
     }
 }

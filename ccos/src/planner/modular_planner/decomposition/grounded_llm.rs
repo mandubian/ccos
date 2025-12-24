@@ -301,6 +301,12 @@ RTFS STEP REFERENCES (use this syntax when a param needs output from a previous 
 - Example: if step 1 filters issues from step 0, use: "data": "step_0"
 - Example: to get issue number from first item: "issue_number": "(get (nth step_0 0) :number)"
 
+RTFS SYNTAX RULES (NOT Clojure - simpler syntax):
+- NO namespace prefixes: use \"split\" NOT \"str/split\" or \"clojure.string/split\"
+- NO regex literals: use plain strings \"pattern\" NOT #\"pattern\"
+- NO anonymous functions: use named functions NOT #(...)
+- Keywords use colons: :name, :issues, :body (not 'name or \"name\" for map keys)
+
 IMPORTANT OUTPUT BEHAVIORS:
 - ccos.data.select with count=1 returns the ITEM DIRECTLY (not a list), so use (get step_N :field) not (nth step_N 0)
 - ccos.data.sort/filter/select automatically extract lists from nested map structures - no separate extraction step needed
@@ -617,7 +623,7 @@ mod tests {
 
         let tools = vec![
             ToolSummary::new("list_issues", "List issues in a repository")
-                .with_domain(DomainHint::GitHub),
+                .with_domain(DomainHint::Custom("github".to_string())),
         ];
 
         let result = strategy
@@ -632,7 +638,10 @@ mod tests {
                 .get("_suggested_tool"),
             Some(&"list_issues".to_string())
         );
-        assert_eq!(result.sub_intents[0].domain_hint, Some(DomainHint::GitHub));
+        assert_eq!(
+            result.sub_intents[0].domain_hint,
+            Some(DomainHint::Custom("github".to_string()))
+        );
     }
 
     #[tokio::test]
@@ -645,8 +654,10 @@ mod tests {
         let context = DecompositionContext::new();
 
         let tools = vec![
-            ToolSummary::new("list_issues", "List GitHub issues").with_domain(DomainHint::GitHub),
-            ToolSummary::new("slack_send", "Send Slack message").with_domain(DomainHint::Slack),
+            ToolSummary::new("list_issues", "List GitHub issues")
+                .with_domain(DomainHint::Custom("github".to_string())),
+            ToolSummary::new("slack_send", "Send Slack message")
+                .with_domain(DomainHint::Custom("slack".to_string())),
             ToolSummary::new("println", "Print to console").with_domain(DomainHint::Generic),
         ];
 

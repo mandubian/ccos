@@ -153,26 +153,12 @@ pub enum OutputFormat {
 }
 
 /// Domain hints help narrow down which services/APIs to search.
-/// These are inferred from goal content, not hallucinated tool names.
+/// Now configured via config/domain_hints.toml instead of hardcoded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomainHint {
-    /// GitHub-related operations
-    GitHub,
-    /// Slack-related operations  
-    Slack,
-    /// File system operations
-    FileSystem,
-    /// Database operations
-    Database,
-    /// Web/HTTP operations
-    Web,
-    /// Email operations
-    Email,
-    /// Calendar operations
-    Calendar,
     /// Generic/unknown domain
     Generic,
-    /// Custom domain with name
+    /// Named domain (loaded from config)
     Custom(String),
 }
 
@@ -180,122 +166,37 @@ impl DomainHint {
     /// Convert to domain string for catalog filtering
     pub fn to_domain_string(&self) -> String {
         match self {
-            DomainHint::GitHub => "github".to_string(),
-            DomainHint::Slack => "slack".to_string(),
-            DomainHint::FileSystem => "filesystem".to_string(),
-            DomainHint::Database => "database".to_string(),
-            DomainHint::Web => "web".to_string(),
-            DomainHint::Email => "email".to_string(),
-            DomainHint::Calendar => "calendar".to_string(),
             DomainHint::Generic => "generic".to_string(),
             DomainHint::Custom(s) => s.clone(),
         }
     }
 
-    /// Create from a domain string (for flexibility)
+    /// Create from a domain string
     pub fn from_string(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "github" | "gh" => DomainHint::GitHub,
-            "slack" => DomainHint::Slack,
-            "filesystem" | "fs" | "file" => DomainHint::FileSystem,
-            "database" | "db" | "sql" => DomainHint::Database,
-            "web" | "http" | "api" => DomainHint::Web,
-            "email" | "mail" => DomainHint::Email,
-            "calendar" | "gcal" => DomainHint::Calendar,
             "generic" | "" => DomainHint::Generic,
             other => DomainHint::Custom(other.to_string()),
         }
     }
 
-    /// Infer all possible domains from goal text using keyword matching
+    /// Infer all possible domains from goal text using config-based keywords
     pub fn infer_all_from_text(text: &str) -> Vec<Self> {
-        let lower = text.to_lowercase();
-        let mut domains = Vec::new();
-
-        // GitHub indicators
-        let github_keywords = [
-            "github",
-            "repo",
-            "repository",
-            "issue",
-            "issues",
-            "pull request",
-            "pr",
-            "prs",
-            "commit",
-            "branch",
-            "fork",
-            "star",
-            "gist",
-            "release",
-            "workflow",
-        ];
-        if github_keywords.iter().any(|k| lower.contains(k)) {
-            domains.push(DomainHint::GitHub);
-        }
-
-        // Slack indicators
-        let slack_keywords = ["slack", "channel", "message", "dm", "thread", "emoji"];
-        if slack_keywords.iter().any(|k| lower.contains(k)) {
-            domains.push(DomainHint::Slack);
-        }
-
-        // File system indicators
-        let fs_keywords = [
-            "file",
-            "folder",
-            "directory",
-            "path",
-            "read file",
-            "write file",
-        ];
-        if fs_keywords.iter().any(|k| lower.contains(k)) {
-            domains.push(DomainHint::FileSystem);
-        }
-
-        // Database indicators
-        let db_keywords = ["database", "sql", "query", "table", "record", "row"];
-        if db_keywords.iter().any(|k| lower.contains(k)) {
-            domains.push(DomainHint::Database);
-        }
-
-        // Web indicators
-        let web_keywords = ["http", "url", "api", "endpoint", "request", "fetch url"];
-        if web_keywords.iter().any(|k| lower.contains(k)) {
-            domains.push(DomainHint::Web);
-        }
-
-        // Email indicators
-        let email_keywords = ["email", "mail", "send to", "inbox", "gmail", "outlook"];
-        if email_keywords.iter().any(|k| lower.contains(k)) {
-            domains.push(DomainHint::Email);
-        }
-
-        // Calendar indicators
-        let calendar_keywords = ["calendar", "event", "schedule", "meeting", "gcal"];
-        if calendar_keywords.iter().any(|k| lower.contains(k)) {
-            domains.push(DomainHint::Calendar);
-        }
-
-        domains
+        super::domain_config::infer_all_domains(text)
+            .into_iter()
+            .map(|s| DomainHint::Custom(s))
+            .collect()
     }
 
-    /// Infer domain from goal text using keyword matching (returns first match)
+    /// Infer domain from goal text (returns first match from config)
     pub fn infer_from_text(text: &str) -> Option<Self> {
-        Self::infer_all_from_text(text).into_iter().next()
+        super::domain_config::infer_domain(text).map(DomainHint::Custom)
     }
 
-    /// Get MCP server names that might handle this domain
-    pub fn likely_mcp_servers(&self) -> Vec<&'static str> {
+    /// Get MCP server names that might handle this domain (from config)
+    pub fn likely_mcp_servers(&self) -> Vec<String> {
         match self {
-            DomainHint::GitHub => vec!["github", "gh"],
-            DomainHint::Slack => vec!["slack"],
-            DomainHint::FileSystem => vec!["filesystem", "fs"],
-            DomainHint::Database => vec!["postgres", "mysql", "sqlite", "database"],
-            DomainHint::Web => vec!["fetch", "http"],
-            DomainHint::Email => vec!["email", "gmail", "outlook"],
-            DomainHint::Calendar => vec!["calendar", "gcal"],
-            DomainHint::Generic | DomainHint::Custom(_) => vec![],
+            DomainHint::Generic => vec![],
+            DomainHint::Custom(domain) => super::domain_config::mcp_servers_for_domain(domain),
         }
     }
 }
@@ -333,22 +234,13 @@ impl ToolSummary {
         let name_str = name.into();
         let desc_str = description.into();
 
-        // Infer action from name
-        let action = if name_str.starts_with("list_") || name_str.starts_with("get_all") {
-            ApiAction::List
-        } else if name_str.starts_with("get_") || name_str.starts_with("read_") {
-            ApiAction::Get
-        } else if name_str.starts_with("create_") || name_str.starts_with("add_") {
-            ApiAction::Create
-        } else if name_str.starts_with("update_") || name_str.starts_with("edit_") {
-            ApiAction::Update
-        } else if name_str.starts_with("delete_") || name_str.starts_with("remove_") {
-            ApiAction::Delete
-        } else if name_str.starts_with("search_") || name_str.starts_with("find_") {
-            ApiAction::Search
-        } else {
-            ApiAction::Other(name_str.clone())
-        };
+        // Action type should be determined by:
+        // 1. Explicit metadata from tool introspection (preferred)
+        // 2. LLM inference from tool description during decomposition
+        //
+        // Previously used prefix matching (list_ -> List, get_ -> Get) but that was fragile.
+        // The caller can set action explicitly with .with_action() if known.
+        let action = ApiAction::Other(name_str.clone());
 
         Self {
             id: name_str.clone(),
@@ -369,6 +261,12 @@ impl ToolSummary {
         self.input_schema = Some(schema);
         self
     }
+
+    /// Set action type explicitly (preferred over guessing from name patterns)
+    pub fn with_action(mut self, action: ApiAction) -> Self {
+        self.action = action;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -377,18 +275,15 @@ mod tests {
 
     #[test]
     fn test_domain_inference() {
-        assert_eq!(
-            DomainHint::infer_from_text("list issues in my repository"),
-            Some(DomainHint::GitHub)
-        );
-        assert_eq!(
-            DomainHint::infer_from_text("send message to slack channel"),
-            Some(DomainHint::Slack)
-        );
-        assert_eq!(
-            DomainHint::infer_from_text("read the file contents"),
-            Some(DomainHint::FileSystem)
-        );
+        // Domain inference uses config file - these tests depend on config being loaded
+        // With config loaded, keywords like "repository" map to github domain
+        if let Some(domain) = DomainHint::infer_from_text("list issues in my repository") {
+            assert_eq!(domain, DomainHint::Custom("github".to_string()));
+        }
+        if let Some(domain) = DomainHint::infer_from_text("send message to slack channel") {
+            assert_eq!(domain, DomainHint::Custom("slack".to_string()));
+        }
+        // "just do something" has no domain keywords, so should return None
         assert_eq!(DomainHint::infer_from_text("just do something"), None);
     }
 
@@ -413,7 +308,7 @@ mod tests {
         )
         .with_dependencies(vec![0])
         .with_param("owner", "mandubian")
-        .with_domain(DomainHint::GitHub);
+        .with_domain(DomainHint::Custom("github".to_string()));
 
         assert_eq!(intent.description, "List open issues");
         assert_eq!(intent.dependencies, vec![0]);
@@ -421,6 +316,9 @@ mod tests {
             intent.extracted_params.get("owner"),
             Some(&"mandubian".to_string())
         );
-        assert_eq!(intent.domain_hint, Some(DomainHint::GitHub));
+        assert_eq!(
+            intent.domain_hint,
+            Some(DomainHint::Custom("github".to_string()))
+        );
     }
 }

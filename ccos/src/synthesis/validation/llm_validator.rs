@@ -22,9 +22,17 @@ pub struct ValidationConfig {
     #[serde(default = "default_true")]
     pub enable_auto_repair: bool,
 
+    /// Enable LLM repair for runtime execution errors (dialog-based)
+    #[serde(default = "default_true")]
+    pub enable_runtime_repair: bool,
+
     /// Max auto-repair attempts before queuing for external review
     #[serde(default = "default_max_repair_attempts")]
     pub max_repair_attempts: usize,
+
+    /// Max runtime repair attempts (dialog loop bound)
+    #[serde(default = "default_max_runtime_repair_attempts")]
+    pub max_runtime_repair_attempts: usize,
 
     /// LLM profile to use for validation (from llm_profiles section)
     /// Format: "set:model" or "profile_name"
@@ -38,6 +46,9 @@ fn default_true() -> bool {
 fn default_max_repair_attempts() -> usize {
     2
 }
+fn default_max_runtime_repair_attempts() -> usize {
+    5
+}
 
 impl Default for ValidationConfig {
     fn default() -> Self {
@@ -45,7 +56,9 @@ impl Default for ValidationConfig {
             enable_schema_validation: false,
             enable_plan_validation: false,
             enable_auto_repair: true,
+            enable_runtime_repair: true,
             max_repair_attempts: 2,
+            max_runtime_repair_attempts: 5,
             validation_profile: None,
         }
     }
@@ -414,6 +427,85 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
         }
         Err(e) => {
             log::warn!("LLM auto-repair failed: {}", e);
+            Ok(None)
+        }
+    }
+}
+
+/// Try to repair a plan that failed at runtime using LLM dialog.
+///
+/// This is called when execution fails with a runtime error (type mismatch, etc.)
+/// The LLM analyzes the error and attempts to fix the RTFS code.
+///
+/// # Arguments
+/// - `plan`: The original RTFS plan code that failed
+/// - `runtime_error`: The error message from execution
+/// - `attempt`: Current repair attempt (1-indexed)
+pub async fn llm_repair_runtime_error(
+    plan: &str,
+    runtime_error: &str,
+    attempt: usize,
+    config: &ValidationConfig,
+) -> Result<Option<String>, String> {
+    if attempt > config.max_runtime_repair_attempts {
+        log::info!(
+            "Max runtime repair attempts ({}) exceeded",
+            config.max_runtime_repair_attempts
+        );
+        return Ok(None);
+    }
+
+    // Get LLM provider based on config
+    let provider = match get_validation_provider(config).await {
+        Some(p) => p,
+        None => {
+            log::debug!("No LLM provider available, cannot repair runtime error");
+            return Ok(None);
+        }
+    };
+
+    let prompt = format!(
+        r#"You are fixing an RTFS plan that failed during execution.
+
+Original plan:
+```rtfs
+{}
+```
+
+Runtime error:
+{}
+
+Repair attempt: {} of {}
+
+Analyze the error and fix the plan. Common runtime issues:
+- `expected vector, got map`: Using (get x :key) on a vector instead of accessing elements
+- `expected map, got vector`: Trying to use keyword access on a vector result  
+- `Type error in map`: The collection argument to `map` is not iterable
+
+Fix guidelines:
+1. If the error mentions "got map" when expecting vector, check if you need to extract an array field first
+2. If the error mentions "got vector" when expecting map, the data is already a collection - use it directly
+3. Look at the step bindings to trace what type each variable holds
+4. If `step_N` is the result of `map`, it's a vector - don't use (get step_N :key) on it
+
+Respond with ONLY the corrected RTFS plan code, no explanations."#,
+        plan, runtime_error, attempt, config.max_runtime_repair_attempts
+    );
+
+    match provider.generate_text(&prompt).await {
+        Ok(response) => {
+            let repaired = extract_rtfs_code(&response);
+            // Basic sanity check - must look like RTFS
+            if repaired.contains("(let") || repaired.contains("(call") || repaired.contains("(do") {
+                log::info!("Runtime repair attempt {} produced candidate fix", attempt);
+                Ok(Some(repaired))
+            } else {
+                log::warn!("Runtime repair produced invalid response");
+                Ok(None)
+            }
+        }
+        Err(e) => {
+            log::warn!("LLM runtime repair failed: {}", e);
             Ok(None)
         }
     }

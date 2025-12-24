@@ -54,7 +54,7 @@ pub enum IntentStatus {
     Suspended,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlanStatus {
     Draft,
     Active,

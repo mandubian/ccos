@@ -177,9 +177,133 @@ impl GovernanceKernel {
         // --- 7. Execution ---
         // If all checks pass, delegate execution to the Orchestrator.
         // Execution mode is passed via context cross_plan_params for RuntimeHost to use
-        self.orchestrator
+        let result = self
+            .orchestrator
             .execute_plan(&safe_plan, &context_with_mode)
-            .await
+            .await;
+
+        // --- 7b. Reactive Auto-Repair (fast pattern-based, then LLM dialog) ---
+        // On runtime errors, attempt fast pattern-based repair first, then LLM dialog
+        if let Err(ref e) = result {
+            let error_msg = e.to_string();
+
+            if let PlanBody::Rtfs(ref rtfs_code) = safe_plan.body {
+                // First try fast pattern-based repair
+                if error_msg.contains("expected map")
+                    || error_msg.contains("got vector with keyword")
+                {
+                    use crate::planner::modular_planner::repair_rules::{
+                        attempt_repair, RepairContext, RepairResult,
+                    };
+
+                    let ctx = RepairContext {
+                        error_message: error_msg.clone(),
+                        failed_expression: rtfs_code.clone(),
+                        schemas: std::collections::HashMap::new(),
+                    };
+
+                    if let RepairResult::Repaired(repaired_code) = attempt_repair(&ctx) {
+                        log::info!(
+                            "[GovernanceKernel] Reactive pattern repair applied, retrying execution"
+                        );
+
+                        // Create repaired plan
+                        let mut repaired_plan = safe_plan.clone();
+                        repaired_plan.body = PlanBody::Rtfs(repaired_code);
+
+                        // Retry execution with repaired plan
+                        return self
+                            .orchestrator
+                            .execute_plan(&repaired_plan, &context_with_mode)
+                            .await;
+                    }
+                }
+
+                // --- LLM Dialog Repair Loop ---
+                // If pattern-based repair didn't work, try LLM dialog repair
+                use crate::synthesis::validation::{llm_repair_runtime_error, ValidationConfig};
+                let validation_config = ValidationConfig::default();
+
+                if validation_config.enable_runtime_repair {
+                    let mut current_plan = rtfs_code.clone();
+                    let mut last_error = error_msg.clone();
+
+                    for attempt in 1..=validation_config.max_runtime_repair_attempts {
+                        log::info!(
+                            "[GovernanceKernel] LLM dialog repair attempt {}/{}",
+                            attempt,
+                            validation_config.max_runtime_repair_attempts
+                        );
+
+                        match llm_repair_runtime_error(
+                            &current_plan,
+                            &last_error,
+                            attempt,
+                            &validation_config,
+                        )
+                        .await
+                        {
+                            Ok(Some(repaired_code)) => {
+                                log::info!(
+                                    "[GovernanceKernel] LLM produced repaired plan, validating..."
+                                );
+
+                                // Create repaired plan
+                                let mut repaired_plan = safe_plan.clone();
+                                repaired_plan.body = PlanBody::Rtfs(repaired_code.clone());
+
+                                // Re-validate against constitution
+                                if let Err(e) = self
+                                    .validate_against_constitution(&repaired_plan, &execution_mode)
+                                {
+                                    log::warn!(
+                                        "[GovernanceKernel] Repaired plan failed constitution: {}",
+                                        e
+                                    );
+                                    current_plan = repaired_code;
+                                    last_error = e.to_string();
+                                    continue;
+                                }
+
+                                // Try executing the repaired plan
+                                match self
+                                    .orchestrator
+                                    .execute_plan(&repaired_plan, &context_with_mode)
+                                    .await
+                                {
+                                    Ok(exec_result) => {
+                                        log::info!(
+                                            "[GovernanceKernel] LLM repair succeeded on attempt {}",
+                                            attempt
+                                        );
+                                        return Ok(exec_result);
+                                    }
+                                    Err(exec_err) => {
+                                        log::warn!(
+                                            "[GovernanceKernel] Repaired plan still failed: {}",
+                                            exec_err
+                                        );
+                                        // Continue dialog with new error
+                                        current_plan = repaired_code;
+                                        last_error = exec_err.to_string();
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                log::info!("[GovernanceKernel] LLM repair returned no fix, stopping dialog");
+                                break;
+                            }
+                            Err(e) => {
+                                log::warn!("[GovernanceKernel] LLM repair error: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result
     }
 
     /// Retrieves the primary intent associated with the plan, if present.

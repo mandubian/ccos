@@ -1,0 +1,44 @@
+# Domain Hints Configuration
+# 
+# This file defines domain hints that help the planner infer which MCP servers
+# might be relevant for a given goal. Add new domains here without code changes.
+#
+# Each domain has:
+# - name: Domain identifier (used in DomainHint::Custom)
+# - keywords: Words/phrases that suggest this domain when found in goal text
+# - mcp_servers: MCP server names that typically handle this domain
+
+[[domains]]
+name = "github"
+keywords = ["github", "repo", "repository", "issue", "issues", "pull request", "pr", "prs", "commit", "branch", "fork", "star", "gist", "release", "workflow"]
+mcp_servers = ["github", "gh"]
+
+[[domains]]
+name = "slack"
+keywords = ["slack", "channel", "dm", "thread", "emoji"]
+mcp_servers = ["slack"]
+
+[[domains]]
+name = "filesystem"
+keywords = ["file", "folder", "directory", "path", "read file", "write file"]
+mcp_servers = ["filesystem", "fs"]
+
+[[domains]]
+name = "database"
+keywords = ["database", "sql", "query", "table", "record", "row"]
+mcp_servers = ["postgres", "mysql", "sqlite", "database"]
+
+[[domains]]
+name = "web"
+keywords = ["http", "url", "api", "endpoint", "request", "fetch url"]
+mcp_servers = ["fetch", "http"]
+
+[[domains]]
+name = "email"
+keywords = ["email", "mail", "send to", "inbox", "gmail", "outlook"]
+mcp_servers = ["email", "gmail", "outlook"]
+
+[[domains]]
+name = "calendar"
+keywords = ["calendar", "event", "schedule", "meeting", "gcal"]
+mcp_servers = ["calendar", "gcal"]

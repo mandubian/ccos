@@ -383,7 +383,14 @@ impl CatalogResolution {
         scored.into_iter().next()
     }
 
-    /// Score capability match - dispatches to appropriate method based on config
+    /// Score capability match - dispatches to appropriate method based on config.
+    ///
+    /// Scoring methods:
+    /// - **Heuristic**: Word overlap + action verb matching (~180 lines of rules)
+    /// - **Embedding**: Semantic similarity via embedding service (preferred)
+    /// - **Hybrid**: 70% embedding + 30% heuristic (best quality when available)
+    ///
+    /// When embeddings fail, falls back to heuristic with a warning.
     async fn score_capability(&self, intent: &SubIntent, cap: &CapabilityInfo) -> f64 {
         match self.config.scoring_method {
             ScoringMethod::Heuristic => self.score_capability_heuristic(intent, cap),
@@ -392,7 +399,10 @@ impl CatalogResolution {
                     score
                 } else {
                     // Fallback to heuristic if embedding fails
-                    log::debug!("   [Embedding failed, using heuristic fallback]");
+                    log::warn!(
+                        "[CatalogResolution] Embedding failed for '{}' → using heuristic fallback",
+                        cap.id
+                    );
                     self.score_capability_heuristic(intent, cap)
                 }
             }
@@ -400,13 +410,13 @@ impl CatalogResolution {
                 // Try embedding first, fallback to heuristic
                 if self.embedding_service.is_some() {
                     if let Some(emb_score) = self.score_capability_embedding(intent, cap).await {
-                        // Combine embedding score with heuristic bonus for action/noun match
+                        // Combine: 70% embedding (semantic), 30% heuristic (lexical)
                         let heuristic_score = self.score_capability_heuristic(intent, cap);
-                        // Weight: 70% embedding, 30% normalized heuristic
-                        let normalized_heuristic = (heuristic_score.max(-1.0).min(1.0) + 1.0) / 2.0; // Map [-1,1] to [0,1]
+                        let normalized_heuristic = (heuristic_score.max(-1.0).min(1.0) + 1.0) / 2.0;
                         let combined = 0.7 * emb_score + 0.3 * normalized_heuristic;
                         log::debug!(
-                            "   -> Score: {:.3} (emb: {:.3}, heur: {:.3})",
+                            "   -> Hybrid score for '{}': {:.3} (emb: {:.3}, heur: {:.3})",
+                            cap.id,
                             combined,
                             emb_score,
                             heuristic_score
@@ -414,7 +424,8 @@ impl CatalogResolution {
                         return combined;
                     }
                 }
-                // Fallback to pure heuristic
+                // Fallback to pure heuristic when no embedding service
+                log::debug!("[CatalogResolution] No embedding service, using heuristic only");
                 self.score_capability_heuristic(intent, cap)
             }
         }
@@ -666,17 +677,20 @@ impl CatalogResolution {
         Self::generic_prompt(topic_lower, topic)
     }
 
-    /// Domain-specific prompt generation
+    /// Domain-specific prompt generation - uses domain string from config
     fn domain_specific_prompt(topic: &str, domain: &DomainHint) -> Option<String> {
-        match domain {
-            DomainHint::GitHub => Self::github_prompt(topic),
-            DomainHint::Slack => Self::slack_prompt(topic),
-            DomainHint::FileSystem => Self::filesystem_prompt(topic),
-            DomainHint::Database => Self::database_prompt(topic),
-            DomainHint::Web => Self::web_prompt(topic),
-            DomainHint::Email => Self::email_prompt(topic),
-            DomainHint::Calendar => Self::calendar_prompt(topic),
-            DomainHint::Generic | DomainHint::Custom(_) => None,
+        let domain_str = domain.to_domain_string();
+        match domain_str.as_str() {
+            "github" => Self::github_prompt(topic),
+            "slack" => Self::slack_prompt(topic),
+            "filesystem" => Self::filesystem_prompt(topic),
+            "database" => Self::database_prompt(topic),
+            "web" => Self::web_prompt(topic),
+            "email" => Self::email_prompt(topic),
+            "calendar" => Self::calendar_prompt(topic),
+            "generic" => None,
+            // For custom domains, try to match common patterns
+            _ => None,
         }
     }
 
@@ -888,26 +902,13 @@ impl ResolutionStrategy for CatalogResolution {
                 let mut fetched_generic = false;
 
                 for hint in hints {
-                    let domain_str = match hint {
-                        DomainHint::GitHub => Some("github"),
-                        DomainHint::Slack => Some("slack"),
-                        DomainHint::FileSystem => Some("filesystem"),
-                        DomainHint::Database => Some("database"),
-                        DomainHint::Web => Some("web"),
-                        DomainHint::Email => Some("email"),
-                        DomainHint::Calendar => Some("calendar"),
-                        DomainHint::Custom(s) => Some(s.as_str()),
-                        DomainHint::Generic => {
-                            fetched_generic = true;
-                            None // List all/generic
-                        }
-                    };
-
-                    if let Some(d) = domain_str {
-                        // TODO: Update CapabilityCatalog to support strict domain filtering
-                        // For now, list_capabilities(None) returns everything, filtering happens here
-                        // Ideally we'd pass 'd' to list_capabilities if it supported filtering
-                        let caps = self.catalog.list_capabilities(Some(d)).await;
+                    // Use to_domain_string for any domain hint
+                    let domain_str = hint.to_domain_string();
+                    if domain_str == "generic" {
+                        fetched_generic = true;
+                        // List all/generic
+                    } else {
+                        let caps = self.catalog.list_capabilities(Some(&domain_str)).await;
                         all_caps.extend(caps);
                     }
                 }
@@ -1039,7 +1040,8 @@ mod tests {
                 arguments,
             } => {
                 assert_eq!(capability_id, "ccos.user.ask");
-                assert!(arguments.get("prompt").unwrap().contains("page size"));
+                // humanize_prompt converts "page size" to a more user-friendly prompt
+                assert!(arguments.get("prompt").unwrap().contains("items per page"));
             }
             _ => panic!("Expected BuiltIn capability"),
         }

@@ -36,7 +36,9 @@
 //! - Learning from execution outcomes
 
 pub mod decomposition;
+pub mod domain_config;
 pub mod orchestrator;
+pub mod repair_rules;
 pub mod resolution;
 pub mod safe_executor;
 pub mod steps;
