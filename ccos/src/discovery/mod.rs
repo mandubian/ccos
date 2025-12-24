@@ -16,9 +16,10 @@ pub mod goal_discovery;
 pub mod intent_transformer;
 pub mod introspection_cache;
 pub mod llm_discovery;
-pub mod local_synthesizer;
+// Note: LocalSynthesizer removed - synthesis now handled by LLM-based RecursiveSynthesizer
 pub mod need_extractor;
-pub mod recursive_synthesizer;
+// Note: RecursiveSynthesizer removed from discovery - synthesis delegated to planner
+// pub mod recursive_synthesizer;
 pub mod registry_search;
 
 pub use apis_guru::*;
@@ -33,7 +34,7 @@ pub use goal_discovery::*;
 pub use intent_transformer::*;
 pub use introspection_cache::*;
 pub use llm_discovery::*;
-pub use local_synthesizer::*;
+// pub use local_synthesizer::*; // Removed
 pub use need_extractor::*;
-pub use recursive_synthesizer::*;
+// pub use recursive_synthesizer::*; // Removed
 pub use registry_search::*;

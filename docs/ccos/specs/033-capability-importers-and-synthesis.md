@@ -1,8 +1,8 @@
 # Capability Importers and Synthesis
 
-**Status**: Authoritative  
-**Version**: 1.0  
-**Last Updated**: 2025-11-29  
+**Status**: Under Review (updated for architecture changes)  
+**Version**: 1.1  
+**Last Updated**: 2025-12-25  
 **Scope**: API importers, capability synthesis, and RTFS code generation
 
 ---
@@ -543,51 +543,121 @@ impl AuthInjector {
 
 ---
 
-## 7. Capability Synthesis
+## 7. Capability Synthesis (Updated Architecture)
 
-### 7.1 Pure RTFS Generation
+> [!IMPORTANT]
+> **Architecture Change (December 2025)**: Discovery and synthesis are now separate concerns.
+> - **Discovery** = finding existing capabilities (marketplace, MCP)
+> - **Synthesis** = creating new capabilities (via `planner.synthesize_capability`)
 
-When no external API exists, generate pure RTFS implementations:
+### 7.1 Separation of Concerns
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Discovery (Pure Lookup)                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  CapabilityNeed ──► DiscoveryEngine ──► Result                    │
+│                                                                   │
+│  [1] Search local marketplace                                     │
+│  [2] Search MCP registry                                          │
+│  [3] Return NotFound (no synthesis in discovery)                  │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼ (if NotFound)
+┌─────────────────────────────────────────────────────────────────┐
+│                     Synthesis (Governance-Gated)                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  CapabilityNeed ──► GovernanceKernel ──► Planner Capability       │
+│                                                                   │
+│  [1] Risk assessment (SynthesisRiskAssessment)                    │
+│  [2] Authorization check (check_synthesis_authorization)          │
+│  [3] If allowed: invoke planner.synthesize_capability             │
+│  [4] Validate and register synthesized capability                 │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 7.2 Governance-Gated Synthesis
+
+Synthesis is now gated by the `GovernanceKernel` to ensure security and compliance:
 
 ```rust
-pub struct CapabilitySynthesizer {
-    arbiter: Arc<DelegatingArbiter>,
-    prompt_manager: PromptManager,
-}
+// In governance_kernel.rs
+pub fn check_synthesis_authorization(&self, capability_id: &str) -> RuleAction {
+    let assessment = SynthesisRiskAssessment::assess(capability_id);
 
-impl CapabilitySynthesizer {
-    /// Synthesize a pure RTFS capability using LLM
-    pub async fn synthesize_capability(
-        &self,
-        need: &CapabilityNeed,
-        context: &SynthesisContext,
-    ) -> RuntimeResult<SynthesizedCapability> {
-        // Build prompt with available primitives
-        let prompt = self.build_synthesis_prompt(need, context)?;
-        
-        // Call arbiter for RTFS generation
-        let response = self.arbiter.generate_rtfs(&prompt).await?;
-        
-        // Parse and validate generated code
-        let rtfs_code = self.extract_rtfs_code(&response)?;
-        let parsed = parse_expression(&rtfs_code)?;
-        
-        // Extract capability definition
-        let manifest = self.extract_manifest_from_rtfs(&parsed)?;
-        
-        Ok(SynthesizedCapability {
-            manifest,
-            rtfs_code,
-            synthesis_trace: response.trace,
-        })
+    match assessment.risk {
+        SynthesisRisk::Low => RuleAction::Allow,
+        SynthesisRisk::Medium => {
+            log::info!("Medium-risk synthesis allowed: {}", capability_id);
+            RuleAction::Allow
+        }
+        SynthesisRisk::High => {
+            if assessment.requires_human_approval {
+                RuleAction::RequireHumanApproval
+            } else {
+                RuleAction::Allow
+            }
+        }
+        SynthesisRisk::Critical => {
+            RuleAction::Deny(format!("Critical risk synthesis blocked: {}", capability_id))
+        }
     }
 }
 ```
 
-### 7.2 Synthesis Prompts
+### 7.3 Risk Assessment
 
 ```rust
-impl CapabilitySynthesizer {
+#[derive(Debug, Clone, PartialEq)]
+pub enum SynthesisRisk {
+    Low,      // Safe primitives only (math, string manipulation)
+    Medium,   // Network calls, file I/O with restrictions
+    High,     // External API calls, credential usage
+    Critical, // System modification, privilege escalation
+}
+
+pub struct SynthesisRiskAssessment {
+    pub risk: SynthesisRisk,
+    pub risk_factors: Vec<String>,
+    pub security_concerns: Vec<String>,
+    pub compliance_requirements: Vec<String>,
+    pub requires_human_approval: bool,
+}
+```
+
+### 7.4 Planner Synthesis Capability
+
+Synthesis is invoked via `planner.synthesize_capability`:
+
+```clojure
+;; Define the synthesis capability
+(capability :planner.synthesize_capability
+  :version "1.0.0"
+  :description "Synthesize a new capability from requirements"
+  
+  :input-schema [:map
+    [:capability_id :string]
+    [:description :string]
+    [:input_requirements [:vector :string]]
+    [:output_requirements [:vector :string]]
+    [:constraints {:optional true} [:vector :string]]]
+  
+  :output-schema [:map
+    [:manifest :any]
+    [:rtfs_code :string]
+    [:risk_assessment :any]]
+  
+  :effects [:write :synthesize])
+```
+
+### 7.5 Synthesis Prompts (LLM-Based)
+
+```rust
+impl PlannerCapabilities {
     fn build_synthesis_prompt(
         &self,
         need: &CapabilityNeed,
@@ -607,8 +677,8 @@ Generate an RTFS capability definition for the following need:
 
 **Constraints:**
 - Use only the primitives listed above
-- Do not use external APIs or network calls
-- Keep the implementation pure and deterministic
+- Do not use external APIs unless explicitly allowed
+- Keep the implementation pure and deterministic where possible
 - Follow RTFS syntax exactly
 
 Generate a complete (capability ...) form:
@@ -623,7 +693,7 @@ Generate a complete (capability ...) form:
 }
 ```
 
-### 7.3 Available Primitives
+### 7.6 Available Primitives for Synthesis
 
 ```rust
 const SYNTHESIS_PRIMITIVES: &[&str] = &[
@@ -649,6 +719,14 @@ const SYNTHESIS_PRIMITIVES: &[&str] = &[
     "string?, number?, map?, vector?, nil?",
 ];
 ```
+
+### 7.7 Deprecated Components
+
+> [!WARNING]
+> The following components have been removed from the synthesis flow:
+> - **`LocalSynthesizer`**: Rule-based synthesis replaced by LLM-based approach
+> - **`RecursiveSynthesizer` in discovery**: Synthesis removed from discovery chain
+> - **Pattern-based synthesis fallbacks**: Now handled by planner capabilities
 
 ---
 
