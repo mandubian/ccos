@@ -74,8 +74,12 @@ enable_schema_validation = true
 enable_plan_validation = true
 # Enable auto-repair on validation failures
 enable_auto_repair = true
+# Enable LLM repair for runtime execution errors (dialog loop)
+enable_runtime_repair = true
 # Max auto-repair attempts before queuing for external review
 max_repair_attempts = 2
+# Max runtime repair attempts (dialog loop bound)
+max_runtime_repair_attempts = 5
 # LLM profile to use for validation (from llm_profiles section)
 # Uses a lower quality/faster model for validation tasks
 validation_profile = "openrouter_free:balanced_gfl"

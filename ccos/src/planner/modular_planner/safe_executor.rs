@@ -51,16 +51,12 @@ impl SafeCapabilityExecutor {
             None => return false,
         };
 
-        // If no effects declared, check if it's a known safe MCP pattern
-        // (MCP capabilities may not have effects metadata until introspected)
+        // If no effects declared, we can't determine safety - require explicit metadata
         if manifest.effects.is_empty() {
-            // MCP patterns: list_, search_, get_
-            let mcp_safe_patterns = ["list_", "search_", "get_", ".list", ".search", ".get"];
-
-            let is_mcp_safe = mcp_safe_patterns.iter().any(|p| capability_id.contains(p));
-
-            // If no effects and not an MCP safe pattern, we can't determine safety
-            return is_mcp_safe;
+            // No effects metadata means we don't know if this is safe
+            // Previously used pattern matching (list_, get_, search_) but that's fragile
+            // Capabilities should declare their effects explicitly
+            return false;
         }
 
         // Check effects against allowlist
@@ -121,24 +117,14 @@ impl SafeCapabilityExecutor {
                 }
             }
         } else {
-            // No effects declared - check safe patterns
-            // MCP patterns: list_, search_, get_
-            // Core CCOS patterns: ccos.data.*, ccos.io.println, ccos.echo
-            let mcp_safe_patterns = ["list_", "search_", "get_", ".list", ".search", ".get"];
-            let ccos_safe_prefixes = ["ccos.data.", "ccos.echo", "ccos.io.println", "ccos.io.log"];
-
-            let is_mcp_safe = mcp_safe_patterns.iter().any(|p| capability_id.contains(p));
-            let is_ccos_safe = ccos_safe_prefixes
-                .iter()
-                .any(|p| capability_id.starts_with(p));
-
-            if !is_mcp_safe && !is_ccos_safe {
-                eprintln!(
-                    "DEBUG: Safe exec blocked for {} (no effects declared and not a safe pattern)",
-                    capability_id
-                );
-                return Ok(None);
-            }
+            // No effects declared - require explicit metadata for safety
+            // Previously used pattern matching (list_, get_, search_) which was fragile
+            // Now we require capabilities to declare effects explicitly
+            eprintln!(
+                "DEBUG: Safe exec blocked for {} (no effects metadata - cannot determine safety)",
+                capability_id
+            );
+            return Ok(None);
         }
 
         // Authorize via RuntimeContext (effects/cap allowlist)
@@ -157,7 +143,9 @@ impl SafeCapabilityExecutor {
         // Build Value::Map from params, injecting _previous_result if available
         let mut map = std::collections::HashMap::new();
         for (k, v) in params {
-            // Parameter normalization should be schema-driven, not hardcoded
+            // TODO: Parameter normalization should be driven by capability manifest's
+            // input schema aliases, not hardcoded here. For now, pass through as-is.
+            // The decomposition LLM should use the correct parameter names.
             let k = k.clone();
 
             let rtfs_val = if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(v) {
@@ -188,16 +176,13 @@ impl SafeCapabilityExecutor {
                 prev.clone(),
             );
 
-            // Heuristic: if "data" is missing, alias _previous_result to "data"
-            // This fixes issues with capabilities that expect :data (like filter/sort/transforms)
-            // We verify both String and Keyword keys
-            if !map.contains_key(&MapKey::String("data".to_string()))
-                && !map.contains_key(&MapKey::Keyword(Keyword("data".to_string())))
-            {
-                eprintln!("DEBUG: SafeExec aliasing _previous_result to :data");
-                map.insert(MapKey::String("data".to_string()), prev.clone());
-                map.insert(MapKey::Keyword(Keyword("data".to_string())), prev.clone());
-            }
+            // NOTE: Removed blind "data" aliasing heuristic.
+            // Previously we auto-aliased _previous_result to :data, but this caused
+            // parameter pollution (e.g., list_issues receiving get_me results as :data).
+            // Capabilities that need upstream data should:
+            // 1. Explicitly reference _previous_result in their schema/adapter
+            // 2. Have an adapter that maps _previous_result to the correct param name
+            // See: issue with Pig Latin demo polluting list_issues with user profile
 
             log::debug!(
                 "Safe exec injecting _previous_result into {} params",

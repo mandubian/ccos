@@ -1667,11 +1667,12 @@ impl IrRuntime {
         env: &mut IrEnvironment,
         module_registry: &ModuleRegistry,
     ) -> Result<ExecutionOutcome, RuntimeError> {
-        let collection_vec = match collection {
-            Value::Vector(v) => v.clone(),
+        let collection_vec: Vec<Value> = match collection {
+            Value::Vector(v) | Value::List(v) => v.clone(),
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             _ => {
                 return Err(RuntimeError::TypeError {
-                    expected: "vector".to_string(),
+                    expected: "vector, list, or string".to_string(),
                     actual: collection.type_name().to_string(),
                     operation: "map".to_string(),
                 })
@@ -2817,11 +2818,12 @@ impl IrRuntime {
         let function = &args[0];
         let collection = &args[1];
 
-        let collection_vec = match collection {
-            Value::Vector(v) => v.clone(),
+        let collection_vec: Vec<Value> = match collection {
+            Value::Vector(v) | Value::List(v) => v.clone(),
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
             _ => {
                 return Err(RuntimeError::TypeError {
-                    expected: "vector".to_string(),
+                    expected: "vector, list, or string".to_string(),
                     actual: collection.type_name().to_string(),
                     operation: "map".to_string(),
                 })

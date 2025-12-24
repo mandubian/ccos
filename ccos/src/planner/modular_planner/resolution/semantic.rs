@@ -201,7 +201,7 @@ impl SemanticResolution {
         // Boost for domain match
         if let Some(ref domain) = intent.domain_hint {
             for server in domain.likely_mcp_servers() {
-                if capability.id.to_lowercase().contains(server) {
+                if capability.id.to_lowercase().contains(server.as_str()) {
                     score += 0.15;
                     break;
                 }

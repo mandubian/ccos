@@ -63,7 +63,7 @@ fn extract_sample_from_rtfs_content(content: &str) -> Option<JsonValue> {
 /// Represents a detected schema mismatch and how to bridge it
 #[derive(Debug, Clone)]
 pub enum AdapterKind {
-    /// Extract a field from a map: `(get :field input)`
+    /// Extract a field from a map: `(get input :field)`
     FieldExtract { field: String },
     /// Extract nested content from MCP response: `(get :text (first (get :content input)))`
     McpContentExtract,
@@ -232,21 +232,25 @@ impl SchemaBridge {
     pub fn generate_rtfs_expr(&self, input_var: &str) -> String {
         match &self.kind {
             AdapterKind::FieldExtract { field } => {
-                format!("(get :{} {})", field, input_var)
+                format!("(get {} :{})", input_var, field)
             }
             AdapterKind::McpContentExtract => {
-                format!("(get :text (first (get :content {})))", input_var)
+                format!(
+                    "(get (first (get {} :content)) :text)",
+                    input_var
+                )
             }
             AdapterKind::McpContentExtractAndParse => {
                 format!(
-                    "(parse-json (get :text (first (get :content {}))))",
+                    "(parse-json (get (first (get {} :content)) :text))",
                     input_var
                 )
             }
             AdapterKind::McpContentExtractParseField { field } => {
                 format!(
-                    "(get :{} (parse-json (get :text (first (get :content {})))))",
-                    field, input_var
+                    "(get (parse-json (get (first (get {} :content)) :text)) :{})",
+                    input_var,
+                    field
                 )
             }
             AdapterKind::ArrayWrap => {

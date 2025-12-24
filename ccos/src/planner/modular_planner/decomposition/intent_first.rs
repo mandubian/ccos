@@ -240,18 +240,16 @@ fn convert_to_sub_intents(
     parsed: LlmResponse,
     goal: &str,
 ) -> Result<Vec<SubIntent>, DecompositionError> {
+    // Parse domain from LLM response - use Custom variant for any recognized domain
     let domain = parsed
         .domain
         .as_ref()
-        .and_then(|d| match d.to_lowercase().as_str() {
-            "github" => Some(DomainHint::GitHub),
-            "slack" => Some(DomainHint::Slack),
-            "filesystem" | "fs" => Some(DomainHint::FileSystem),
-            "database" | "db" => Some(DomainHint::Database),
-            "web" | "http" => Some(DomainHint::Web),
-            "email" => Some(DomainHint::Email),
-            "calendar" => Some(DomainHint::Calendar),
-            _ => None,
+        .map(|d| {
+            let lower = d.to_lowercase();
+            match lower.as_str() {
+                "generic" | "" => DomainHint::Generic,
+                _ => DomainHint::Custom(lower),
+            }
         })
         .or_else(|| DomainHint::infer_from_text(goal));
 
@@ -420,7 +418,10 @@ mod tests {
             }
         ));
         assert_eq!(result.sub_intents[1].dependencies, vec![0]);
-        assert_eq!(result.sub_intents[1].domain_hint, Some(DomainHint::GitHub));
+        assert_eq!(
+            result.sub_intents[1].domain_hint,
+            Some(DomainHint::Custom("github".to_string()))
+        );
     }
 
     #[test]

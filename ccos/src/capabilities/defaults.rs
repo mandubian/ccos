@@ -1,8 +1,129 @@
 use crate::capability_marketplace::CapabilityMarketplace;
+use crate::utils::schema_cardinality::{
+    cardinality_action, consumer_param_expects_array, is_rtfs_collection_schema, CardinalityAction,
+};
+use crate::utils::value_conversion::rtfs_value_to_json;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use std::sync::Arc;
+
+fn get_map_string(map: &std::collections::HashMap<MapKey, Value>, key: &str) -> Option<String> {
+    map.get(&MapKey::Keyword(Keyword(key.to_string())))
+        .or_else(|| map.get(&MapKey::String(key.to_string())))
+        .and_then(|v| match v {
+            Value::String(s) => Some(s.clone()),
+            _ => Some(v.to_string()),
+        })
+}
+
+fn get_map_value<'a>(
+    map: &'a std::collections::HashMap<MapKey, Value>,
+    key: &str,
+) -> Option<&'a Value> {
+    map.get(&MapKey::Keyword(Keyword(key.to_string())))
+        .or_else(|| map.get(&MapKey::String(key.to_string())))
+}
+
+fn mk_hint(action: &str, reason: &str, param: Option<&str>) -> Value {
+    let mut out = std::collections::HashMap::new();
+    out.insert(
+        MapKey::Keyword(Keyword("action".to_string())),
+        Value::Keyword(Keyword(action.to_string())),
+    );
+    out.insert(
+        MapKey::Keyword(Keyword("reason".to_string())),
+        Value::String(reason.to_string()),
+    );
+    if let Some(param) = param {
+        out.insert(
+            MapKey::Keyword(Keyword("param".to_string())),
+            Value::String(param.to_string()),
+        );
+    }
+    Value::Map(out)
+}
+
+fn cardinality_hint_impl(input: &Value) -> RuntimeResult<Value> {
+    let map = match input {
+        Value::Map(m) => m,
+        other => {
+            return Err(RuntimeError::TypeError {
+                expected: "map".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "ccos.schema.cardinality_hint".to_string(),
+            })
+        }
+    };
+
+    // Expected inputs (generic):
+    // - :source_rtfs_schema (string)
+    // - :consumer_schema (json schema as map or stringified json)
+    // - :param (string)
+    let source_schema = get_map_string(map, "source_rtfs_schema")
+        .or_else(|| get_map_string(map, "source_schema"));
+    let param = get_map_string(map, "param").or_else(|| get_map_string(map, "param_name"));
+    let consumer_schema_val = get_map_value(map, "consumer_schema")
+        .or_else(|| get_map_value(map, "target_schema"));
+
+    let Some(source_schema) = source_schema else {
+        return Ok(mk_hint(
+            "unknown",
+            "Missing :source_rtfs_schema",
+            param.as_deref(),
+        ));
+    };
+    let Some(param) = param else {
+        return Ok(mk_hint(
+            "unknown",
+            "Missing :param",
+            None,
+        ));
+    };
+    let Some(consumer_schema_val) = consumer_schema_val else {
+        return Ok(mk_hint(
+            "unknown",
+            "Missing :consumer_schema",
+            Some(&param),
+        ));
+    };
+
+    let consumer_schema_json = match consumer_schema_val {
+        Value::String(s) => serde_json::from_str::<serde_json::Value>(s).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Invalid JSON in :consumer_schema for ccos.schema.cardinality_hint: {e}"
+            ))
+        })?,
+        other => rtfs_value_to_json(other)?,
+    };
+
+    let source_is_collection = is_rtfs_collection_schema(&source_schema);
+    let param_expects_array = consumer_param_expects_array(&consumer_schema_json, &param);
+
+    match cardinality_action(&source_schema, &consumer_schema_json, &param) {
+        CardinalityAction::Map => Ok(mk_hint(
+            "map",
+            "Source is a collection but target param is not an array",
+            Some(&param),
+        )),
+        CardinalityAction::Pass => {
+            if source_is_collection {
+                if param_expects_array == Some(true) {
+                    Ok(mk_hint("pass", "Target param expects an array", Some(&param)))
+                } else {
+                    Ok(mk_hint("pass", "Source is not a collection", Some(&param)))
+                }
+            } else {
+                Ok(mk_hint("pass", "Source is not a collection", Some(&param)))
+            }
+        }
+        CardinalityAction::Unknown => Ok(mk_hint(
+            "unknown",
+            "Cannot determine whether target param expects an array",
+            Some(&param),
+        )),
+    }
+}
 
 pub async fn register_default_capabilities(
     marketplace: &CapabilityMarketplace,
@@ -182,6 +303,25 @@ pub async fn register_default_capabilities(
         )
         .await
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.math.add: {:?}", e)))?;
+
+    // Register ccos.schema.cardinality_hint capability - deterministic schema helper
+    // Effect: :compute - safe for grounding
+    // Returns: {:action :map|:pass|:unknown :reason "..." :param "..."}
+    marketplace
+        .register_local_capability_with_effects(
+            "ccos.schema.cardinality_hint".to_string(),
+            "Schema Cardinality Hint".to_string(),
+            "Suggests whether a consumer call should map over a collection source".to_string(),
+            Arc::new(|input| cardinality_hint_impl(input)),
+            vec![":compute".to_string()],
+        )
+        .await
+        .map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to register ccos.schema.cardinality_hint: {:?}",
+                e
+            ))
+        })?;
 
     // Register ccos.user.ask capability (interactive user input - reads from stdin)
     // Effect: :interactive - NOT safe for grounding (requires human interaction)
@@ -448,4 +588,75 @@ pub async fn register_default_capabilities(
         .map_err(|e| RuntimeError::Generic(format!("Failed to register ccos.io.log: {:?}", e)))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cardinality_hint_map_when_source_collection_and_param_scalar() {
+        let input = Value::Map(std::collections::HashMap::from([
+            (
+                MapKey::Keyword(Keyword("source_rtfs_schema".to_string())),
+                Value::String("[:vector :string]".to_string()),
+            ),
+            (
+                MapKey::Keyword(Keyword("consumer_schema".to_string())),
+                crate::utils::value_conversion::json_to_rtfs_value(&serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "data": { "type": "string" }
+                    }
+                }))
+                .unwrap(),
+            ),
+            (
+                MapKey::Keyword(Keyword("param".to_string())),
+                Value::String("data".to_string()),
+            ),
+        ]));
+
+        let out = cardinality_hint_impl(&input).unwrap();
+        let Value::Map(m) = out else {
+            panic!("expected map");
+        };
+        assert_eq!(
+            m.get(&MapKey::Keyword(Keyword("action".to_string()))),
+            Some(&Value::Keyword(Keyword("map".to_string())))
+        );
+    }
+
+    #[test]
+    fn test_cardinality_hint_pass_when_param_expects_array() {
+        let input = Value::Map(std::collections::HashMap::from([
+            (
+                MapKey::Keyword(Keyword("source_rtfs_schema".to_string())),
+                Value::String("[:vector :string]".to_string()),
+            ),
+            (
+                MapKey::Keyword(Keyword("consumer_schema".to_string())),
+                crate::utils::value_conversion::json_to_rtfs_value(&serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "data": { "type": "array" }
+                    }
+                }))
+                .unwrap(),
+            ),
+            (
+                MapKey::Keyword(Keyword("param".to_string())),
+                Value::String("data".to_string()),
+            ),
+        ]));
+
+        let out = cardinality_hint_impl(&input).unwrap();
+        let Value::Map(m) = out else {
+            panic!("expected map");
+        };
+        assert_eq!(
+            m.get(&MapKey::Keyword(Keyword("action".to_string()))),
+            Some(&Value::Keyword(Keyword("pass".to_string())))
+        );
+    }
 }

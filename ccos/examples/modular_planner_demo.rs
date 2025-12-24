@@ -149,37 +149,46 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // 7. Execute!
     if let Some(result) = plan_result {
         if !args.no_execute {
-            println!("\n⚡ Executing Plan...");
-            println!("───────────────────────────────────────────────────────────────");
+            // Check if plan has pending capabilities that need synthesis
+            if result.plan_status == ccos::types::PlanStatus::PendingSynthesis {
+                println!("\n⚠️  Plan has pending capabilities - cannot execute yet");
+                println!("   Status: {:?}", result.plan_status);
+                println!("\n💡 Pending capabilities need to be synthesized first.");
+                println!("   Re-run after synthesis queue is processed or use --no-execute to skip execution.");
+            } else {
+                println!("\n⚡ Executing Plan...");
+                println!("───────────────────────────────────────────────────────────────");
 
-            let plan_obj = ccos::types::Plan {
-                plan_id: format!("modular-plan-{}", uuid::Uuid::new_v4()),
-                name: Some("Modular Plan".to_string()),
-                body: ccos::types::PlanBody::Rtfs(result.rtfs_plan.clone()),
-                intent_ids: result.intent_ids.clone(),
-                ..Default::default()
-            };
+                let plan_obj = ccos::types::Plan {
+                    plan_id: format!("modular-plan-{}", uuid::Uuid::new_v4()),
+                    name: Some("Modular Plan".to_string()),
+                    body: ccos::types::PlanBody::Rtfs(result.rtfs_plan.clone()),
+                    intent_ids: result.intent_ids.clone(),
+                    status: result.plan_status,
+                    ..Default::default()
+                };
 
-            let context = RuntimeContext::full();
-            match ccos.validate_and_execute_plan(plan_obj, &context).await {
-                Ok(exec_result) => {
-                    println!("\n🏁 Execution Result:");
-                    println!("   Success: {}", exec_result.success);
+                let context = RuntimeContext::full();
+                match ccos.validate_and_execute_plan(plan_obj, &context).await {
+                    Ok(exec_result) => {
+                        println!("\n🏁 Execution Result:");
+                        println!("   Success: {}", exec_result.success);
 
-                    // Format output nicely
-                    let output_str = value_to_string(&exec_result.value);
-                    println!("   Result: {}", output_str);
+                        // Format output nicely
+                        let output_str = value_to_string(&exec_result.value);
+                        println!("   Result: {}", output_str);
 
-                    if !exec_result.success {
-                        if let Some(err) = exec_result.metadata.get("error") {
-                            println!("   Error: {:?}", err);
+                        if !exec_result.success {
+                            if let Some(err) = exec_result.metadata.get("error") {
+                                println!("   Error: {:?}", err);
+                            }
                         }
                     }
+                    Err(e) => {
+                        println!("\n❌ Execution Failed: {}", e);
+                    }
                 }
-                Err(e) => {
-                    println!("\n❌ Execution Failed: {}", e);
-                }
-            }
+            } // end else (plan is ready to execute)
         }
     }
 

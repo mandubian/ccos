@@ -251,13 +251,11 @@ impl CachedToolInfo {
     }
 
     pub fn to_tool_summary(&self) -> ToolSummary {
-        // Infer domain from server name
-        let domain = match self.server_name.to_lowercase().as_str() {
-            s if s.contains("github") => DomainHint::GitHub,
-            s if s.contains("slack") => DomainHint::Slack,
-            s if s.contains("file") || s.contains("fs") => DomainHint::FileSystem,
-            _ => DomainHint::Generic,
-        };
+        // Infer domain from server name using domain_config
+        let domain =
+            crate::planner::modular_planner::domain_config::infer_domain(&self.server_name)
+                .map(DomainHint::Custom)
+                .unwrap_or(DomainHint::Generic);
 
         // Infer action from tool name
         let action = if self.name.starts_with("list_")
@@ -745,13 +743,15 @@ mod tests {
     #[async_trait(?Send)]
     impl McpDiscovery for MockMcpDiscovery {
         async fn get_server_for_domain(&self, domain: &DomainHint) -> Option<McpServerInfo> {
-            match domain {
-                DomainHint::GitHub => Some(McpServerInfo {
+            // Match on domain string for config-driven approach
+            if domain.to_domain_string() == "github" {
+                Some(McpServerInfo {
                     name: "github".to_string(),
                     url: "https://api.github.com/mcp".to_string(),
                     namespace: "github".to_string(),
-                }),
-                _ => None,
+                })
+            } else {
+                None
             }
         }
 
@@ -794,7 +794,7 @@ mod tests {
                 action: ApiAction::List,
             },
         )
-        .with_domain(DomainHint::GitHub)
+        .with_domain(DomainHint::Custom("github".to_string()))
         .with_param("owner", "mandubian")
         .with_param("repo", "ccos");
 

@@ -1339,21 +1339,12 @@ impl MCPDiscoveryService {
 
     /// Get server config for a domain hint
     pub fn get_server_for_domain(&self, domain: &DomainHint) -> Option<MCPServerConfig> {
-        let hint = match domain {
-            DomainHint::GitHub => "github",
-            DomainHint::Slack => "slack",
-            DomainHint::FileSystem => "filesystem",
-            DomainHint::Database => "database",
-            DomainHint::Web => "web",
-            DomainHint::Email => "email",
-            DomainHint::Calendar => "calendar",
-            DomainHint::Generic => "general",
-            DomainHint::Custom(s) => s.as_str(),
-        };
+        // Use to_domain_string() for config-driven domain handling
+        let hint = domain.to_domain_string();
 
         let configs = self.list_known_servers();
         for config in configs {
-            if config.name.contains(hint) || hint.contains(&config.name) {
+            if config.name.contains(&hint) || hint.contains(&config.name) {
                 return Some(config);
             }
         }
