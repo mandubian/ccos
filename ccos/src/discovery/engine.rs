@@ -1,4 +1,4 @@
-//! Discovery engine for finding and synthesizing capabilities
+//! Discovery engine for finding capabilities (no synthesis - that's delegated to planner)
 
 use crate::arbiter::delegating_arbiter::DelegatingArbiter;
 use crate::capability_marketplace::types::CapabilityManifest;
@@ -7,7 +7,7 @@ use crate::discovery::config::DiscoveryConfig;
 use crate::discovery::discovery_agent::DiscoveryAgent;
 use crate::discovery::introspection_cache::IntrospectionCache;
 use crate::discovery::need_extractor::CapabilityNeed;
-use crate::discovery::recursive_synthesizer::RecursiveSynthesizer;
+// Note: RecursiveSynthesizer removed - synthesis is delegated to planner.synthesize_capability
 use crate::intent_graph::IntentGraph;
 use crate::synthesis::primitives::PrimitiveContext;
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
@@ -242,143 +242,25 @@ impl DiscoveryEngine {
         }
         eprintln!("  ✗ Not found");
 
-        // 3. Try local RTFS synthesis for simple operations (ONLY if MCP didn't find anything)
-        // IMPORTANT: We only synthesize if no MCP capability was found above - if MCP found something,
-        // we would have returned early and never reached this point.
+        // Note: LocalSynthesizer (rule-based) has been removed.
+        // Step 3 now relies on recursive synthesis which uses LLM-based approach.
         eprintln!(
-            "  [3/4] Checking for local RTFS synthesis (MCP found nothing, using fallback)..."
+            "  [3/4] Rule-based local synthesis removed, proceeding to recursive synthesis..."
         );
-        if crate::discovery::local_synthesizer::LocalSynthesizer::can_synthesize_locally(need) {
-            match crate::discovery::local_synthesizer::LocalSynthesizer::synthesize_locally(need) {
-                Ok(local_manifest) => {
-                    eprintln!(
-                        "  ✓ Synthesized as local RTFS capability: {}",
-                        local_manifest.id
-                    );
 
-                    // Display the generated RTFS code
-                    if let Some(rtfs_code) = local_manifest.metadata.get("rtfs_implementation") {
-                        eprintln!("  📝 Generated RTFS code:");
-                        eprintln!("  {}", "─".repeat(76));
-                        for line in rtfs_code.lines() {
-                            eprintln!("  {}", line);
-                        }
-                        eprintln!("  {}", "─".repeat(76));
-                    }
-
-                    // Save the capability to disk
-                    if let Err(e) = self.save_synthesized_capability(&local_manifest).await {
-                        eprintln!("  ⚠️  Failed to save synthesized capability: {}", e);
-                    } else {
-                        eprintln!("  💾 Saved synthesized capability to disk");
-                    }
-
-                    // Register the local capability
-                    if let Err(e) = self
-                        .marketplace
-                        .register_capability_manifest(local_manifest.clone())
-                        .await
-                    {
-                        eprintln!("  ⚠️  Failed to register local capability: {}", e);
-                    } else {
-                        eprintln!("       Registered local capability in marketplace");
-                    }
-                    eprintln!("{}", "═".repeat(80));
-                    return Ok(DiscoveryResult::Found(local_manifest));
-                }
-                Err(e) => {
-                    eprintln!("  ⚠️  Local synthesis failed: {}, continuing...", e);
-                }
-            }
-        } else {
-            eprintln!("  → Not a simple local operation");
-        }
-
-        // 4. Try OpenAPI introspection
-        // DISABLED: Web search and OpenAPI discovery temporarily disabled to avoid timeouts
-        // eprintln!("  [3/5] Searching OpenAPI services...");
-        // if let Some(manifest) = self.search_openapi(need).await? {
-        //     eprintln!("  ✓ Found: {}", manifest.id);
-        //     eprintln!("{}", "═".repeat(80));
-        //     return Ok(DiscoveryResult::Found(manifest));
-        // }
-        // eprintln!("  ✗ Not found");
-
-        // 4. Try recursive synthesis (if delegating arbiter is available)
-        eprintln!("  [4/4] Attempting recursive synthesis...");
-        if let Some(ref arbiter) = self.delegating_arbiter {
-            eprintln!("       Synthesizing capability: {}", need.capability_class);
-
-            let context = DiscoveryContext::new(5); // Default max depth of 5
-            let mut synthesizer = RecursiveSynthesizer::new(
-                DiscoveryEngine::new(
-                    Arc::clone(&self.marketplace),
-                    Arc::clone(&self.intent_graph),
-                ),
-                Some(Arc::clone(arbiter)),
-                5, // max depth
-            );
-
-            match synthesizer.synthesize_as_intent(need, &context).await {
-                Ok(synthesized) => {
-                    // Check if the synthesized capability is incomplete
-                    let is_incomplete = synthesized
-                        .manifest
-                        .metadata
-                        .get("status")
-                        .map(|s| s == "incomplete")
-                        .unwrap_or(false);
-
-                    if is_incomplete {
-                        eprintln!(
-                            "  ⚠️  Synthesized incomplete capability: {}",
-                            synthesized.manifest.id
-                        );
-                        // Register the incomplete capability in the marketplace
-                        if let Err(e) = self
-                            .marketplace
-                            .register_capability_manifest(synthesized.manifest.clone())
-                            .await
-                        {
-                            eprintln!("  ⚠  Warning: Failed to register: {}", e);
-                        } else {
-                            eprintln!(
-                                "       Registered as incomplete: {}",
-                                synthesized.manifest.id
-                            );
-                        }
-                        eprintln!("{}", "═".repeat(80));
-                        return Ok(DiscoveryResult::Incomplete(synthesized.manifest));
-                    } else {
-                        eprintln!("  ✓ Synthesized: {}", synthesized.manifest.id);
-                        // Register the synthesized capability in the marketplace
-                        if let Err(e) = self
-                            .marketplace
-                            .register_capability_manifest(synthesized.manifest.clone())
-                            .await
-                        {
-                            eprintln!("  ⚠  Warning: Failed to register: {}", e);
-                        } else {
-                            eprintln!("       Registered as: {}", synthesized.manifest.id);
-                        }
-                        eprintln!("{}", "═".repeat(80));
-                        // Mark as synthesized (not just found)
-                        return Ok(DiscoveryResult::Found(synthesized.manifest));
-                    }
-                }
-                Err(e) => {
-                    eprintln!("  ✗ Synthesis failed: {}", e);
-                }
-            }
-        } else {
-            eprintln!("  ⚠  No arbiter available");
-        }
-
+        // Note: Synthesis has been removed from discovery.
+        // Discovery only finds existing capabilities (marketplace, MCP).
+        // Missing capabilities are returned as NotFound for the planner
+        // to handle via planner.synthesize_capability.
+        eprintln!("  [4/4] Discovery complete - capability not found");
         eprintln!("{}", "═".repeat(80));
-        eprintln!("  ✗ Discovery failed for: {}", need.capability_class);
+        eprintln!(
+            "  ✗ Discovery failed for: {} (delegate to synthesis)",
+            need.capability_class
+        );
         eprintln!("{}", "═".repeat(80));
 
-        // 5. Not found
+        // Not found - let planner handle synthesis
         Ok(DiscoveryResult::NotFound)
     }
 

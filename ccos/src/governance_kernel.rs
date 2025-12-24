@@ -33,6 +33,110 @@ pub enum RuleAction {
     RequireHumanApproval,
 }
 
+/// Risk priority level for capability synthesis authorization.
+/// Used by GovernanceKernel to gate external capability synthesis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SynthesisRisk {
+    /// Low risk - can be auto-resolved
+    Low,
+    /// Medium risk - auto-resolve with monitoring
+    Medium,
+    /// High risk - requires human approval
+    High,
+    /// Critical risk - manual intervention required
+    Critical,
+}
+
+/// Risk assessment for capability synthesis authorization.
+/// Mirrors the assessment logic from MissingCapabilityResolver but lives
+/// in GovernanceKernel for proper governance gating.
+#[derive(Debug, Clone)]
+pub struct SynthesisRiskAssessment {
+    /// Overall risk level
+    pub risk: SynthesisRisk,
+    /// Risk factors identified
+    pub risk_factors: Vec<String>,
+    /// Security concerns (admin, auth, credentials)
+    pub security_concerns: Vec<String>,
+    /// Compliance requirements (PCI-DSS, GDPR)
+    pub compliance_requirements: Vec<String>,
+    /// Human approval required based on risk + config
+    pub requires_human_approval: bool,
+}
+
+impl SynthesisRiskAssessment {
+    /// Assess synthesis risk for a capability based on its ID.
+    /// Returns a risk assessment that can be used to gate synthesis.
+    pub fn assess(capability_id: &str) -> Self {
+        let mut risk_factors = Vec::new();
+        let mut security_concerns = Vec::new();
+        let mut compliance_requirements = Vec::new();
+
+        let id_lower = capability_id.to_lowercase();
+
+        // Administrative capabilities
+        if id_lower.contains("admin") || id_lower.contains("root") || id_lower.contains("sudo") {
+            risk_factors.push("Administrative capability detected".to_string());
+            security_concerns.push("High privilege access required".to_string());
+        }
+
+        // Financial capabilities
+        if id_lower.contains("payment")
+            || id_lower.contains("financial")
+            || id_lower.contains("billing")
+        {
+            risk_factors.push("Financial capability detected".to_string());
+            compliance_requirements.push("PCI-DSS compliance required".to_string());
+        }
+
+        // Security-related capabilities
+        if id_lower.contains("auth")
+            || id_lower.contains("security")
+            || id_lower.contains("credential")
+        {
+            risk_factors.push("Security-related capability".to_string());
+            security_concerns.push("Authentication/authorization access".to_string());
+        }
+
+        // Data access capabilities
+        if id_lower.contains("database")
+            || id_lower.contains("storage")
+            || id_lower.contains("delete")
+        {
+            risk_factors.push("Data access capability".to_string());
+            compliance_requirements.push("Data protection compliance required".to_string());
+        }
+
+        // Personal data capabilities
+        if id_lower.contains("pii") || id_lower.contains("personal") || id_lower.contains("gdpr") {
+            risk_factors.push("Personal data handling".to_string());
+            compliance_requirements.push("GDPR compliance required".to_string());
+        }
+
+        // Determine risk level
+        let risk = if security_concerns.len() > 1 || compliance_requirements.len() > 1 {
+            SynthesisRisk::Critical
+        } else if !security_concerns.is_empty() || !compliance_requirements.is_empty() {
+            SynthesisRisk::High
+        } else if !risk_factors.is_empty() {
+            SynthesisRisk::Medium
+        } else {
+            SynthesisRisk::Low
+        };
+
+        let requires_human_approval =
+            risk == SynthesisRisk::Critical || risk == SynthesisRisk::High;
+
+        Self {
+            risk,
+            risk_factors,
+            security_concerns,
+            compliance_requirements,
+            requires_human_approval,
+        }
+    }
+}
+
 /// A rule in the Constitution
 #[derive(Debug, Clone)]
 pub struct ConstitutionRule {
@@ -130,6 +234,60 @@ impl GovernanceKernel {
             orchestrator,
             intent_graph,
             constitution: Constitution::default(),
+        }
+    }
+
+    /// Check authorization for synthesizing an external capability.
+    ///
+    /// This is called by the planner or MissingCapabilityResolver before
+    /// synthesizing a capability from an external source (MCP, LLM, etc).
+    ///
+    /// Returns:
+    /// - `RuleAction::Allow` - Proceed with synthesis
+    /// - `RuleAction::RequireHumanApproval` - Queue for human approval
+    /// - `RuleAction::Deny(reason)` - Block synthesis
+    pub fn check_synthesis_authorization(&self, capability_id: &str) -> RuleAction {
+        let assessment = SynthesisRiskAssessment::assess(capability_id);
+
+        log::debug!(
+            "[GovernanceKernel] Synthesis risk for '{}': {:?} (factors: {:?})",
+            capability_id,
+            assessment.risk,
+            assessment.risk_factors
+        );
+
+        match assessment.risk {
+            SynthesisRisk::Low => RuleAction::Allow,
+            SynthesisRisk::Medium => {
+                // Medium risk: allow but log for monitoring
+                log::info!(
+                    "[GovernanceKernel] Medium-risk synthesis allowed: {} (factors: {:?})",
+                    capability_id,
+                    assessment.risk_factors
+                );
+                RuleAction::Allow
+            }
+            SynthesisRisk::High => {
+                if assessment.requires_human_approval {
+                    log::warn!(
+                        "[GovernanceKernel] High-risk synthesis requires human approval: {} (security: {:?}, compliance: {:?})",
+                        capability_id,
+                        assessment.security_concerns,
+                        assessment.compliance_requirements
+                    );
+                    RuleAction::RequireHumanApproval
+                } else {
+                    RuleAction::Allow
+                }
+            }
+            SynthesisRisk::Critical => {
+                let reason = format!(
+                    "Critical risk synthesis blocked: {} (security: {:?}, compliance: {:?})",
+                    capability_id, assessment.security_concerns, assessment.compliance_requirements
+                );
+                log::error!("[GovernanceKernel] {}", reason);
+                RuleAction::Deny(reason)
+            }
         }
     }
 
