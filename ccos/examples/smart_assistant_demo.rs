@@ -23,8 +23,7 @@ use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
 use ccos::capabilities::{MCPSessionHandler, SessionPoolManager};
 use ccos::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
 use ccos::discovery::{
-    local_synthesizer::LocalSynthesizer, CapabilityNeed, DiscoveryEngine, DiscoveryHints,
-    DiscoveryResult, FoundCapability,
+    CapabilityNeed, DiscoveryEngine, DiscoveryHints, DiscoveryResult, FoundCapability,
 };
 use ccos::environment::CCOSBuilder;
 use ccos::examples_common::capability_helpers::{
@@ -2824,11 +2823,7 @@ fn build_needs_capabilities(steps: &[ProposedStep]) -> Value {
                         .collect(),
                 ),
             );
-            if let Some(annotations_json) = step
-                .primitive_annotations
-                .clone()
-                .or_else(|| LocalSynthesizer::infer_primitive_annotations(&inferred_need))
-            {
+            if let Some(annotations_json) = step.primitive_annotations.clone() {
                 map.insert(
                     MapKey::String("primitive_annotations".into()),
                     json_to_rtfs_value(&annotations_json),
@@ -3436,7 +3431,9 @@ fn manifest_is_incomplete(manifest: &CapabilityManifest) -> bool {
         .or_else(|| manifest.metadata.get("synthesis-method"))
         .map(|method| method.eq_ignore_ascii_case("local_rtfs"))
         .unwrap_or(false);
-    if local_rtfs_synth && !LocalSynthesizer::is_safe_local_prefix(&manifest.id) {
+    // LocalSynthesizer was removed - local_rtfs synthesis no longer exists
+    // Treat all local_rtfs synthesized capabilities as incomplete
+    if local_rtfs_synth {
         return true;
     }
 

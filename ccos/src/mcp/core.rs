@@ -581,12 +581,17 @@ impl MCPDiscoveryService {
                             Ok(manifest) => {
                                 log::debug!("Converted capability: {}", manifest.name);
                                 // Convert CapabilityManifest to DiscoveredMCPTool
+                                // Convert TypeExpr to JSON Schema so required params are available
+                                let input_schema_json = manifest
+                                    .input_schema
+                                    .as_ref()
+                                    .and_then(|ts| ts.to_json().ok());
                                 let tool = DiscoveredMCPTool {
                                     tool_name: manifest.name.clone(),
                                     description: Some(manifest.description.clone()),
                                     input_schema: manifest.input_schema.clone(),
                                     output_schema: manifest.output_schema.clone(),
-                                    input_schema_json: None,
+                                    input_schema_json,
                                 };
                                 discovered_tools.push(tool);
                                 success_count += 1;

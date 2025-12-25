@@ -640,6 +640,9 @@ impl CCOS {
         // The delegating_arbiter is now the primary arbiter
         let arbiter = Arc::clone(&delegating_arbiter);
 
+        // Wire arbiter to GovernanceKernel for centralized LLM access (repairs, validation)
+        governance_kernel.set_arbiter(Arc::clone(&arbiter));
+
         // Initialize checkpoint archive
         let checkpoint_archive = Arc::new(crate::checkpoint_archive::CheckpointArchive::new());
 

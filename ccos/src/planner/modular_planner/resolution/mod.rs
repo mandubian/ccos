@@ -158,6 +158,11 @@ impl ResolvedCapability {
             ResolvedCapability::NeedsReferral { .. } => 0.0,
         }
     }
+
+    /// Check if this resolution represents a pending/unresolved capability
+    pub fn is_pending(&self) -> bool {
+        matches!(self, ResolvedCapability::NeedsReferral { .. })
+    }
 }
 
 /// Trait for intent resolution strategies.

@@ -355,6 +355,8 @@ pub struct PlannerConfig {
     pub enable_schema_validation: bool,
     /// Whether to enable LLM-based plan validation after generation
     pub enable_plan_validation: bool,
+    /// Max attempts to retry decomposition if it produces pending capabilities
+    pub max_decomposition_retries: usize,
 }
 
 impl Default for PlannerConfig {
@@ -374,6 +376,7 @@ impl Default for PlannerConfig {
             hybrid_config: Some(HybridConfig::default()),
             enable_schema_validation: false, // Disabled by default
             enable_plan_validation: false,   // Disabled by default
+            max_decomposition_retries: 2,    // Retry decomposition if pending caps found
         }
     }
 }
@@ -727,10 +730,60 @@ impl ModularPlanner {
 
         let tools_slice = available_tools.as_ref().map(|v| v.as_slice());
 
-        let decomp_result = self
-            .decomposition
-            .decompose(goal, tools_slice, &decomp_context)
-            .await?;
+        // Decomposition retry loop: if resolution produces pending capabilities, retry decomposition
+        let max_decomp_retries = self.config.max_decomposition_retries;
+        let mut decomp_attempt = 0;
+        let decomp_result;
+
+        'decomp_retry: loop {
+            decomp_attempt += 1;
+
+            let attempt_result = self
+                .decomposition
+                .decompose(goal, tools_slice, &decomp_context)
+                .await?;
+
+            // For first attempt or if max retries reached, use this result
+            if decomp_attempt >= max_decomp_retries {
+                decomp_result = attempt_result;
+                break 'decomp_retry;
+            }
+
+            // Quick check: resolve intents and see if any are pending
+            let temp_resolution_context = ResolutionContext::new();
+            let mut has_pending = false;
+
+            for sub_intent in &attempt_result.sub_intents {
+                match self
+                    .resolution
+                    .resolve(sub_intent, &temp_resolution_context)
+                    .await
+                {
+                    Ok(resolved) => {
+                        if resolved.is_pending() {
+                            has_pending = true;
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        // Resolution error means we'll get a fallback/pending
+                        has_pending = true;
+                        break;
+                    }
+                }
+            }
+
+            if has_pending && decomp_attempt < max_decomp_retries {
+                ccos_println!(
+                    "🔄 Decomposition attempt {} produced pending capabilities, retrying...",
+                    decomp_attempt
+                );
+                continue 'decomp_retry;
+            }
+
+            decomp_result = attempt_result;
+            break 'decomp_retry;
+        }
 
         trace.events.push(TraceEvent::DecompositionCompleted {
             num_intents: decomp_result.sub_intents.len(),
@@ -2204,6 +2257,7 @@ impl ModularPlanner {
         sub_intent: &SubIntent,
         resolved: &ResolvedCapability,
         previous_result: Option<&rtfs::runtime::values::Value>,
+        step_results: &HashMap<usize, rtfs::runtime::values::Value>,
     ) -> Result<Option<rtfs::runtime::values::Value>, PlannerError> {
         let cap_id = match resolved.capability_id() {
             Some(id) => id,
@@ -2215,6 +2269,24 @@ impl ModularPlanner {
             IntentType::ApiCall { .. }
             | IntentType::DataTransform { .. }
             | IntentType::Output { .. } => {}
+            IntentType::UserInput { ref prompt_topic } => {
+                // Phase 2: UserInput Grounding Mock
+                // Use explicit _grounding_sample provided by LLM if available
+                let mock_val = sub_intent
+                    .extracted_params
+                    .get("_grounding_sample")
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        format!("<sample-{}>", prompt_topic.to_lowercase().replace(' ', "-"))
+                    });
+
+                log::info!(
+                    "[Grounding] Providing mock for user_input '{}': {}",
+                    prompt_topic,
+                    mock_val
+                );
+                return Ok(Some(rtfs::runtime::values::Value::String(mock_val)));
+            }
             _ => {
                 log::debug!(
                     "Safe exec skipped for {} (intent type not eligible)",
@@ -2246,6 +2318,24 @@ impl ModularPlanner {
             if let Ok(prev_json) = rtfs_value_to_json(prev) {
                 if let Ok(s) = serde_json::to_string(&prev_json) {
                     params.insert("_previous_result".to_string(), s);
+                }
+            }
+        }
+
+        // Phase 2: Resolve 'step_N' references in params
+        for value in params.values_mut() {
+            if value.starts_with("step_") {
+                if let Ok(idx) = value["step_".len()..].parse::<usize>() {
+                    if let Some(res) = step_results.get(&idx) {
+                        if let Ok(json) = rtfs_value_to_json(res) {
+                            // If it's a string, use it directly, otherwise JSON stringify
+                            if let Some(s) = json.as_str() {
+                                *value = s.to_string();
+                            } else if let Ok(s) = serde_json::to_string(&json) {
+                                *value = s;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2460,7 +2550,13 @@ impl ModularPlanner {
 
             // Execute the step with dependency data
             match self
-                .maybe_execute_and_ground(executor, sub_intent, resolved, previous_result)
+                .maybe_execute_and_ground(
+                    executor,
+                    sub_intent,
+                    resolved,
+                    previous_result,
+                    &step_results,
+                )
                 .await
             {
                 Ok(Some(result)) => {

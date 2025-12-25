@@ -23,7 +23,24 @@
 
 - **Do NOT** use strings for output keys in `(get ...)` - always use keywords: `(get step_0 :output)` not `(get step_0 "output")`.
 
-- **Do NOT** call `clojure.*`, `common-lisp.*`, or any host-language library. Only RTFS forms and SecureStandardLibrary helpers are permitted.
+---
+
+## ⚠️ CRITICAL: RTFS is NOT Clojure!
+
+**RTFS uses Clojure-like syntax but IS NOT Clojure.** The following WILL FAIL:
+
+| ❌ Unsupported | ❌ Example | ✅ RTFS Alternative |
+|----------------|-----------|---------------------|
+| `clojure.*` namespaces | `clojure.string/join` | `(reduce str items)` |
+| `map-indexed` | `(map-indexed ...)` | `(map (fn [x] ...) coll)` |
+| `inc` / `dec` | `(inc n)` | `(+ n 1)` / `(- n 1)` |
+| `some` | `(some pred coll)` | `(not (empty? (filter pred coll)))` |
+| `sort-by` | `(sort-by :key coll)` | Use `call ccos.data.sort` |
+| `apply str` | `(apply str xs)` | `(reduce str xs)` |
+
+**RTFS stdlib:** `map`, `filter`, `reduce`, `first`, `rest`, `conj`, `get`, `assoc`, `count`, `empty?`, `nil?`, `str`, `+`, `-`, `*`, `/`, `=`, `not=`, `<`, `>`, `and`, `or`, `not`, `if`, `let`, `fn`, `call`
+
+---
 
 - **Do NOT** use namespace syntax for string functions - use RTFS standard library functions:
   - ❌ `string/includes?`, `string/lower`, `string/upper` (Clojure namespace syntax)
