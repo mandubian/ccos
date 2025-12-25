@@ -499,6 +499,7 @@ impl ModularPlannerBuilder {
             hybrid_config: Some(HybridConfig::default()),
             enable_schema_validation: false,
             enable_plan_validation: false,
+            max_decomposition_retries: 2,
         };
 
         let planner = ModularPlanner::new(

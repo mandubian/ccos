@@ -142,10 +142,13 @@ impl SafeCapabilityExecutor {
 
         // Build Value::Map from params, injecting _previous_result if available
         let mut map = std::collections::HashMap::new();
-        for (k, v) in params {
-            // TODO: Parameter normalization should be driven by capability manifest's
-            // input schema aliases, not hardcoded here. For now, pass through as-is.
-            // The decomposition LLM should use the correct parameter names.
+
+        // Phase 2 Trace: Parameter Normalization
+        // Check input schema for required keys - but do NOT add domain-specific aliases here
+        // Any normalization should be driven by the tool's schema, not hardcoded rules
+        let normalized_params = params.clone();
+
+        for (k, v) in &normalized_params {
             let k = k.clone();
 
             let rtfs_val = if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(v) {

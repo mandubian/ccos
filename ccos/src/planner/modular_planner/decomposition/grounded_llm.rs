@@ -4,7 +4,11 @@
 //! for more accurate decomposition with real tool knowledge.
 
 use async_trait::async_trait;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+
+use crate::arbiter::prompt::{FilePromptStore, PromptManager};
 
 use super::intent_first::LlmProvider;
 use super::{DecompositionContext, DecompositionError, DecompositionResult, DecompositionStrategy};
@@ -52,15 +56,25 @@ pub struct GroundedLlmDecomposition {
     max_tools_in_prompt: usize,
     /// Similarity threshold for tool inclusion (only used if max_tools > 0)
     similarity_threshold: f64,
+    /// Prompt manager for loading templates
+    prompt_manager: PromptManager<FilePromptStore>,
 }
 
 impl GroundedLlmDecomposition {
+    /// Create with default prompt directory (assets/prompts/arbiter)
     pub fn new(llm_provider: Arc<dyn LlmProvider>) -> Self {
+        Self::new_with_prompt_dir(llm_provider, PathBuf::from("ccos/assets/prompts/arbiter"))
+    }
+
+    /// Create with custom prompt directory
+    pub fn new_with_prompt_dir(llm_provider: Arc<dyn LlmProvider>, prompt_dir: PathBuf) -> Self {
+        let store = FilePromptStore::new(&prompt_dir);
         Self {
             llm_provider,
             embedding_provider: None,
             max_tools_in_prompt: 0, // 0 = pass ALL tools (like real MCP behavior)
             similarity_threshold: 0.0,
+            prompt_manager: PromptManager::new(store),
         }
     }
 
@@ -190,6 +204,7 @@ impl GroundedLlmDecomposition {
         tools: &[&ToolSummary],
         context: &DecompositionContext,
     ) -> String {
+        // Build tools list XML
         let tools_list = if tools.is_empty() {
             "No specific tools available - decompose into abstract steps.".to_string()
         } else {
@@ -202,6 +217,7 @@ impl GroundedLlmDecomposition {
             list
         };
 
+        // Build params hint
         let params_hint = if context.pre_extracted_params.is_empty() {
             String::new()
         } else {
@@ -220,7 +236,7 @@ RULE: If grounded data covers what you need, use data_transform/output. Only ask
             )
         };
 
-        // Build parent/sibling context for sub-intent refinement
+        // Build sibling context for sub-intent refinement
         let sibling_context = if !context.sibling_intents.is_empty() {
             let sibling_list: Vec<String> = context
                 .sibling_intents
@@ -264,55 +280,70 @@ CRITICAL RULES FOR SUB-INTENT:
             String::new()
         };
 
+        // Try to load from template system, fallback to inline if loading fails
+        let mut vars = HashMap::new();
+        vars.insert("tools_list".to_string(), tools_list.clone());
+        vars.insert("goal".to_string(), goal.to_string());
+        vars.insert("params_hint".to_string(), params_hint.clone());
+        vars.insert("sibling_context".to_string(), sibling_context.clone());
+        vars.insert(
+            "today".to_string(),
+            chrono::Utc::now().format("%Y-%m-%d").to_string(),
+        );
+        vars.insert(
+            "week_ago".to_string(),
+            (chrono::Utc::now() - chrono::Duration::days(7))
+                .format("%Y-%m-%d")
+                .to_string(),
+        );
+
+        // Try template first, fallback to inline if template load fails
+        match self
+            .prompt_manager
+            .render("grounded_decomposition", "v1", &vars)
+        {
+            Ok(rendered) => {
+                log::debug!("[GroundedLlm] Loaded prompt from template system");
+                rendered
+            }
+            Err(e) => {
+                log::warn!(
+                    "[GroundedLlm] Failed to load prompt template, using inline fallback: {}",
+                    e
+                );
+                // Inline fallback for robustness
+                self.build_grounded_prompt_fallback(
+                    &tools_list,
+                    goal,
+                    &params_hint,
+                    &sibling_context,
+                )
+            }
+        }
+    }
+
+    /// Inline fallback prompt if template loading fails
+    fn build_grounded_prompt_fallback(
+        &self,
+        tools_list: &str,
+        goal: &str,
+        params_hint: &str,
+        sibling_context: &str,
+    ) -> String {
         format!(
             r#"You are a goal decomposition expert with access to tools. Break down the goal into executable steps.
 
 {tools_list}
 
-RULES:
-1. Examine the available tools above - each has a name, description, and input_schema.
-2. For each step, if a tool matches, set "tool" to the exact tool name.
-3. Extract parameters from the goal that match the tool's input_schema.
-4. **If the goal does NOT provide the actual value for a parameter, create a user_input step to ask for it.** Do not invent content - ask the user!
-5. If no tool matches exactly, use intent_type "api_call" or "data_transform" without a tool.
-   - IMPORTANT: Do NOT force a tool match if the tool's description doesn't fit the goal.
-   - It is BETTER to leave "tool" as null than to pick a wrong tool.
-   - If you need a capability that isn't in the list (e.g., "group_by", "summarize", "aggregate"), use "tool": null.
-6. **NO DUPLICATE TOOLS**: Each tool should typically appear ONCE in the plan.
-   - API tools (like list_issues, search, get_*) ONLY fetch data - they do NOT transform it.
-   - If the goal requires fetching then transforming (e.g., "fetch issues then group by label"), use TWO steps:
-     a) Step 1: API call with the fetch tool (list_issues)
-     b) Step 2: data_transform with "tool": null for the transformation (grouping, aggregation, etc.)
-7. When data is already available, produce an "output" step (e.g., with ccos.io.println) instead of asking the user.
-8. Use CONCRETE values, not placeholders. For dates, use ISO 8601 format (YYYY-MM-DD). Today is {today}.
-9. For "weekly" or "last 7 days", calculate the actual date: {week_ago}.
-
-INTENT TYPES:
-- "user_input": Ask the user for missing information
-- "api_call": External API operation - use tool name if available
-- "data_transform": Process/filter/sort data locally
-- "output": Display results to user
-
-RTFS STEP REFERENCES (use this syntax when a param needs output from a previous step):
-- Reference step output variable: step_0, step_1, step_2... (0-indexed)
-- Access map key: (get step_0 :issues)
-- Access array element: (nth step_0 0)
-- Chained access: (get (nth (get step_0 :items) 0) :number)
-- Example: if step 1 filters issues from step 0, use: "data": "step_0"
-- Example: to get issue number from first item: "issue_number": "(get (nth step_0 0) :number)"
-
-RTFS SYNTAX RULES (NOT Clojure - simpler syntax):
-- NO namespace prefixes: use \"split\" NOT \"str/split\" or \"clojure.string/split\"
-- NO regex literals: use plain strings \"pattern\" NOT #\"pattern\"
-- NO anonymous functions: use named functions NOT #(...)
-- Keywords use colons: :name, :issues, :body (not 'name or \"name\" for map keys)
-
-IMPORTANT OUTPUT BEHAVIORS:
-- ccos.data.select with count=1 returns the ITEM DIRECTLY (not a list), so use (get step_N :field) not (nth step_N 0)
-- ccos.data.sort/filter/select automatically extract lists from nested map structures - no separate extraction step needed
-
 GOAL: "{goal}"
 {params_hint}{sibling_context}
+
+RTFS SYNTAX RULES (CRITICAL - RTFS is NOT Clojure!):
+- NO namespace prefixes: use "split" NOT "clojure.string/split"
+- NO Clojure functions: map-indexed, inc, dec, some, sort-by, apply, partial, clojure.anything
+- Use ONLY: get, map, filter, reduce, first, rest, count, empty?, str, +, -, *, /, =, not=, <, >, and, or, not, if, let
+- For increment: use (+ n 1) NOT (inc n)
+- For string joining: use (reduce str items) NOT (clojure.string/join ...)
 
 Respond with ONLY valid JSON:
 {{
@@ -327,16 +358,11 @@ Respond with ONLY valid JSON:
     }}
   ]
 }}
-
-CRITICAL: "depends_on" MUST be an array of NUMERIC step indices (0, 1, 2...), NOT step descriptions.
-Example: if step 2 depends on step 0, use "depends_on": [0] - NOT "depends_on": ["description of step 0"]
 "#,
             tools_list = tools_list,
             goal = goal,
             params_hint = params_hint,
             sibling_context = sibling_context,
-            today = chrono::Utc::now().format("%Y-%m-%d"),
-            week_ago = (chrono::Utc::now() - chrono::Duration::days(7)).format("%Y-%m-%d"),
         )
     }
 }

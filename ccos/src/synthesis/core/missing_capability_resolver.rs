@@ -1202,7 +1202,8 @@ impl MissingCapabilityResolver {
             if let Err(err) = store.remove(capability_pattern) {
                 ccos_eprintln!(
                     "⚠️  Failed to remove tool alias for '{}': {}",
-                    capability_pattern, err
+                    capability_pattern,
+                    err
                 );
             }
         }
@@ -1219,7 +1220,9 @@ impl MissingCapabilityResolver {
         if self.config.verbose_logging {
             ccos_eprintln!(
                 "🔁 Alias cache hit for '{}' → {} / {}",
-                capability_id, alias.server_name, alias.tool_name
+                capability_id,
+                alias.server_name,
+                alias.tool_name
             );
         }
 
@@ -1228,7 +1231,8 @@ impl MissingCapabilityResolver {
                 if let Err(err) = self.persist_discovered_mcp_capability(&manifest) {
                     ccos_eprintln!(
                         "⚠️  Failed to persist MCP alias capability '{}': {}",
-                        manifest.id, err
+                        manifest.id,
+                        err
                     );
                 }
                 return Ok(Some(manifest));
@@ -1246,7 +1250,8 @@ impl MissingCapabilityResolver {
             Err(err) => {
                 ccos_eprintln!(
                     "⚠️  Failed to materialize alias for '{}': {}",
-                    capability_id, err
+                    capability_id,
+                    err
                 );
                 Ok(None)
             }
@@ -1427,7 +1432,8 @@ impl MissingCapabilityResolver {
                 let actual_capability_id = manifest.id.clone();
                 ccos_eprintln!(
                     "✅ DISCOVERY: Successfully discovered capability '{}' -> registered as '{}'",
-                    capability_id_normalized, actual_capability_id
+                    capability_id_normalized,
+                    actual_capability_id
                 );
                 quiet_eprintln!(
                     "✅ DISCOVERY: Successfully discovered capability '{}'",
@@ -1521,22 +1527,64 @@ impl MissingCapabilityResolver {
 
                 // 4. External LLM Hint Strategy
                 if self.feature_checker.is_llm_synthesis_enabled() {
-                    if let Some(manifest) = self
-                        .attempt_llm_capability_synthesis(request, &capability_id_normalized)
-                        .await?
-                    {
-                        self.marketplace
-                            .register_capability_manifest(manifest.clone())
-                            .await?;
+                    // Governance gate: Check synthesis authorization based on risk
+                    let risk_assessment =
+                        RiskAssessment::assess(&capability_id_normalized, &self.config);
 
-                        self.trigger_auto_resume_for_capability(&capability_id_normalized)
-                            .await?;
+                    match risk_assessment.priority {
+                        ResolutionPriority::Critical => {
+                            // Critical risk: block synthesis entirely
+                            self.emit_event(
+                                &capability_id_normalized,
+                                "governance_blocked",
+                                format!("LLM synthesis blocked for critical-risk capability (security: {:?})", 
+                                    risk_assessment.security_concerns),
+                                None,
+                            );
+                            ccos_eprintln!(
+                                "🛑 GOVERNANCE: LLM synthesis blocked for '{}' (critical risk)",
+                                capability_id_normalized
+                            );
+                        }
+                        ResolutionPriority::High if risk_assessment.requires_human_approval => {
+                            // High risk requiring approval: skip synthesis, return to user interaction
+                            self.emit_event(
+                                &capability_id_normalized,
+                                "governance_approval_required",
+                                format!(
+                                    "LLM synthesis requires human approval (compliance: {:?})",
+                                    risk_assessment.compliance_requirements
+                                ),
+                                None,
+                            );
+                            ccos_eprintln!(
+                                "⚠️  GOVERNANCE: LLM synthesis for '{}' requires human approval",
+                                capability_id_normalized
+                            );
+                        }
+                        _ => {
+                            // Low/Medium risk or high risk without approval required: proceed
+                            if let Some(manifest) = self
+                                .attempt_llm_capability_synthesis(
+                                    request,
+                                    &capability_id_normalized,
+                                )
+                                .await?
+                            {
+                                self.marketplace
+                                    .register_capability_manifest(manifest.clone())
+                                    .await?;
 
-                        return Ok(ResolutionResult::Resolved {
-                            capability_id: manifest.id.clone(),
-                            resolution_method: "llm_synthesis".to_string(),
-                            provider_info: Some("llm_auto_generated".to_string()),
-                        });
+                                self.trigger_auto_resume_for_capability(&capability_id_normalized)
+                                    .await?;
+
+                                return Ok(ResolutionResult::Resolved {
+                                    capability_id: manifest.id.clone(),
+                                    resolution_method: "llm_synthesis".to_string(),
+                                    provider_info: Some("llm_auto_generated".to_string()),
+                                });
+                            }
+                        }
                     }
                 }
 
@@ -1599,7 +1647,9 @@ impl MissingCapabilityResolver {
 
         let Some(capability_rtfs) = extract_capability_rtfs_from_response(&response) else {
             if self.config.verbose_logging {
-                ccos_eprintln!("❌ LLM synthesis response did not contain a `(capability ...)` form.");
+                ccos_eprintln!(
+                    "❌ LLM synthesis response did not contain a `(capability ...)` form."
+                );
             }
             return Ok(None);
         };
@@ -2448,7 +2498,8 @@ impl MissingCapabilityResolver {
         if !curated.is_empty() {
             ccos_eprintln!(
                 "📦 MCP DISCOVERY: Loaded {} curated MCP server override(s) for '{}'",
-                curated_len, capability_id
+                curated_len,
+                capability_id
             );
             if self.config.verbose_logging {
                 quiet_eprintln!(
@@ -2644,7 +2695,9 @@ impl MissingCapabilityResolver {
 
         ccos_eprintln!(
             "🔍 MCP DISCOVERY: Introspecting server '{}' at '{}' for capability '{}'",
-            selected_server.name, server_url, capability_id
+            selected_server.name,
+            server_url,
+            capability_id
         );
 
         self.emit_event(
@@ -2772,7 +2825,8 @@ impl MissingCapabilityResolver {
         if candidates.is_empty() {
             ccos_eprintln!(
                 "⚠️ MCP DISCOVERY: No tool candidates matched for '{}' from server '{}'",
-                capability_id, selected_server.name
+                capability_id,
+                selected_server.name
             );
             if self.config.verbose_logging {
                 ccos_eprintln!(
@@ -2818,7 +2872,9 @@ impl MissingCapabilityResolver {
                 if self.config.verbose_logging {
                     ccos_eprintln!(
                         "✅ DISCOVERY: Heuristic match '{}' (score {:.2}, overlap {:.2})",
-                        best.tool_name, best.score, overlap
+                        best.tool_name,
+                        best.score,
+                        overlap
                     );
                 }
                 let mut manifest = manifests.swap_remove(best.index);
@@ -3224,7 +3280,8 @@ impl MissingCapabilityResolver {
                 Err(e) => {
                     ccos_eprintln!(
                         "⚠️ SEMANTIC SEARCH: Failed to search for '{}': {}",
-                        keyword, e
+                        keyword,
+                        e
                     );
                 }
             }
@@ -3404,7 +3461,8 @@ impl MissingCapabilityResolver {
             if self.config.verbose_logging {
                 ccos_eprintln!(
                     "🔍 DISCOVERY: Found web result: {} ({})",
-                    best_result.title, best_result.result_type
+                    best_result.title,
+                    best_result.result_type
                 );
             }
 
@@ -3726,7 +3784,8 @@ impl MissingCapabilityResolver {
             Ok(mut manifest) => {
                 ccos_eprintln!(
                     "💾 Persisting generated capability '{}' (source: {})",
-                    manifest.id, source_label
+                    manifest.id,
+                    source_label
                 );
                 // Mark the resolution source (implementation already extracted by manifest_from_rtfs)
                 manifest
@@ -4012,7 +4071,8 @@ fn convert_expression_to_type_expr(expr: &Expression) -> Result<TypeExpr, String
                 Ok(Err(err)) => {
                     ccos_eprintln!(
                         "⚠️  Type expression parse error for schema '{}': {:?}; defaulting to :any",
-                        schema_src, err
+                        schema_src,
+                        err
                     );
                     Ok(TypeExpr::Any)
                 }

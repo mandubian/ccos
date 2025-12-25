@@ -1,3 +1,4 @@
+use crate::arbiter::llm_provider::LlmProvider;
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::synthesis::introspection::api_introspector::APIIntrospector;
 use crate::synthesis::introspection::auth_injector::AuthInjector;
@@ -5,6 +6,7 @@ use crate::synthesis::introspection::mcp_introspector::MCPIntrospector;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Capability synthesis request
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +117,8 @@ pub struct CapabilitySynthesizer {
     mock_mode: bool,
     /// Feature flag for enabling synthesis
     synthesis_enabled: bool,
+    /// Optional LLM provider for actual synthesis
+    llm_provider: Option<Arc<dyn LlmProvider>>,
 }
 
 impl CapabilitySynthesizer {
@@ -124,6 +128,17 @@ impl CapabilitySynthesizer {
             auth_injector: AuthInjector::new(),
             mock_mode: false,
             synthesis_enabled: true,
+            llm_provider: None,
+        }
+    }
+
+    /// Create with LLM provider for actual synthesis
+    pub fn with_llm_provider(llm_provider: Arc<dyn LlmProvider>) -> Self {
+        Self {
+            auth_injector: AuthInjector::new(),
+            mock_mode: false,
+            synthesis_enabled: true,
+            llm_provider: Some(llm_provider),
         }
     }
 
@@ -133,6 +148,7 @@ impl CapabilitySynthesizer {
             auth_injector: AuthInjector::mock(),
             mock_mode: true,
             synthesis_enabled: true,
+            llm_provider: None,
         }
     }
 
@@ -142,6 +158,7 @@ impl CapabilitySynthesizer {
             auth_injector: AuthInjector::new(),
             mock_mode: false,
             synthesis_enabled: enabled,
+            llm_provider: None,
         }
     }
 
@@ -160,18 +177,217 @@ impl CapabilitySynthesizer {
             return self.generate_mock_capability(request);
         }
 
-        // In real implementation, this would:
-        // 1. Call LLM with guardrailed prompt
-        // 2. Parse and validate the response
-        // 3. Run static analysis checks
-        // 4. Generate capability manifest
+        // Check if we have an LLM provider
+        let provider = match &self.llm_provider {
+            Some(p) => p,
+            None => {
+                return Err(RuntimeError::Generic(
+                    "LLM synthesis requires an LLM provider. Use CapabilitySynthesizer::with_llm_provider()".to_string(),
+                ));
+            }
+        };
 
         eprintln!("🤖 Synthesizing capability: {}", request.capability_name);
 
-        // Placeholder for LLM integration
-        Err(RuntimeError::Generic(
-            "LLM synthesis not yet implemented - requires LLM integration".to_string(),
-        ))
+        // Build the synthesis prompt
+        let prompt = self.build_rtfs_synthesis_prompt(request);
+
+        // Call LLM
+        let llm_response = provider.generate_text(&prompt).await?;
+
+        // Extract RTFS code from response
+        let rtfs_code = self.extract_rtfs_code(&llm_response).ok_or_else(|| {
+            RuntimeError::Generic(format!(
+                "Failed to extract RTFS code from LLM response: {}",
+                &llm_response[..llm_response.len().min(200)]
+            ))
+        })?;
+
+        // Parse and validate the RTFS
+        rtfs::parser::parse_expression(&rtfs_code).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Synthesized RTFS failed to parse: {:?}\nCode: {}",
+                e, rtfs_code
+            ))
+        })?;
+
+        // Run static analysis
+        let (safety_passed, warnings) = self.run_static_analysis(&rtfs_code)?;
+
+        // Create capability manifest
+        let capability = self.create_capability_manifest(request, &rtfs_code);
+
+        eprintln!("✅ Synthesized valid RTFS: {} chars", rtfs_code.len());
+
+        Ok(SynthesisResult {
+            capability,
+            implementation_code: rtfs_code,
+            quality_score: if safety_passed { 0.8 } else { 0.5 },
+            safety_passed,
+            warnings,
+        })
+    }
+
+    /// Build the RTFS synthesis prompt with guardrails
+    fn build_rtfs_synthesis_prompt(&self, request: &SynthesisRequest) -> String {
+        let description = request
+            .description
+            .as_deref()
+            .unwrap_or(&request.capability_name);
+
+        format!(
+            r#"Generate a pure RTFS capability function for the following need:
+
+**Need:** {}
+
+**RTFS Language Rules (IMPORTANT - NOT Clojure!):**
+RTFS is a pure functional language. It looks like Clojure but has key differences:
+
+SUPPORTED:
+- Anonymous functions: (fn [a b] (+ a b))
+- Vectors: [1 2 3]
+- Maps: {{"key" value}}
+- Keywords: :keyword
+- let, if, do, match, reduce, map, filter
+
+NOT SUPPORTED (will cause parse errors):
+- Quote syntax: '() or 'expr - DO NOT USE
+- Atoms/mutation: atom, deref, reset!, swap!, @atom - DO NOT USE  
+- Set literals: #{{}} - DO NOT USE
+- Regex literals: #"pattern" - DO NOT USE
+- cons function - use conj instead
+
+**Available Primitives:**
++, -, *, /, str, first, rest, count, map, filter, reduce, get, assoc, conj, concat, reverse, nth, empty?, mod, =, <, >, <=, >=
+
+**Examples of valid RTFS functions:**
+
+For "multiply two numbers":
+```rtfs
+(fn [a b] (* a b))  
+```
+
+For "get first element":
+```rtfs
+(fn [items] (first items))
+```
+
+For "sum a list":
+```rtfs
+(fn [numbers] (reduce + 0 numbers))
+```
+
+**Now generate the RTFS function for: {}**
+
+Wrap your answer in ```rtfs code blocks. Keep it simple and pure:
+"#,
+            description, description
+        )
+    }
+
+    /// Extract RTFS code from LLM response
+    fn extract_rtfs_code(&self, response: &str) -> Option<String> {
+        // Try to find ```rtfs code block first
+        if let Some(start) = response.find("```rtfs") {
+            let code_start = start + 7;
+            if let Some(end) = response[code_start..].find("```") {
+                return Some(response[code_start..code_start + end].trim().to_string());
+            }
+        }
+
+        // Try generic code block
+        if let Some(start) = response.find("```") {
+            let after_ticks = &response[start + 3..];
+            // Skip language identifier if present
+            let code_start = if let Some(newline) = after_ticks.find('\n') {
+                start + 3 + newline + 1
+            } else {
+                start + 3
+            };
+            if let Some(end) = response[code_start..].find("```") {
+                return Some(response[code_start..code_start + end].trim().to_string());
+            }
+        }
+
+        // Try to find a standalone (fn ...) expression
+        if let Some(start) = response.find("(fn ") {
+            let mut depth = 0;
+            let mut end = start;
+            for (i, ch) in response[start..].char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = start + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if end > start {
+                return Some(response[start..end].to_string());
+            }
+        }
+
+        None
+    }
+
+    /// Create capability manifest for synthesized code
+    fn create_capability_manifest(
+        &self,
+        request: &SynthesisRequest,
+        rtfs_code: &str,
+    ) -> CapabilityManifest {
+        let capability_id = format!("synthesized.{}", request.capability_name.replace(' ', "_"));
+
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "llm_synthesized".to_string());
+        metadata.insert("status".to_string(), "experimental".to_string());
+        metadata.insert("guardrailed".to_string(), "true".to_string());
+        metadata.insert("needs_review".to_string(), "true".to_string());
+        metadata.insert("rtfs_code".to_string(), rtfs_code.to_string());
+
+        let mut effects = vec![];
+        if request.requires_auth {
+            effects.push(":auth".to_string());
+        }
+
+        CapabilityManifest {
+            id: capability_id.clone(),
+            name: request.capability_name.clone(),
+            description: request
+                .description
+                .clone()
+                .unwrap_or_else(|| format!("Synthesized capability: {}", request.capability_name)),
+            provider: crate::capability_marketplace::types::ProviderType::Local(
+                crate::capability_marketplace::types::LocalCapability {
+                    handler: std::sync::Arc::new(|_| {
+                        Ok(rtfs::runtime::values::Value::String(
+                            "Synthesized capability - use RTFS code".to_string(),
+                        ))
+                    }),
+                },
+            ),
+            version: "1.0.0".to_string(),
+            input_schema: None,  // Synthesized capabilities have dynamic schemas
+            output_schema: None, // Synthesized capabilities have dynamic schemas
+            attestation: None,
+            provenance: Some(crate::capability_marketplace::types::CapabilityProvenance {
+                source: "llm_synthesizer".to_string(),
+                version: Some("1.0.0".to_string()),
+                content_hash: format!("synthesized_{}", request.capability_name),
+                custody_chain: vec!["llm_synthesizer".to_string()],
+                registered_at: chrono::Utc::now(),
+            }),
+            permissions: vec![],
+            effects,
+            metadata,
+            agent_metadata: None,
+            domains: Vec::new(),
+            categories: Vec::new(),
+        }
     }
 
     /// Synthesize multiple specialized capabilities from API documentation

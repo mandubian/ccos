@@ -1,8 +1,8 @@
 # Missing Capability Resolution System
 
 **Status**: Authoritative  
-**Version**: 1.1  
-**Last Updated**: 2025-12-22  
+**Version**: 1.2  
+**Last Updated**: 2025-12-25  
 **Scope**: Complete missing capability detection, resolution, and registration system
 
 ---
@@ -731,9 +731,67 @@ impl ContinuousResolutionLoop {
 
 ---
 
-## 12. CLI Tools
+## 12. LLM Synthesis Governance Gate
 
-### 12.1 resolve-deps Command
+### 12.1 Overview
+
+Before invoking LLM synthesis, the `MissingCapabilityResolver` runs a governance gate to assess risk and block or approve synthesis based on capability characteristics.
+
+### 12.2 Governance Flow
+
+```rust
+// In resolve_capability() → attempt_llm_capability_synthesis branch
+if self.feature_checker.is_llm_synthesis_enabled() {
+    let risk = RiskAssessment::assess(&capability_id, &self.config);
+    
+    match risk.priority {
+        ResolutionPriority::Critical => {
+            // Block synthesis entirely
+            self.emit_event(&capability_id, "governance_blocked", ...);
+        }
+        ResolutionPriority::High if risk.requires_human_approval => {
+            // Skip synthesis, fall back to user interaction
+            self.emit_event(&capability_id, "governance_approval_required", ...);
+        }
+        _ => {
+            // Proceed with LLM synthesis
+            self.attempt_llm_capability_synthesis(request, &capability_id).await?;
+        }
+    }
+}
+```
+
+### 12.3 Risk Detection Keywords
+
+Capabilities are assessed based on ID patterns:
+
+| Pattern | Risk Factor | Example |
+|---------|-------------|---------|
+| `admin`, `root`, `sudo` | Security concerns | `admin.delete_user` |
+| `payment`, `financial`, `billing` | PCI-DSS compliance | `payment.process` |
+| `auth`, `credential` | High privilege access | `auth.reset_password` |
+| `database`, `delete` | Data protection | `database.drop_table` |
+| `pii`, `personal`, `gdpr` | GDPR compliance | `user.export_pii` |
+
+### 12.4 RTFS Synthesis Prompts
+
+The synthesis prompts include explicit warnings about Clojure syntax that is NOT supported in RTFS:
+
+| Unsupported | Clojure Example | RTFS Alternative |
+|-------------|-----------------|------------------|
+| Quote syntax | `'()`, `'expr` | `[]` (empty vector) |
+| Atoms/mutation | `atom`, `@var` | Pure state |
+| Set literals | `#{1 2}` | Filter for uniqueness |
+| Regex literals | `#"pattern"` | String functions |
+| `cons` | `(cons x list)` | `(conj coll x)` |
+
+These warnings are documented in `assets/prompts/arbiter/capability_synthesis/v1/anti_patterns.md`.
+
+---
+
+## 13. CLI Tools
+
+### 13.1 resolve-deps Command
 
 ```bash
 # Resolve a specific capability
@@ -751,7 +809,7 @@ cargo run --bin resolve-deps -- resume \
 cargo run --bin resolve-deps -- status --capability-id github
 ```
 
-### 12.2 Example Output
+### 13.2 Example Output
 
 ```
 🚀 Bootstrapped marketplace with 5 test capabilities
@@ -784,9 +842,9 @@ cargo run --bin resolve-deps -- status --capability-id github
 
 ---
 
-## 13. Configuration
+## 14. Configuration
 
-### 13.1 Feature Flags
+### 14.1 Feature Flags
 
 ```rust
 pub struct MissingCapabilityConfig {
@@ -799,7 +857,7 @@ pub struct MissingCapabilityConfig {
 }
 ```
 
-### 13.2 Environment Variables
+### 14.2 Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -811,7 +869,7 @@ pub struct MissingCapabilityConfig {
 
 ---
 
-## 14. File Locations
+## 15. File Locations
 
 | Component | Location |
 |-----------|----------|
@@ -830,7 +888,7 @@ pub struct MissingCapabilityConfig {
 
 ---
 
-## 15. See Also
+## 16. See Also
 
 - [030-capability-system-architecture.md](./030-capability-system-architecture.md) - Overall capability system
 - [031-mcp-discovery-unified-service.md](./031-mcp-discovery-unified-service.md) - MCP discovery details

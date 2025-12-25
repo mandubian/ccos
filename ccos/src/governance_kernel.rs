@@ -11,7 +11,9 @@
 //! - Logging all decisions and actions to the Causal Chain.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+
+use crate::arbiter::DelegatingArbiter;
 
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
@@ -225,6 +227,8 @@ pub struct GovernanceKernel {
     orchestrator: Arc<Orchestrator>,
     intent_graph: Arc<Mutex<IntentGraph>>,
     constitution: Constitution,
+    /// Optional reference to the DelegatingArbiter for centralized LLM access
+    delegating_arbiter: RwLock<Option<Arc<DelegatingArbiter>>>,
 }
 
 impl GovernanceKernel {
@@ -234,6 +238,14 @@ impl GovernanceKernel {
             orchestrator,
             intent_graph,
             constitution: Constitution::default(),
+            delegating_arbiter: RwLock::new(None),
+        }
+    }
+
+    /// Set the DelegatingArbiter for centralized LLM access (called after construction)
+    pub fn set_arbiter(&self, arbiter: Arc<DelegatingArbiter>) {
+        if let Ok(mut guard) = self.delegating_arbiter.write() {
+            *guard = Some(arbiter);
         }
     }
 
@@ -332,15 +344,81 @@ impl GovernanceKernel {
             Value::String(execution_mode.clone()),
         );
 
-        // --- 7. Execution ---
+        // --- 7a. Pre-execution Parse Validation with LLM Repair ---
+        // Validate RTFS syntax before execution, attempt LLM repair if parsing fails
+        let mut plan_to_execute = safe_plan.clone();
+        if let PlanBody::Rtfs(ref rtfs_code) = safe_plan.body {
+            use rtfs::parser::parse_expression;
+            if let Err(parse_err) = parse_expression(rtfs_code.trim()) {
+                log::warn!(
+                    "[GovernanceKernel] RTFS parse error detected, attempting LLM repair: {:?}",
+                    parse_err
+                );
+
+                // Try LLM repair for parse errors
+                use crate::synthesis::validation::{llm_repair_runtime_error, ValidationConfig};
+                let validation_config = ValidationConfig::default();
+
+                if validation_config.enable_runtime_repair {
+                    let error_msg = format!("RTFS parse error: {:?}", parse_err);
+                    let mut current_code = rtfs_code.clone();
+
+                    for attempt in 1..=validation_config.max_runtime_repair_attempts {
+                        log::info!(
+                            "[GovernanceKernel] LLM parse-error repair attempt {}/{}",
+                            attempt,
+                            validation_config.max_runtime_repair_attempts
+                        );
+
+                        match llm_repair_runtime_error(
+                            &current_code,
+                            &error_msg,
+                            attempt,
+                            &validation_config,
+                        )
+                        .await
+                        {
+                            Ok(Some(repaired_code)) => {
+                                // Validate repaired code parses
+                                if parse_expression(repaired_code.trim()).is_ok() {
+                                    log::info!(
+                                        "[GovernanceKernel] LLM parse repair succeeded on attempt {}",
+                                        attempt
+                                    );
+                                    plan_to_execute.body = PlanBody::Rtfs(repaired_code);
+                                    break;
+                                } else {
+                                    log::warn!(
+                                        "[GovernanceKernel] LLM repair still has parse errors, continuing"
+                                    );
+                                    current_code = repaired_code;
+                                }
+                            }
+                            Ok(None) => {
+                                log::info!(
+                                    "[GovernanceKernel] LLM parse repair returned no fix, stopping"
+                                );
+                                break;
+                            }
+                            Err(e) => {
+                                log::warn!("[GovernanceKernel] LLM parse repair error: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- 7b. Execution ---
         // If all checks pass, delegate execution to the Orchestrator.
         // Execution mode is passed via context cross_plan_params for RuntimeHost to use
         let result = self
             .orchestrator
-            .execute_plan(&safe_plan, &context_with_mode)
+            .execute_plan(&plan_to_execute, &context_with_mode)
             .await;
 
-        // --- 7b. Reactive Auto-Repair (fast pattern-based, then LLM dialog) ---
+        // --- 7c. Reactive Auto-Repair (fast pattern-based, then LLM dialog) ---
         // On runtime errors, attempt fast pattern-based repair first, then LLM dialog
         if let Err(ref e) = result {
             let error_msg = e.to_string();
@@ -378,90 +456,145 @@ impl GovernanceKernel {
                 }
 
                 // --- LLM Dialog Repair Loop ---
-                // If pattern-based repair didn't work, try LLM dialog repair
-                use crate::synthesis::validation::{llm_repair_runtime_error, ValidationConfig};
-                let validation_config = ValidationConfig::default();
+                // Uses DelegatingArbiter for centralized LLM access
+                let arbiter_opt = {
+                    self.delegating_arbiter
+                        .read()
+                        .ok()
+                        .and_then(|guard| guard.clone())
+                };
 
-                if validation_config.enable_runtime_repair {
+                if let Some(arbiter) = arbiter_opt {
+                    let max_repair_attempts = 3;
                     let mut current_plan = rtfs_code.clone();
                     let mut last_error = error_msg.clone();
 
-                    for attempt in 1..=validation_config.max_runtime_repair_attempts {
-                        log::info!(
-                            "[GovernanceKernel] LLM dialog repair attempt {}/{}",
+                    for attempt in 1..=max_repair_attempts {
+                        ccos_eprintln!(
+                            "🔧 [GovernanceKernel] LLM repair attempt {}/{}",
                             attempt,
-                            validation_config.max_runtime_repair_attempts
+                            max_repair_attempts
                         );
 
-                        match llm_repair_runtime_error(
-                            &current_plan,
-                            &last_error,
-                            attempt,
-                            &validation_config,
-                        )
-                        .await
-                        {
-                            Ok(Some(repaired_code)) => {
-                                log::info!(
-                                    "[GovernanceKernel] LLM produced repaired plan, validating..."
-                                );
+                        // Build repair prompt
+                        let prompt = format!(
+                            r#"You are fixing an RTFS plan that failed during execution.
 
-                                // Create repaired plan
-                                let mut repaired_plan = safe_plan.clone();
-                                repaired_plan.body = PlanBody::Rtfs(repaired_code.clone());
+Original plan:
+```rtfs
+{}
+```
 
-                                // Re-validate against constitution
-                                if let Err(e) = self
-                                    .validate_against_constitution(&repaired_plan, &execution_mode)
+Runtime error:
+{}
+
+Repair attempt: {} of {}
+
+Analyze the error and fix the plan. Common runtime issues:
+- Type mismatch: Check parameter types (e.g., enum values like "OPEN" vs "all")
+- `expected vector, got map`: Use (get x :key) to extract array field first
+- `expected map, got vector`: Data is already a collection - use it directly
+- `Undefined symbol`: Use only RTFS stdlib functions (map, filter, reduce, get, etc.)
+
+RTFS stdlib includes: map, filter, reduce, first, rest, conj, get, assoc, count, empty?, nil?, +, -, *, /, =, not=, and, or, not, if, let, fn
+
+Respond with ONLY the corrected RTFS plan code, no explanations."#,
+                            current_plan, last_error, attempt, max_repair_attempts
+                        );
+
+                        match arbiter.generate_raw_text(&prompt).await {
+                            Ok(response) => {
+                                // Extract RTFS code from response
+                                let repaired = Self::extract_rtfs_code(&response);
+
+                                // Basic sanity check
+                                if repaired.contains("(let")
+                                    || repaired.contains("(call")
+                                    || repaired.contains("(do")
                                 {
-                                    log::warn!(
-                                        "[GovernanceKernel] Repaired plan failed constitution: {}",
-                                        e
+                                    ccos_eprintln!(
+                                        "🔧 [GovernanceKernel] LLM produced candidate fix"
                                     );
-                                    current_plan = repaired_code;
-                                    last_error = e.to_string();
-                                    continue;
-                                }
 
-                                // Try executing the repaired plan
-                                match self
-                                    .orchestrator
-                                    .execute_plan(&repaired_plan, &context_with_mode)
-                                    .await
-                                {
-                                    Ok(exec_result) => {
-                                        log::info!(
-                                            "[GovernanceKernel] LLM repair succeeded on attempt {}",
-                                            attempt
+                                    // Create repaired plan
+                                    let mut repaired_plan = safe_plan.clone();
+                                    repaired_plan.body = PlanBody::Rtfs(repaired.clone());
+
+                                    // Re-validate against constitution
+                                    if let Err(e) = self.validate_against_constitution(
+                                        &repaired_plan,
+                                        &execution_mode,
+                                    ) {
+                                        ccos_eprintln!(
+                                            "⚠️  [GovernanceKernel] Repaired plan failed constitution: {}",
+                                            e
                                         );
-                                        return Ok(exec_result);
+                                        current_plan = repaired;
+                                        last_error = e.to_string();
+                                        continue;
                                     }
-                                    Err(exec_err) => {
-                                        log::warn!(
-                                            "[GovernanceKernel] Repaired plan still failed: {}",
-                                            exec_err
-                                        );
-                                        // Continue dialog with new error
-                                        current_plan = repaired_code;
-                                        last_error = exec_err.to_string();
+
+                                    // Try executing the repaired plan
+                                    match self
+                                        .orchestrator
+                                        .execute_plan(&repaired_plan, &context_with_mode)
+                                        .await
+                                    {
+                                        Ok(exec_result) => {
+                                            ccos_eprintln!(
+                                                "✅ [GovernanceKernel] LLM repair succeeded on attempt {}",
+                                                attempt
+                                            );
+                                            ccos_eprintln!("📝 Repaired Plan:\n{}", repaired);
+                                            return Ok(exec_result);
+                                        }
+                                        Err(exec_err) => {
+                                            ccos_eprintln!(
+                                                "⚠️  [GovernanceKernel] Repaired plan still failed: {}",
+                                                exec_err
+                                            );
+                                            current_plan = repaired;
+                                            last_error = exec_err.to_string();
+                                        }
                                     }
+                                } else {
+                                    ccos_eprintln!("⚠️  [GovernanceKernel] LLM repair produced invalid response");
+                                    break;
                                 }
-                            }
-                            Ok(None) => {
-                                log::info!("[GovernanceKernel] LLM repair returned no fix, stopping dialog");
-                                break;
                             }
                             Err(e) => {
-                                log::warn!("[GovernanceKernel] LLM repair error: {}", e);
+                                ccos_eprintln!("⚠️  [GovernanceKernel] LLM repair error: {}", e);
                                 break;
                             }
                         }
                     }
+                } else {
+                    log::debug!("[GovernanceKernel] No arbiter available for LLM repair");
                 }
             }
         }
 
         result
+    }
+
+    /// Extract RTFS code from LLM response (handles markdown code blocks)
+    fn extract_rtfs_code(response: &str) -> String {
+        // Check for markdown code block with rtfs tag
+        if let Some(start) = response.find("```rtfs") {
+            if let Some(end) = response[start + 7..].find("```") {
+                return response[start + 7..start + 7 + end].trim().to_string();
+            }
+        }
+        // Check for generic code block
+        if let Some(start) = response.find("```") {
+            if let Some(end) = response[start + 3..].find("```") {
+                return response[start + 3..start + 3 + end].trim().to_string();
+            }
+            // If it starts with ``` but doesn't have closing, take rest as code
+            return response[start + 3..].trim().to_string();
+        }
+        // Return as-is if no code block found
+        response.trim().to_string()
     }
 
     /// Retrieves the primary intent associated with the plan, if present.
