@@ -64,9 +64,18 @@ Note: The predicate uses:
 - `str` to convert values to strings when needed
 
 - Allowed RTFS constructs:
-  - `do`, `let`, `call`, `get`, `assoc`, `dissoc`, `if`, `match`, `map`, `filter`, `reduce`, `contains?`, primitive arithmetic, comparisons, and helpers documented in SecureStandardLibrary.
+  - `do`, `let`, `call`, `get`, `assoc`, `dissoc`, `if`, `match`, `map`, `filter`, `reduce`, `group-by`, `contains?`, primitive arithmetic, comparisons, and helpers documented in SecureStandardLibrary.
   - Anonymous functions via `(fn [args] body)` when (and only when) the capability parameter expects a function.
   - `rtfs20` literal syntax only; **do not** use `clojure.string`, Common Lisp macros, or any host-language namespaces.
+
+- **Collection Transformation Functions**:
+  - `map` - Apply function to each item: `(map (fn [x] ...) collection)`
+  - `filter` - Keep items matching predicate: `(filter (fn [x] ...) collection)`
+  - `reduce` - Fold collection into single value: `(reduce (fn [acc x] ...) initial collection)`
+  - `group-by` - Group items by key function result: `(group-by (fn [x] (get x :field)) collection)`
+    - Returns a map where keys are the results of applying key-fn, values are vectors of items
+    - Also accepts keywords as key-fn: `(group-by :state issues)` is equivalent to `(group-by (fn [x] (get x :state)) issues)`
+    - Example: `(group-by :author issues)` → `{"alice" [issue1 issue3] "bob" [issue2]}`
 
 - **RTFS String Functions** (use these, not namespace syntax):
   - `string-contains` - Check if a string contains a substring: `(string-contains haystack needle)`

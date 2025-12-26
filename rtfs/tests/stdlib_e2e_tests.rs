@@ -302,6 +302,85 @@ impl StdlibTestRunner {
         )?;
         self.run_test("(conj [] 1)", Value::Vector(vec![Value::Integer(1)]))?;
 
+        // Group-by tests
+        // Test group-by with keyword as key-fn
+        let mut expected_map = std::collections::HashMap::new();
+        expected_map.insert(
+            rtfs::ast::MapKey::String("open".to_string()),
+            Value::Vector(vec![
+                Value::Map({
+                    let mut m = std::collections::HashMap::new();
+                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())), Value::String("open".to_string()));
+                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("id".to_string())), Value::Integer(1));
+                    m
+                }),
+                Value::Map({
+                    let mut m = std::collections::HashMap::new();
+                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())), Value::String("open".to_string()));
+                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("id".to_string())), Value::Integer(3));
+                    m
+                }),
+            ]),
+        );
+        expected_map.insert(
+            rtfs::ast::MapKey::String("closed".to_string()),
+            Value::Vector(vec![
+                Value::Map({
+                    let mut m = std::collections::HashMap::new();
+                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())), Value::String("closed".to_string()));
+                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("id".to_string())), Value::Integer(2));
+                    m
+                }),
+            ]),
+        );
+        self.run_test(
+            "(group-by :state [{:state \"open\" :id 1} {:state \"closed\" :id 2} {:state \"open\" :id 3}])",
+            Value::Map(expected_map),
+        )?;
+
+        // Test group-by with function as key-fn
+        self.run_test(
+            "(group-by (fn [x] (get x :state)) [{:state \"a\" :v 1} {:state \"b\" :v 2} {:state \"a\" :v 3}])",
+            {
+                let mut m = std::collections::HashMap::new();
+                m.insert(
+                    rtfs::ast::MapKey::String("a".to_string()),
+                    Value::Vector(vec![
+                        Value::Map({
+                            let mut inner = std::collections::HashMap::new();
+                            inner.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())), Value::String("a".to_string()));
+                            inner.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("v".to_string())), Value::Integer(1));
+                            inner
+                        }),
+                        Value::Map({
+                            let mut inner = std::collections::HashMap::new();
+                            inner.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())), Value::String("a".to_string()));
+                            inner.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("v".to_string())), Value::Integer(3));
+                            inner
+                        }),
+                    ]),
+                );
+                m.insert(
+                    rtfs::ast::MapKey::String("b".to_string()),
+                    Value::Vector(vec![
+                        Value::Map({
+                            let mut inner = std::collections::HashMap::new();
+                            inner.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())), Value::String("b".to_string()));
+                            inner.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("v".to_string())), Value::Integer(2));
+                            inner
+                        }),
+                    ]),
+                );
+                Value::Map(m)
+            },
+        )?;
+
+        // Test group-by on empty collection
+        self.run_test(
+            "(group-by :state [])",
+            Value::Map(std::collections::HashMap::new()),
+        )?;
+
         println!("✅ All collection function tests passed!");
         Ok(())
     }

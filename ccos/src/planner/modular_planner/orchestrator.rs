@@ -27,6 +27,7 @@ use crate::capability_marketplace::CapabilityMarketplace;
 use crate::intent_graph::storage::Edge;
 use crate::intent_graph::IntentGraph;
 use crate::plan_archive::PlanArchive;
+use crate::synthesis::core::{SynthesizedCapability, SynthesizedCapabilityStorage};
 use crate::synthesis::enqueue_missing_capability_placeholder;
 use crate::synthesis::missing_capability_resolver::{
     MissingCapabilityRequest, MissingCapabilityResolver, ResolutionResult,
@@ -1204,6 +1205,11 @@ impl ModularPlanner {
                         }
                     }
                 }
+            }
+
+            // Save synthesized capabilities for reuse
+            if has_pending_synth {
+                self.save_synthesized_capabilities(&decomp_result.sub_intents, &resolutions, goal);
             }
         }
 
@@ -2734,6 +2740,89 @@ impl ModularPlanner {
 
         log::info!("[request_llm_adapter] LLM generated adapter: {}", adapter);
         Some(adapter)
+    }
+
+    /// Save synthesized capabilities for reuse by future planners.
+    ///
+    /// When plan decomposition generates inline RTFS code for transformations
+    /// (marked as `generated/` or `Synthesized` resolutions), this function
+    /// extracts and saves them as proper capability definitions.
+    fn save_synthesized_capabilities(
+        &self,
+        sub_intents: &[SubIntent],
+        resolutions: &HashMap<String, ResolvedCapability>,
+        goal: &str,
+    ) {
+        let storage = SynthesizedCapabilityStorage::new();
+
+        for (intent_id, resolution) in resolutions {
+            // Extract synthesized RTFS code from resolution
+            let (cap_id, rtfs_code, description) = match resolution {
+                ResolvedCapability::Synthesized {
+                    capability_id,
+                    rtfs_code,
+                    ..
+                } => {
+                    // Find the matching sub-intent for description
+                    let desc = sub_intents
+                        .iter()
+                        .find(|si| intent_id.contains(&si.description) || si.description.len() > 10)
+                        .map(|si| si.description.clone())
+                        .unwrap_or_else(|| capability_id.clone());
+                    (capability_id.clone(), rtfs_code.clone(), desc)
+                }
+                ResolvedCapability::NeedsReferral {
+                    suggested_action, ..
+                } if suggested_action.contains("Synth-or-enqueue") => {
+                    // Find the matching sub-intent
+                    if let Some(si) = sub_intents.iter().find(|si| {
+                        intent_id.ends_with(&format!("{:x}", fnv1a64(&si.description) as u32))
+                    }) {
+                        // Check if there's inline RTFS in the extracted params
+                        if let Some(inline_code) = si.extracted_params.get("_inline_rtfs") {
+                            let cap_id = generated_capability_id_from_description(&si.description);
+                            (cap_id, inline_code.clone(), si.description.clone())
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+                _ => continue,
+            };
+
+            // Skip if capability already exists
+            if storage.exists(&cap_id) {
+                log::debug!(
+                    "Synthesized capability already exists, skipping: {}",
+                    cap_id
+                );
+                continue;
+            }
+
+            // Create and save the synthesized capability
+            let capability = SynthesizedCapability::new(&description, &rtfs_code)
+                .with_metadata("source_goal", goal)
+                .with_metadata("source_intent_id", intent_id);
+
+            match storage.save(&capability) {
+                Ok(path) => {
+                    ccos_println!(
+                        "✨ Synthesized capability saved for reuse: {} → {}",
+                        capability.id,
+                        path.display()
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to save synthesized capability '{}': {}",
+                        cap_id,
+                        e
+                    );
+                }
+            }
+        }
     }
 }
 
