@@ -474,6 +474,17 @@ impl SecureStandardLibrary {
             })),
         );
 
+        // Group-by function - groups collection items by key function result
+        // (group-by key-fn collection) -> map of key -> [items]
+        env.define(
+            &Symbol("group-by".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "group-by".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::group_by_with_context),
+            })),
+        );
+
         // Contains? function - collection membership test
         env.define(
             &Symbol("contains?".to_string()),
@@ -2251,6 +2262,125 @@ impl SecureStandardLibrary {
             };
         }
         Ok(accumulator)
+    }
+
+    /// Groups collection items by the result of applying key-fn to each item.
+    /// (group-by key-fn collection) -> map of key -> [items with that key]
+    ///
+    /// Example: (group-by (fn [x] (get x :state)) issues)
+    /// Returns: {"open" [issue1 issue2] "closed" [issue3]}
+    fn group_by_with_context(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "group-by".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+        let key_fn = &args[0];
+        let collection = &args[1];
+
+        let collection_vec = match collection {
+            Value::Vector(v) | Value::List(v) => v.clone(),
+            _ => {
+                return Err(RuntimeError::TypeError {
+                    expected: "vector or list".to_string(),
+                    actual: collection.type_name().to_string(),
+                    operation: "group-by".to_string(),
+                })
+            }
+        };
+
+        let mut groups: std::collections::HashMap<MapKey, Vec<Value>> =
+            std::collections::HashMap::new();
+
+        for item in collection_vec {
+            // Apply key-fn to get the grouping key
+            let key_value = match key_fn {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    (builtin_func.func)(func_args)?
+                }
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    (builtin_func.func)(func_args, evaluator, env)?
+                }
+                Value::Function(Function::Closure(closure)) => {
+                    if closure.params.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "group-by key-fn".to_string(),
+                            expected: "1".to_string(),
+                            actual: 0,
+                        });
+                    }
+                    let mut func_env = Environment::with_parent(closure.env.clone());
+                    func_env.define(&closure.params[0], item.clone());
+                    match evaluator.eval_expr(&closure.body, &mut func_env)? {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(_hc) => {
+                            return Err(RuntimeError::Generic(
+                                "Host call required in group-by key function".into(),
+                            ))
+                        }
+                        #[cfg(feature = "effect-boundary")]
+                        ExecutionOutcome::RequiresHost(_) => {
+                            return Err(RuntimeError::Generic(
+                                "Host effect required in group-by key function".to_string(),
+                            ))
+                        }
+                    }
+                }
+                // Also support keywords as key-fn: (group-by :state issues)
+                Value::Keyword(kw) => match &item {
+                    Value::Map(m) => {
+                        let map_key = MapKey::Keyword(kw.clone());
+                        m.get(&map_key).cloned().unwrap_or(Value::Nil)
+                    }
+                    _ => Value::Nil,
+                },
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function or keyword".to_string(),
+                        actual: key_fn.type_name().to_string(),
+                        operation: "group-by".to_string(),
+                    });
+                }
+            };
+
+            // Convert key_value to MapKey (permissive - converts unsupported types to strings)
+            let map_key = Self::group_key_to_map_key(&key_value);
+
+            // Add item to the appropriate group
+            groups.entry(map_key).or_default().push(item);
+        }
+
+        // Convert HashMap to Value::Map
+        let result_map: std::collections::HashMap<MapKey, Value> = groups
+            .into_iter()
+            .map(|(k, v)| (k, Value::Vector(v)))
+            .collect();
+
+        Ok(Value::Map(result_map))
+    }
+
+    /// Convert a Value to a MapKey for use as a grouping key (group-by specific)
+    /// More permissive than value_to_map_key - converts unsupported types to strings
+    fn group_key_to_map_key(value: &Value) -> MapKey {
+        match value {
+            Value::String(s) => MapKey::String(s.clone()),
+            Value::Keyword(kw) => MapKey::Keyword(kw.clone()),
+            Value::Integer(n) => MapKey::Integer(*n),
+            // Convert other types to string keys
+            Value::Symbol(sym) => MapKey::String(sym.0.clone()),
+            Value::Float(f) => MapKey::String(f.to_string()),
+            Value::Boolean(b) => MapKey::String(b.to_string()),
+            Value::Nil => MapKey::String("nil".to_string()),
+            other => MapKey::String(format!("{:?}", other)),
+        }
     }
 
     fn apply_with_context(
