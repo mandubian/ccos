@@ -223,6 +223,11 @@ pub struct ToolSummary {
     /// Optional input schema for argument validation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<serde_json::Value>,
+
+    /// Optional output schema as compact RTFS type string
+    /// This tells the LLM what fields the tool returns (e.g., ":url" vs ":html_url")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<String>,
 }
 
 impl ToolSummary {
@@ -249,6 +254,7 @@ impl ToolSummary {
             domain: DomainHint::Generic,
             action,
             input_schema: None,
+            output_schema: None,
         }
     }
 

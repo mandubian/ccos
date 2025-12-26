@@ -989,6 +989,7 @@ impl ResolutionStrategy for CatalogResolution {
                     domain,
                     action,
                     input_schema,
+                    output_schema: None, // TODO: Add output_schema to CapabilityInfo
                 }
             })
             .collect()
