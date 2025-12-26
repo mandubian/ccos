@@ -76,3 +76,23 @@ filetime = "0.2"
 name = "test_macros"
 path = "tests/test_macros.rs"
 
+[[test]]
+name = "parser_robustness_tests"
+path = "tests/robustness/parser_robustness_tests.rs"
+
+[[test]]
+name = "runtime_error_tests"
+path = "tests/robustness/runtime_error_tests.rs"
+
+[[test]]
+name = "parser_fuzz_tests"
+path = "tests/robustness/parser_fuzz_tests.rs"
+
+[[test]]
+name = "parser_error_format_tests"
+path = "tests/robustness/parser_error_format_tests.rs"
+
+[[test]]
+name = "destructuring_runtime_tests"
+path = "tests/robustness/destructuring_runtime_tests2.rs"
+
