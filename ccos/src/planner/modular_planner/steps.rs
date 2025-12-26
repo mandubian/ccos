@@ -679,6 +679,7 @@ pub async fn step_discover_new_tools(
             domain: DomainHint::infer_from_text(&result.server_info.name)
                 .unwrap_or(DomainHint::Generic),
             input_schema: None, // Will be populated after introspection
+            output_schema: None, // Will be populated after introspection
         })
         .collect();
 

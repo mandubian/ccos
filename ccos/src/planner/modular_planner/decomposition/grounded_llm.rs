@@ -188,11 +188,19 @@ impl GroundedLlmDecomposition {
             String::new()
         };
 
+        // Include output_schema if available so LLM knows what fields the tool returns
+        let output_attr = if let Some(ref out_schema) = tool.output_schema {
+            format!(" output_schema=\"{}\"", out_schema.replace('"', "'"))
+        } else {
+            String::new()
+        };
+
         format!(
-            r#"<tool name="{}"{} description="{}" input_schema='{}'/>"#,
+            r#"<tool name="{}"{}{} description="{}" input_schema='{}'/>"#,
             // Use fully qualified id so the LLM returns executable capability ids
             tool.id,
             required_params,
+            output_attr,
             tool.description.replace('"', "'"), // Escape quotes in description
             schema_str
         )

@@ -126,13 +126,55 @@ created_at = "2025-12-26T12:00:00Z"
 
 ---
 
+## ✅ COMPLETED: Output Schema Propagation (Generic Fix for html_url and Similar Issues)
+
+**Date**: 2025-12-26
+
+### Root Cause
+The LLM planner uses `:html_url` but GitHub MCP returns `:url` because it uses GraphQL API. This is a **generic problem**: without knowing the output schema, the LLM can't know what fields a tool returns.
+
+The root cause was that `output_schema` was not being propagated to the LLM prompt:
+- `DiscoveredMCPTool` has `output_schema: Option<TypeExpr>` but it was being discarded
+- `McpToolInfo` and `ToolSummary` didn't have `output_schema` fields
+- `format_tool_for_prompt` only included `input_schema`, not `output_schema`
+
+### Solution (Generic, Not Domain-Specific)
+Propagate output_schema through the entire pipeline so LLM knows what fields each tool returns:
+
+1. **Added `output_schema: Option<String>` to `McpToolInfo`** - Stores compact RTFS type string
+2. **Added `output_schema: Option<String>` to `ToolSummary`** - Carries schema to prompt formatter
+3. **Added `output_schema: Option<String>` to `CachedToolInfo`** - Persists schema in cache
+4. **Updated `format_tool_for_prompt`** - Now includes `output_schema` attribute in tool XML
+
+### Files Modified
+- `ccos/src/planner/modular_planner/resolution/mcp.rs` - Added output_schema to McpToolInfo, CachedToolInfo
+- `ccos/src/planner/modular_planner/types.rs` - Added output_schema to ToolSummary
+- `ccos/src/planner/modular_planner/decomposition/grounded_llm.rs` - Include output_schema in prompt
+- `ccos/src/planner/modular_planner/steps.rs` - Initialize output_schema in pending tools
+- `ccos/src/planner/modular_planner/resolution/catalog.rs` - Initialize output_schema from catalog
+
+### Result
+Now when a tool has an introspected output_schema, the LLM prompt includes:
+```xml
+<tool name="mcp.github.list_issues" required_params="owner, repo" output_schema="[:map [:url :string] [:title :string] ...]" description="..." input_schema='...'/>
+```
+
+The LLM can now correctly use `:url` instead of `:html_url` because the schema tells it what fields exist.
+
+### Remaining Work
+Output schema introspection must be enabled during discovery (`introspect_output_schemas: true` in DiscoveryOptions) for this to work. Currently defaults to `false` for performance. Consider:
+- Enabling by default for read-only tools
+- Caching introspected schemas persistently
+
+---
+
 ## Next Steps
 
 1. **Consider executing pending plans** - The inline RTFS generated for pending capabilities is often valid and could execute. Add a `--force-execute` flag or smarter detection.
 
 2. **Improve LLM prompt for owner/repo splitting** - The LLM should learn to split `owner/repo` input during decomposition, not rely on repair.
 
-3. **Fix `html_url` nil values** - Check if GitHub API returns a different field name (e.g., `url` vs `html_url`).
+3. **Enable output schema introspection by default** - Set `introspect_output_schemas: true` for read-only tools during discovery.
 
 4. **Add metrics/logging** - Track decomposition retry counts, repair success rates, and pending capability frequencies.
 

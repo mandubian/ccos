@@ -21,6 +21,7 @@ use crate::capability_marketplace::CapabilityMarketplace;
 use crate::mcp::registry::MCPRegistryClient;
 use crate::mcp::types::DiscoveredMCPTool;
 use crate::synthesis::mcp_introspector::MCPIntrospector;
+use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
 
 /// MCP server info
 #[derive(Debug, Clone)]
@@ -36,6 +37,8 @@ pub struct McpToolInfo {
     pub name: String,
     pub description: String,
     pub input_schema: Option<serde_json::Value>,
+    /// Output schema as compact RTFS type string (e.g., "[:map [:url :string] [:title :string]]")
+    pub output_schema: Option<String>,
     pub server: McpServerInfo,
 }
 
@@ -150,6 +153,7 @@ impl McpDiscovery for RuntimeMcpDiscovery {
                         name: t.tool_name.clone(),
                         description: t.description.unwrap_or_default(),
                         input_schema: t.input_schema_json.clone(),
+                        output_schema: t.output_schema.as_ref().map(type_expr_to_rtfs_compact),
                         server: server.clone(),
                     })
                     .collect();
@@ -213,6 +217,8 @@ pub struct CachedToolInfo {
     pub name: String,
     pub description: String,
     pub input_schema: Option<serde_json::Value>,
+    /// Output schema as compact RTFS type string
+    pub output_schema: Option<String>,
     pub server_name: String,
     pub server_url: String,
     pub server_namespace: String,
@@ -225,6 +231,7 @@ impl From<&McpToolInfo> for CachedToolInfo {
             name: tool.name.clone(),
             description: tool.description.clone(),
             input_schema: tool.input_schema.clone(),
+            output_schema: tool.output_schema.clone(),
             server_name: tool.server.name.clone(),
             server_url: tool.server.url.clone(),
             server_namespace: tool.server.namespace.clone(),
@@ -242,6 +249,7 @@ impl CachedToolInfo {
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
+            output_schema: self.output_schema.clone(),
             server: McpServerInfo {
                 name: self.server_name.clone(),
                 url: self.server_url.clone(),
@@ -288,6 +296,7 @@ impl CachedToolInfo {
             domain,
             action,
             input_schema: self.input_schema.clone(),
+            output_schema: self.output_schema.clone(),
         }
     }
 }
@@ -763,6 +772,7 @@ mod tests {
                 name: "list_issues".to_string(),
                 description: "List issues in a repository".to_string(),
                 input_schema: None,
+                output_schema: None,
                 server: McpServerInfo {
                     name: "github".to_string(),
                     url: "https://api.github.com/mcp".to_string(),
