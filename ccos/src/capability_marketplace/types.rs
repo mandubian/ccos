@@ -1050,6 +1050,14 @@ impl CapabilityIsolationPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SandboxedCapability {
+    pub runtime: String, // e.g., "python", "node", "wasm"
+    pub source: String,  // Code or path
+    pub entry_point: Option<String>,
+    pub provider: Option<String>, // e.g., "process", "firecracker"
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum ProviderType {
     Local(LocalCapability),
     Http(HttpCapability),
@@ -1061,6 +1069,7 @@ pub enum ProviderType {
     Stream(StreamCapabilityImpl),
     Registry(RegistryCapability),
     Native(NativeCapability),
+    Sandboxed(SandboxedCapability),
 }
 
 #[derive(Debug, Clone, PartialEq)]

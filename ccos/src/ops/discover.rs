@@ -3,6 +3,7 @@
 use crate::discovery::config::DiscoveryConfig;
 use crate::discovery::{ApprovalQueue, GoalDiscoveryAgent};
 use crate::utils::fs::find_workspace_root;
+#[cfg(feature = "tui")]
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
 use rtfs::runtime::error::RuntimeResult;
 
@@ -62,11 +63,15 @@ pub async fn discover_by_goal_with_options(
         if options.interactive {
             // Fallback: ask user if they want to add a server manually
             println!();
-            let add_manual = Confirm::with_theme(&ColorfulTheme::default())
+            #[cfg(feature = "tui")]
+            let add_manual = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
                 .with_prompt("Do you know a specific server URL you want to add?")
                 .default(false)
                 .interact()
                 .unwrap_or(false);
+
+            #[cfg(not(feature = "tui"))]
+            let add_manual = false;
 
             if add_manual {
                 return handle_manual_url_entry(&agent, &goal, options.llm).await;
@@ -127,7 +132,8 @@ pub async fn discover_by_goal_with_options(
         println!("\n📋 All servers pre-selected. Use SPACE to toggle, ENTER to confirm.\n");
 
         // Show interactive multi-select (all pre-selected - user deselects unwanted)
-        let selections = MultiSelect::with_theme(&ColorfulTheme::default())
+        #[cfg(feature = "tui")]
+        let selections = dialoguer::MultiSelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
             .with_prompt("Select servers to queue")
             .items(&items)
             .defaults(&vec![true; items.len()]) // Pre-select all
@@ -136,16 +142,25 @@ pub async fn discover_by_goal_with_options(
                 rtfs::runtime::error::RuntimeError::Generic(format!("Selection cancelled: {}", e))
             })?;
 
+        #[cfg(not(feature = "tui"))]
+        let selections: Vec<usize> = return Err(rtfs::runtime::error::RuntimeError::Generic(
+            "Interactive mode not available".to_string(),
+        ));
+
         if selections.is_empty() {
             println!("❌ No servers selected.");
 
             // Fallback: ask user if they want to add a server manually
             println!();
-            let add_manual = Confirm::with_theme(&ColorfulTheme::default())
+            #[cfg(feature = "tui")]
+            let add_manual = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
                 .with_prompt("Do you know a specific server URL you want to add instead?")
                 .default(false)
                 .interact()
                 .unwrap_or(false);
+
+            #[cfg(not(feature = "tui"))]
+            let add_manual = false;
 
             if add_manual {
                 return handle_manual_url_entry(&agent, &goal, options.llm).await;
@@ -197,7 +212,8 @@ pub async fn discover_by_goal_with_options(
                     "Skip - Keep existing, don't add to pending",
                 ];
 
-                let selection = Select::with_theme(&ColorfulTheme::default())
+                #[cfg(feature = "tui")]
+                let selection = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
                     .with_prompt("What would you like to do?")
                     .items(&options)
                     .default(0)
@@ -208,6 +224,9 @@ pub async fn discover_by_goal_with_options(
                             e
                         ))
                     })?;
+
+                #[cfg(not(feature = "tui"))]
+                let selection = 1; // Default to Skip in non-interactive
 
                 if selection == 0 {
                     // Add to pending
@@ -248,7 +267,8 @@ pub async fn discover_by_goal_with_options(
                     "Skip - Keep existing pending entry",
                 ];
 
-                let selection = Select::with_theme(&ColorfulTheme::default())
+                #[cfg(feature = "tui")]
+                let selection = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
                     .with_prompt("What would you like to do?")
                     .items(&options)
                     .default(0)
@@ -259,6 +279,9 @@ pub async fn discover_by_goal_with_options(
                             e
                         ))
                     })?;
+
+                #[cfg(not(feature = "tui"))]
+                let selection = 2; // Default to Skip in non-interactive
 
                 if selection == 0 {
                     // Merge - add will automatically merge
@@ -290,11 +313,15 @@ pub async fn discover_by_goal_with_options(
 
         // Ask if user wants to introspect tools
         println!();
-        let introspect = Confirm::with_theme(&ColorfulTheme::default())
+        #[cfg(feature = "tui")]
+        let introspect = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
             .with_prompt("Do you want to introspect queued servers to discover their tools?")
             .default(true)
             .interact()
             .unwrap_or(false);
+
+        #[cfg(not(feature = "tui"))]
+        let introspect = false; // Default to false in non-interactive
 
         if introspect {
             println!("\n🔍 Introspecting queued servers...\n");
@@ -406,6 +433,7 @@ pub async fn discover_by_goal_with_options(
 
                                         // Ask if user wants to update the token and retry
                                         println!();
+                                        #[cfg(feature = "tui")]
                                         let retry = dialoguer::Confirm::with_theme(
                                             &dialoguer::theme::ColorfulTheme::default(),
                                         )
@@ -417,8 +445,12 @@ pub async fn discover_by_goal_with_options(
                                         .interact()
                                         .unwrap_or(false);
 
+                                        #[cfg(not(feature = "tui"))]
+                                        let retry = false;
+
                                         if retry {
                                             // Prompt for token (hidden input)
+                                            #[cfg(feature = "tui")]
                                             let token = dialoguer::Password::with_theme(
                                                 &dialoguer::theme::ColorfulTheme::default(),
                                             )
@@ -428,6 +460,9 @@ pub async fn discover_by_goal_with_options(
                                             ))
                                             .interact()
                                             .ok();
+
+                                            #[cfg(not(feature = "tui"))]
+                                            let token: Option<String> = None;
 
                                             if let Some(token) = token {
                                                 // Validate env_var name before setting (set_var can panic on invalid names)
@@ -602,26 +637,43 @@ async fn handle_manual_url_entry(
             "Done - no more URLs to add",
         ];
 
-        let url_type_idx = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("What type of URL are you providing?")
-            .items(&url_types)
-            .default(0)
-            .interact()
-            .map_err(|e| {
-                rtfs::runtime::error::RuntimeError::Generic(format!("Selection error: {}", e))
-            })?;
+        let url_type_idx: usize;
+        #[cfg(feature = "tui")]
+        {
+            url_type_idx = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                .with_prompt("What type of URL are you providing?")
+                .items(&url_types)
+                .default(0)
+                .interact()
+                .map_err(|e| {
+                    rtfs::runtime::error::RuntimeError::Generic(format!("Selection error: {}", e))
+                })?;
+        }
+
+        #[cfg(not(feature = "tui"))]
+        {
+            return Err(rtfs::runtime::error::RuntimeError::Generic(
+                "Interactive mode not available".to_string(),
+            ));
+        }
 
         // Exit loop if user is done
         if url_type_idx == 2 {
             break;
         }
 
+        #[cfg(feature = "tui")]
         let url: String = dialoguer::Input::with_theme(&ColorfulTheme::default())
             .with_prompt("Enter URL")
             .interact_text()
             .map_err(|e| {
                 rtfs::runtime::error::RuntimeError::Generic(format!("Input error: {}", e))
             })?;
+
+        #[cfg(not(feature = "tui"))]
+        let url: String = return Err(rtfs::runtime::error::RuntimeError::Generic(
+            "Interactive mode not available".to_string(),
+        ));
 
         let ids = if url_type_idx == 0 {
             // MCP Server endpoint
@@ -644,11 +696,15 @@ async fn handle_manual_url_entry(
 
         // Ask if user wants to add more
         println!();
-        let add_more = Confirm::with_theme(&ColorfulTheme::default())
+        #[cfg(feature = "tui")]
+        let add_more = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
             .with_prompt("Do you want to add another server/API?")
             .default(false)
             .interact()
             .unwrap_or(false);
+
+        #[cfg(not(feature = "tui"))]
+        let add_more = false;
 
         if !add_more {
             break;
