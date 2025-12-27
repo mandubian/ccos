@@ -82,6 +82,18 @@ impl std::fmt::Debug for StreamCapabilityImpl {
     }
 }
 
+/// Effect classification for governance - determines if capability can be used in adapters
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum EffectType {
+    /// No side effects - safe for use in adapters, data transforms
+    Pure,
+    /// Has side effects (network, IO, state) - requires governance approval
+    #[default]
+    Effectful,
+    /// Provisionally pure - auto-usable but queued for constitutional review
+    PureProvisional,
+}
+
 #[derive(Debug, Clone)]
 pub struct CapabilityManifest {
     pub id: String,
@@ -106,6 +118,9 @@ pub struct CapabilityManifest {
     /// Categories describe what kind of operation the capability performs
     /// New categories can be added dynamically without code changes  
     pub categories: Vec<String>,
+    /// Effect classification for governance - determines if capability can be used in adapters
+    /// Pure capabilities have no side effects and are safe for use in adapters
+    pub effect_type: EffectType,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -186,6 +201,7 @@ impl CapabilityManifest {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         }
     }
 
@@ -222,6 +238,7 @@ impl CapabilityManifest {
             }),
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         }
     }
 

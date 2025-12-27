@@ -73,6 +73,8 @@ pub enum AdapterKind {
     McpContentExtractParseField { field: String },
     /// Wrap scalar in array: `[input]`
     ArrayWrap,
+    /// Convert string to number: `(float input)` or `(int input)`
+    StringToNumber { target_type: String },
     /// No adapter needed
     None,
 }
@@ -208,6 +210,32 @@ impl SchemaBridge {
             };
         }
 
+        // Case 3: Sample is string but target expects number (integer or number)
+        if sample.is_string() {
+            let target_is_number = target_input
+                .and_then(|s| s.get("type"))
+                .map(|t| t.as_str() == Some("number") || t.as_str() == Some("integer"))
+                .unwrap_or(false);
+
+            if target_is_number {
+                let target_type = target_input
+                    .and_then(|s| s.get("type"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("number");
+                let func = if target_type == "integer" {
+                    "int"
+                } else {
+                    "float"
+                };
+                return SchemaBridge {
+                    kind: AdapterKind::StringToNumber {
+                        target_type: func.to_string(),
+                    },
+                    description: format!("Convert string to {} using ({})", target_type, func),
+                };
+            }
+        }
+
         // No adapter needed
         SchemaBridge {
             kind: AdapterKind::None,
@@ -235,10 +263,7 @@ impl SchemaBridge {
                 format!("(get {} :{})", input_var, field)
             }
             AdapterKind::McpContentExtract => {
-                format!(
-                    "(get (first (get {} :content)) :text)",
-                    input_var
-                )
+                format!("(get (first (get {} :content)) :text)", input_var)
             }
             AdapterKind::McpContentExtractAndParse => {
                 format!(
@@ -249,12 +274,14 @@ impl SchemaBridge {
             AdapterKind::McpContentExtractParseField { field } => {
                 format!(
                     "(get (parse-json (get (first (get {} :content)) :text)) :{})",
-                    input_var,
-                    field
+                    input_var, field
                 )
             }
             AdapterKind::ArrayWrap => {
                 format!("[{}]", input_var)
+            }
+            AdapterKind::StringToNumber { target_type } => {
+                format!("({} {})", target_type, input_var)
             }
             AdapterKind::None => input_var.to_string(),
         }
@@ -282,7 +309,7 @@ mod tests {
         let bridge = SchemaBridge::detect(None, Some(&target), Some(&sample));
 
         assert!(matches!(&bridge.kind, AdapterKind::FieldExtract { field } if field == "issues"));
-        assert_eq!(bridge.generate_rtfs_expr("step_1"), "(get :issues step_1)");
+        assert_eq!(bridge.generate_rtfs_expr("step_1"), "(get step_1 :issues)");
     }
 
     #[test]

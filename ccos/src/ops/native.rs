@@ -3,7 +3,7 @@
 //! This module contains operations for native capabilities (ccos.cli.*).
 
 use crate::capabilities::provider::CapabilityProvider;
-use crate::capability_marketplace::types::{CapabilityManifest, ProviderType};
+use crate::capability_marketplace::types::{CapabilityManifest, EffectType, ProviderType};
 use crate::capability_marketplace::CapabilityMarketplace;
 use rtfs::runtime::error::RuntimeResult;
 
@@ -37,8 +37,9 @@ pub async fn register_native_capabilities(
                 effects: vec![],
                 metadata: descriptor.metadata.clone(),
                 agent_metadata: None,
-                domains: vec![],
-                categories: vec![],
+                domains: Vec::new(),
+                categories: Vec::new(),
+                effect_type: EffectType::default(),
             };
             marketplace.register_capability_manifest(manifest).await?;
         }

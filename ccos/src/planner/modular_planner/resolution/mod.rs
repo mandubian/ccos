@@ -96,6 +96,7 @@ pub enum ResolvedCapability {
     Local {
         capability_id: String,
         arguments: HashMap<String, String>,
+        input_schema: Option<serde_json::Value>,
         confidence: f64,
     },
 

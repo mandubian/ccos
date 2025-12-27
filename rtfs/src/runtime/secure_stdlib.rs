@@ -196,6 +196,50 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::pow),
             })),
         );
+
+        // Parse integer from string
+        // (parse-int "123") -> 123, (parse-int "abc") -> nil
+        env.define(
+            &Symbol("parse-int".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "parse-int".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::parse_int),
+            })),
+        );
+
+        // Parse float from string
+        // (parse-float "3.14") -> 3.14, (parse-float "abc") -> nil
+        env.define(
+            &Symbol("parse-float".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "parse-float".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::parse_float),
+            })),
+        );
+
+        // Coerce to integer
+        // (int "42") -> 42, (int 3.7) -> 3, (int true) -> 1
+        env.define(
+            &Symbol("int".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "int".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::to_int),
+            })),
+        );
+
+        // Coerce to float
+        // (float "3.14") -> 3.14, (float 42) -> 42.0, (float true) -> 1.0
+        env.define(
+            &Symbol("float".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "float".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::to_float),
+            })),
+        );
     }
 
     pub(crate) fn load_comparison_functions(env: &mut Environment) {
@@ -2689,6 +2733,116 @@ impl SecureStandardLibrary {
                 operation: "factorial".to_string(),
             }),
         }
+    }
+
+    /// Parse a string to an integer, returning nil on failure
+    /// (parse-int "123") -> 123
+    /// (parse-int "abc") -> nil
+    fn parse_int(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "parse-int".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::String(s) => {
+                match s.trim().parse::<i64>() {
+                    Ok(n) => Ok(Value::Integer(n)),
+                    Err(_) => Ok(Value::Nil), // Return nil for invalid input
+                }
+            }
+            Value::Integer(n) => Ok(Value::Integer(*n)), // Identity for integers
+            Value::Float(f) => Ok(Value::Integer(*f as i64)), // Truncate floats
+            _ => Ok(Value::Nil),                         // Return nil for other types
+        }
+    }
+
+    /// Parse a string to a float, returning nil on failure
+    /// (parse-float "3.14") -> 3.14
+    /// (parse-float "abc") -> nil
+    fn parse_float(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "parse-float".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::String(s) => {
+                match s.trim().parse::<f64>() {
+                    Ok(f) => Ok(Value::Float(f)),
+                    Err(_) => Ok(Value::Nil), // Return nil for invalid input
+                }
+            }
+            Value::Float(f) => Ok(Value::Float(*f)), // Identity for floats
+            Value::Integer(n) => Ok(Value::Float(*n as f64)), // Convert integers
+            _ => Ok(Value::Nil),                     // Return nil for other types
+        }
+    }
+
+    /// Coerce any value to an integer (returns 0 on failure)
+    /// (int "42") -> 42
+    /// (int 3.7) -> 3
+    /// (int true) -> 1
+    fn to_int(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "int".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let result = match &args[0] {
+            Value::Integer(n) => *n,
+            Value::Float(f) => *f as i64,
+            Value::String(s) => s.trim().parse::<i64>().unwrap_or(0),
+            Value::Boolean(b) => {
+                if *b {
+                    1
+                } else {
+                    0
+                }
+            }
+            Value::Nil => 0,
+            _ => 0,
+        };
+        Ok(Value::Integer(result))
+    }
+
+    /// Coerce any value to a float (returns 0.0 on failure)
+    /// (float "3.14") -> 3.14
+    /// (float 42) -> 42.0
+    /// (float true) -> 1.0
+    fn to_float(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "float".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let result = match &args[0] {
+            Value::Float(f) => *f,
+            Value::Integer(n) => *n as f64,
+            Value::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
+            Value::Boolean(b) => {
+                if *b {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Value::Nil => 0.0,
+            _ => 0.0,
+        };
+        Ok(Value::Float(result))
     }
 
     fn length(args: Vec<Value>) -> RuntimeResult<Value> {

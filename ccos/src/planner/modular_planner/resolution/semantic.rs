@@ -287,8 +287,12 @@ impl ResolutionStrategy for SemanticResolution {
         let arguments = self.extract_arguments(intent);
 
         Ok(ResolvedCapability::Local {
-            capability_id: best.id,
+            capability_id: best.id.clone(),
             arguments,
+            input_schema: best
+                .input_schema
+                .as_ref()
+                .and_then(|s| serde_json::from_str(s).ok()),
             confidence: best_score,
         })
     }
