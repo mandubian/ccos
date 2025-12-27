@@ -36,6 +36,8 @@ pub struct SynthesizedCapability {
     pub input_schema: String,
     /// Output schema (RTFS type expression string)
     pub output_schema: String,
+    /// Whether this is a pure capability (can be called from adapters)
+    pub is_pure: bool,
     /// Additional metadata (e.g., source plan ID, creation time)
     pub metadata: HashMap<String, String>,
 }
@@ -50,6 +52,7 @@ impl SynthesizedCapability {
             implementation: implementation.to_string(),
             input_schema: ":any".to_string(),
             output_schema: ":any".to_string(),
+            is_pure: true, // Default to pure for synthesized data transformation capabilities
             metadata: HashMap::new(),
         }
     }
@@ -94,6 +97,8 @@ impl SynthesizedCapability {
             Ok(expr) => crate::rtfs_bridge::expression_to_pretty_rtfs_string(&expr),
             Err(_) => self.implementation.clone(),
         };
+        // Build effects array
+        let effects = if self.is_pure { "\":pure\"" } else { "" };
         let implementation_indented = indent_block(&implementation_pretty, "    ");
 
         format!(
@@ -106,7 +111,7 @@ impl SynthesizedCapability {
   :version "1.0.0"
   :language "rtfs20"
   :permissions []
-  :effects []
+  :effects [{effects}]
   :input-schema {input_schema}
   :output-schema {output_schema}
 {metadata}  :implementation
@@ -117,6 +122,7 @@ impl SynthesizedCapability {
             id = escaped_id,
             name = sanitize_name(&self.description),
             desc = escaped_desc,
+            effects = effects,
             input_schema = self.input_schema,
             output_schema = self.output_schema,
             metadata = metadata_block,
@@ -313,7 +319,10 @@ mod tests {
     #[test]
     fn test_slugify() {
         assert_eq!(slugify("Group By Author"), "group-by-author");
-        assert_eq!(slugify("filter items with high score"), "filter-items-with-high-score");
+        assert_eq!(
+            slugify("filter items with high score"),
+            "filter-items-with-high-score"
+        );
     }
 
     #[test]

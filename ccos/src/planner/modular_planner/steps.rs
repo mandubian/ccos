@@ -542,6 +542,7 @@ pub async fn step_create_fallback_resolutions_with_strategies(
                                     ResolvedCapability::Local {
                                         capability_id: request.capability_id,
                                         arguments: HashMap::new(),
+                                        input_schema: None,
                                         confidence: 0.9,
                                     },
                                 );
@@ -678,7 +679,7 @@ pub async fn step_discover_new_tools(
             action: ApiAction::Search, // Default action
             domain: DomainHint::infer_from_text(&result.server_info.name)
                 .unwrap_or(DomainHint::Generic),
-            input_schema: None, // Will be populated after introspection
+            input_schema: None,  // Will be populated after introspection
             output_schema: None, // Will be populated after introspection
         })
         .collect();

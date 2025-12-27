@@ -57,6 +57,7 @@ impl StaticDiscoveryProvider {
                     agent_metadata: None,
                     domains: Vec::new(),
                     categories: Vec::new(),
+                    effect_type: EffectType::default(),
                 },
             ],
         }
@@ -261,6 +262,7 @@ impl NetworkDiscoveryAgent {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         })
     }
 }
@@ -465,6 +467,7 @@ async fn parse_capability_manifest_from_json(
         agent_metadata: None,
         domains: Vec::new(),
         categories: Vec::new(),
+        effect_type: EffectType::default(),
     })
 }
 

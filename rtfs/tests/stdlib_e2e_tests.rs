@@ -100,6 +100,49 @@ impl StdlibTestRunner {
         Ok(())
     }
 
+    fn run_type_conversion_tests(&mut self) -> Result<(), String> {
+        println!("Running type conversion function tests...");
+
+        // parse-int tests
+        self.run_test("(parse-int \"123\")", Value::Integer(123))?;
+        self.run_test("(parse-int \"-42\")", Value::Integer(-42))?;
+        self.run_test("(parse-int \"  456  \")", Value::Integer(456))?; // Trimmed
+        self.run_test("(parse-int \"abc\")", Value::Nil)?; // Invalid
+        self.run_test("(parse-int \"\")", Value::Nil)?; // Empty
+        self.run_test("(parse-int \"12.5\")", Value::Nil)?; // Float string
+        self.run_test("(parse-int 42)", Value::Integer(42))?; // Identity
+        self.run_test("(parse-int 3.7)", Value::Integer(3))?; // Float truncated
+
+        // parse-float tests
+        self.run_test("(parse-float \"3.14\")", Value::Float(3.14))?;
+        self.run_test("(parse-float \"-2.5\")", Value::Float(-2.5))?;
+        self.run_test("(parse-float \"  1.5  \")", Value::Float(1.5))?; // Trimmed
+        self.run_test("(parse-float \"abc\")", Value::Nil)?; // Invalid
+        self.run_test("(parse-float \"\")", Value::Nil)?; // Empty
+        self.run_test("(parse-float \"42\")", Value::Float(42.0))?; // Integer string
+        self.run_test("(parse-float 3.14)", Value::Float(3.14))?; // Identity
+        self.run_test("(parse-float 42)", Value::Float(42.0))?; // Integer
+
+        // int coercion tests
+        self.run_test("(int \"42\")", Value::Integer(42))?;
+        self.run_test("(int \"invalid\")", Value::Integer(0))?; // Falls back to 0
+        self.run_test("(int 3.7)", Value::Integer(3))?; // Truncate
+        self.run_test("(int true)", Value::Integer(1))?;
+        self.run_test("(int false)", Value::Integer(0))?;
+        self.run_test("(int nil)", Value::Integer(0))?;
+
+        // float coercion tests
+        self.run_test("(float \"3.14\")", Value::Float(3.14))?;
+        self.run_test("(float \"invalid\")", Value::Float(0.0))?; // Falls back to 0.0
+        self.run_test("(float 42)", Value::Float(42.0))?;
+        self.run_test("(float true)", Value::Float(1.0))?;
+        self.run_test("(float false)", Value::Float(0.0))?;
+        self.run_test("(float nil)", Value::Float(0.0))?;
+
+        println!("✅ All type conversion function tests passed!");
+        Ok(())
+    }
+
     fn run_comparison_tests(&mut self) -> Result<(), String> {
         println!("Running comparison function tests...");
 
@@ -310,28 +353,44 @@ impl StdlibTestRunner {
             Value::Vector(vec![
                 Value::Map({
                     let mut m = std::collections::HashMap::new();
-                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())), Value::String("open".to_string()));
-                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("id".to_string())), Value::Integer(1));
+                    m.insert(
+                        rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())),
+                        Value::String("open".to_string()),
+                    );
+                    m.insert(
+                        rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("id".to_string())),
+                        Value::Integer(1),
+                    );
                     m
                 }),
                 Value::Map({
                     let mut m = std::collections::HashMap::new();
-                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())), Value::String("open".to_string()));
-                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("id".to_string())), Value::Integer(3));
+                    m.insert(
+                        rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())),
+                        Value::String("open".to_string()),
+                    );
+                    m.insert(
+                        rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("id".to_string())),
+                        Value::Integer(3),
+                    );
                     m
                 }),
             ]),
         );
         expected_map.insert(
             rtfs::ast::MapKey::String("closed".to_string()),
-            Value::Vector(vec![
-                Value::Map({
-                    let mut m = std::collections::HashMap::new();
-                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())), Value::String("closed".to_string()));
-                    m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("id".to_string())), Value::Integer(2));
-                    m
-                }),
-            ]),
+            Value::Vector(vec![Value::Map({
+                let mut m = std::collections::HashMap::new();
+                m.insert(
+                    rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("state".to_string())),
+                    Value::String("closed".to_string()),
+                );
+                m.insert(
+                    rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword("id".to_string())),
+                    Value::Integer(2),
+                );
+                m
+            })]),
         );
         self.run_test(
             "(group-by :state [{:state \"open\" :id 1} {:state \"closed\" :id 2} {:state \"open\" :id 3}])",
@@ -528,12 +587,19 @@ fn test_type_predicate_functions() {
 }
 
 #[test]
+fn test_type_conversion_functions() {
+    let mut runner = StdlibTestRunner::new();
+    runner.run_type_conversion_tests().unwrap();
+}
+
+#[test]
 fn test_all_stdlib_functions() {
     println!("Running comprehensive standard library end-to-end tests...");
 
     let mut runner = StdlibTestRunner::new();
 
     runner.run_arithmetic_tests().unwrap();
+    runner.run_type_conversion_tests().unwrap();
     runner.run_comparison_tests().unwrap();
     runner.run_boolean_tests().unwrap();
     runner.run_string_tests().unwrap();

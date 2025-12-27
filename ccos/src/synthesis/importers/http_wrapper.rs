@@ -1,4 +1,4 @@
-use crate::capability_marketplace::types::CapabilityManifest;
+use crate::capability_marketplace::types::{CapabilityManifest, EffectType};
 use crate::synthesis::introspection::auth_injector::{AuthInjector, AuthType};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -257,6 +257,7 @@ impl HTTPWrapper {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         })
     }
 

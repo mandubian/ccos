@@ -14,7 +14,7 @@ use super::schema_serializer::type_expr_to_rtfs_compact;
 use crate::arbiter::prompt::{FilePromptStore, PromptManager};
 use crate::arbiter::DelegatingArbiter;
 use crate::capability_marketplace::types::{
-    CapabilityKind, CapabilityManifest, CapabilityQuery, LocalCapability, ProviderType,
+    CapabilityKind, CapabilityManifest, CapabilityQuery, EffectType, LocalCapability, ProviderType,
 };
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::checkpoint_archive::CheckpointArchive;
@@ -2156,6 +2156,16 @@ impl MissingCapabilityResolver {
             manifest.effects.push(":pure".to_string());
         }
 
+        // Set effect_type based on declared effects
+        // Capabilities with :pure effect can be called from adapters
+        if manifest
+            .effects
+            .iter()
+            .any(|e| e == ":pure" || e.contains("pure"))
+        {
+            manifest.effect_type = EffectType::Pure;
+        }
+
         if let Some(expr) = input_schema_expr {
             manifest.input_schema =
                 Some(convert_expression_to_type_expr(&expr).map_err(|err| {
@@ -3605,6 +3615,7 @@ impl MissingCapabilityResolver {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         };
 
         if self.config.verbose_logging {
@@ -4603,6 +4614,7 @@ mod tests {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         };
         marketplace
             .register_capability_manifest(manifest)

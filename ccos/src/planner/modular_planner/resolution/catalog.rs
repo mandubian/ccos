@@ -100,11 +100,12 @@ impl CatalogResolution {
                 let mut args = std::collections::HashMap::new();
 
                 // First, check if the LLM already provided a detailed prompt in extracted_params
-                // LLM may use "prompt" or "message" key - check both
+                // LLM may use "prompt", "message", or "question" key - check all
                 let llm_prompt = intent
                     .extracted_params
                     .get("prompt")
-                    .or_else(|| intent.extracted_params.get("message"));
+                    .or_else(|| intent.extracted_params.get("message"))
+                    .or_else(|| intent.extracted_params.get("question"));
 
                 let prompt = if let Some(llm_text) = llm_prompt {
                     // Use the LLM-provided text if it's not empty and looks meaningful
@@ -875,8 +876,12 @@ impl ResolutionStrategy for CatalogResolution {
             }
 
             return Ok(ResolvedCapability::Local {
-                capability_id: cap.id,
+                capability_id: cap.id.clone(),
                 arguments,
+                input_schema: cap
+                    .input_schema
+                    .as_ref()
+                    .and_then(|s| serde_json::from_str(s).ok()),
                 confidence: score,
             });
         }

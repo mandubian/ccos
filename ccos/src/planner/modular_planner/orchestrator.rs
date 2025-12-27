@@ -194,6 +194,52 @@ fn sanitize_llm_rtfs(expr: &str) -> String {
     result
 }
 
+/// Validate that any `(call ...)` expressions in an adapter only reference pure capabilities.
+///
+/// Adapters are meant to be pure data transformations - they should not invoke external APIs,
+/// trigger user interactions, or cause side effects. This validation allows calls only to
+/// known-pure capability prefixes.
+///
+/// Currently validated using prefix-based allowlist. In the future, this could look up
+/// the capability's `effect_type` from the marketplace.
+///
+/// # Allowed Prefixes
+/// - `rtfs.*` - RTFS stdlib functions (sort-by, map, filter, etc.)
+/// - `math.*` - Mathematical operations
+/// - `pure.*` - Explicitly marked pure capabilities
+/// - `stdlib.*` - Standard library functions
+///
+/// # Blocked Prefixes (examples)
+/// - `mcp.*` - External MCP servers (side effects)
+/// - `ccos.*` - CCOS capabilities (user interaction, file I/O, etc.)
+/// - `openapi.*` - External API calls
+fn validate_adapter_calls(adapter: &str) -> bool {
+    lazy_static::lazy_static! {
+        // Match (call "capability.id" ...) patterns
+        static ref CALL_PATTERN: Regex = Regex::new(r#"\(call\s+"([^"]+)""#).unwrap();
+    }
+
+    // Known pure capability prefixes - adapters may only call these
+    // "generated/" capabilities are synthesized pure functions
+    const PURE_PREFIXES: &[&str] = &["rtfs.", "math.", "pure.", "stdlib.", "generated/"];
+
+    for cap in CALL_PATTERN.captures_iter(adapter) {
+        if let Some(capability_id) = cap.get(1).map(|m| m.as_str()) {
+            // Check if the capability uses a known pure prefix
+            let is_pure = PURE_PREFIXES.iter().any(|p| capability_id.starts_with(p));
+            if !is_pure {
+                log::debug!(
+                    "[validate_adapter_calls] Blocked call to '{}' (not a pure capability)",
+                    capability_id
+                );
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
 /// Detect unresolved capabilities in an RTFS expression.
 ///
 /// Scans the expression for `(call "generated/..." ...)` or `(call "pending/..." ...)`
@@ -1011,6 +1057,7 @@ impl ModularPlanner {
                                         ResolvedCapability::Local {
                                             capability_id: cid,
                                             arguments: HashMap::new(),
+                                            input_schema: None,
                                             confidence: 1.0,
                                         },
                                     );
@@ -1128,26 +1175,10 @@ impl ModularPlanner {
         }
 
         // Determine plan status
-        let has_pending_synth = resolutions.values().any(|r| {
-            // Check for NeedsReferral with synth suggestion
-            if let ResolvedCapability::NeedsReferral {
-                suggested_action, ..
-            } = r
-            {
-                if suggested_action.contains("Synth-or-enqueue") {
-                    return true;
-                }
-            }
-
-            // Check for usage of generated (placeholder) capabilities
-            if let Some(id) = r.capability_id() {
-                if id.starts_with("generated/") {
-                    return true;
-                }
-            }
-
-            false
-        });
+        // Only mark as PendingSynthesis if the RTFS plan actually contains pending/ calls
+        // LLM-solved intents with inline RTFS expressions don't need synthesis
+        let has_pending_synth =
+            rtfs_plan.contains("\"pending/") || rtfs_plan.contains("(call \"pending/");
 
         // Store plan in PlanArchive
         let mut plan_status = PlanStatus::Draft;
@@ -1679,11 +1710,15 @@ impl ModularPlanner {
                             // Get consumer's expected input schema
                             let consumer_id = &intent_ids[consumer_idx];
                             let consumer_schema = resolutions.get(consumer_id).and_then(|r| {
-                                if let ResolvedCapability::Remote { input_schema, .. } = r {
-                                    input_schema.as_ref()
-                                } else {
-                                    // Synthesized and other types don't have input_schema
-                                    None
+                                match r {
+                                    ResolvedCapability::Remote { input_schema, .. } => {
+                                        input_schema.as_ref()
+                                    }
+                                    ResolvedCapability::Local { input_schema, .. } => {
+                                        input_schema.as_ref()
+                                    }
+                                    // Synthesized and BuiltIn types don't have input_schema
+                                    _ => None,
                                 }
                             });
 
@@ -1729,6 +1764,24 @@ impl ModularPlanner {
                                         | Some("entries")
                                 ) {
                                     synthetic_target_schema = Some(json!({ "type": "array" }));
+                                    synthetic_target_schema.as_ref()
+                                } else if matches!(
+                                    consumer_param_name.as_deref(),
+                                    Some("perPage")
+                                        | Some("per_page")
+                                        | Some("page")
+                                        | Some("pageSize")
+                                        | Some("page_size")
+                                        | Some("count")
+                                        | Some("limit")
+                                        | Some("offset")
+                                        | Some("max")
+                                        | Some("min")
+                                        | Some("size")
+                                        | Some("num")
+                                        | Some("number")
+                                ) {
+                                    synthetic_target_schema = Some(json!({ "type": "number" }));
                                     synthetic_target_schema.as_ref()
                                 } else {
                                     None
@@ -2735,6 +2788,17 @@ impl ModularPlanner {
             return None;
         }
 
+        // Validate call expressions - adapters may only call pure capabilities
+        // This prevents LLM hallucinations where it tries to re-invoke APIs instead of
+        // transforming existing data, while still allowing pure stdlib functions
+        if !validate_adapter_calls(&adapter) {
+            log::warn!(
+                "[request_llm_adapter] LLM adapter calls non-pure capability (rejected): {}",
+                adapter
+            );
+            return None;
+        }
+
         // Sanitize common LLM patterns that RTFS doesn't support
         adapter = sanitize_llm_rtfs(&adapter);
 
@@ -2815,11 +2879,7 @@ impl ModularPlanner {
                     );
                 }
                 Err(e) => {
-                    log::warn!(
-                        "Failed to save synthesized capability '{}': {}",
-                        cap_id,
-                        e
-                    );
+                    log::warn!("Failed to save synthesized capability '{}': {}", cap_id, e);
                 }
             }
         }
@@ -2880,14 +2940,21 @@ fn build_llm_adapter_prompt(
          1. Use 'input' as the variable for the upstream data.\n\
          2. RETURN ONLY the expression. No markdown, no commentary.\n\
          3. NO Clojure namespaces (e.g. avoid 'str/split', just use 'split').\n\
-            4. Regex IS supported. Use: (re-matches pattern text), (re-find pattern text), (re-seq pattern text).\n\
-               Pattern syntax follows Rust regex. Example: (re-matches \"[A-Z]+\" title)\n\
+         4. Regex IS supported. Use: (re-matches pattern text), (re-find pattern text), (re-seq pattern text).\n\
+            Pattern syntax follows Rust regex. Example: (re-matches \"[A-Z]+\" title)\n\
          5. RTFS 'get' syntax: (get map :key) NOT (get :key map) - map comes FIRST.\n\
-         6. Use RTFS functions: 'map', 'filter', 'get', 'assoc', 'str', 'split', 'substring', 'join', 're-matches', 're-find', 're-seq'.\n\
-         7. IMPORTANT: If INPUT DATA TYPE is 'Map' but you need to iterate, you MUST extract the array field first (e.g. (get input :issues)).\n\
-         8. IMPORTANT: If INPUT DATA TYPE is 'List', work on it directly with 'map' or 'filter'.\n\n\
-         Example (if input is already a list of issues):\n\
-         (map (fn [x] (let [t (get x :title)] (assoc x :title (str (substring t 1) (substring t 0 1) \"ay\")))) input)",
+         6. Use RTFS functions: 'map', 'filter', 'get', 'assoc', 'str', 'split', 'substring', 'join', 're-matches', 're-find', 're-seq', 'group-by'.\n\
+         7. IMPORTANT: If INPUT DATA TYPE is 'Map' but you need to iterate, EXTRACT the array field first (e.g. (get input :issues)).\n\
+         8. IMPORTANT: If INPUT DATA TYPE is 'List', work on it directly with 'map' or 'filter'.\n\
+         9. FORBIDDEN: Do NOT use (call ...). This is a DATA ADAPTER, not a capability invocation. Transform existing data only.\n\
+         10. FORBIDDEN: Do NOT re-fetch data. The data is already in 'input'. Just transform it.\n\n\
+         GOOD examples:\n\
+           - (get input :issues)\n\
+           - (map (fn [x] (get x :title)) input)\n\
+           - (filter (fn [x] (= (get x :state) \"open\")) (get input :issues))\n\n\
+         BAD examples (NEVER do this):\n\
+           - (call \"github-mcp.list_issues\" {{...}})  ← FORBIDDEN\n\
+           - (call :capability.id {{...}})              ← FORBIDDEN",
         target_desc,
         input_type_desc,
         bindings_str,

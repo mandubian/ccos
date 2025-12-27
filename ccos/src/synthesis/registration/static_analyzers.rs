@@ -449,6 +449,7 @@ impl StaticAnalyzer for DependencyAnalyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability_marketplace::types::EffectType;
 
     fn create_test_manifest() -> CapabilityManifest {
         CapabilityManifest {
@@ -473,6 +474,7 @@ mod tests {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         }
     }
 

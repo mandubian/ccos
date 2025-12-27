@@ -8,7 +8,9 @@ use ccos::arbiter::arbiter_config::{
     LlmConfig as ArbiterLlmConfig, LlmProviderType, RetryConfig,
 };
 use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
-use ccos::capability_marketplace::types::{CapabilityManifest, LocalCapability, ProviderType};
+use ccos::capability_marketplace::types::{
+    CapabilityManifest, EffectType, LocalCapability, ProviderType,
+};
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::checkpoint_archive::CheckpointArchive;
 use ccos::intent_graph::IntentGraph;
@@ -1047,6 +1049,7 @@ async fn bootstrap_test_capabilities(
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         };
 
         marketplace.register_capability_manifest(manifest).await?;
