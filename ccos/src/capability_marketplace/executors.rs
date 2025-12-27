@@ -1209,8 +1209,17 @@ pub struct SandboxedExecutor {
 
 impl SandboxedExecutor {
     pub fn new() -> Self {
+        let mut factory = MicroVMFactory::new();
+        // Get provider names first to avoid borrow issues
+        let provider_names: Vec<String> = factory.list_providers().iter().map(|s| s.to_string()).collect();
+        // Initialize all available providers
+        for provider_name in provider_names {
+            if let Some(provider) = factory.get_provider_mut(&provider_name) {
+                let _ = provider.initialize();
+            }
+        }
         Self {
-            factory: Arc::new(Mutex::new(MicroVMFactory::new())),
+            factory: Arc::new(Mutex::new(factory)),
         }
     }
 }
