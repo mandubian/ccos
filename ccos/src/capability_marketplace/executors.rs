@@ -25,6 +25,9 @@ use crate::capabilities::native_provider::NativeCapabilityProvider;
 use crate::capabilities::SessionPoolManager;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use rtfs::runtime::microvm::{MicroVMFactory, ExecutionContext, Program};
+use std::sync::Mutex;
+use uuid::Uuid;
 
 pub struct MCPExecutor {
     pub session_pool: Arc<RwLock<Option<Arc<SessionPoolManager>>>>,
@@ -1200,6 +1203,70 @@ impl CapabilityExecutor for HttpExecutor {
     }
 }
 
+pub struct SandboxedExecutor {
+    factory: Arc<Mutex<MicroVMFactory>>,
+}
+
+impl SandboxedExecutor {
+    pub fn new() -> Self {
+        Self {
+            factory: Arc::new(Mutex::new(MicroVMFactory::new())),
+        }
+    }
+}
+
+#[async_trait(?Send)]
+impl CapabilityExecutor for SandboxedExecutor {
+    fn provider_type_id(&self) -> TypeId {
+        TypeId::of::<SandboxedCapability>()
+    }
+
+    async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
+        if let ProviderType::Sandboxed(sandboxed) = provider {
+            let mut factory = self.factory.lock().unwrap();
+            let provider_name = sandboxed.provider.as_deref().unwrap_or("process");
+            
+            if factory.get_provider(provider_name).is_none() {
+                 return Err(RuntimeError::Generic(format!("Provider '{}' not available", provider_name)));
+            }
+
+            let vm_provider = factory.get_provider_mut(provider_name).unwrap();
+            
+            let mut program_args = Vec::new();
+            if sandboxed.runtime == "python" {
+                program_args.push("-c".to_string());
+                program_args.push(sandboxed.source.clone());
+            } else {
+                program_args.push(sandboxed.source.clone());
+            }
+
+            // Pass inputs as JSON string argument
+            let input_json = serde_json::to_string(&inputs).unwrap_or_default();
+            program_args.push(input_json);
+
+            let program = Program::ExternalProgram {
+                path: if sandboxed.runtime == "python" { "python3".to_string() } else { sandboxed.runtime.clone() },
+                args: program_args,
+            };
+            
+            let context = ExecutionContext {
+                execution_id: Uuid::new_v4().to_string(),
+                program: Some(program),
+                capability_id: None,
+                capability_permissions: vec![],
+                args: vec![inputs.clone()],
+                config: Default::default(),
+                runtime_context: None,
+            };
+
+            let result = vm_provider.execute(context)?;
+            Ok(result.value)
+        } else {
+            Err(RuntimeError::Generic("Invalid provider type".to_string()))
+        }
+    }
+}
+
 pub enum ExecutorVariant {
     MCP(MCPExecutor),
     A2A(A2AExecutor),
@@ -1208,6 +1275,7 @@ pub enum ExecutorVariant {
     OpenApi(OpenApiExecutor),
     Registry(RegistryExecutor),
     Native(NativeCapabilityProvider),
+    Sandboxed(SandboxedExecutor),
 }
 
 impl ExecutorVariant {
@@ -1219,6 +1287,7 @@ impl ExecutorVariant {
             ExecutorVariant::Http(e) => e.execute(provider, inputs).await,
             ExecutorVariant::OpenApi(e) => e.execute(provider, inputs).await,
             ExecutorVariant::Registry(e) => e.execute(provider, inputs).await,
+            ExecutorVariant::Sandboxed(e) => e.execute(provider, inputs).await,
             ExecutorVariant::Native(native_provider) => {
                 // For Native capabilities, the provider type contains the capability ID
                 // and we dispatch through the NativeCapabilityProvider
