@@ -311,6 +311,14 @@ impl MicroVMProvider for ProcessMicroVMProvider {
 
         let result_value = match context.program {
             Some(ref program) => match program {
+                crate::runtime::microvm::core::Program::ScriptSource { language, source } => {
+                    // Execute script in a subprocess using the appropriate interpreter
+                    let interpreter = language.interpreter();
+                    match self.execute_external_process(interpreter, &["-c".to_string(), source.clone()], &context) {
+                        Ok(v) => v,
+                        Err(e) => Value::String(format!("Process {:?} execution error: {}", language, e)),
+                    }
+                }
                 crate::runtime::microvm::core::Program::RtfsSource(source) => {
                     match self.execute_rtfs_in_process(&source, &context) {
                         Ok(v) => v,

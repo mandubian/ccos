@@ -81,6 +81,11 @@ impl MicroVMProvider for WasmMicroVMProvider {
 
         let result_value = match context.program {
             Some(ref program) => match program {
+                crate::runtime::microvm::core::Program::ScriptSource { .. } => {
+                    return Err(RuntimeError::Generic(
+                        "Script execution not supported in WASM provider".to_string(),
+                    ));
+                }
                 crate::runtime::microvm::core::Program::RtfsSource(source) => {
                     self.execute_simple_wasm_module(&source, &context)?
                 }
