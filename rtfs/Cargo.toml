@@ -64,6 +64,10 @@ clap = { version = "4.0", features = ["derive"] }
 indexmap = "2.0"
 yansi = "1.0"
 
+# Platform-specific for non-blocking I/O
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [dev-dependencies]
