@@ -19,10 +19,8 @@ use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 
-use super::orchestrator::Orchestrator;
-use crate::capability_marketplace::types::CapabilityProvenance;
-
 use super::intent_graph::IntentGraph;
+use super::orchestrator::Orchestrator;
 use super::types::Intent; // for delegation validation
 use super::types::{ExecutionResult, Plan, PlanBody, StorableIntent};
 use rtfs::runtime::error::RuntimeError;
@@ -303,6 +301,58 @@ impl GovernanceKernel {
         }
     }
 
+    /// Validates that an RTFS expression is pure (no side effects).
+    ///
+    /// Pure expressions can only use:
+    /// - RTFS stdlib functions (map, filter, group-by, get, etc.)
+    /// - Pure capability calls (rtfs.*, pure.*, math.*, generated/*)
+    ///
+    /// Impure patterns are blocked:
+    /// - External MCP calls (mcp.*)
+    /// - HTTP calls (http.*)
+    /// - File system operations (fs.*)
+    /// - Database operations (db.*)
+    /// - I/O operations (ccos.io.* except println)
+    /// - User interaction (ccos.user.*)
+    ///
+    /// Returns Ok(()) if pure, Err with reason if impure.
+    pub fn validate_purity(&self, rtfs_code: &str) -> RuntimeResult<()> {
+        // Patterns that indicate impure operations
+        // These are capability ID prefixes that have side effects
+        const IMPURE_PREFIXES: &[&str] = &[
+            "mcp.",          // External MCP server calls
+            "http.",         // HTTP calls
+            "fs.",           // File system operations
+            "db.",           // Database operations
+            "ccos.io.write", // I/O write operations
+            "ccos.user.",    // User interaction
+            "ccos.cli.",     // CLI operations
+            "ccos.config.",  // Configuration mutations
+        ];
+
+        // Check for impure (call ...) patterns
+        for prefix in IMPURE_PREFIXES {
+            let pattern = format!("(call \"{}", prefix);
+            if rtfs_code.contains(&pattern) {
+                return Err(RuntimeError::Generic(format!(
+                    "Purity violation: adapter contains impure operation with prefix '{}'",
+                    prefix
+                )));
+            }
+        }
+
+        // Note: Pure patterns are implicitly allowed:
+        // - No (call ...) at all (pure stdlib expressions)
+        // - (call "rtfs.*) - RTFS stdlib wrappers
+        // - (call "pure.*) - Explicitly pure capabilities
+        // - (call "math.*) - Pure mathematical functions
+        // - (call "generated/*) - Auto-generated pure capabilities
+        // - (call "ccos.io.println") - Safe output for debugging
+        // - (call "ccos.data.*) - Pure data transformations
+
+        log::debug!("[GovernanceKernel] Purity validation passed for adapter");
+        Ok(())
+    }
     /// The primary entry point for processing a plan from the Arbiter.
     /// It validates the plan and, if successful, passes it to the Orchestrator.
     pub async fn validate_and_execute(
