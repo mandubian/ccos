@@ -104,19 +104,22 @@ cargo build -p ccos --release
 cargo build -p ccos --no-default-features --features minimal --release
 ```
 
-### Docker Image
+### Docker Images
 
-```dockerfile
-# Dockerfile.tiny
-FROM rust:1.83-slim-bookworm as builder
-# ... build with minimal features ...
+Two Dockerfiles are provided:
 
-FROM debian:bookworm-slim
-# Includes Python for sandboxed capabilities
-# Final image: ~552MB
+| File | Base | Size | Use Case |
+|------|------|------|----------|
+| `Dockerfile.tiny` | Alpine | **72MB** | Production, minimal footprint |
+| `Dockerfile.debian` | Debian | 552MB | Dev/debug, full Python tooling |
+
+```bash
+# Tiny Alpine image (recommended for production)
+docker build -f Dockerfile.tiny -t ccos-tiny .
+
+# Debian image with full Python dev tools
+docker build -f Dockerfile.debian -t ccos-debian .
 ```
-
-Build: `docker build -f Dockerfile.tiny -t ccos-tiny .`
 
 ## Usage
 
