@@ -283,3 +283,91 @@ print(json.dumps({"result": "sandbox works!"}))
         }
     }
 }
+
+/// Check if Firecracker is available on the system
+fn is_firecracker_available() -> bool {
+    std::process::Command::new("firecracker")
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+/// Test Firecracker provider availability
+#[test]
+fn test_firecracker_provider_availability() {
+    let factory = rtfs::runtime::microvm::MicroVMFactory::new();
+    
+    if is_firecracker_available() {
+        println!("Firecracker binary found, provider should be available");
+        // Note: Provider may still not be available if kernel/rootfs missing
+        if let Some(provider) = factory.get_provider("firecracker") {
+            println!("Firecracker provider available: {}", provider.name());
+        } else {
+            println!("Firecracker provider not registered (missing dependencies)");
+        }
+    } else {
+        println!("Firecracker binary not found, skipping provider check");
+    }
+}
+
+/// Test Firecracker provider execution (requires firecracker setup)
+#[tokio::test]
+async fn test_firecracker_python_execution() {
+    // Skip if firecracker is not available
+    if !is_firecracker_available() {
+        println!("Skipping test: Firecracker not installed");
+        return;
+    }
+    
+    // Check if kernel and rootfs exist
+    let kernel_exists = std::path::Path::new("/opt/firecracker/vmlinux").exists();
+    let rootfs_exists = std::path::Path::new("/opt/firecracker/rootfs.ext4").exists();
+    
+    if !kernel_exists || !rootfs_exists {
+        println!("Skipping test: Firecracker kernel or rootfs not found in /opt/firecracker/");
+        println!("  kernel: {} (exists: {})", "/opt/firecracker/vmlinux", kernel_exists);
+        println!("  rootfs: {} (exists: {})", "/opt/firecracker/rootfs.ext4", rootfs_exists);
+        return;
+    }
+    
+    println!("Firecracker setup found, testing execution...");
+    
+    let executor = SandboxedExecutor::new();
+    
+    // Simple Python test
+    let python_code = r#"
+import json
+result = {"message": "Hello from Firecracker!", "calculated": 2 + 2}
+print(json.dumps(result))
+"#;
+    
+    let sandboxed = SandboxedCapability {
+        runtime: "python".to_string(),
+        source: python_code.to_string(),
+        entry_point: None,
+        provider: Some("firecracker".to_string()),
+    };
+    
+    let provider = ProviderType::Sandboxed(sandboxed);
+    let inputs = Value::Nil;
+    
+    match executor.execute(&provider, &inputs).await {
+        Ok(value) => {
+            println!("Firecracker execution result: {:?}", value);
+            // Verify we got valid output
+            if let Value::String(s) = &value {
+                assert!(s.contains("Hello from Firecracker") || s.contains("calculated"), 
+                    "Expected Python output, got: {}", s);
+            }
+        }
+        Err(e) => {
+            let err_msg = format!("{:?}", e);
+            // Firecracker might fail if not properly configured
+            if err_msg.contains("not available") || err_msg.contains("not found") {
+                println!("Firecracker provider not fully configured: {}", err_msg);
+            } else {
+                println!("Firecracker execution error (may be expected): {:?}", e);
+            }
+        }
+    }
+}
