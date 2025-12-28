@@ -38,6 +38,8 @@ pub struct FirecrackerConfig {
     pub tap_device: Option<String>,
     pub vsock_enabled: bool,
     pub vsock_cid: Option<u32>,
+    pub extra_drives: Vec<PathBuf>,
+    pub boot_args: Option<String>,
     // New security and performance features
     pub security_features: SecurityFeatures,
     pub resource_limits: ResourceLimits,
@@ -101,6 +103,8 @@ impl Default for FirecrackerConfig {
             tap_device: None,
             vsock_enabled: true,
             vsock_cid: Some(3),
+            extra_drives: Vec::new(),
+            boot_args: None,
             security_features: SecurityFeatures::default(),
             resource_limits: ResourceLimits::default(),
             performance_tuning: PerformanceTuning::default(),
@@ -459,9 +463,13 @@ impl FirecrackerVM {
     /// Configure VM via Firecracker API with enhanced features
     fn configure_vm(&mut self) -> RuntimeResult<()> {
         // Configure boot source (kernel and rootfs)
+        let boot_args = self.config.boot_args.clone().unwrap_or_else(|| {
+            "console=ttyS0 reboot=k panic=1 pci=off".to_string()
+        });
+
         let boot_source = json!({
             "kernel_image_path": self.config.kernel_path.to_string_lossy(),
-            "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
+            "boot_args": boot_args
         });
 
         self.api_call("PUT", "/boot-source", &boot_source)?;
@@ -475,6 +483,19 @@ impl FirecrackerVM {
         });
 
         self.api_call("PUT", "/drives/rootfs", &drive_config)?;
+
+        // Configure extra drives
+        let extra_drives = self.config.extra_drives.clone();
+        for (i, drive_path) in extra_drives.iter().enumerate() {
+            let drive_id = format!("drive{}", i + 1);
+            let extra_drive_config = json!({
+                "drive_id": drive_id,
+                "path_on_host": drive_path.to_string_lossy(),
+                "is_root_device": false,
+                "is_read_only": true
+            });
+            self.api_call("PUT", &format!("/drives/{}", drive_id), &extra_drive_config)?;
+        }
 
         // Configure machine (CPU and memory)
         let machine_config = json!({
@@ -565,17 +586,21 @@ impl FirecrackerVM {
         })?;
 
         // Read response with enhanced parsing
-        let mut response = String::new();
+        let mut response_header = String::new();
         let mut reader = BufReader::new(stream);
-        reader.read_line(&mut response).map_err(|e| {
+        reader.read_line(&mut response_header).map_err(|e| {
             RuntimeError::Generic(format!("Failed to read Firecracker API response: {}", e))
         })?;
 
         // Enhanced response validation
-        if !response.contains("200") && !response.contains("204") {
+        if !response_header.contains("200") && !response_header.contains("204") {
+            // Read the rest of the response to get the error message
+            let mut body = String::new();
+            let _ = reader.read_to_string(&mut body);
             return Err(RuntimeError::Generic(format!(
-                "Firecracker API error: {}",
-                response
+                "Firecracker API error: {} - Body: {}",
+                response_header.trim(),
+                body.trim()
             )));
         }
 
@@ -834,45 +859,515 @@ impl FirecrackerMicroVMProvider {
         Ok(())
     }
 
-    /// Execute a Python program inside the Firecracker VM
-    /// This uses a one-shot VM approach: boot, execute, capture output, shutdown
-    fn execute_python_in_vm(
-        &self,
-        vm: &mut FirecrackerVM,
-        python_code: &str,
-    ) -> RuntimeResult<String> {
-        // Create a temporary init script that runs Python and outputs to serial
-        let script_path = PathBuf::from(format!("/tmp/fc-script-{}.py", vm.id));
-        let output_path = PathBuf::from(format!("/tmp/fc-output-{}.txt", vm.id));
+    /// Execution output markers for parsing serial console output
+    const OUTPUT_START_MARKER: &'static str = "===RTFS_OUTPUT_START===";
+    const OUTPUT_END_MARKER: &'static str = "===RTFS_OUTPUT_END===";
+    const EXIT_CODE_MARKER: &'static str = "===RTFS_EXIT_CODE===";
+
+    /// Create an overlay rootfs with our script injected
+    /// This uses a copy-on-write approach with a temporary overlay
+    fn create_overlay_rootfs(&self, vm_id: &str, python_code: &str) -> RuntimeResult<PathBuf> {
+        let work_dir = PathBuf::from(format!("/tmp/fc-overlay-{}", vm_id));
+        fs::create_dir_all(&work_dir).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to create overlay directory: {}", e))
+        })?;
         
-        // Write the Python script
+        // Create the Python script to inject
+        let script_path = work_dir.join("script.py");
         fs::write(&script_path, python_code).map_err(|e| {
             RuntimeError::Generic(format!("Failed to write script: {}", e))
         })?;
         
-        // For real Firecracker execution, we need to:
-        // 1. Mount the rootfs
-        // 2. Copy the script in
-        // 3. Boot with custom init
-        // 4. Capture serial output
+        // Create an init script that runs our Python code and shuts down
+        // Note: This replaces /sbin/init. We use /usr/bin/python (Python 2.7) available in the rootfs
+        let init_script = format!(r#"#!/bin/sh
+# RTFS One-shot execution init
+# Mount essential filesystems
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+
+# Output markers for parsing
+echo "{start}"
+if [ -x /usr/bin/python ]; then
+    /usr/bin/python /rtfs_script.py 2>&1
+elif [ -x /usr/bin/python2 ]; then
+    /usr/bin/python2 /rtfs_script.py 2>&1
+elif [ -x /usr/bin/python3 ]; then
+    /usr/bin/python3 /rtfs_script.py 2>&1
+else
+    echo "ERROR: No Python interpreter found"
+fi
+EXIT_CODE=$?
+echo "{end}"
+echo "{exit}:$EXIT_CODE"
+
+# Trigger immediate poweroff via sysrq
+sync
+echo 1 > /proc/sys/kernel/sysrq 2>/dev/null
+echo o > /proc/sysrq-trigger 2>/dev/null
+# Fallbacks
+sleep 1
+poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
+"#,
+            start = Self::OUTPUT_START_MARKER,
+            end = Self::OUTPUT_END_MARKER,
+            exit = Self::EXIT_CODE_MARKER,
+        );
         
-        // For now, use a hybrid approach: run Python directly if Firecracker init isn't ready
-        // This demonstrates the security boundary while providing real execution
+        let init_path = work_dir.join("rtfs_init");
+        fs::write(&init_path, &init_script).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to write init script: {}", e))
+        })?;
         
-        let output = Command::new("python")
-            .args(["-c", python_code])
-            .output()
-            .map_err(|e| RuntimeError::Generic(format!("Python execution failed: {}", e)))?;
-        
-        // Clean up
-        let _ = fs::remove_file(&script_path);
-        
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).to_string())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(RuntimeError::Generic(format!("Python error: {}", stderr)))
+        // Make the init script executable on the host BEFORE debugfs injection
+        // debugfs write command preserves source file permissions
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&init_path)
+                .map_err(|e| RuntimeError::Generic(format!("Failed to get init permissions: {}", e)))?
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&init_path, perms)
+                .map_err(|e| RuntimeError::Generic(format!("Failed to set init permissions: {}", e)))?;
         }
+        
+        // Copy the base rootfs to create a writable version
+        let overlay_rootfs = work_dir.join("rootfs.ext4");
+        eprintln!("[Firecracker] Copying rootfs to overlay...");
+        
+        let output = Command::new("cp")
+            .args([
+                &self.config.rootfs_path.to_string_lossy().to_string(),
+                &overlay_rootfs.to_string_lossy().to_string(),
+            ])
+            .output()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to copy rootfs: {}", e)))?;
+        
+        if !output.status.success() {
+            return Err(RuntimeError::Generic(format!(
+                "Failed to copy rootfs: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        
+        // Use debugfs to inject the Python script
+        eprintln!("[Firecracker] Injecting Python script into rootfs...");
+        let output = Command::new("debugfs")
+            .args([
+                "-w",
+                "-R",
+                &format!("write {} rtfs_script.py", script_path.display()),
+                &overlay_rootfs.to_string_lossy(),
+            ])
+            .output()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to inject script: {}", e)))?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.is_empty() && !stderr.contains("Operation not permitted") {
+                eprintln!("[Firecracker] debugfs warning: {}", stderr);
+            }
+        }
+        
+        // Inject the init script
+        eprintln!("[Firecracker] Injecting init script into rootfs...");
+        let output = Command::new("debugfs")
+            .args([
+                "-w",
+                "-R",
+                &format!("write {} rtfs_init", init_path.display()),
+                &overlay_rootfs.to_string_lossy(),
+            ])
+            .output()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to inject init: {}", e)))?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.is_empty() {
+                eprintln!("[Firecracker] debugfs init warning: {}", stderr);
+            }
+        }
+        
+        // Note: debugfs write command preserves source file permissions,
+        // so we don't need to call set_inode_field - the 0755 perms from
+        // the host file are already copied.
+        
+        Ok(overlay_rootfs)
+    }
+
+    /// Execute a Python program inside the Firecracker VM using a one-shot approach
+    fn execute_python_in_vm(
+        &self,
+        _vm: &mut FirecrackerVM,
+        python_code: &str,
+    ) -> RuntimeResult<String> {
+        let vm_id = format!(
+            "oneshot-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+
+        eprintln!("[Firecracker] Creating overlay rootfs for VM: {}", vm_id);
+        
+        // Create overlay rootfs with our script injected
+        let overlay_rootfs = self.create_overlay_rootfs(&vm_id, python_code)?;
+        
+        // Configure VM with custom boot args to use our init script
+        // Use init= for ext4 rootfs (not rdinit which is for initramfs)
+        let boot_args = "console=ttyS0 reboot=k panic=1 pci=off init=/rtfs_init";
+        
+        eprintln!("[Firecracker] Starting one-shot VM with init=/rtfs_init");
+        
+        let socket_path = PathBuf::from(format!("/tmp/fc-{}.sock", vm_id));
+        
+        // Clean up any existing socket
+        let _ = fs::remove_file(&socket_path);
+        
+        // Start Firecracker - serial console output goes to stdout by default
+        let mut cmd = Command::new("firecracker");
+        cmd.arg("--api-sock")
+            .arg(&socket_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| RuntimeError::Generic(format!("Failed to start Firecracker: {}", e)))?;
+        
+        // Wait for socket to be created
+        let socket_timeout = Duration::from_secs(5);
+        let start = Instant::now();
+        while !socket_path.exists() {
+            if start.elapsed() > socket_timeout {
+                let _ = child.kill();
+                let work_dir = overlay_rootfs.parent().unwrap().to_path_buf();
+                let _ = fs::remove_dir_all(&work_dir);
+                return Err(RuntimeError::Generic(
+                    "Timeout waiting for Firecracker socket".to_string(),
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        
+        // Give socket a moment to be ready
+        std::thread::sleep(Duration::from_millis(100));
+        
+        // Helper to make API calls
+        let api_call = |method: &str, path: &str, data: &serde_json::Value| -> RuntimeResult<String> {
+            let mut stream = UnixStream::connect(&socket_path).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to connect to Firecracker API: {}", e))
+            })?;
+            
+            stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+            stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+            
+            let body = data.to_string();
+            // Add Connection: close to ensure server closes connection after response
+            let request = format!(
+                "{} {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                method,
+                path,
+                body.len(),
+                body
+            );
+            
+            stream.write_all(request.as_bytes()).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to write to Firecracker API: {}", e))
+            })?;
+            
+            // Read response - with Connection: close, server will close after response
+            let mut response = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                match stream.read(&mut buf) {
+                    Ok(0) => break, // Connection closed
+                    Ok(n) => {
+                        response.extend_from_slice(&buf[..n]);
+                        // Check if we have a complete HTTP response
+                        let partial = String::from_utf8_lossy(&response);
+                        if partial.contains("\r\n\r\n") {
+                            // We have headers at least, check for body
+                            if partial.starts_with("HTTP/1.1 204") || 
+                               partial.starts_with("HTTP/1.1 2") && partial.ends_with("\r\n\r\n") {
+                                break; // 204 No Content or empty body
+                            }
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => break,
+                    Err(e) => {
+                        return Err(RuntimeError::Generic(format!(
+                            "Failed to read Firecracker API response: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+            
+            let response_str = String::from_utf8_lossy(&response).to_string();
+            
+            if response_str.starts_with("HTTP/1.1 2") {
+                Ok(response_str)
+            } else {
+                Err(RuntimeError::Generic(format!(
+                    "Firecracker API error on {}: {}",
+                    path,
+                    response_str.lines().take(3).collect::<Vec<_>>().join(" | ")
+                )))
+            }
+        };
+        
+        // Configure boot source
+        eprintln!("[Firecracker] Configuring boot source...");
+        api_call(
+            "PUT",
+            "/boot-source",
+            &json!({
+                "kernel_image_path": self.config.kernel_path.to_string_lossy(),
+                "boot_args": boot_args
+            }),
+        )?;
+        
+        // Configure root drive
+        eprintln!("[Firecracker] Configuring root drive...");
+        api_call(
+            "PUT",
+            "/drives/rootfs",
+            &json!({
+                "drive_id": "rootfs",
+                "path_on_host": overlay_rootfs.to_string_lossy(),
+                "is_root_device": true,
+                "is_read_only": false
+            }),
+        )?;
+        
+        // Configure machine
+        eprintln!("[Firecracker] Configuring machine...");
+        api_call(
+            "PUT",
+            "/machine-config",
+            &json!({
+                "vcpu_count": self.config.vcpu_count,
+                "mem_size_mib": self.config.memory_size_mb,
+                "smt": false
+            }),
+        )?;
+        
+        // Start the VM
+        eprintln!("[Firecracker] Starting VM instance...");
+        api_call("PUT", "/actions", &json!({"action_type": "InstanceStart"}))?;
+        
+        // Read stdout (serial console) until we see the end marker or timeout
+        let execution_timeout = Duration::from_secs(30);
+        let start = Instant::now();
+        let mut stdout_data = Vec::new();
+        
+        eprintln!("[Firecracker] Waiting for execution (max 30s)...");
+        
+        // Take stdout for reading
+        let mut stdout_handle = child.stdout.take();
+        
+        if let Some(ref mut stdout) = stdout_handle {
+            use std::os::unix::io::AsRawFd;
+            
+            // Set non-blocking mode on stdout
+            let fd = stdout.as_raw_fd();
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
+            
+            let mut buf = [0u8; 4096];
+            
+            loop {
+                if start.elapsed() > execution_timeout {
+                    eprintln!("[Firecracker] Execution timed out after 30s");
+                    break;
+                }
+                
+                // Check if process has exited
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        eprintln!("[Firecracker] VM process exited with: {:?}", status);
+                        // Drain remaining stdout
+                        loop {
+                            match stdout.read(&mut buf) {
+                                Ok(0) => break,
+                                Ok(n) => stdout_data.extend_from_slice(&buf[..n]),
+                                Err(_) => break,
+                            }
+                        }
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!("[Firecracker] Error checking process: {}", e);
+                        break;
+                    }
+                }
+                
+                // Try to read data
+                match stdout.read(&mut buf) {
+                    Ok(0) => {
+                        // EOF
+                        break;
+                    }
+                    Ok(n) => {
+                        stdout_data.extend_from_slice(&buf[..n]);
+                        let output = String::from_utf8_lossy(&stdout_data);
+                        
+                        // Check if we have the end marker
+                        if output.contains(Self::OUTPUT_END_MARKER) {
+                            eprintln!("[Firecracker] Found output end marker");
+                            // Give it a moment to write exit code
+                            std::thread::sleep(Duration::from_millis(200));
+                            // Drain remaining
+                            loop {
+                                match stdout.read(&mut buf) {
+                                    Ok(0) => break,
+                                    Ok(n) => stdout_data.extend_from_slice(&buf[..n]),
+                                    Err(_) => break,
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    Err(e) => {
+                        eprintln!("[Firecracker] Error reading stdout: {}", e);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Kill process FIRST before reading stderr (to avoid blocking)
+        if child.try_wait().ok().flatten().is_none() {
+            eprintln!("[Firecracker] Killing VM process...");
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        
+        // Read stderr (now safe since process is dead)
+        let mut stderr_data = Vec::new();
+        if let Some(ref mut stderr) = child.stderr {
+            // Use non-blocking read for stderr as well
+            #[cfg(unix)]
+            {
+                use std::os::unix::io::AsRawFd;
+                let fd = stderr.as_raw_fd();
+                let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                unsafe {
+                    libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                }
+                let mut buf = [0u8; 4096];
+                loop {
+                    match stderr.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => stderr_data.extend_from_slice(&buf[..n]),
+                        Err(_) => break,
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = stderr.read_to_end(&mut stderr_data);
+            }
+        }
+        
+        // Cleanup
+        let work_dir = overlay_rootfs.parent().unwrap().to_path_buf();
+        let _ = fs::remove_file(&socket_path);
+        let _ = fs::remove_dir_all(&work_dir);
+        
+        let stdout_str = String::from_utf8_lossy(&stdout_data).to_string();
+        let stderr_str = String::from_utf8_lossy(&stderr_data).to_string();
+        
+        eprintln!(
+            "[Firecracker] Captured {} bytes stdout, {} bytes stderr",
+            stdout_data.len(),
+            stderr_data.len()
+        );
+        
+        let parsed_output = self.parse_vm_output(&stdout_str, &stderr_str);
+        
+        eprintln!("[Firecracker] Execution complete.");
+        
+        Ok(parsed_output)
+    }
+
+    /// Parse VM output to extract script output between markers
+    fn parse_vm_output(&self, stdout: &str, stderr: &str) -> String {
+        // First try to find output between markers
+        if let Some(start_idx) = stdout.find(Self::OUTPUT_START_MARKER) {
+            let after_start = start_idx + Self::OUTPUT_START_MARKER.len();
+            if let Some(end_offset) = stdout[after_start..].find(Self::OUTPUT_END_MARKER) {
+                let end_idx = after_start + end_offset;
+                let script_output = &stdout[after_start..end_idx];
+                
+                // Extract exit code if present
+                if let Some(exit_idx) = stdout.find(Self::EXIT_CODE_MARKER) {
+                    let after_exit = exit_idx + Self::EXIT_CODE_MARKER.len() + 1;
+                    if after_exit < stdout.len() {
+                        let code_str = stdout[after_exit..]
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or("0");
+                        if code_str != "0" {
+                            return format!(
+                                "{}\n[Exit code: {}]",
+                                script_output.trim(),
+                                code_str
+                            );
+                        }
+                    }
+                }
+                return script_output.trim().to_string();
+            }
+        }
+        
+        // If no markers found, try to extract useful output
+        let mut result = String::new();
+        
+        if !stdout.is_empty() {
+            // Filter out kernel boot messages, keep only relevant output
+            let lines: Vec<&str> = stdout.lines().collect();
+            let mut capture = false;
+            for line in &lines {
+                // Start capturing after kernel finishes or when we see shell output
+                if line.contains("init") || line.contains("python") || line.contains("Python")
+                   || line.contains("#") || line.contains("$")
+                {
+                    capture = true;
+                }
+                if capture {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+            }
+            
+            if result.is_empty() {
+                // Just use the last portion of output
+                let last_lines: Vec<&str> = lines.iter().rev().take(20).rev().cloned().collect();
+                result = last_lines.join("\n");
+            }
+        }
+        
+        if !stderr.is_empty() {
+            result.push_str("\n[stderr]: ");
+            result.push_str(stderr);
+        }
+        
+        if result.is_empty() {
+            result = "[No output captured from VM]".to_string();
+        }
+        
+        result
     }
 
     /// Execute a program directly (fallback when VM not available)
@@ -1310,28 +1805,55 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
             }
         }
 
-        // Execute the program - try Firecracker VM, fall back to direct execution
+        // Execute the program - use one-shot VM for Python, direct for RTFS
         let result = if let Some(ref program) = context.program {
-            // Try to get a VM from the pool, fall back to direct execution on failure
-            let mut provider = FirecrackerMicroVMProvider::with_config(self.config.clone());
-            provider.initialized = true;
-
-            match provider.get_vm() {
-                Ok(vm) => {
-                    // Deploy RTFS runtime to VM with enhanced security
-                    if let Err(e) = self.deploy_rtfs_runtime(vm) {
-                        eprintln!("Firecracker: Failed to deploy RTFS runtime to VM: {:?}, using direct execution", e);
-                        self.execute_direct(program)?
+            match program {
+                Program::RtfsSource(source) => {
+                    // Check if this is Python code that needs VM execution
+                    if source.trim().starts_with("#!") && source.contains("python") 
+                       || source.contains("import ") 
+                       || source.contains("print(") 
+                       || source.contains("def ") 
+                    {
+                        // Use one-shot VM execution for Python code
+                        // Create a dummy VM struct for the signature (not actually used)
+                        let mut dummy_vm = FirecrackerVM::new(self.config.clone());
+                        match self.execute_python_in_vm(&mut dummy_vm, source) {
+                            Ok(output) => Value::String(output),
+                            Err(e) => {
+                                eprintln!("Firecracker: Python VM execution failed: {:?}, falling back to direct", e);
+                                self.execute_direct(program)?
+                            }
+                        }
                     } else {
-                        // Execute the program with enhanced monitoring
-                        self.execute_rtfs_in_vm(vm, program)?
+                        // For simple RTFS expressions, use direct evaluation
+                        self.execute_direct(program)?
                     }
                 }
-                Err(e) => {
-                    // VM creation failed, use direct execution with security boundary
-                    eprintln!("Firecracker: VM not available ({:?}), using direct execution", e);
-                    self.execute_direct(program)?
+                Program::ExternalProgram { path, args } => {
+                    // For external Python programs, use one-shot VM
+                    if path == "python" || path == "python3" || path == "python2" {
+                        if let Some(pos) = args.iter().position(|a| a == "-c") {
+                            if let Some(code) = args.get(pos + 1) {
+                                let mut dummy_vm = FirecrackerVM::new(self.config.clone());
+                                match self.execute_python_in_vm(&mut dummy_vm, code) {
+                                    Ok(output) => Value::String(output),
+                                    Err(e) => {
+                                        eprintln!("Firecracker: Python VM execution failed: {:?}", e);
+                                        self.execute_direct(program)?
+                                    }
+                                }
+                            } else {
+                                self.execute_direct(program)?
+                            }
+                        } else {
+                            self.execute_direct(program)?
+                        }
+                    } else {
+                        self.execute_direct(program)?
+                    }
                 }
+                _ => self.execute_direct(program)?,
             }
         } else {
             return Err(RuntimeError::Generic(
