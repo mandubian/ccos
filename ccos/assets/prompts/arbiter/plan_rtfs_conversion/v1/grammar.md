@@ -76,6 +76,41 @@ Note: The predicate uses:
     - Returns a map where keys are the results of applying key-fn, values are vectors of items
     - Also accepts keywords as key-fn: `(group-by :state issues)` is equivalent to `(group-by (fn [x] (get x :state)) issues)`
     - Example: `(group-by :author issues)` → `{"alice" [issue1 issue3] "bob" [issue2]}`
+  - `sort-by` - Sort collection by key function: `(sort-by (fn [x] (get x :date)) items)`
+
+- **Collection Access Functions**:
+  - `first` - Get first element: `(first collection)` → first item or `nil`
+  - `rest` - Get all but first: `(rest collection)` → remaining items
+  - `nth` - Get item by index: `(nth collection 2)` → third item (0-indexed)
+  - `last` - Get last element: `(last collection)` → last item or `nil`
+  - `count` - Get collection size: `(count collection)` → integer
+
+- **Collection Building Functions**:
+  - `conj` - Add item to collection: `(conj items new-item)` → updated collection
+  - `concat` - Join collections: `(concat list1 list2)` → combined list
+  - `flatten` - Flatten nested lists: `(flatten [[1 2] [3 4]])` → `[1 2 3 4]`
+  - `distinct` - Remove duplicates: `(distinct [1 2 1 3])` → `[1 2 3]`
+  - `take` - Take first N items: `(take 5 collection)` → first 5 items
+  - `drop` - Drop first N items: `(drop 5 collection)` → items after first 5
+  - `reverse` - Reverse collection: `(reverse collection)` → reversed
+  - `keys` - Get map keys: `(keys {:a 1 :b 2})` → `[:a :b]`
+  - `vals` - Get map values: `(vals {:a 1 :b 2})` → `[1 2]`
+
+- **Collection Predicates**:
+  - `empty?` - Check if empty: `(empty? collection)` → `true/false`
+  - `contains?` - Check if key exists: `(contains? map :key)` → `true/false`
+  - `nil?` - Check if nil: `(nil? value)` → `true/false`
+
+- **Math Functions**:
+  - `+`, `-`, `*`, `/` - Basic arithmetic
+  - `max` - Maximum value: `(max 1 5 3)` → `5`
+  - `min` - Minimum value: `(min 1 5 3)` → `1`
+  - `abs` - Absolute value: `(abs -5)` → `5`
+  - `mod` - Modulo: `(mod 10 3)` → `1`
+  - `inc` - Increment by 1: `(inc 5)` → `6`
+  - `dec` - Decrement by 1: `(dec 5)` → `4`
+  - `sqrt` - Square root: `(sqrt 16)` → `4.0`
+  - `pow` - Power: `(pow 2 3)` → `8`
 
 - **Type Conversion Functions**:
   - `parse-int` - Parse string to integer: `(parse-int "123")` → `123`. Returns `nil` for invalid input.
@@ -91,6 +126,10 @@ Note: The predicate uses:
   - `string-length` - Get string length: `(string-length str)`
   - `string-trim` - Remove whitespace: `(string-trim str)`
   - `str` - Convert to string: `(str value)`
+  - `split` - Split string by separator: `(split "a/b/c" "/")` → `["a" "b" "c"]`
+  - `join` - Join collection with separator: `(join ", " ["a" "b"])` → `"a, b"`
+  - `substring` - Extract substring: `(substring str start end)`
+  - `starts-with?` - Check prefix: `(starts-with? "hello" "hel")` → `true`
   - **DO NOT use**: `string/includes?`, `string/lower`, `clojure.string/includes?`, or any namespace syntax
   - **DO NOT use**: Property access like `issue.title` - use `(get issue :title)` instead
 
