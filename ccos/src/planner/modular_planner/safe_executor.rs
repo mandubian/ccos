@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use crate::capability_marketplace::CapabilityManifest;
 use crate::capability_marketplace::CapabilityMarketplace;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
@@ -15,10 +16,12 @@ use rtfs::runtime::security::{RuntimeContext, SecurityAuthorizer};
 use rtfs::runtime::values::Value;
 
 /// Allowlist of effects that are considered safe for opportunistic execution.
-const SAFE_EFFECTS: &[&str] = &[":network", ":compute", ":read", ":output", ":pure"];
+/// Normalized to lowercase without leading colons.
+const SAFE_EFFECTS: &[&str] = &["network", "compute", "read", "output", "pure", "llm"];
 
 /// Denylist of effects that block safe execution.
-const UNSAFE_EFFECTS: &[&str] = &[":filesystem", ":system", ":write", ":delete"];
+/// Normalized to lowercase without leading colons.
+const UNSAFE_EFFECTS: &[&str] = &["filesystem", "system", "write", "delete"];
 
 /// Minimal executor that enforces an allowlist of effects.
 pub struct SafeCapabilityExecutor {
@@ -29,43 +32,55 @@ pub struct SafeCapabilityExecutor {
 impl SafeCapabilityExecutor {
     /// Create with a controlled RuntimeContext that allows network/compute/read only.
     pub fn new(marketplace: Arc<CapabilityMarketplace>) -> Self {
+        // Use controlled context with effects-based permissions
         let mut ctx = RuntimeContext::controlled(vec![]);
-        ctx.allow_effect(":network");
-        ctx.allow_effect(":compute");
-        ctx.allow_effect(":read");
-        // Disallow filesystem/system by default via effect denies
-        ctx.deny_effect(":filesystem");
-        ctx.deny_effect(":system");
-        ctx.deny_effect(":write");
-        ctx.deny_effect(":delete");
-        Self {
+        ctx.allow_effect("network");
+        ctx.allow_effect("compute");
+        ctx.allow_effect("read");
+        ctx.allow_effect("llm");
+        ctx.deny_effect("filesystem");
+        ctx.deny_effect("system");
+        ctx.deny_effect("write");
+        ctx.deny_effect("delete");
+        SafeCapabilityExecutor {
             marketplace,
             runtime_context: ctx,
         }
     }
 
-    /// Check if a capability is safe to execute (read-only, network allowed).
-    pub async fn is_safe(&self, capability_id: &str) -> bool {
-        let manifest = match self.marketplace.get_capability(capability_id).await {
-            Some(m) => m,
-            None => return false,
-        };
-
-        // If no effects declared, we can't determine safety - require explicit metadata
+    /// Returns true if the capability is considered "safe" for opportunistic execution.
+    fn is_safe(&self, manifest: &CapabilityManifest) -> bool {
+        // If effects list is empty, we can't determine safety
         if manifest.effects.is_empty() {
-            // No effects metadata means we don't know if this is safe
-            // Previously used pattern matching (list_, get_, search_) but that's fragile
+            log::debug!(
+                "DEBUG: Safe exec blocked for {} (no effects metadata - cannot determine safety)",
+                manifest.id
+            );
             // Capabilities should declare their effects explicitly
             return false;
         }
 
         // Check effects against allowlist
         for eff in &manifest.effects {
+            // Normalize: trim, lowercase, strip leading colon
             let norm = eff.trim().to_lowercase();
-            if UNSAFE_EFFECTS.contains(&norm.as_str()) {
+            let norm = norm.strip_prefix(':').unwrap_or(&norm);
+
+            if UNSAFE_EFFECTS.contains(&norm) {
+                log::debug!(
+                    "DEBUG: Safe exec blocked for {} (effect {} not allowed)",
+                    manifest.id,
+                    norm
+                );
                 return false;
             }
-            if !SAFE_EFFECTS.contains(&norm.as_str()) && !norm.is_empty() {
+            if !SAFE_EFFECTS.contains(&norm) && !norm.is_empty() {
+                log::debug!(
+                    "DEBUG: Safe exec blocked for {} (effect {} not in allowlist: {:?})",
+                    manifest.id,
+                    norm,
+                    SAFE_EFFECTS
+                );
                 return false;
             }
         }
