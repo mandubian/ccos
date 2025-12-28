@@ -127,6 +127,15 @@ impl CatalogResolution {
                 })
             }
             IntentType::Output { format: _ } => {
+                // Check if LLM suggested a specific tool (e.g., ccos.llm.generate for summarization)
+                if let Some(suggested_tool) = intent.extracted_params.get("_suggested_tool") {
+                    // If a specific tool was suggested, don't override with println
+                    // Return None to let the catalog search handle it
+                    if suggested_tool != "ccos.io.println" {
+                        return None;
+                    }
+                }
+
                 let mut args = std::collections::HashMap::new();
                 // Only use description as message if there are no dependencies.
                 // If dependencies exist, we want println to output the dependency result (injected via _previous_result).

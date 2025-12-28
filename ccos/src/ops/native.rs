@@ -18,6 +18,9 @@ pub async fn register_native_capabilities(
 
     for descriptor in descriptors {
         if let Some(native_cap) = native_provider.get_capability(&descriptor.id) {
+            // Determine effects based on capability type
+            let (effects, effect_type) = get_capability_effects(&descriptor.id);
+
             let manifest = CapabilityManifest {
                 id: descriptor.id.clone(),
                 name: descriptor.id.clone(),
@@ -34,16 +37,37 @@ pub async fn register_native_capabilities(
                     .iter()
                     .map(|p| format!("{:?}", p))
                     .collect(),
-                effects: vec![],
+                effects,
                 metadata: descriptor.metadata.clone(),
                 agent_metadata: None,
                 domains: Vec::new(),
                 categories: Vec::new(),
-                effect_type: EffectType::default(),
+                effect_type,
             };
             marketplace.register_capability_manifest(manifest).await?;
         }
     }
 
     Ok(())
+}
+
+/// Determine effects for a capability based on its ID
+fn get_capability_effects(id: &str) -> (Vec<String>, EffectType) {
+    match id {
+        // LLM capabilities - effectful but deterministic for same input
+        "ccos.llm.generate" => (
+            vec!["llm".to_string(), "network".to_string()],
+            EffectType::Effectful,
+        ),
+        // IO capabilities - effectful
+        id if id.starts_with("ccos.io.") || id.starts_with("ccos.cli.") => {
+            (vec!["io".to_string()], EffectType::Effectful)
+        }
+        // Config capabilities - read-only effectful
+        id if id.contains("config") || id.contains("show") => {
+            (vec!["read".to_string()], EffectType::Effectful)
+        }
+        // Default - pure
+        _ => (vec![], EffectType::Pure),
+    }
 }

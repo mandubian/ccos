@@ -151,3 +151,22 @@ Note: The predicate uses:
   - Convert dots to colons for keywords: `mcp.github.list_issues` → `:mcp.github.list_issues`
   - Keep capability ID format consistent with RTFS keyword syntax
 
+- **LLM Capabilities** (for text generation, summarization, analysis):
+  - `ccos.llm.generate` - Generate text using LLM with prompt sanitization
+    - Use for: summarization, analysis, extraction, translation, explanation
+    - Parameters:
+      - `:prompt` (required) - The instruction/question for the LLM
+      - `:context` (optional) - Data to include (serialize with `str` if needed)
+      - `:max_tokens` (optional, default 4096) - Maximum tokens to generate
+      - `:temperature` (optional, default 0.3) - Sampling temperature
+    - Returns: Generated text string, or map with `:approval_required true` if prompt needs human approval
+    - Example:
+    ```rtfs
+    step_2 (call :ccos.llm.generate {
+      :prompt "Summarize these issues into a list of action items"
+      :context (str step_1)
+    })
+    ```
+    - **USE THIS** when the goal requires summarization, analysis, or generating human-readable text
+    - **DO NOT** try to summarize with inline RTFS - use this capability instead
+

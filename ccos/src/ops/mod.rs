@@ -8,6 +8,7 @@ pub mod approval;
 pub mod config;
 pub mod discover;
 pub mod governance;
+pub mod llm;
 pub mod native;
 pub mod plan;
 pub mod server;

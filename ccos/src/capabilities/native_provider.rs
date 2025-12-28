@@ -117,6 +117,12 @@ impl NativeCapabilityProvider {
             create_plan_validate_capability(),
         );
 
+        // LLM capabilities
+        capabilities.insert(
+            "ccos.llm.generate".to_string(),
+            create_llm_generate_capability(),
+        );
+
         Self { capabilities }
     }
 
@@ -265,25 +271,33 @@ impl CapabilityProvider for NativeCapabilityProvider {
     fn list_capabilities(&self) -> Vec<CapabilityDescriptor> {
         self.capabilities
             .iter()
-            .map(|(id, _)| CapabilityDescriptor {
-                id: id.clone(),
-                description: format!("CCOS CLI capability: {}", id),
-                capability_type: CapabilityDescriptor::constrained_function_type(
-                    vec![CapabilityDescriptor::non_empty_string_type()],
-                    CapabilityDescriptor::non_empty_string_type(),
-                    None,
-                ),
-                security_requirements: crate::capabilities::provider::SecurityRequirements {
-                    permissions: vec![],
-                    requires_microvm: false,
-                    resource_limits: crate::capabilities::provider::ResourceLimits {
-                        max_memory: None,
-                        max_cpu_time: None,
-                        max_disk_space: None,
+            .map(|(id, cap)| {
+                // Use metadata description if available, otherwise generic
+                let description = cap
+                    .metadata
+                    .get("description")
+                    .cloned()
+                    .unwrap_or_else(|| format!("CCOS CLI capability: {}", id));
+                CapabilityDescriptor {
+                    id: id.clone(),
+                    description,
+                    capability_type: CapabilityDescriptor::constrained_function_type(
+                        vec![CapabilityDescriptor::non_empty_string_type()],
+                        CapabilityDescriptor::non_empty_string_type(),
+                        None,
+                    ),
+                    security_requirements: crate::capabilities::provider::SecurityRequirements {
+                        permissions: vec![],
+                        requires_microvm: false,
+                        resource_limits: crate::capabilities::provider::ResourceLimits {
+                            max_memory: None,
+                            max_cpu_time: None,
+                            max_disk_space: None,
+                        },
+                        network_access: crate::capabilities::provider::NetworkAccess::None,
                     },
-                    network_access: crate::capabilities::provider::NetworkAccess::None,
-                },
-                metadata: HashMap::new(),
+                    metadata: cap.metadata.clone(),
+                }
             })
             .collect()
     }
@@ -392,25 +406,73 @@ impl NativeProviderInterface {
 // ============================================================================
 
 /// Helper to get a string from a Value map
+/// Checks both String keys and Keyword keys for RTFS compatibility
 fn get_string_param(inputs: &Value, key: &str) -> Result<String, RuntimeError> {
     match inputs {
-        Value::Map(map) => map
-            .get(&rtfs::ast::MapKey::String(key.to_string()))
-            .and_then(|v| v.as_string())
-            .map(|s| s.to_string())
-            .ok_or_else(|| RuntimeError::Generic(format!("Missing parameter: {}", key))),
+        Value::Map(map) => {
+            // Try String key first (from safe execution/HashMap conversion)
+            if let Some(v) = map.get(&rtfs::ast::MapKey::String(key.to_string())) {
+                if let Some(s) = v.as_string() {
+                    return Ok(s.to_string());
+                }
+            }
+            // Try Keyword key (from RTFS parsing: {:prompt "..."})
+            if let Some(v) = map.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(
+                key.to_string(),
+            ))) {
+                if let Some(s) = v.as_string() {
+                    return Ok(s.to_string());
+                }
+            }
+            Err(RuntimeError::Generic(format!("Missing parameter: {}", key)))
+        }
         Value::String(s) if key == "value" => Ok(s.clone()),
         _ => Err(RuntimeError::Generic("Expected map input".to_string())),
     }
 }
 
 /// Helper to get an optional string from a Value map
+/// Checks both String keys and Keyword keys for RTFS compatibility
 fn get_optional_string_param(inputs: &Value, key: &str) -> Option<String> {
     match inputs {
-        Value::Map(map) => map
-            .get(&rtfs::ast::MapKey::String(key.to_string()))
-            .and_then(|v| v.as_string())
-            .map(|s| s.to_string()),
+        Value::Map(map) => {
+            // Try String key first
+            if let Some(v) = map.get(&rtfs::ast::MapKey::String(key.to_string())) {
+                if let Some(s) = v.as_string() {
+                    return Some(s.to_string());
+                }
+            }
+            // Try Keyword key
+            if let Some(v) = map.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(
+                key.to_string(),
+            ))) {
+                if let Some(s) = v.as_string() {
+                    return Some(s.to_string());
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Helper to get any Value and serialize it to string (for LLM context)
+/// Checks both String keys and Keyword keys for RTFS compatibility
+fn get_optional_value_as_string(inputs: &Value, key: &str) -> Option<String> {
+    match inputs {
+        Value::Map(map) => {
+            // Try String key first
+            if let Some(v) = map.get(&rtfs::ast::MapKey::String(key.to_string())) {
+                return Some(format!("{:?}", v));
+            }
+            // Try Keyword key
+            if let Some(v) = map.get(&rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(
+                key.to_string(),
+            ))) {
+                return Some(format!("{:?}", v));
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -1027,6 +1089,108 @@ fn create_plan_validate_capability() -> NativeCapability {
         handler,
         security_level: "low".to_string(),
         metadata: HashMap::new(),
+    }
+}
+
+// LLM capabilities
+
+fn create_llm_generate_capability() -> NativeCapability {
+    let handler = Arc::new(
+        |inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+            let inputs = inputs.clone();
+            async move {
+                let prompt = get_string_param(&inputs, "prompt")?;
+                // Accept both :context and :data (fallback)
+                let context = get_optional_string_param(&inputs, "context")
+                    .or_else(|| get_optional_string_param(&inputs, "data"))
+                    .or_else(|| {
+                        // If :data is a non-string value, serialize it
+                        get_optional_value_as_string(&inputs, "data")
+                    });
+                let max_tokens = get_optional_u32_param(&inputs, "max_tokens");
+                let temperature = get_optional_f32_param(&inputs, "temperature");
+
+                let request = ops::llm::LlmGenerateRequest {
+                    prompt,
+                    context,
+                    max_tokens,
+                    temperature,
+                };
+
+                match ops::llm::llm_generate(request).await {
+                    Ok(response) => {
+                        if response.approval_required {
+                            // Return a structured response indicating approval needed
+                            Ok(Value::Map({
+                                let mut map = std::collections::HashMap::new();
+                                map.insert(
+                                    rtfs::ast::MapKey::String("approval_required".to_string()),
+                                    Value::Boolean(true),
+                                );
+                                if let Some(reason) = response.approval_reason {
+                                    map.insert(
+                                        rtfs::ast::MapKey::String("reason".to_string()),
+                                        Value::String(reason),
+                                    );
+                                }
+                                map
+                            }))
+                        } else {
+                            Ok(Value::String(response.text))
+                        }
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            .boxed()
+        },
+    );
+
+    let mut metadata = HashMap::new();
+    metadata.insert("name".to_string(), "LLM Generate".to_string());
+    metadata.insert(
+        "description".to_string(),
+        "LLM text generation for summarization, analysis, explanation, translation. Use for summarizing data, extracting insights, generating human-readable text from structured data.".to_string(),
+    );
+    metadata.insert(
+        "keywords".to_string(),
+        "summarize summary analyze analysis explain translate generate text".to_string(),
+    );
+
+    NativeCapability {
+        handler,
+        security_level: "medium".to_string(),
+        metadata,
+    }
+}
+
+/// Helper to get an optional u32 from a Value map
+fn get_optional_u32_param(inputs: &Value, key: &str) -> Option<u32> {
+    match inputs {
+        Value::Map(map) => map
+            .get(&rtfs::ast::MapKey::String(key.to_string()))
+            .and_then(|v| match v {
+                Value::Integer(i) => Some(*i as u32),
+                Value::Float(f) => Some(*f as u32),
+                Value::String(s) => s.parse().ok(),
+                _ => None,
+            }),
+        _ => None,
+    }
+}
+
+/// Helper to get an optional f32 from a Value map
+fn get_optional_f32_param(inputs: &Value, key: &str) -> Option<f32> {
+    match inputs {
+        Value::Map(map) => map
+            .get(&rtfs::ast::MapKey::String(key.to_string()))
+            .and_then(|v| match v {
+                Value::Float(f) => Some(*f as f32),
+                Value::Integer(i) => Some(*i as f32),
+                Value::String(s) => s.parse().ok(),
+                _ => None,
+            }),
+        _ => None,
     }
 }
 
