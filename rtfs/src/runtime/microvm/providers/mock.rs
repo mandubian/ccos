@@ -54,6 +54,9 @@ impl MicroVMProvider for MockMicroVMProvider {
 
         let result_value = match context.program {
             Some(program) => match program {
+                crate::runtime::microvm::core::Program::ScriptSource { language, source } => {
+                    Value::String(format!("Mock {:?} script result: {} bytes", language, source.len()))
+                }
                 crate::runtime::microvm::core::Program::RtfsSource(source) => {
                     // Delegate to RTFS runtime for proper evaluation
                     let module_registry = crate::runtime::module_runtime::ModuleRegistry::new();

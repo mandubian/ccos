@@ -5,6 +5,107 @@ use crate::runtime::security::RuntimeContext;
 use crate::runtime::values::Value;
 use std::time::Duration;
 
+/// Supported script languages for sandboxed execution
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptLanguage {
+    /// Python (2.x or 3.x)
+    Python,
+    /// JavaScript (Node.js)
+    JavaScript,
+    /// Bash/Shell script
+    Shell,
+    /// Ruby
+    Ruby,
+    /// Lua
+    Lua,
+    /// RTFS language
+    Rtfs,
+    /// Custom language with interpreter path
+    Custom { interpreter: String, file_ext: String },
+}
+
+impl ScriptLanguage {
+    /// Get the interpreter command for this language
+    pub fn interpreter(&self) -> &str {
+        match self {
+            ScriptLanguage::Python => "python",
+            ScriptLanguage::JavaScript => "node",
+            ScriptLanguage::Shell => "sh",
+            ScriptLanguage::Ruby => "ruby",
+            ScriptLanguage::Lua => "lua",
+            ScriptLanguage::Rtfs => "rtfs",
+            ScriptLanguage::Custom { interpreter, .. } => interpreter,
+        }
+    }
+
+    /// Get the file extension for this language
+    pub fn file_extension(&self) -> &str {
+        match self {
+            ScriptLanguage::Python => "py",
+            ScriptLanguage::JavaScript => "js",
+            ScriptLanguage::Shell => "sh",
+            ScriptLanguage::Ruby => "rb",
+            ScriptLanguage::Lua => "lua",
+            ScriptLanguage::Rtfs => "rtfs",
+            ScriptLanguage::Custom { file_ext, .. } => file_ext,
+        }
+    }
+
+    /// Alternative interpreter paths to try in order
+    pub fn interpreter_alternatives(&self) -> Vec<&str> {
+        match self {
+            ScriptLanguage::Python => vec!["/usr/bin/python", "/usr/bin/python3", "/usr/bin/python2"],
+            ScriptLanguage::JavaScript => vec!["/usr/bin/node", "/usr/local/bin/node"],
+            ScriptLanguage::Shell => vec!["/bin/sh", "/bin/bash"],
+            ScriptLanguage::Ruby => vec!["/usr/bin/ruby"],
+            ScriptLanguage::Lua => vec!["/usr/bin/lua", "/usr/bin/lua5.4", "/usr/bin/lua5.3"],
+            ScriptLanguage::Rtfs => vec![],
+            ScriptLanguage::Custom { interpreter, .. } => vec![interpreter.as_str()],
+        }
+    }
+
+    /// Detect language from source code heuristics
+    pub fn detect_from_source(source: &str) -> Option<ScriptLanguage> {
+        let trimmed = source.trim();
+        
+        // Check shebang first
+        if let Some(first_line) = trimmed.lines().next() {
+            if first_line.starts_with("#!") {
+                if first_line.contains("python") {
+                    return Some(ScriptLanguage::Python);
+                } else if first_line.contains("node") || first_line.contains("javascript") {
+                    return Some(ScriptLanguage::JavaScript);
+                } else if first_line.contains("ruby") {
+                    return Some(ScriptLanguage::Ruby);
+                } else if first_line.contains("lua") {
+                    return Some(ScriptLanguage::Lua);
+                } else if first_line.contains("sh") || first_line.contains("bash") {
+                    return Some(ScriptLanguage::Shell);
+                }
+            }
+        }
+        
+        // Heuristic detection based on syntax patterns
+        // Python
+        if source.contains("import ") || source.contains("def ") || source.contains("print(") {
+            return Some(ScriptLanguage::Python);
+        }
+        
+        // JavaScript
+        if source.contains("const ") || source.contains("let ") || source.contains("function ") 
+           || source.contains("console.log") || source.contains("require(") || source.contains("import {") {
+            return Some(ScriptLanguage::JavaScript);
+        }
+        
+        // Ruby
+        if source.contains("puts ") || source.contains("def ") && source.contains("end") {
+            return Some(ScriptLanguage::Ruby);
+        }
+        
+        None
+    }
+}
+
 /// Program representation for MicroVM execution
 #[derive(Debug, Clone)]
 pub enum Program {
@@ -16,8 +117,10 @@ pub enum Program {
     NativeFunction(fn(Vec<Value>) -> crate::runtime::error::RuntimeResult<Value>),
     /// External program (for process-based isolation)
     ExternalProgram { path: String, args: Vec<String> },
-    /// RTFS source code to parse and execute
+    /// RTFS source code to parse and execute (legacy, prefer ScriptSource)
     RtfsSource(String),
+    /// Script source with explicit language tag for sandboxed execution
+    ScriptSource { language: ScriptLanguage, source: String },
 }
 
 impl Program {
@@ -68,6 +171,47 @@ impl Program {
             Program::ExternalProgram { path, args } => {
                 format!("External program: {} {:?}", path, args)
             }
+            Program::ScriptSource { language, source } => {
+                format!("{:?} script: {} bytes", language, source.len())
+            }
+        }
+    }
+
+    /// Try to detect the language and convert RtfsSource to ScriptSource
+    pub fn with_detected_language(self) -> Self {
+        match self {
+            Program::RtfsSource(source) => {
+                if let Some(lang) = ScriptLanguage::detect_from_source(&source) {
+                    Program::ScriptSource { language: lang, source }
+                } else {
+                    Program::RtfsSource(source)
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// Create a Python script program
+    pub fn python(source: impl Into<String>) -> Self {
+        Program::ScriptSource {
+            language: ScriptLanguage::Python,
+            source: source.into(),
+        }
+    }
+
+    /// Create a JavaScript script program
+    pub fn javascript(source: impl Into<String>) -> Self {
+        Program::ScriptSource {
+            language: ScriptLanguage::JavaScript,
+            source: source.into(),
+        }
+    }
+
+    /// Create a Shell script program
+    pub fn shell(source: impl Into<String>) -> Self {
+        Program::ScriptSource {
+            language: ScriptLanguage::Shell,
+            source: source.into(),
         }
     }
 }

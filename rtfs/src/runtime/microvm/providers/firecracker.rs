@@ -12,7 +12,7 @@
 
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::microvm::core::{
-    ExecutionContext, ExecutionMetadata, ExecutionResult, Program,
+    ExecutionContext, ExecutionMetadata, ExecutionResult, Program, ScriptLanguage,
 };
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::values::Value;
@@ -866,20 +866,28 @@ impl FirecrackerMicroVMProvider {
 
     /// Create an overlay rootfs with our script injected
     /// This uses a copy-on-write approach with a temporary overlay
-    fn create_overlay_rootfs(&self, vm_id: &str, python_code: &str) -> RuntimeResult<PathBuf> {
+    fn create_overlay_rootfs(
+        &self,
+        vm_id: &str,
+        language: &ScriptLanguage,
+        script_source: &str,
+    ) -> RuntimeResult<PathBuf> {
         let work_dir = PathBuf::from(format!("/tmp/fc-overlay-{}", vm_id));
         fs::create_dir_all(&work_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create overlay directory: {}", e))
         })?;
         
-        // Create the Python script to inject
-        let script_path = work_dir.join("script.py");
-        fs::write(&script_path, python_code).map_err(|e| {
+        // Create the script file with appropriate extension
+        let script_filename = format!("rtfs_script.{}", language.file_extension());
+        let script_path = work_dir.join(&script_filename);
+        fs::write(&script_path, script_source).map_err(|e| {
             RuntimeError::Generic(format!("Failed to write script: {}", e))
         })?;
         
-        // Create an init script that runs our Python code and shuts down
-        // Note: This replaces /sbin/init. We use /usr/bin/python (Python 2.7) available in the rootfs
+        // Build interpreter detection logic for the init script
+        let interpreter_checks = self.build_interpreter_checks(language, &script_filename);
+        
+        // Create an init script that runs our code and shuts down
         let init_script = format!(r#"#!/bin/sh
 # RTFS One-shot execution init
 # Mount essential filesystems
@@ -888,15 +896,7 @@ mount -t sysfs sysfs /sys 2>/dev/null
 
 # Output markers for parsing
 echo "{start}"
-if [ -x /usr/bin/python ]; then
-    /usr/bin/python /rtfs_script.py 2>&1
-elif [ -x /usr/bin/python2 ]; then
-    /usr/bin/python2 /rtfs_script.py 2>&1
-elif [ -x /usr/bin/python3 ]; then
-    /usr/bin/python3 /rtfs_script.py 2>&1
-else
-    echo "ERROR: No Python interpreter found"
-fi
+{interpreter_checks}
 EXIT_CODE=$?
 echo "{end}"
 echo "{exit}:$EXIT_CODE"
@@ -912,6 +912,7 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
             start = Self::OUTPUT_START_MARKER,
             end = Self::OUTPUT_END_MARKER,
             exit = Self::EXIT_CODE_MARKER,
+            interpreter_checks = interpreter_checks,
         );
         
         let init_path = work_dir.join("rtfs_init");
@@ -996,11 +997,36 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
         Ok(overlay_rootfs)
     }
 
-    /// Execute a Python program inside the Firecracker VM using a one-shot approach
-    fn execute_python_in_vm(
+    /// Build interpreter detection shell commands for a given language
+    fn build_interpreter_checks(&self, language: &ScriptLanguage, script_filename: &str) -> String {
+        let alternatives = language.interpreter_alternatives();
+        
+        if alternatives.is_empty() {
+            // For languages without alternatives, use direct execution
+            return format!("/{} 2>&1", script_filename);
+        }
+        
+        let mut checks = String::new();
+        for (i, path) in alternatives.iter().enumerate() {
+            if i == 0 {
+                checks.push_str(&format!("if [ -x {} ]; then\n", path));
+                checks.push_str(&format!("    {} /{} 2>&1\n", path, script_filename));
+            } else {
+                checks.push_str(&format!("elif [ -x {} ]; then\n", path));
+                checks.push_str(&format!("    {} /{} 2>&1\n", path, script_filename));
+            }
+        }
+        checks.push_str(&format!("else\n    echo \"ERROR: No {:?} interpreter found\"\nfi", language));
+        
+        checks
+    }
+
+    /// Execute a script inside the Firecracker VM using a one-shot approach
+    fn execute_script_in_vm(
         &self,
         _vm: &mut FirecrackerVM,
-        python_code: &str,
+        language: &ScriptLanguage,
+        script_source: &str,
     ) -> RuntimeResult<String> {
         let vm_id = format!(
             "oneshot-{}",
@@ -1010,10 +1036,10 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 .as_nanos()
         );
 
-        eprintln!("[Firecracker] Creating overlay rootfs for VM: {}", vm_id);
+        eprintln!("[Firecracker] Creating overlay rootfs for VM: {} ({:?})", vm_id, language);
         
         // Create overlay rootfs with our script injected
-        let overlay_rootfs = self.create_overlay_rootfs(&vm_id, python_code)?;
+        let overlay_rootfs = self.create_overlay_rootfs(&vm_id, language, script_source)?;
         
         // Configure VM with custom boot args to use our init script
         // Use init= for ext4 rootfs (not rdinit which is for initramfs)
@@ -1373,30 +1399,18 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
     /// Execute a program directly (fallback when VM not available)
     fn execute_direct(&self, program: &Program) -> RuntimeResult<Value> {
         match program {
+            Program::ScriptSource { language, source } => {
+                self.execute_script_direct(language, source)
+            }
             Program::RtfsSource(source) => {
-                // Detect Python code
-                if source.trim().starts_with("#!") && source.contains("python")
-                    || source.contains("import ")
-                    || source.contains("print(")
-                    || source.contains("def ")
-                {
-                    let output = Command::new("python")
-                        .args(["-c", source])
-                        .output()
-                        .map_err(|e| RuntimeError::Generic(format!("Python execution failed: {}", e)))?;
-
-                    if output.status.success() {
-                        Ok(Value::String(String::from_utf8_lossy(&output.stdout).to_string()))
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        Err(RuntimeError::Generic(format!("Python error: {}", stderr)))
-                    }
-                } else {
-                    Ok(Value::String(format!(
-                        "Firecracker direct execution result: {}",
-                        source
-                    )))
+                // Try to detect language
+                if let Some(lang) = ScriptLanguage::detect_from_source(source) {
+                    return self.execute_script_direct(&lang, source);
                 }
+                Ok(Value::String(format!(
+                    "Firecracker direct execution result: {}",
+                    source
+                )))
             }
             Program::ExternalProgram { path, args } => {
                 let output = Command::new(path)
@@ -1412,6 +1426,23 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 }
             }
             _ => Ok(Value::String("Direct execution for this program type not supported".to_string())),
+        }
+    }
+
+    /// Execute a script directly using the host's interpreter (fallback)
+    fn execute_script_direct(&self, language: &ScriptLanguage, source: &str) -> RuntimeResult<Value> {
+        let interpreter = language.interpreter();
+        
+        let output = Command::new(interpreter)
+            .args(["-c", source])
+            .output()
+            .map_err(|e| RuntimeError::Generic(format!("{:?} execution failed: {}", language, e)))?;
+
+        if output.status.success() {
+            Ok(Value::String(String::from_utf8_lossy(&output.stdout).to_string()))
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(RuntimeError::Generic(format!("{:?} error: {}", language, stderr)))
         }
     }
 
@@ -1431,14 +1462,15 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
 
         // Execute the program
         let result = match program {
+            Program::ScriptSource { language, source } => {
+                // Explicit language - execute directly in VM
+                let output = self.execute_script_in_vm(vm, language, source)?;
+                return Ok(Value::String(output));
+            }
             Program::RtfsSource(source) => {
-                // Check if this is Python code (starts with python shebang or import)
-                if source.trim().starts_with("#!") && source.contains("python") 
-                   || source.contains("import ") 
-                   || source.contains("print(") 
-                   || source.contains("def ") 
-                {
-                    let output = self.execute_python_in_vm(vm, source)?;
+                // Try to detect language from source
+                if let Some(detected_lang) = ScriptLanguage::detect_from_source(source) {
+                    let output = self.execute_script_in_vm(vm, &detected_lang, source)?;
                     return Ok(Value::String(output));
                 }
                 
@@ -1462,12 +1494,27 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 )))
             }
             Program::ExternalProgram { path, args } => {
-                // Execute external programs with real subprocess
-                if path == "python" || path == "python3" || path == "python2" {
-                    // Find the -c argument for inline code
-                    if let Some(pos) = args.iter().position(|a| a == "-c") {
+                // Detect language from external program path
+                let lang = if path == "python" || path == "python3" || path == "python2" {
+                    Some(ScriptLanguage::Python)
+                } else if path == "node" || path == "nodejs" {
+                    Some(ScriptLanguage::JavaScript)
+                } else if path == "ruby" {
+                    Some(ScriptLanguage::Ruby)
+                } else if path == "lua" {
+                    Some(ScriptLanguage::Lua)
+                } else if path == "sh" || path == "bash" {
+                    Some(ScriptLanguage::Shell)
+                } else {
+                    None
+                };
+                
+                // Execute script languages in VM
+                if let Some(language) = lang {
+                    // Find the -c or -e argument for inline code
+                    if let Some(pos) = args.iter().position(|a| a == "-c" || a == "-e") {
                         if let Some(code) = args.get(pos + 1) {
-                            let output = self.execute_python_in_vm(vm, code)?;
+                            let output = self.execute_script_in_vm(vm, &language, code)?;
                             return Ok(Value::String(output));
                         }
                     }
@@ -1805,23 +1852,29 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
             }
         }
 
-        // Execute the program - use one-shot VM for Python, direct for RTFS
+        // Execute the program - use one-shot VM for scripts, direct for RTFS
         let result = if let Some(ref program) = context.program {
             match program {
+                Program::ScriptSource { language, source } => {
+                    // Explicit language - use VM execution
+                    let mut dummy_vm = FirecrackerVM::new(self.config.clone());
+                    match self.execute_script_in_vm(&mut dummy_vm, language, source) {
+                        Ok(output) => Value::String(output),
+                        Err(e) => {
+                            eprintln!("Firecracker: {:?} VM execution failed: {:?}, falling back to direct", language, e);
+                            self.execute_direct(program)?
+                        }
+                    }
+                }
                 Program::RtfsSource(source) => {
-                    // Check if this is Python code that needs VM execution
-                    if source.trim().starts_with("#!") && source.contains("python") 
-                       || source.contains("import ") 
-                       || source.contains("print(") 
-                       || source.contains("def ") 
-                    {
-                        // Use one-shot VM execution for Python code
-                        // Create a dummy VM struct for the signature (not actually used)
+                    // Try to detect language from source
+                    if let Some(detected_lang) = ScriptLanguage::detect_from_source(source) {
+                        // Use one-shot VM execution for detected script languages
                         let mut dummy_vm = FirecrackerVM::new(self.config.clone());
-                        match self.execute_python_in_vm(&mut dummy_vm, source) {
+                        match self.execute_script_in_vm(&mut dummy_vm, &detected_lang, source) {
                             Ok(output) => Value::String(output),
                             Err(e) => {
-                                eprintln!("Firecracker: Python VM execution failed: {:?}, falling back to direct", e);
+                                eprintln!("Firecracker: {:?} VM execution failed: {:?}, falling back to direct", detected_lang, e);
                                 self.execute_direct(program)?
                             }
                         }
@@ -1831,15 +1884,29 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
                     }
                 }
                 Program::ExternalProgram { path, args } => {
-                    // For external Python programs, use one-shot VM
-                    if path == "python" || path == "python3" || path == "python2" {
-                        if let Some(pos) = args.iter().position(|a| a == "-c") {
+                    // Detect language from program path
+                    let lang = if path == "python" || path == "python3" || path == "python2" {
+                        Some(ScriptLanguage::Python)
+                    } else if path == "node" || path == "nodejs" {
+                        Some(ScriptLanguage::JavaScript)
+                    } else if path == "ruby" {
+                        Some(ScriptLanguage::Ruby)
+                    } else if path == "lua" {
+                        Some(ScriptLanguage::Lua)
+                    } else if path == "sh" || path == "bash" {
+                        Some(ScriptLanguage::Shell)
+                    } else {
+                        None
+                    };
+                    
+                    if let Some(language) = lang {
+                        if let Some(pos) = args.iter().position(|a| a == "-c" || a == "-e") {
                             if let Some(code) = args.get(pos + 1) {
                                 let mut dummy_vm = FirecrackerVM::new(self.config.clone());
-                                match self.execute_python_in_vm(&mut dummy_vm, code) {
+                                match self.execute_script_in_vm(&mut dummy_vm, &language, code) {
                                     Ok(output) => Value::String(output),
                                     Err(e) => {
-                                        eprintln!("Firecracker: Python VM execution failed: {:?}", e);
+                                        eprintln!("Firecracker: {:?} VM execution failed: {:?}", language, e);
                                         self.execute_direct(program)?
                                     }
                                 }
