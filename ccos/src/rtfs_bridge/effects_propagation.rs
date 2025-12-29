@@ -129,9 +129,9 @@ where
 /// This analyzes the RTFS code to find all `(call :capability.id ...)` patterns.
 fn extract_capability_ids_from_plan(plan: &Plan) -> Result<Vec<String>, RtfsBridgeError> {
     let body_str = match &plan.body {
-        PlanBody::Rtfs(rtfs_code) => rtfs_code.clone(),
-        PlanBody::Wasm(_) => {
-            // For WASM plans, we can't statically analyze the body
+        PlanBody::Source(rtfs_code) | PlanBody::Rtfs(rtfs_code) => rtfs_code.clone(),
+        PlanBody::Binary(_) | PlanBody::Wasm(_) => {
+            // For binary/WASM plans, we can't statically analyze the body
             // Return empty list (conservative: no effects propagated)
             return Ok(Vec::new());
         }

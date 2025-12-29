@@ -109,22 +109,19 @@ pub struct GenerationContext {
 
 // --- Plans and Orchestration (SEP-002) ---
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlanLanguage {
     Rtfs20,
-    // Future language support - currently unused but keeps the door open
-    #[allow(dead_code)]
     Wasm,
-    #[allow(dead_code)]
     Python,
-    #[allow(dead_code)]
+    JavaScript,
+    Shell,
     GraphJson,
-    #[allow(dead_code)]
     Other(String),
 }
 
 /// Represents the "how" for achieving an Intent. An immutable, archivable script.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
     pub plan_id: PlanId,
     pub name: Option<String>,
@@ -143,10 +140,16 @@ pub struct Plan {
     pub annotations: HashMap<String, Value>, // Provenance and metadata (prompt-id, version, etc.)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PlanBody {
-    Rtfs(String),  // RTFS source code
-    Wasm(Vec<u8>), // compiled WASM bytecode
+    /// Source code of the plan (RTFS, Python, etc.)
+    Source(String),
+    /// Compiled binary representation (WASM, RTFS bytecode)
+    Binary(Vec<u8>),
+    /// RTFS source code
+    Rtfs(String),
+    /// WASM bytecode
+    Wasm(Vec<u8>),
 }
 
 // --- Causal Chain (SEP-003) ---

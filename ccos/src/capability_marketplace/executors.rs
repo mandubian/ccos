@@ -25,7 +25,7 @@ use crate::capabilities::native_provider::NativeCapabilityProvider;
 use crate::capabilities::SessionPoolManager;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use rtfs::runtime::microvm::{MicroVMFactory, ExecutionContext, Program};
+use rtfs::runtime::microvm::{ExecutionContext, MicroVMFactory, Program, ScriptLanguage};
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -1234,30 +1234,47 @@ impl CapabilityExecutor for SandboxedExecutor {
         if let ProviderType::Sandboxed(sandboxed) = provider {
             let mut factory = self.factory.lock().unwrap();
             let provider_name = sandboxed.provider.as_deref().unwrap_or("process");
-            
+
             if factory.get_provider(provider_name).is_none() {
-                 return Err(RuntimeError::Generic(format!("Provider '{}' not available", provider_name)));
+                return Err(RuntimeError::Generic(format!(
+                    "Provider '{}' not available",
+                    provider_name
+                )));
             }
 
             let vm_provider = factory.get_provider_mut(provider_name).unwrap();
-            
-            let mut program_args = Vec::new();
-            if sandboxed.runtime == "python" {
-                program_args.push("-c".to_string());
-                program_args.push(sandboxed.source.clone());
+
+            let program = if sandboxed.runtime == "wasm" {
+                // Try to decode as base64, if fails assume it's a path and read it
+                let wasm_bytes = if let Ok(bytes) = base64::decode(&sandboxed.source) {
+                    bytes
+                } else {
+                    std::fs::read(&sandboxed.source)
+                        .map_err(|e| RuntimeError::Generic(format!("Failed to read WASM file: {}", e)))?
+                };
+                Program::Binary {
+                    language: ScriptLanguage::Wasm,
+                    source: wasm_bytes,
+                }
             } else {
-                program_args.push(sandboxed.source.clone());
-            }
+                let language = match sandboxed.runtime.as_str() {
+                    "python" | "python3" => ScriptLanguage::Python,
+                    "javascript" | "js" | "node" => ScriptLanguage::JavaScript,
+                    "shell" | "sh" | "bash" => ScriptLanguage::Shell,
+                    "ruby" => ScriptLanguage::Ruby,
+                    "lua" => ScriptLanguage::Lua,
+                    _ => ScriptLanguage::Custom {
+                        interpreter: sandboxed.runtime.clone(),
+                        file_ext: "tmp".to_string(),
+                    },
+                };
 
-            // Pass inputs as JSON string argument
-            let input_json = serde_json::to_string(&inputs).unwrap_or_default();
-            program_args.push(input_json);
-
-            let program = Program::ExternalProgram {
-                path: if sandboxed.runtime == "python" { "python3".to_string() } else { sandboxed.runtime.clone() },
-                args: program_args,
+                Program::ScriptSource {
+                    language,
+                    source: sandboxed.source.clone(),
+                }
             };
-            
+
             let context = ExecutionContext {
                 execution_id: Uuid::new_v4().to_string(),
                 program: Some(program),
@@ -1268,7 +1285,7 @@ impl CapabilityExecutor for SandboxedExecutor {
                 runtime_context: None,
             };
 
-            let result = vm_provider.execute(context)?;
+            let result = vm_provider.execute_program(context)?;
             Ok(result.value)
         } else {
             Err(RuntimeError::Generic("Invalid provider type".to_string()))

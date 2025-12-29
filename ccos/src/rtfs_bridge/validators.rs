@@ -51,16 +51,16 @@ pub fn validate_plan(plan: &Plan) -> Result<(), RtfsBridgeError> {
 
     // Validate plan body
     match &plan.body {
-        crate::types::PlanBody::Rtfs(rtfs_code) => {
+        crate::types::PlanBody::Source(rtfs_code) | crate::types::PlanBody::Rtfs(rtfs_code) => {
             if rtfs_code.trim().is_empty() {
                 return Err(RtfsBridgeError::ValidationFailed {
-                    message: "Plan RTFS body cannot be empty".to_string(),
+                    message: "Plan source body cannot be empty".to_string(),
                 });
             }
         }
-        crate::types::PlanBody::Wasm(_) => {
-            // WASM bodies are binary, so we can't check for emptiness in the same way
-            // This is handled by the WASM runtime
+        crate::types::PlanBody::Binary(_) | crate::types::PlanBody::Wasm(_) => {
+            // Binary/WASM bodies are binary, so we can't check for emptiness in the same way
+            // This is handled by the runtime
         }
     }
 

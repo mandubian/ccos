@@ -1006,7 +1006,7 @@ impl Orchestrator {
         // --- 3. Parse and Execute the Plan Body with Yield-Based Control Flow ---
         let final_result = match &plan.language {
             PlanLanguage::Rtfs20 => match &plan.body {
-                PlanBody::Rtfs(rtfs_code) => {
+                PlanBody::Source(rtfs_code) | PlanBody::Rtfs(rtfs_code) => {
                     let code = rtfs_code.trim();
                     if code.is_empty() {
                         Err(RuntimeError::Generic(
@@ -1022,8 +1022,8 @@ impl Orchestrator {
                         }
                     }
                 }
-                PlanBody::Wasm(_) => Err(RuntimeError::Generic(
-                    "RTFS plans must use Rtfs body format".to_string(),
+                PlanBody::Binary(_) | PlanBody::Wasm(_) => Err(RuntimeError::Generic(
+                    "RTFS plans must use Source/Rtfs body format".to_string(),
                 )),
             },
             _ => Err(RuntimeError::Generic(format!(
@@ -1774,7 +1774,7 @@ impl Orchestrator {
         // Parse and continue executing the plan body
         let final_result = match &plan.language {
             PlanLanguage::Rtfs20 => match &plan.body {
-                PlanBody::Rtfs(rtfs_code) => {
+                PlanBody::Source(rtfs_code) | PlanBody::Rtfs(rtfs_code) => {
                     let code = rtfs_code.trim();
                     if code.is_empty() {
                         Err(RuntimeError::Generic(
@@ -1790,8 +1790,8 @@ impl Orchestrator {
                         }
                     }
                 }
-                PlanBody::Wasm(_) => Err(RuntimeError::Generic(
-                    "RTFS plans must use Rtfs body format".to_string(),
+                PlanBody::Binary(_) | PlanBody::Wasm(_) => Err(RuntimeError::Generic(
+                    "RTFS plans must use Source/Rtfs body format".to_string(),
                 )),
             },
             _ => Err(RuntimeError::Generic(format!(

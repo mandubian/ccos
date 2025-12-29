@@ -817,9 +817,9 @@ fn load_plan_from_archive(hint: &str) -> RuntimeResult<Option<Plan>> {
 
 fn plan_body_to_string(plan: &Plan) -> RuntimeResult<String> {
     match &plan.body {
-        PlanBody::Rtfs(code) => Ok(code.clone()),
-        PlanBody::Wasm(_) => Err(RuntimeError::Generic(
-            "WASM plan execution from archive is not supported".to_string(),
+        PlanBody::Source(code) | PlanBody::Rtfs(code) => Ok(code.clone()),
+        PlanBody::Binary(_) | PlanBody::Wasm(_) => Err(RuntimeError::Generic(
+            "Binary/WASM plan execution from archive is not supported".to_string(),
         )),
     }
 }
