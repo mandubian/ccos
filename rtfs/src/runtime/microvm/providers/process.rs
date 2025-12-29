@@ -193,6 +193,25 @@ impl ProcessMicroVMProvider {
         let mut command = Command::new(path);
         command.args(args);
 
+        // Create a temporary file for input if there are arguments
+        let mut _temp_input_file = None;
+        if let Some(first_arg) = context.args.first() {
+            let json_val = crate::utils::rtfs_value_to_json(first_arg)
+                .map_err(|e| RuntimeError::Generic(format!("Failed to serialize input: {}", e)))?;
+            let json_str = serde_json::to_string(&json_val)
+                .map_err(|e| RuntimeError::Generic(format!("Failed to stringify input: {}", e)))?;
+            
+            let mut temp_file = tempfile::NamedTempFile::new()
+                .map_err(|e| RuntimeError::Generic(format!("Failed to create temp file: {}", e)))?;
+            use std::io::Write;
+            temp_file.write_all(json_str.as_bytes())
+                .map_err(|e| RuntimeError::Generic(format!("Failed to write temp file: {}", e)))?;
+            
+            let path = temp_file.path().to_path_buf();
+            command.env("RTFS_INPUT_FILE", &path);
+            _temp_input_file = Some(temp_file);
+        }
+
         // Set environment variables from config
         for (key, value) in &context.config.env_vars {
             command.env(key, value);
@@ -208,6 +227,15 @@ impl ProcessMicroVMProvider {
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
+            let trimmed = stdout.trim();
+
+            // Try to parse as JSON first (for complex return values)
+            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if let Ok(rtfs_val) = crate::utils::json_to_rtfs_value(&json_val) {
+                    return Ok(rtfs_val);
+                }
+            }
+
             Ok(Value::String(stdout.to_string()))
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -314,9 +342,19 @@ impl MicroVMProvider for ProcessMicroVMProvider {
                 crate::runtime::microvm::core::Program::ScriptSource { language, source } => {
                     // Execute script in a subprocess using the appropriate interpreter
                     let interpreter = language.interpreter();
-                    match self.execute_external_process(interpreter, &["-c".to_string(), source.clone()], &context) {
+                    let flag = language.execute_flag();
+
+                    let mut args = vec![flag.to_string(), source.clone()];
+                    for arg in &context.args {
+                        let json_val = crate::utils::rtfs_value_to_json(arg).unwrap_or(serde_json::Value::Null);
+                        args.push(serde_json::to_string(&json_val).unwrap_or_default());
+                    }
+
+                    match self.execute_external_process(interpreter, &args, &context) {
                         Ok(v) => v,
-                        Err(e) => Value::String(format!("Process {:?} execution error: {}", language, e)),
+                        Err(e) => {
+                            Value::String(format!("Process {:?} execution error: {}", language, e))
+                        }
                     }
                 }
                 crate::runtime::microvm::core::Program::RtfsSource(source) => {
@@ -346,6 +384,18 @@ impl MicroVMProvider for ProcessMicroVMProvider {
                     match self.execute_external_process(&path, &args, &context) {
                         Ok(v) => v,
                         Err(e) => Value::String(format!("Process external execution error: {}", e)),
+                    }
+                }
+                crate::runtime::microvm::core::Program::Binary { language, source } => {
+                    if *language == crate::runtime::microvm::core::ScriptLanguage::Wasm {
+                        // For process provider, we can try to run wasmtime if available
+                        let args = vec!["--dir=.".to_string(), "-".to_string()];
+                        match self.execute_external_process("wasmtime", &args, &context) {
+                            Ok(v) => v,
+                            Err(e) => Value::String(format!("Process WASM execution error: {}", e)),
+                        }
+                    } else {
+                        Value::String(format!("Binary execution for {:?} not supported in process provider", language))
                     }
                 }
             },

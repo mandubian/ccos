@@ -20,6 +20,8 @@ pub enum ScriptLanguage {
     Lua,
     /// RTFS language
     Rtfs,
+    /// WebAssembly
+    Wasm,
     /// Custom language with interpreter path
     Custom { interpreter: String, file_ext: String },
 }
@@ -34,6 +36,7 @@ impl ScriptLanguage {
             ScriptLanguage::Ruby => "ruby",
             ScriptLanguage::Lua => "lua",
             ScriptLanguage::Rtfs => "rtfs",
+            ScriptLanguage::Wasm => "wasmtime",
             ScriptLanguage::Custom { interpreter, .. } => interpreter,
         }
     }
@@ -47,7 +50,22 @@ impl ScriptLanguage {
             ScriptLanguage::Ruby => "rb",
             ScriptLanguage::Lua => "lua",
             ScriptLanguage::Rtfs => "rtfs",
+            ScriptLanguage::Wasm => "wasm",
             ScriptLanguage::Custom { file_ext, .. } => file_ext,
+        }
+    }
+
+    /// Get the flag to execute a string of code
+    pub fn execute_flag(&self) -> &str {
+        match self {
+            ScriptLanguage::Python => "-c",
+            ScriptLanguage::JavaScript => "-e",
+            ScriptLanguage::Shell => "-c",
+            ScriptLanguage::Ruby => "-e",
+            ScriptLanguage::Lua => "-e",
+            ScriptLanguage::Rtfs => "-c",
+            ScriptLanguage::Wasm => "", // wasmtime doesn't use -c for binary
+            ScriptLanguage::Custom { .. } => "-c",
         }
     }
 
@@ -60,6 +78,7 @@ impl ScriptLanguage {
             ScriptLanguage::Ruby => vec!["/usr/bin/ruby"],
             ScriptLanguage::Lua => vec!["/usr/bin/lua", "/usr/bin/lua5.4", "/usr/bin/lua5.3"],
             ScriptLanguage::Rtfs => vec![],
+            ScriptLanguage::Wasm => vec!["/usr/bin/wasmtime", "/usr/local/bin/wasmtime"],
             ScriptLanguage::Custom { interpreter, .. } => vec![interpreter.as_str()],
         }
     }
@@ -121,6 +140,8 @@ pub enum Program {
     RtfsSource(String),
     /// Script source with explicit language tag for sandboxed execution
     ScriptSource { language: ScriptLanguage, source: String },
+    /// Binary source (e.g. WASM) with explicit language tag
+    Binary { language: ScriptLanguage, source: Vec<u8> },
 }
 
 impl Program {
@@ -174,6 +195,9 @@ impl Program {
             Program::ScriptSource { language, source } => {
                 format!("{:?} script: {} bytes", language, source.len())
             }
+            Program::Binary { language, source } => {
+                format!("{:?} binary: {} bytes", language, source.len())
+            }
         }
     }
 
@@ -212,6 +236,14 @@ impl Program {
         Program::ScriptSource {
             language: ScriptLanguage::Shell,
             source: source.into(),
+        }
+    }
+
+    /// Create a WASM binary program
+    pub fn wasm(source: Vec<u8>) -> Self {
+        Program::Binary {
+            language: ScriptLanguage::Wasm,
+            source,
         }
     }
 }

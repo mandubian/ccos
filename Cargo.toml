@@ -21,11 +21,14 @@ schemars = "0.8.21"
 toml = "0.8"
 jsonschema = "0.18"
 sha2 = "0.10"
-wasmtime = "13"
+wasmtime = { version = "13", features = ["component-model", "cranelift"] }
+wasmtime-wasi = { version = "13", features = ["sync"] }
+wasi-common = "13"
 flate2 = "1.0"
 bincode = "1.3"
 async-trait = "0.1"
 futures = "0.3"
 filetime = "0.2"
 anyhow = "1.0"
+base64 = "0.21"
 

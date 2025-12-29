@@ -81,6 +81,9 @@ impl MicroVMProvider for MockMicroVMProvider {
                 crate::runtime::microvm::core::Program::ExternalProgram { path, args } => {
                     Value::String(format!("Mock external program: {} {:?}", path, args))
                 }
+                crate::runtime::microvm::core::Program::Binary { language, source } => {
+                    Value::String(format!("Mock binary result: {:?} ({} bytes)", language, source.len()))
+                }
             },
             None => Value::String("No program provided".to_string()),
         };
