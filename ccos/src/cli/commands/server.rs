@@ -216,12 +216,16 @@ impl ServerCommand {
             }
             ServerCommand::Dismiss { name, reason } => {
                 let workspace_root = find_workspace_root();
-                let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
+                let storage_path = workspace_root.join("capabilities/servers/approvals");
+                let storage = std::sync::Arc::new(
+                    crate::approval::storage_file::FileApprovalStorage::new(storage_path)?,
+                );
+                let queue = crate::approval::UnifiedApprovalQueue::new(storage);
                 let reason_str = reason
                     .clone()
                     .unwrap_or_else(|| "Manual dismissal".to_string());
 
-                match queue.dismiss_server(name, reason_str.clone()) {
+                match queue.dismiss_server(name, reason_str.clone()).await {
                     Ok(_) => {
                         formatter.success(&format!("Dismissed server '{}'", name));
                         formatter.kv("Reason", &reason_str);
@@ -233,8 +237,12 @@ impl ServerCommand {
             }
             ServerCommand::Retry { name } => {
                 let workspace_root = find_workspace_root();
-                let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
-                match queue.retry_server(name) {
+                let storage_path = workspace_root.join("capabilities/servers/approvals");
+                let storage = std::sync::Arc::new(
+                    crate::approval::storage_file::FileApprovalStorage::new(storage_path)?,
+                );
+                let queue = crate::approval::UnifiedApprovalQueue::new(storage);
+                match queue.retry_server(name).await {
                     Ok(_) => {
                         formatter.success(&format!("Retried server '{}'", name));
                         formatter.list_item(

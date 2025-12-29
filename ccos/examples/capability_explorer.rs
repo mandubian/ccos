@@ -644,7 +644,7 @@ impl CapabilityExplorer {
     // RTFS-mode implementations
 
     async fn get_servers_as_value(&self) -> Value {
-        let servers = self.discovery_service.list_known_servers();
+        let servers = self.discovery_service.list_known_servers().await;
         let server_values: Vec<Value> = servers
             .iter()
             .map(|s| {
@@ -669,7 +669,7 @@ impl CapabilityExplorer {
         _hint: Option<&str>,
         quiet: bool,
     ) -> Result<Value, String> {
-        let servers = self.discovery_service.list_known_servers();
+        let servers = self.discovery_service.list_known_servers().await;
         let config = servers
             .iter()
             .find(|s| s.name == server_name || s.endpoint.contains(server_name))
@@ -987,7 +987,7 @@ impl CapabilityExplorer {
         );
         println!();
 
-        let servers = self.discovery_service.list_known_servers();
+        let servers = self.discovery_service.list_known_servers().await;
 
         if servers.is_empty() {
             println!("  {} No servers configured.", "⚠".yellow());
@@ -1205,7 +1205,7 @@ impl CapabilityExplorer {
         );
         println!();
 
-        let servers = self.discovery_service.list_known_servers();
+        let servers = self.discovery_service.list_known_servers().await;
 
         if servers.is_empty() {
             // Allow manual endpoint entry
@@ -1422,7 +1422,7 @@ impl CapabilityExplorer {
             // Offer to discover
             let discover = self.prompt("Would you like to discover from available servers? (y/n):");
             if discover.to_lowercase() == "y" {
-                let servers = self.discovery_service.list_known_servers();
+                let servers = self.discovery_service.list_known_servers().await;
                 for config in &servers {
                     self.perform_discovery(config, Some(hint.clone())).await;
                 }
@@ -2058,7 +2058,7 @@ impl CapabilityExplorer {
             self.perform_discovery(&config, args.hint.clone()).await;
         } else if args.hint.is_some() {
             // Search in known servers
-            let servers = self.discovery_service.list_known_servers();
+            let servers = self.discovery_service.list_known_servers().await;
             for config in &servers {
                 self.perform_discovery(config, args.hint.clone()).await;
             }

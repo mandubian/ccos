@@ -93,7 +93,7 @@ impl HasName for PendingDiscovery {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ApprovalAuthority {
     User(String),
     Constitution { rule_id: String },
@@ -205,6 +205,10 @@ pub struct TimeoutQueueState {
     pub items: Vec<PendingDiscovery>,
 }
 
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release."
+)]
 pub struct ApprovalQueue {
     base_path: PathBuf,
 }

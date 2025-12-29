@@ -1,13 +1,10 @@
-use crate::discovery::approval_queue::{
-    ApprovalQueue, PendingDiscovery, RiskAssessment, RiskLevel,
-};
+use crate::approval::queue::{RiskAssessment, RiskLevel};
+use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
 use crate::discovery::capability_matcher::calculate_description_match_score_improved;
 use crate::discovery::config::DiscoveryConfig;
 use crate::discovery::llm_discovery::{IntentAnalysis, LlmDiscoveryService};
 use crate::discovery::registry_search::{RegistrySearchResult, RegistrySearcher};
-use chrono::Utc;
 use rtfs::runtime::error::RuntimeResult;
-use uuid::Uuid;
 
 /// Scored search result for ranking (internal)
 struct ScoredResult {
@@ -31,12 +28,12 @@ pub struct LlmSearchResult {
 
 pub struct GoalDiscoveryAgent {
     registry_searcher: RegistrySearcher,
-    approval_queue: ApprovalQueue,
+    approval_queue: UnifiedApprovalQueue<FileApprovalStorage>,
     config: DiscoveryConfig,
 }
 
 impl GoalDiscoveryAgent {
-    pub fn new(approval_queue: ApprovalQueue) -> Self {
+    pub fn new(approval_queue: UnifiedApprovalQueue<FileApprovalStorage>) -> Self {
         Self {
             registry_searcher: RegistrySearcher::new(),
             approval_queue,
@@ -45,7 +42,10 @@ impl GoalDiscoveryAgent {
     }
 
     /// Create with custom config
-    pub fn new_with_config(approval_queue: ApprovalQueue, config: DiscoveryConfig) -> Self {
+    pub fn new_with_config(
+        approval_queue: UnifiedApprovalQueue<FileApprovalStorage>,
+        config: DiscoveryConfig,
+    ) -> Self {
         Self {
             registry_searcher: RegistrySearcher::new(),
             approval_queue,
@@ -59,7 +59,7 @@ impl GoalDiscoveryAgent {
 
         let mut queued_ids = Vec::new();
         for (result, score) in scored_results {
-            let id = self.queue_result(goal, result, score)?;
+            let id = self.queue_result(goal, result, score).await?;
             queued_ids.push(id);
         }
 
@@ -440,14 +440,13 @@ impl GoalDiscoveryAgent {
     }
 
     /// Queue a single result for approval
-    pub fn queue_result(
+    pub async fn queue_result(
         &self,
         goal: &str,
         result: RegistrySearchResult,
         score: f64,
     ) -> RuntimeResult<String> {
         let keywords: Vec<&str> = goal.split_whitespace().collect();
-        let id = format!("discovery-{}", Uuid::new_v4());
 
         let risk = if result.server_info.endpoint.starts_with("https://") {
             RiskLevel::Medium
@@ -465,25 +464,24 @@ impl GoalDiscoveryAgent {
             server_info.alternative_endpoints.dedup();
         }
 
-        let discovery = PendingDiscovery {
-            id: id.clone(),
-            source: result.source,
-            server_info,
-            domain_match: keywords.iter().map(|s| s.to_string()).collect(),
-            risk_assessment: RiskAssessment {
-                level: risk,
-                reasons: vec![
-                    "external_registry".to_string(),
-                    format!("relevance_score:{:.2}", score),
-                ],
-            },
-            requested_at: Utc::now(),
-            expires_at: Utc::now() + chrono::Duration::hours(24),
-            requesting_goal: Some(goal.to_string()),
-        };
-
-        // add() returns the ID (existing if duplicate, new if not)
-        let actual_id = self.approval_queue.add(discovery)?;
+        // Use the unified queue's add_server_discovery method
+        let actual_id = self
+            .approval_queue
+            .add_server_discovery(
+                result.source,
+                server_info,
+                keywords.iter().map(|s| s.to_string()).collect(),
+                RiskAssessment {
+                    level: risk,
+                    reasons: vec![
+                        "external_registry".to_string(),
+                        format!("relevance_score:{:.2}", score),
+                    ],
+                },
+                Some(goal.to_string()),
+                24, // expires_in_hours
+            )
+            .await?;
         Ok(actual_id)
     }
 }

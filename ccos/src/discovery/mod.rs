@@ -5,7 +5,6 @@
 //! where missing capabilities trigger their own refinement cycles.
 
 pub mod apis_guru;
-pub mod approval_queue;
 pub mod capability_matcher;
 pub mod config;
 pub mod cycle_detector;
@@ -23,7 +22,6 @@ pub mod need_extractor;
 pub mod registry_search;
 
 pub use apis_guru::*;
-pub use approval_queue::*;
 pub use capability_matcher::*;
 pub use config::*;
 pub use cycle_detector::*;

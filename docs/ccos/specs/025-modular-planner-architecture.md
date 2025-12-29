@@ -318,6 +318,64 @@ gantt
 
 These enhancements will transform the modular planner from a capable planning system into a truly autonomous agent that can self-correct, learn from experience, and handle complex workflows in the CCOS environment.
 
+## 6. Approval Queue Integration
+
+**Status**: Implemented (December 2025)
+
+The modular planner now integrates with the `UnifiedApprovalQueue` to handle risky capability execution with proper governance.
+
+### Overview
+
+When executing capabilities during planning (via `SafeCapabilityExecutor`), the planner now:
+1. Checks if a capability requires approval based on its declared effects
+2. Respects per-agent effect constraints (`allowed_effects`, `denied_effects`)
+3. Queues risky capabilities for human approval before execution
+
+### Components
+
+| Component | Purpose |
+|-----------|---------|
+| `SafeCapabilityExecutor.requires_approval()` | Check if capability needs approval |
+| `SafeCapabilityExecutor.queue_for_approval()` | Queue capability for effect approval |
+| `ModularPlanner.with_safe_executor_and_approval()` | Wire approval queue to planner |
+| `AgentConstraints.allowed_effects` | Per-agent effect allowlist |
+| `AgentConstraints.denied_effects` | Per-agent effect denylist |
+
+### Approval Categories
+
+The `UnifiedApprovalQueue` supports three approval types relevant to autonomous planning:
+
+| Category | When Used | Purpose |
+|----------|-----------|---------|
+| `EffectApproval` | Capability has risky effects | Approve filesystem, system, write, delete |
+| `LlmPromptApproval` | Potentially risky LLM prompt | Review prompts before sending to LLM |
+| `SynthesisApproval` | Generated code | Review auto-generated RTFS capabilities |
+
+### Usage
+
+```rust
+let planner = ModularPlanner::new(decomposition, resolution, intent_graph)
+    .with_safe_executor_and_approval(
+        marketplace,
+        approval_queue,
+        Some(AgentConstraints {
+            allowed_effects: vec!["read".to_string(), "network".to_string()],
+            denied_effects: vec!["filesystem".to_string()],
+            ..Default::default()
+        }),
+    );
+```
+
+### Effect Classification
+
+Effects are classified for approval decisions:
+
+| Safe Effects | Risky Effects |
+|--------------|---------------|
+| `read`, `network`, `compute`, `output`, `pure`, `llm` | `filesystem`, `system`, `write`, `delete` |
+
+Per-agent constraints take precedence over the static allowlist/denylist.
+
 ### Validated Capabilities
 *   **Hybrid Decomposition**: Successfully switches between Patterns and LLM based on goal complexity.
 *   **Grounded Decomposition**: Can utilize catalog tools to guide LLM decomposition. Supports `_suggested_tool` hints for direct capability lookup.

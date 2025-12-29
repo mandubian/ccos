@@ -605,6 +605,29 @@ impl ModularPlanner {
         self
     }
 
+    /// Enable safe execution with approval queue and agent constraints.
+    /// This allows the planner to queue risky capabilities for approval
+    /// and respect agent-specific effect constraints.
+    pub fn with_safe_executor_and_approval(
+        mut self,
+        marketplace: Arc<CapabilityMarketplace>,
+        approval_queue: crate::approval::UnifiedApprovalQueue<
+            crate::approval::storage_file::FileApprovalStorage,
+        >,
+        agent_constraints: Option<crate::agents::identity::AgentConstraints>,
+    ) -> Self {
+        let mut executor = SafeCapabilityExecutor::new(marketplace)
+            .with_approval_queue(approval_queue)
+            .enable_approval_queuing(Some("Planner execution".to_string()));
+
+        if let Some(constraints) = agent_constraints {
+            executor = executor.with_agent_constraints(constraints);
+        }
+
+        self.safe_executor = Some(executor);
+        self
+    }
+
     /// Emit a trace event - pushes to the Vec AND calls the callback if set.
     /// This enables real-time streaming of trace events to the TUI.
     #[allow(dead_code)]

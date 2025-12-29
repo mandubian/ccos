@@ -266,36 +266,36 @@ mod cache_tests {
 mod discovery_service_tests {
     use super::*;
 
-    #[test]
-    fn test_service_creation() {
+    #[tokio::test]
+    async fn test_service_creation() {
         let service = MCPDiscoveryService::new();
         // Service should be created without panicking
-        let _servers = service.list_known_servers();
+        let _servers = service.list_known_servers().await;
     }
 
-    #[test]
-    fn test_service_with_marketplace() {
+    #[tokio::test]
+    async fn test_service_with_marketplace() {
         let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
         let service = MCPDiscoveryService::new().with_marketplace(marketplace);
 
         // Should not panic
-        let _servers = service.list_known_servers();
+        let _servers = service.list_known_servers().await;
     }
 
-    #[test]
-    fn test_service_with_catalog() {
+    #[tokio::test]
+    async fn test_service_with_catalog() {
         let catalog = Arc::new(CatalogService::new());
 
         let service = MCPDiscoveryService::new().with_catalog(catalog);
 
         // Should not panic
-        let _servers = service.list_known_servers();
+        let _servers = service.list_known_servers().await;
     }
 
-    #[test]
-    fn test_service_with_marketplace_and_catalog() {
+    #[tokio::test]
+    async fn test_service_with_marketplace_and_catalog() {
         let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
         let catalog = Arc::new(CatalogService::new());
@@ -305,7 +305,7 @@ mod discovery_service_tests {
             .with_catalog(catalog);
 
         // Should not panic
-        let _servers = service.list_known_servers();
+        let _servers = service.list_known_servers().await;
     }
 
     #[test]
@@ -368,10 +368,10 @@ mod discovery_service_tests {
         assert!(manifest.input_schema.is_none());
     }
 
-    #[test]
-    fn test_list_known_servers_empty_config() {
+    #[tokio::test]
+    async fn test_list_known_servers_empty_config() {
         let service = MCPDiscoveryService::new();
-        let servers = service.list_known_servers();
+        let servers = service.list_known_servers().await;
 
         // May be empty or have some configured servers
         // This test just ensures the method doesn't panic
