@@ -3,6 +3,7 @@
 use super::*;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::values::Value;
+use crate::ast::MapKey;
 use crate::runtime::{RuntimeError, RuntimeResult};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -911,4 +912,168 @@ fn test_microvm_provider_integration_with_capability_system() {
             }
         }
     }
+}
+
+#[test]
+fn test_process_large_payload_and_json_return() {
+    let mut factory = MicroVMFactory::new();
+    factory.initialize_provider("process").unwrap();
+    let provider = factory.get_provider("process").unwrap();
+
+    // A Python script that reads from RTFS_INPUT_FILE and returns it as JSON
+    let python_script = r#"
+import json
+import os
+import sys
+
+input_file = os.environ.get('RTFS_INPUT_FILE')
+if input_file and os.path.exists(input_file):
+    with open(input_file, 'r') as f:
+        data = json.load(f)
+    # Return the data as JSON
+    print(json.dumps(data))
+else:
+    # Fallback to CLI args if RTFS_INPUT_FILE not set
+    if len(sys.argv) > 1:
+        print(sys.argv[1])
+    else:
+        print(json.dumps({"error": "No input file or args"}))
+"#;
+
+    let mut input_map = HashMap::new();
+    input_map.insert(MapKey::String("key1".to_string()), Value::String("value1".to_string()));
+    input_map.insert(MapKey::String("key2".to_string()), Value::Integer(42));
+    let input_val = Value::Map(input_map);
+
+    let context = ExecutionContext {
+        execution_id: "test-large-payload".to_string(),
+        program: Some(Program::ScriptSource {
+            language: ScriptLanguage::Python,
+            source: python_script.to_string(),
+        }),
+        capability_id: None,
+        capability_permissions: vec![],
+        args: vec![input_val.clone()],
+        config: MicroVMConfig::default(),
+        runtime_context: None,
+    };
+
+    let result = provider.execute_program(context).unwrap();
+    
+    // The result should be a Map equal to input_val
+    assert_eq!(result.value, input_val);
+}
+
+#[test]
+fn test_firecracker_large_payload_and_json_return() {
+    let mut factory = MicroVMFactory::new();
+    
+    // Only run this test if firecracker is available
+    if !factory.get_available_providers().contains(&"firecracker") {
+        println!("Skipping firecracker test - provider not available");
+        return;
+    }
+
+    // Initialize the provider
+    if let Err(e) = factory.initialize_provider("firecracker") {
+        println!("Firecracker initialization failed: {:?}", e);
+        return;
+    }
+
+    let provider = factory
+        .get_provider("firecracker")
+        .expect("Firecracker provider should be available");
+
+    // A Python script that reads from /input.json and returns it as JSON
+    // Note: In Firecracker, RTFS_INPUT_FILE is set to /input.json by the provider
+    let python_script = r#"
+import json
+import os
+import sys
+
+input_file = os.environ.get('RTFS_INPUT_FILE', '/input.json')
+if os.path.exists(input_file):
+    with open(input_file, 'r') as f:
+        data = json.load(f)
+    # Return the data as JSON
+    print(json.dumps(data))
+else:
+    print(json.dumps({"error": "Input file {} not found".format(input_file)}))
+"#;
+
+    let mut input_map = HashMap::new();
+    input_map.insert(MapKey::String("key1".to_string()), Value::String("value1".to_string()));
+    input_map.insert(MapKey::String("key2".to_string()), Value::Integer(42));
+    let input_val = Value::Map(input_map);
+
+    let context = ExecutionContext {
+        execution_id: "test-fc-large-payload".to_string(),
+        program: Some(Program::ScriptSource {
+            language: ScriptLanguage::Python,
+            source: python_script.to_string(),
+        }),
+        capability_id: None,
+        capability_permissions: vec![],
+        args: vec![input_val.clone()],
+        config: MicroVMConfig::default(),
+        runtime_context: None,
+    };
+
+    let result = provider.execute_program(context);
+    if let Err(ref e) = result {
+        println!("Firecracker large payload test failed: {:?}", e);
+        return;
+    }
+
+    let execution_result = result.unwrap();
+    // The result should be a Map equal to input_val
+    assert_eq!(execution_result.value, input_val);
+}
+
+#[test]
+fn test_wasm_execution() {
+    let mut factory = MicroVMFactory::new();
+
+    // Initialize the provider
+    factory
+        .initialize_provider("wasm")
+        .expect("Failed to initialize wasm provider");
+
+    let provider = factory
+        .get_provider("wasm")
+        .expect("Wasm provider should be available");
+
+    // Minimal WASM binary with _start function
+    // (module
+    //   (func $_start)
+    //   (export "_start" (func $_start))
+    // )
+    let wasm_bytes = vec![
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 
+        0x03, 0x02, 0x01, 0x00, 
+        0x07, 0x0a, 0x01, 0x06, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x00, 0x00, 
+        0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b
+    ];
+
+    let context = ExecutionContext {
+        execution_id: "test-wasm-exec".to_string(),
+        program: Some(Program::Binary {
+            language: ScriptLanguage::Wasm,
+            source: wasm_bytes,
+        }),
+        capability_id: None,
+        capability_permissions: vec![],
+        args: vec![],
+        config: MicroVMConfig::default(),
+        runtime_context: None,
+    };
+
+    let result = provider.execute_program(context);
+    assert!(result.is_ok());
+
+    let execution_result = result.unwrap();
+    // Should return Nil as there is no output
+    println!("WASM result: {:?}", execution_result.value);
+    assert!(matches!(execution_result.value, Value::Nil));
 }
