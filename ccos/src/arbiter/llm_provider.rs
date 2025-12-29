@@ -2549,8 +2549,8 @@ impl LlmProvider for StubLlmProvider {
 
         let synthetic_prompt = format!("Stub plan synthesis for intent: {}", intent.intent_id);
         let plan_body_text = match &plan.body {
-            PlanBody::Rtfs(body) => body.clone(),
-            PlanBody::Wasm(_) => "(wasm plan body)".to_string(),
+            PlanBody::Source(body) | PlanBody::Rtfs(body) => body.clone(),
+            PlanBody::Binary(_) | PlanBody::Wasm(_) => "(binary/wasm plan body)".to_string(),
         };
         let completion = LlmCompletion {
             content: plan_body_text.clone(),
@@ -2917,8 +2917,8 @@ mod tests {
 
         // Extract plan content for validation
         let plan_content = match &plan.body {
-            PlanBody::Rtfs(content) => content.as_str(),
-            PlanBody::Wasm(_) => "(wasm plan)",
+            PlanBody::Source(content) | PlanBody::Rtfs(content) => content.as_str(),
+            PlanBody::Binary(_) | PlanBody::Wasm(_) => "(binary/wasm plan)",
         };
 
         let validation = provider.validate_plan(plan_content).await.unwrap();
@@ -2999,8 +2999,8 @@ mod tests {
         let expected_prompt_hash = sha256_hex(expected_prompt.as_bytes());
 
         let plan_body_text = match &plan.body {
-            PlanBody::Rtfs(body) => body.clone(),
-            PlanBody::Wasm(_) => "(wasm plan body)".to_string(),
+            PlanBody::Source(body) | PlanBody::Rtfs(body) => body.clone(),
+            PlanBody::Binary(_) | PlanBody::Wasm(_) => "(binary/wasm plan body)".to_string(),
         };
         let expected_response_hash = sha256_hex(plan_body_text.as_bytes());
 

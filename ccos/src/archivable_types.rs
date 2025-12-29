@@ -67,6 +67,8 @@ impl From<&PlanLanguage> for ArchivablePlanLanguage {
             PlanLanguage::Rtfs20 => ArchivablePlanLanguage::Rtfs20,
             PlanLanguage::Wasm => ArchivablePlanLanguage::Rtfs20, // Default to Rtfs20 for unsupported types
             PlanLanguage::Python => ArchivablePlanLanguage::Rtfs20,
+            PlanLanguage::JavaScript => ArchivablePlanLanguage::Rtfs20,
+            PlanLanguage::Shell => ArchivablePlanLanguage::Rtfs20,
             PlanLanguage::GraphJson => ArchivablePlanLanguage::Rtfs20,
             PlanLanguage::Other(_) => ArchivablePlanLanguage::Rtfs20,
         }
@@ -81,7 +83,7 @@ impl From<&Plan> for ArchivablePlan {
             intent_ids: plan.intent_ids.clone(),
             language: (&plan.language).into(),
             body: match &plan.body {
-                PlanBody::Rtfs(rtfs_code) => {
+                PlanBody::Source(rtfs_code) | PlanBody::Rtfs(rtfs_code) => {
                     // Extract just the body if it's wrapped in a (plan ...) form
                     let body_code = if rtfs_code.trim_start().starts_with("(plan") {
                         // Try to parse as top-level construct to extract :body from (plan ...) form
@@ -121,7 +123,7 @@ impl From<&Plan> for ArchivablePlan {
                     };
                     ArchivablePlanBody::String(body_code)
                 }
-                PlanBody::Wasm(_) => ArchivablePlanBody::String("<WASM bytecode>".to_string()),
+                PlanBody::Binary(_) | PlanBody::Wasm(_) => ArchivablePlanBody::String("<binary/WASM bytecode>".to_string()),
             },
             status: plan.status.clone(),
             created_at: plan.created_at,
