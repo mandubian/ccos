@@ -1,10 +1,13 @@
 //! Discovery operations - pure logic functions for server discovery
 
+use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
 use crate::discovery::config::DiscoveryConfig;
-use crate::discovery::{ApprovalQueue, GoalDiscoveryAgent};
+use crate::discovery::goal_discovery::LlmSearchResult;
+use crate::discovery::GoalDiscoveryAgent;
 use crate::utils::fs::find_workspace_root;
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
 use rtfs::runtime::error::RuntimeResult;
+use std::sync::Arc;
 
 /// Options for goal-driven server discovery
 #[derive(Debug, Clone)]
@@ -30,6 +33,14 @@ impl Default for DiscoverOptions {
     }
 }
 
+/// Create a unified approval queue
+fn create_queue() -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
+    let workspace_root = find_workspace_root();
+    let storage_path = workspace_root.join("capabilities/servers/approvals");
+    let storage = Arc::new(FileApprovalStorage::new(storage_path)?);
+    Ok(UnifiedApprovalQueue::new(storage))
+}
+
 /// Goal-driven server discovery (simple API - uses defaults)
 pub async fn discover_by_goal(goal: String) -> RuntimeResult<Vec<String>> {
     discover_by_goal_with_options(goal, DiscoverOptions::default()).await
@@ -44,8 +55,7 @@ pub async fn discover_by_goal_with_options(
     let mut config = DiscoveryConfig::from_env();
     config.match_threshold = options.threshold;
 
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
+    let queue = create_queue()?;
     let agent = GoalDiscoveryAgent::new_with_config(queue, config);
 
     // Show mode being used
@@ -160,13 +170,22 @@ pub async fn discover_by_goal_with_options(
         let selected: Vec<_> = selections.into_iter().map(|i| results[i].clone()).collect();
 
         // Check for conflicts with already approved or pending servers and prompt user
-        let workspace_root = find_workspace_root();
-        let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
+        let queue = create_queue()?;
         let mut servers_to_queue = Vec::new();
 
         for (result, score) in &selected {
-            let approved = queue.list_approved()?;
-            let pending = queue.list_pending()?;
+            // Get all approved and pending requests and convert to legacy types for compatibility
+            let approved_requests = queue.list_approved_servers().await?;
+            let pending_requests = queue.list_pending_servers().await?;
+
+            let approved: Vec<_> = approved_requests
+                .iter()
+                .filter_map(|r| r.to_approved_discovery())
+                .collect();
+            let pending: Vec<_> = pending_requests
+                .iter()
+                .filter_map(|r| r.to_pending_discovery())
+                .collect();
 
             // Check approved servers first
             let approved_conflict = approved.iter().find(|existing| {
@@ -265,7 +284,7 @@ pub async fn discover_by_goal_with_options(
                     servers_to_queue.push((result.clone(), *score));
                 } else if selection == 1 {
                     // Replace - remove old entry first
-                    queue.remove_pending(&existing.id)?;
+                    queue.remove_pending(&existing.id).await?;
                     servers_to_queue.push((result.clone(), *score));
                 } else {
                     println!("   ✓ Skipped - keeping existing pending entry");
@@ -282,9 +301,12 @@ pub async fn discover_by_goal_with_options(
         }
 
         // Queue servers to pending FIRST (before introspection)
-        let mut queued_servers = Vec::new();
+        let mut queued_servers: Vec<(
+            String,
+            crate::discovery::registry_search::RegistrySearchResult,
+        )> = Vec::new();
         for (result, score) in &servers_to_queue {
-            let id = agent.queue_result(&goal, result.clone(), *score)?;
+            let id = agent.queue_result(&goal, result.clone(), *score).await?;
             queued_servers.push((id, result.clone()));
         }
 
@@ -544,9 +566,12 @@ pub async fn discover_by_goal_with_options(
     }
 
     // Non-interactive mode: check for conflicts and queue
-    let workspace_root = find_workspace_root();
-    let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
-    let approved = queue.list_approved()?;
+    let queue = create_queue()?;
+    let approved_requests = queue.list_approved_servers().await?;
+    let approved: Vec<_> = approved_requests
+        .iter()
+        .filter_map(|r| r.to_approved_discovery())
+        .collect();
     let mut servers_to_queue = Vec::new();
 
     for (result, score) in &results {
@@ -566,7 +591,7 @@ pub async fn discover_by_goal_with_options(
     // Queue selected results
     let mut queued_ids = Vec::new();
     for (result, score) in servers_to_queue {
-        let id = agent.queue_result(&goal, result, score)?;
+        let id = agent.queue_result(&goal, result, score).await?;
         queued_ids.push(id);
     }
 
@@ -690,10 +715,10 @@ async fn handle_mcp_url(
 
             // Create a synthetic RegistrySearchResult
             let result = crate::discovery::registry_search::RegistrySearchResult {
-                source: crate::discovery::approval_queue::DiscoverySource::Manual {
+                source: crate::approval::queue::DiscoverySource::Manual {
                     user: "cli".to_string(),
                 },
-                server_info: crate::discovery::approval_queue::ServerInfo {
+                server_info: crate::approval::queue::ServerInfo {
                     name: introspection.server_name.clone(),
                     endpoint: introspection.server_url.clone(),
                     description: Some("Manually added MCP server".to_string()),
@@ -705,7 +730,7 @@ async fn handle_mcp_url(
                 alternative_endpoints: Vec::new(),
             };
 
-            let id = agent.queue_result(goal, result.clone(), 1.0)?;
+            let id = agent.queue_result(goal, result.clone(), 1.0).await?;
 
             // Save tools
             if let Err(e) = crate::ops::server::save_discovered_tools(
@@ -786,10 +811,10 @@ async fn handle_documentation_url(
 
             // Create a synthetic RegistrySearchResult for the API
             let result = crate::discovery::registry_search::RegistrySearchResult {
-                source: crate::discovery::approval_queue::DiscoverySource::Manual {
+                source: crate::approval::queue::DiscoverySource::Manual {
                     user: "cli".to_string(),
                 },
-                server_info: crate::discovery::approval_queue::ServerInfo {
+                server_info: crate::approval::queue::ServerInfo {
                     name: api_result.api_title.clone(),
                     endpoint: api_result.base_url.clone(),
                     description: Some(format!("HTTP API parsed from documentation: {}", url)),
@@ -801,7 +826,7 @@ async fn handle_documentation_url(
                 alternative_endpoints: Vec::new(),
             };
 
-            let id = agent.queue_result(goal, result.clone(), 1.0)?;
+            let id = agent.queue_result(goal, result.clone(), 1.0).await?;
 
             // Save the parsed API as capabilities
             if let Err(e) = crate::ops::server::save_api_capabilities(&api_result, &id).await {

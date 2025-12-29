@@ -1,4 +1,4 @@
-use ccos::discovery::approval_queue::{
+use ccos::approval::{
     ApprovalQueue, DiscoverySource, PendingDiscovery, RiskAssessment, RiskLevel, ServerInfo,
 };
 use chrono::Utc;

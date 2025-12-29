@@ -12,12 +12,14 @@
 //! - Caching support for discovered tools
 //! - Rate limiting and retry policies
 
+use crate::approval::{
+    queue::ApprovedDiscovery, storage_file::FileApprovalStorage, UnifiedApprovalQueue,
+};
 use crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery;
 use crate::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use crate::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogService, CatalogSource};
-use crate::discovery::{ApprovalQueue, ApprovedDiscovery};
 use crate::mcp::cache::MCPCache;
 use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 use crate::mcp::rate_limiter::{RateLimiter, RetryContext};
@@ -40,7 +42,7 @@ pub struct MCPDiscoveryService {
     session_manager: Arc<MCPSessionManager>,
     registry_client: MCPRegistryClient,
     config_discovery: LocalConfigMcpDiscovery,
-    approval_queue: ApprovalQueue,
+    approval_queue: UnifiedApprovalQueue<FileApprovalStorage>,
     introspector: MCPIntrospector,
     cache: Arc<MCPCache>,
     rate_limiter: Arc<RateLimiter>,
@@ -81,12 +83,18 @@ impl MCPDiscoveryService {
             approval_base
         );
 
+        let storage_path = approval_base.join("capabilities/servers/approvals");
+        let storage = Arc::new(
+            FileApprovalStorage::new(storage_path).expect("Failed to create approval storage"),
+        );
+        let approval_queue = UnifiedApprovalQueue::new(storage);
+
         Self {
             http_client: Arc::clone(&http_client),
             session_manager: Arc::new(MCPSessionManager::with_client(http_client, None)),
             registry_client: MCPRegistryClient::new(),
             config_discovery: LocalConfigMcpDiscovery::new(),
-            approval_queue: ApprovalQueue::new(approval_base),
+            approval_queue,
             introspector: MCPIntrospector::new(),
             cache: Arc::new(MCPCache::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
@@ -125,12 +133,18 @@ impl MCPDiscoveryService {
             approval_base
         );
 
+        let storage_path = approval_base.join("capabilities/servers/approvals");
+        let storage = Arc::new(
+            FileApprovalStorage::new(storage_path).expect("Failed to create approval storage"),
+        );
+        let approval_queue = UnifiedApprovalQueue::new(storage);
+
         Self {
             http_client: Arc::clone(&http_client),
             session_manager: Arc::new(MCPSessionManager::with_client(http_client, auth_headers)),
             registry_client: MCPRegistryClient::new(),
             config_discovery: LocalConfigMcpDiscovery::new(),
-            approval_queue: ApprovalQueue::new(approval_base),
+            approval_queue,
             introspector: MCPIntrospector::new(),
             cache: Arc::new(MCPCache::new()),
             rate_limiter: Arc::new(RateLimiter::new()),
@@ -164,8 +178,12 @@ impl MCPDiscoveryService {
         // Check for approved RTFS capability files first (for non-MCP servers)
         if !options.ignore_approved_files {
             ccos_eprintln!("🔍 Checking approved servers for: {}", server_config.name);
-            match self.approval_queue.list_approved() {
-                Ok(approved) => {
+            match self.approval_queue.list_approved_servers().await {
+                Ok(approved_requests) => {
+                    let approved: Vec<_> = approved_requests
+                        .iter()
+                        .filter_map(|r| r.to_approved_discovery())
+                        .collect();
                     ccos_eprintln!("📋 Loaded {} approved server(s) from queue", approved.len());
                     log::debug!("Loaded {} approved server(s) from queue", approved.len());
 
@@ -253,10 +271,12 @@ impl MCPDiscoveryService {
 
                                 if !files_to_load.is_empty() {
                                     // Update approved.json with found files (best effort)
-                                    let _ = self.update_approved_capability_files(
-                                        &approved_server.id,
-                                        &files_to_load,
-                                    );
+                                    let _ = self
+                                        .update_approved_capability_files(
+                                            &approved_server.id,
+                                            &files_to_load,
+                                        )
+                                        .await;
                                 } else {
                                     // Keep going to MCP discovery if no files found
                                     ccos_eprintln!("⚠️  No RTFS capability files found for approved server: {} (searched in {})",
@@ -320,12 +340,12 @@ impl MCPDiscoveryService {
                                     server_config.name
                                 );
                                 // Create a minimal ApprovedDiscovery for loading
-                                let synthetic_approved = crate::discovery::ApprovedDiscovery {
+                                let synthetic_approved = crate::approval::ApprovedDiscovery {
                                     id: server_id_normalized.clone(),
-                                    source: crate::discovery::DiscoverySource::LocalOverride {
+                                    source: crate::approval::DiscoverySource::LocalOverride {
                                         path: approved_dir.to_string_lossy().to_string(),
                                     },
-                                    server_info: crate::discovery::ServerInfo {
+                                    server_info: crate::approval::ServerInfo {
                                         name: server_config.name.clone(),
                                         endpoint: server_config.endpoint.clone(),
                                         description: None,
@@ -334,13 +354,13 @@ impl MCPDiscoveryService {
                                         alternative_endpoints: vec![],
                                     },
                                     domain_match: vec![],
-                                    risk_assessment: crate::discovery::RiskAssessment {
-                                        level: crate::discovery::RiskLevel::Low,
+                                    risk_assessment: crate::approval::RiskAssessment {
+                                        level: crate::approval::RiskLevel::Low,
                                         reasons: vec![],
                                     },
                                     requesting_goal: None,
                                     approved_at: chrono::Utc::now(),
-                                    approved_by: crate::discovery::ApprovalAuthority::Auto,
+                                    approved_by: crate::approval::ApprovalAuthority::Auto,
                                     approval_reason: Some("Pre-loaded from RTFS files".to_string()),
                                     capability_files: Some(files_to_load.clone()),
                                     version: 1,
@@ -495,7 +515,7 @@ impl MCPDiscoveryService {
     }
 
     /// Update capability_files in approved.json (helper method)
-    fn update_approved_capability_files(
+    async fn update_approved_capability_files(
         &self,
         server_id: &str,
         files: &[String],
@@ -503,7 +523,8 @@ impl MCPDiscoveryService {
         // Best-effort update - don't fail discovery if this fails
         if let Err(e) = self
             .approval_queue
-            .update_capability_files(server_id, files.to_vec())
+            .update_approved_server_capabilities(server_id, files.to_vec())
+            .await
         {
             log::warn!(
                 "Failed to update capability_files for server {}: {}",
@@ -1065,13 +1086,19 @@ impl MCPDiscoveryService {
 
         // Check if this server is approved and has RTFS files - if so, skip export
         let is_approved_with_files = {
-            if let Ok(approved) = self.approval_queue.list_approved() {
+            if let Ok(approved_requests) = self.approval_queue.list_approved_servers().await {
+                let approved: Vec<_> = approved_requests
+                    .iter()
+                    .filter_map(|r| r.to_approved_discovery())
+                    .collect();
+
+                let server_name_normalized = server_config
+                    .name
+                    .replace("/", "_")
+                    .replace(" ", "_")
+                    .to_lowercase();
+
                 if let Some(approved_server) = approved.iter().find(|s| {
-                    let server_name_normalized = server_config
-                        .name
-                        .replace("/", "_")
-                        .replace(" ", "_")
-                        .to_lowercase();
                     let approved_name_normalized = s
                         .server_info
                         .name
@@ -1090,16 +1117,13 @@ impl MCPDiscoveryService {
                         let server_id = approved_server
                             .server_info
                             .name
-                            .to_lowercase()
-                            .replace(" ", "_")
-                            .replace("/", "_");
-                        let approved_roots = [
-                            std::path::Path::new("capabilities/servers/approved").to_path_buf(),
-                            std::path::Path::new("../capabilities/servers/approved").to_path_buf(),
-                        ];
-                        approved_roots
-                            .iter()
-                            .any(|root| root.join(&server_id).exists())
+                            .replace("/", "_")
+                            .replace(":", "_");
+                        let workspace_root = get_workspace_root();
+                        let approved_dir = workspace_root
+                            .join("capabilities/servers/approved")
+                            .join(&server_id);
+                        approved_dir.exists()
                     }
                 } else {
                     // Fallback: check if directory exists even without queue entry
@@ -1343,11 +1367,11 @@ impl MCPDiscoveryService {
     }
 
     /// Get server config for a domain hint
-    pub fn get_server_for_domain(&self, domain: &DomainHint) -> Option<MCPServerConfig> {
+    pub async fn get_server_for_domain(&self, domain: &DomainHint) -> Option<MCPServerConfig> {
         // Use to_domain_string() for config-driven domain handling
         let hint = domain.to_domain_string();
 
-        let configs = self.list_known_servers();
+        let configs = self.list_known_servers().await;
         for config in configs {
             if config.name.contains(&hint) || hint.contains(&config.name) {
                 return Some(config);
@@ -1358,13 +1382,17 @@ impl MCPDiscoveryService {
     }
 
     /// List all known servers (from config and approval queue)
-    pub fn list_known_servers(&self) -> Vec<MCPServerConfig> {
+    pub async fn list_known_servers(&self) -> Vec<MCPServerConfig> {
         let mut servers = self.config_discovery.get_all_server_configs();
         ccos_eprintln!("📋 Config discovery found {} server(s)", servers.len());
 
         // Add approved servers from queue
-        match self.approval_queue.list_approved() {
-            Ok(approved) => {
+        match self.approval_queue.list_approved_servers().await {
+            Ok(approved_requests) => {
+                let approved: Vec<_> = approved_requests
+                    .iter()
+                    .filter_map(|r| r.to_approved_discovery())
+                    .collect();
                 ccos_eprintln!(
                     "📋 Approval queue found {} approved server(s)",
                     approved.len()
@@ -1383,8 +1411,8 @@ impl MCPDiscoveryService {
                             server.server_info.endpoint
                         );
                         servers.push(MCPServerConfig {
-                            name: server.server_info.name,
-                            endpoint: server.server_info.endpoint,
+                            name: server.server_info.name.clone(),
+                            endpoint: server.server_info.endpoint.clone(),
                             auth_token: None, // Will fallback to env vars if needed
                             timeout_seconds: 30, // Default
                             protocol_version: "2024-11-05".to_string(), // Default
@@ -1464,7 +1492,7 @@ impl MCPDiscoveryService {
         let mut found_servers = Vec::new();
 
         // First, check if any known local servers might have this capability
-        let local_servers = self.list_known_servers();
+        let local_servers = self.list_known_servers().await;
         for server in local_servers {
             // Check if server name hints at having this capability
             let server_name_lower = server.name.to_lowercase();
@@ -1633,10 +1661,10 @@ impl MCPDiscoveryService {
             session_manager: Arc::clone(&self.session_manager),
             registry_client: MCPRegistryClient::new(), // Registry client is stateless
             config_discovery: LocalConfigMcpDiscovery::new(), // Config discovery is stateless
-            approval_queue: ApprovalQueue::new(get_workspace_root()), // Approval queue is stateless (file-based)
-            introspector: MCPIntrospector::new(),                     // Introspector is stateless
-            cache: Arc::clone(&self.cache),                           // Share cache
-            rate_limiter: Arc::clone(&self.rate_limiter),             // Share rate limiter
+            approval_queue: self.approval_queue.clone(),
+            introspector: MCPIntrospector::new(), // Introspector is stateless
+            cache: Arc::clone(&self.cache),       // Share cache
+            rate_limiter: Arc::clone(&self.rate_limiter), // Share rate limiter
             marketplace: self.marketplace.as_ref().map(Arc::clone),
             catalog: self.catalog.as_ref().map(Arc::clone),
         }
@@ -1775,7 +1803,7 @@ impl MCPDiscoveryService {
         &self,
         options: &DiscoveryOptions,
     ) -> RuntimeResult<CacheWarmingStats> {
-        let servers = self.list_known_servers();
+        let servers = self.list_known_servers().await;
         log::info!(
             "🔥 Warming cache for {} configured server(s)...",
             servers.len()

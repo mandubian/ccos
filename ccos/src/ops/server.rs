@@ -1,11 +1,13 @@
 //! Server operations - pure logic functions for server management
 
 use super::{ServerInfo, ServerListOutput};
-use crate::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
-use crate::discovery::{
-    ApprovalQueue, DiscoverySource, PendingDiscovery, RegistrySearcher, RiskAssessment, RiskLevel,
-    ServerInfo as DiscoveryServerInfo,
+use crate::approval::{
+    storage_file::FileApprovalStorage, suggest_auth_env_var, ApprovalCategory, ApprovalRequest,
+    DiscoverySource, RiskAssessment, RiskLevel, ServerInfo as DiscoveryServerInfo,
+    UnifiedApprovalQueue,
 };
+use crate::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
+use crate::discovery::RegistrySearcher;
 use crate::mcp::core::MCPDiscoveryService;
 use crate::mcp::types::{DiscoveryOptions, MCPTool};
 use crate::synthesis::introspection::api_introspector::APIIntrospector;
@@ -15,48 +17,58 @@ use chrono::Utc;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use uuid::Uuid;
+
+/// Create a unified approval queue with file storage
+fn create_queue() -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
+    let workspace_root = find_workspace_root();
+    let storage_path = workspace_root.join("capabilities/servers/approvals");
+    let storage = Arc::new(FileApprovalStorage::new(storage_path)?);
+    Ok(UnifiedApprovalQueue::new(storage))
+}
 
 /// List configured servers
 pub async fn list_servers() -> RuntimeResult<ServerListOutput> {
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
-    let approved = queue.list_approved()?;
+    let queue = create_queue()?;
+    let approved_requests = queue.list_approved_servers().await?;
 
-    let servers: Vec<ServerInfo> = approved
-        .into_iter()
-        .map(|server| {
-            let id = server.id.clone();
-            let name = server.server_info.name.clone();
-            let endpoint = server.server_info.endpoint.clone();
-            let source = Some(server.source.name());
+    let servers: Vec<ServerInfo> = approved_requests
+        .iter()
+        .filter_map(|request| {
+            request.to_approved_discovery().map(|server| {
+                let id = server.id.clone();
+                let name = server.server_info.name.clone();
+                let endpoint = server.server_info.endpoint.clone();
+                let source = Some(server.source.name());
 
-            let auth_status = if let Some(ref auth_var) = server.server_info.auth_env_var {
-                let token_set = std::env::var(auth_var).is_ok();
-                if token_set {
-                    Some(format!("✓ {} (set)", auth_var))
+                let auth_status = if let Some(ref auth_var) = server.server_info.auth_env_var {
+                    let token_set = std::env::var(auth_var).is_ok();
+                    if token_set {
+                        Some(format!("✓ {} (set)", auth_var))
+                    } else {
+                        Some(format!("⚠ {} (not set)", auth_var))
+                    }
                 } else {
-                    Some(format!("⚠ {} (not set)", auth_var))
+                    None
+                };
+
+                ServerInfo {
+                    id,
+                    name,
+                    endpoint,
+                    description: server.server_info.description.clone(),
+                    source,
+                    matching_capabilities: None,
+                    status: if server.should_dismiss() {
+                        "failing".to_string()
+                    } else {
+                        "healthy".to_string()
+                    },
+                    health_score: Some(server.error_rate()),
+                    auth_status,
                 }
-            } else {
-                None
-            };
-
-            ServerInfo {
-                id,
-                name,
-                endpoint,
-                description: server.server_info.description.clone(),
-                source,
-                matching_capabilities: None,
-                status: if server.should_dismiss() {
-                    "failing".to_string()
-                } else {
-                    "healthy".to_string()
-                },
-                health_score: Some(server.error_rate()),
-                auth_status,
-            }
+            })
         })
         .collect();
 
@@ -68,35 +80,35 @@ pub async fn list_servers() -> RuntimeResult<ServerListOutput> {
 
 /// Add a new server
 pub async fn add_server(url: String, name: Option<String>) -> RuntimeResult<String> {
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
+    let queue = create_queue()?;
     let name_str = name.unwrap_or_else(|| "manual-server".to_string());
 
-    let discovery = PendingDiscovery {
-        id: format!("manual-{}", Uuid::new_v4()),
-        source: DiscoverySource::Manual {
-            user: "cli".to_string(),
-        },
-        server_info: DiscoveryServerInfo {
-            name: name_str.clone(),
-            endpoint: url.clone(),
-            description: Some("Manually added via CLI".to_string()),
-            auth_env_var: Some(ApprovalQueue::suggest_auth_env_var(&name_str)),
-            capabilities_path: None,
-            alternative_endpoints: Vec::new(),
-        },
-        domain_match: vec![],
-        risk_assessment: RiskAssessment {
-            level: RiskLevel::Low,
-            reasons: vec!["manual_add".to_string()],
-        },
-        requested_at: Utc::now(),
-        expires_at: Utc::now() + chrono::Duration::hours(24 * 30),
-        requesting_goal: None,
+    let server_info = DiscoveryServerInfo {
+        name: name_str.clone(),
+        endpoint: url.clone(),
+        description: Some("Manually added via CLI".to_string()),
+        auth_env_var: Some(suggest_auth_env_var(&name_str)),
+        capabilities_path: None,
+        alternative_endpoints: Vec::new(),
     };
 
-    queue.add(discovery.clone())?;
-    Ok(discovery.id)
+    let risk_assessment = RiskAssessment {
+        level: RiskLevel::Low,
+        reasons: vec!["manual_add".to_string()],
+    };
+
+    queue
+        .add_server_discovery(
+            DiscoverySource::Manual {
+                user: "cli".to_string(),
+            },
+            server_info,
+            vec![],
+            risk_assessment,
+            None,
+            24 * 30, // 30 days
+        )
+        .await
 }
 
 /// Remove a server
@@ -107,18 +119,20 @@ pub async fn remove_server(name: String) -> RuntimeResult<()> {
 
 /// Show server health status
 pub async fn server_health(name: Option<String>) -> RuntimeResult<Vec<ServerInfo>> {
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
-    let approved = queue.list_approved()?;
+    let queue = create_queue()?;
+    let approved_requests = queue.list_approved_servers().await?;
 
-    let target_servers: Vec<_> = if let Some(n) = name {
-        approved
-            .into_iter()
-            .filter(|s| s.server_info.name == n || s.id == n)
-            .collect()
-    } else {
-        approved
-    };
+    let target_servers: Vec<_> = approved_requests
+        .iter()
+        .filter_map(|r| r.to_approved_discovery())
+        .filter(|s| {
+            if let Some(ref n) = name {
+                s.server_info.name == *n || s.id == *n
+            } else {
+                true
+            }
+        })
+        .collect();
 
     let health_info = target_servers
         .into_iter()
@@ -266,8 +280,7 @@ pub async fn search_servers(
 /// - Server name (looks up endpoint from approved/pending servers)
 /// - Direct endpoint URL
 pub async fn introspect_server(server: String) -> RuntimeResult<MCPIntrospectionResult> {
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
+    let queue = create_queue()?;
 
     // Try to find server by name in approved or pending
     let (endpoint, auth_env_var_owned) = if server.starts_with("http") {
@@ -275,8 +288,18 @@ pub async fn introspect_server(server: String) -> RuntimeResult<MCPIntrospection
         (server.clone(), None)
     } else {
         // Look up by name
-        let approved = queue.list_approved()?;
-        let pending = queue.list_pending()?;
+        let approved_requests = queue.list_approved_servers().await?;
+        let pending_requests = queue.list_pending_servers().await?;
+
+        // Convert to legacy types for easier access
+        let approved: Vec<_> = approved_requests
+            .iter()
+            .filter_map(|r| r.to_approved_discovery())
+            .collect();
+        let pending: Vec<_> = pending_requests
+            .iter()
+            .filter_map(|r| r.to_pending_discovery())
+            .collect();
 
         // Search approved first
         let found_approved = approved
@@ -485,9 +508,12 @@ pub async fn save_discovered_tools(
 
     // Find the pending entry to get the server ID
     // Use workspace root to ensure server.json is saved in the correct location
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
-    let pending = queue.list_pending()?;
+    let queue = create_queue()?;
+    let pending_requests = queue.list_pending_servers().await?;
+    let pending: Vec<_> = pending_requests
+        .iter()
+        .filter_map(|r| r.to_pending_discovery())
+        .collect();
 
     // Find the pending entry for this server
     // Use server_info from the parameter (which matches the discovery result) rather than introspection
@@ -553,13 +579,28 @@ pub async fn save_discovered_tools(
     // Save RTFS capabilities (overwrites existing file if present)
     provider.save_rtfs_capabilities(&rtfs_capabilities, &capabilities_path)?;
 
-    // Update the pending entry to include capabilities_path
-    // IMPORTANT: Update in place to avoid removing the directory (which would delete capabilities.rtfs)
-    let mut updated_entry = entry.clone();
-    updated_entry.server_info.capabilities_path = Some(capabilities_path.clone());
+    // Update the pending entry to include capabilities_path - need original ApprovalRequest
+    let original_request = pending_requests.iter().find(|r| {
+        if let ApprovalCategory::ServerDiscovery {
+            server_info: si, ..
+        } = &r.category
+        {
+            si.name == entry.server_info.name
+        } else {
+            false
+        }
+    });
 
-    // Update the entry in place (preserves directory and capabilities.rtfs file)
-    queue.update_pending(&updated_entry)?;
+    if let Some(mut updated_request) = original_request.cloned() {
+        if let ApprovalCategory::ServerDiscovery {
+            ref mut server_info,
+            ..
+        } = updated_request.category
+        {
+            server_info.capabilities_path = Some(capabilities_path.clone());
+        }
+        queue.update_pending_server(&updated_request).await?;
+    }
 
     Ok(capabilities_path)
 }
@@ -571,9 +612,13 @@ pub async fn save_api_capabilities(
 ) -> RuntimeResult<String> {
     use std::io::Write;
 
-    let workspace_root = find_workspace_root();
-    let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
-    let entry = queue.get_pending(pending_id)?.ok_or_else(|| {
+    let queue = create_queue()?;
+    let pending_requests = queue.list_pending_servers().await?;
+    let pending: Vec<_> = pending_requests
+        .iter()
+        .filter_map(|r| r.to_pending_discovery())
+        .collect();
+    let entry = pending.iter().find(|e| e.id == pending_id).ok_or_else(|| {
         RuntimeError::Generic(format!("Pending entry not found for ID: {}", pending_id))
     })?;
 
@@ -682,12 +727,19 @@ pub async fn save_api_capabilities(
     file.write_all(rtfs_content.as_bytes())
         .map_err(|e| RuntimeError::Generic(format!("Failed to write capabilities: {}", e)))?;
 
-    // Update the pending entry to include capabilities_path
-    let mut updated_entry = entry.clone();
-    updated_entry.server_info.capabilities_path = Some(capabilities_path.clone());
+    // Update the pending entry to include capabilities_path - need original ApprovalRequest
+    let original_request = pending_requests.iter().find(|r| r.id == pending_id);
 
-    queue.remove_pending(&entry.id)?;
-    queue.add(updated_entry)?;
+    if let Some(mut updated_request) = original_request.cloned() {
+        if let ApprovalCategory::ServerDiscovery {
+            ref mut server_info,
+            ..
+        } = updated_request.category
+        {
+            server_info.capabilities_path = Some(capabilities_path.clone());
+        }
+        queue.update_pending_server(&updated_request).await?;
+    }
 
     Ok(capabilities_path)
 }

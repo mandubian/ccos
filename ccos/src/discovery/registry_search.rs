@@ -1,5 +1,5 @@
+use crate::approval::queue::{DiscoverySource, ServerInfo};
 use crate::discovery::apis_guru::ApisGuruClient;
-use crate::discovery::approval_queue::{DiscoverySource, ServerInfo};
 use crate::mcp::registry::MCPRegistryClient;
 use crate::synthesis::runtime::web_search_discovery::WebSearchDiscovery;
 use rtfs::runtime::error::RuntimeResult;
@@ -39,46 +39,59 @@ impl RegistrySearcher {
                 if debug {
                     eprintln!("🔍 MCP Registry: found {} servers", mcp_servers.len());
                 }
-                let registry_results: Vec<RegistrySearchResult> = mcp_servers.into_iter().map(|server| {
-                    let (endpoint, alternatives) = if let Some(remotes) = &server.remotes {
-                        // Collect all HTTP/HTTPS remotes as alternatives
-                        let all_http_remotes: Vec<String> = remotes.iter()
-                            .filter_map(|r| {
-                                let remote_type = r.r#type.to_ascii_lowercase();
-                                let url = r.url.trim();
-                                if !url.is_empty() && (remote_type == "http" || remote_type == "https"
-                                    || url.starts_with("http://") || url.starts_with("https://")) {
-                                    Some(url.to_string())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
+                let registry_results: Vec<RegistrySearchResult> = mcp_servers
+                    .into_iter()
+                    .map(|server| {
+                        let (endpoint, alternatives) = if let Some(remotes) = &server.remotes {
+                            // Collect all HTTP/HTTPS remotes as alternatives
+                            let all_http_remotes: Vec<String> = remotes
+                                .iter()
+                                .filter_map(|r| {
+                                    let remote_type = r.r#type.to_ascii_lowercase();
+                                    let url = r.url.trim();
+                                    if !url.is_empty()
+                                        && (remote_type == "http"
+                                            || remote_type == "https"
+                                            || url.starts_with("http://")
+                                            || url.starts_with("https://"))
+                                    {
+                                        Some(url.to_string())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
 
-                        // Select best as primary, rest as alternatives
-                        let primary = MCPRegistryClient::select_best_remote_url(remotes).unwrap_or_default();
-                        let mut alternatives = all_http_remotes;
-                        alternatives.retain(|url| url != &primary);
+                            // Select best as primary, rest as alternatives
+                            let primary = MCPRegistryClient::select_best_remote_url(remotes)
+                                .unwrap_or_default();
+                            let mut alternatives = all_http_remotes;
+                            alternatives.retain(|url| url != &primary);
 
-                        (primary, alternatives)
-                    } else {
-                        (String::new(), Vec::new())
-                    };
+                            (primary, alternatives)
+                        } else {
+                            (String::new(), Vec::new())
+                        };
 
-                    RegistrySearchResult {
-                        source: DiscoverySource::McpRegistry { name: server.name.clone() },
-                        server_info: ServerInfo {
-                            name: server.name.clone(),
-                            endpoint,
-                            description: Some(server.description),
-                            auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server.name)),
-                            capabilities_path: None,
-                            alternative_endpoints: alternatives,
-                        },
-                        match_score: 1.0, // Default score
-                        alternative_endpoints: Vec::new(), // Not used anymore, kept for compatibility
-                    }
-                }).collect();
+                        RegistrySearchResult {
+                            source: DiscoverySource::McpRegistry {
+                                name: server.name.clone(),
+                            },
+                            server_info: ServerInfo {
+                                name: server.name.clone(),
+                                endpoint,
+                                description: Some(server.description),
+                                auth_env_var: Some(crate::approval::suggest_auth_env_var(
+                                    &server.name,
+                                )),
+                                capabilities_path: None,
+                                alternative_endpoints: alternatives,
+                            },
+                            match_score: 1.0,                  // Default score
+                            alternative_endpoints: Vec::new(), // Not used anymore, kept for compatibility
+                        }
+                    })
+                    .collect();
                 results.extend(registry_results);
             }
             Err(e) => {
@@ -145,11 +158,7 @@ impl RegistrySearcher {
                         name: format!("apis.guru/{}", api.name),
                         endpoint,
                         description: api.description.or(Some(api.title)),
-                        auth_env_var: Some(
-                            crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(
-                                &server_name,
-                            ),
-                        ),
+                        auth_env_var: Some(crate::approval::suggest_auth_env_var(&server_name)),
                         capabilities_path: None,
                         alternative_endpoints: Vec::new(),
                     },
@@ -176,7 +185,8 @@ impl RegistrySearcher {
         // Search for MCP servers and API specs
         let search_results = web_searcher.search_for_api_specs(&mcp_query).await?;
 
-        let results: Vec<RegistrySearchResult> = search_results.into_iter()
+        let results: Vec<RegistrySearchResult> = search_results
+            .into_iter()
             .filter_map(|result| {
                 // Include results that look like API endpoints or specs
                 // Prioritize MCP servers but also include OpenAPI specs
@@ -195,9 +205,12 @@ impl RegistrySearcher {
 
                 let is_openapi_spec = url_lower.contains("openapi")
                     || url_lower.contains("swagger")
-                    || url_lower.ends_with(".json") && (url_lower.contains("api") || url_lower.contains("spec"))
-                    || url_lower.ends_with(".yaml") && (url_lower.contains("api") || url_lower.contains("spec"))
-                    || url_lower.ends_with(".yml") && (url_lower.contains("api") || url_lower.contains("spec"))
+                    || url_lower.ends_with(".json")
+                        && (url_lower.contains("api") || url_lower.contains("spec"))
+                    || url_lower.ends_with(".yaml")
+                        && (url_lower.contains("api") || url_lower.contains("spec"))
+                    || url_lower.ends_with(".yml")
+                        && (url_lower.contains("api") || url_lower.contains("spec"))
                     || title_lower.contains("openapi")
                     || title_lower.contains("swagger")
                     || result.result_type == "openapi_spec";
@@ -210,17 +223,19 @@ impl RegistrySearcher {
                 // Include MCP servers, OpenAPI specs, and API documentation
                 if is_mcp_server || is_openapi_spec || is_api_doc {
                     // Extract server name from URL domain or title
-                    let server_name = if let Some(domain) = Self::extract_domain_from_url(&result.url) {
-                        domain
-                    } else {
-                        // Clean title - remove HTML tags and take first meaningful word
-                        result.title
-                            .replace("<[^>]*>", "") // Remove HTML tags (basic)
-                            .split_whitespace()
-                            .find(|w| w.len() > 2 && !w.eq_ignore_ascii_case("api"))
-                            .unwrap_or(if is_mcp_server { "web-mcp" } else { "web-api" })
-                            .to_string()
-                    };
+                    let server_name =
+                        if let Some(domain) = Self::extract_domain_from_url(&result.url) {
+                            domain
+                        } else {
+                            // Clean title - remove HTML tags and take first meaningful word
+                            result
+                                .title
+                                .replace("<[^>]*>", "") // Remove HTML tags (basic)
+                                .split_whitespace()
+                                .find(|w| w.len() > 2 && !w.eq_ignore_ascii_case("api"))
+                                .unwrap_or(if is_mcp_server { "web-mcp" } else { "web-api" })
+                                .to_string()
+                        };
 
                     // Determine server type for better naming
                     let server_type = if is_mcp_server {
@@ -238,13 +253,14 @@ impl RegistrySearcher {
                     // Use regex to strip HTML tags, and handle truncated tags
                     let html_re = regex::Regex::new(r"<[^>]*>").unwrap();
                     let mut clean_title = html_re.replace_all(&result.title, "").trim().to_string();
-                    let mut clean_snippet = html_re.replace_all(&result.snippet, "").trim().to_string();
+                    let mut clean_snippet =
+                        html_re.replace_all(&result.snippet, "").trim().to_string();
 
                     // Helper closure to clean truncated tags
                     let strip_truncated = |s: &str| -> String {
                         if s.starts_with('<') {
                             if let Some(idx) = s.find('>') {
-                                s[idx+1..].trim().to_string()
+                                s[idx + 1..].trim().to_string()
                             } else {
                                 s.trim_start_matches('<')
                                     .trim_start_matches(|c: char| c.is_alphanumeric() || c == '-')
@@ -263,12 +279,16 @@ impl RegistrySearcher {
                     clean_snippet = clean_snippet.trim_start_matches("- ").to_string();
 
                     Some(RegistrySearchResult {
-                        source: DiscoverySource::WebSearch { url: result.url.clone() },
+                        source: DiscoverySource::WebSearch {
+                            url: result.url.clone(),
+                        },
                         server_info: ServerInfo {
                             name: format!("web/{}/{}", server_type, safe_server_name),
                             endpoint: result.url.clone(),
                             description: Some(format!("{} - {}", clean_title, clean_snippet)),
-                            auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&safe_server_name)),
+                            auth_env_var: Some(crate::approval::suggest_auth_env_var(
+                                &safe_server_name,
+                            )),
                             capabilities_path: None,
                             alternative_endpoints: Vec::new(),
                         },
@@ -389,10 +409,15 @@ impl RegistrySearcher {
                                             server_info: ServerInfo {
                                                 name: server_name,
                                                 endpoint,
-                                                description: server.get("description")
+                                                description: server
+                                                    .get("description")
                                                     .and_then(|d| d.as_str())
                                                     .map(|s| s.to_string()),
-                                                auth_env_var: Some(crate::discovery::approval_queue::ApprovalQueue::suggest_auth_env_var(&server_name_clone)),
+                                                auth_env_var: Some(
+                                                    crate::approval::suggest_auth_env_var(
+                                                        &server_name_clone,
+                                                    ),
+                                                ),
                                                 capabilities_path: None,
                                                 alternative_endpoints: alternatives,
                                             },
