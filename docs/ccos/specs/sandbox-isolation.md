@@ -42,42 +42,81 @@ CCOS provides a sandboxed execution environment for running untrusted or resourc
 
 ### SandboxedCapability
 
-A new provider type representing code that should execute in isolation:
+A provider type representing code that should execute in isolation. It supports both text-based scripts (Python, JS, Shell) and binary payloads (WASM).
 
 ```rust
 pub struct SandboxedCapability {
-    pub runtime: String,        // e.g., "python", "node", "wasm"
-    pub source: String,         // Code or path to executable
+    pub runtime: String,        // e.g., "python", "js", "shell", "wasm"
+    pub source: String,         // Script source or Base64 encoded binary
     pub entry_point: Option<String>,
-    pub provider: Option<String>, // e.g., "process", "firecracker"
+    pub provider: Option<String>, // e.g., "process", "firecracker", "wasm"
+}
+```
+
+### Program and ScriptLanguage
+
+The internal representation has been refactored to support multiple languages and binary formats:
+
+```rust
+pub enum ScriptLanguage {
+    Python,
+    JavaScript,
+    Shell,
+    Wasm,
+    Rtfs,
+    Other(String),
+}
+
+pub enum Program {
+    ScriptSource {
+        language: ScriptLanguage,
+        source: String,
+    },
+    Binary {
+        language: ScriptLanguage,
+        source: Vec<u8>,
+    },
+    // ...
 }
 ```
 
 ### SandboxedExecutor
 
-Executes `SandboxedCapability` instances through the MicroVM provider system:
-
-```rust
-pub struct SandboxedExecutor {
-    factory: Arc<Mutex<MicroVMFactory>>,
-}
-```
-
-The executor:
-1. Initializes all available providers on creation
-2. Selects the appropriate provider based on `SandboxedCapability.provider`
-3. Constructs an `ExecutionContext` with the program and inputs
-4. Returns the execution result as an RTFS `Value`
+Executes `SandboxedCapability` instances through the MicroVM provider system. It automatically handles:
+1. **Input Injection**: Large payloads (up to 100KB+) are passed via `RTFS_INPUT_FILE` environment variable (pointing to a JSON file) to avoid shell command line limits. For Firecracker, this file is injected into the guest rootfs using `debugfs`.
+2. **Output Parsing**: Captures stdout and parses it as JSON to return structured RTFS `Value`s.
+3. **Binary Handling**: Automatically decodes Base64 `source` for `wasm` runtimes.
 
 ### MicroVM Providers
 
 | Provider | Description | Availability |
 |----------|-------------|--------------|
-| `process` | Basic process isolation | Always (if Python/runtime available) |
+| `process` | Basic process isolation | Always (if runtime available) |
 | `mock` | Testing provider | Always |
 | `firecracker` | AWS Firecracker microVMs | If firecracker installed |
-| `gvisor` | Google gVisor sandbox | If runsc available |
-| `wasm` | WebAssembly sandbox | If wasmtime available |
+| `wasm` | Native WebAssembly execution | Built-in via `wasmtime` |
+
+## WebAssembly (WASM) Execution
+
+The `wasm` provider uses `wasmtime` to execute WebAssembly modules with `WASI` support. 
+
+### Data Exchange
+- **Input**: Passed to the WASM module via `stdin` as a JSON string.
+- **Output**: Captured from `stdout` and parsed as JSON.
+- **Environment**: Standard WASI environment variables are provided.
+
+### Example WASM Capability
+```rust
+let manifest = CapabilityManifest {
+    id: "my.wasm.tool".to_string(),
+    provider: ProviderType::Sandboxed(SandboxedCapability {
+        runtime: "wasm".to_string(),
+        source: "AGFzbQE...".to_string(), // Base64 encoded .wasm file
+        provider: Some("wasm".to_string()),
+        // ...
+    }),
+};
+```
 
 ## Minimal Build Profile
 
@@ -261,16 +300,17 @@ cargo test --test test_sandboxed_capability -- --nocapture
 cargo test firecracker -- --nocapture
 ```
 
-Tests cover:
-- Executor creation
-- Python code execution
-- Provider type validation
-- Marketplace integration
-- Error handling
+### Examples
+
+A comprehensive demo showing Python execution in both Process and Firecracker providers with large payloads is available:
+
+```bash
+cargo run --example sandboxed_script_demo
+```
 
 ## Future Work
 
-- [ ] WASM-based sandbox for portable execution
+- [x] WASM-based sandbox for portable execution
 - [ ] Fine-grained filesystem and network policies per capability
 - [ ] Resource usage metrics and quotas
 - [ ] Capability attestation for sandboxed code
