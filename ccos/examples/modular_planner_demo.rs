@@ -337,7 +337,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                                     println!("   Warnings: {:?}", synth_result.warnings);
                                 }
 
-                                // Test execution: parse validation with mock data simulation
+                                // Test execution: parse validation with generic static analysis
                                 println!("\n🧪 Testing synthesized code...");
                                 let test_passed = {
                                     use rtfs::parser::parse_expression;
@@ -347,42 +347,53 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                                         Ok(_expr) => {
                                             println!("   ✅ Parse validation: PASSED");
 
-                                            // Step 2: Check for known problematic patterns
+                                            // Step 2: Generic static analysis for common issues
                                             let code = &synth_result.implementation_code;
                                             let mut issues = Vec::new();
 
-                                            // Check for undefined function references
-                                            if code.contains("ends-with?")
-                                                && !code.contains("(fn [")
-                                            {
-                                                issues.push(
-                                                    "Uses 'ends-with?' which may not be a built-in",
-                                                );
+                                            // Check for common RTFS anti-patterns
+                                            // 1. Undefined symbol references (symbols ending with ? that aren't defined)
+                                            let undefined_refs: Vec<&str> = code
+                                                .split_whitespace()
+                                                .filter(|word| {
+                                                    word.ends_with('?') 
+                                                    && !word.starts_with('(')
+                                                    && !code.contains(&format!("(defn {}", word))
+                                                    && !code.contains(&format!("(fn {} [", word))
+                                                })
+                                                .collect();
+                                            
+                                            if !undefined_refs.is_empty() && undefined_refs.len() <= 5 {
+                                                // Only warn if there are a few - might be helper fns
+                                                issues.push(format!(
+                                                    "Potentially undefined functions: {:?}", 
+                                                    &undefined_refs[..undefined_refs.len().min(3)]
+                                                ));
                                             }
-                                            if code.contains("contains-password?")
-                                                && !code.contains("(defn contains-password")
-                                            {
-                                                issues.push(
-                                                    "Uses 'contains-password?' without definition",
-                                                );
+
+                                            // 2. Check for direct side-effects without (call ...)
+                                            if code.contains("http://") || code.contains("https://") {
+                                                if !code.contains("(call ") {
+                                                    issues.push("Contains URLs without (call ...) wrapper".to_string());
+                                                }
+                                            }
+
+                                            // 3. Check for hardcoded secrets
+                                            if code.contains("Bearer ") || code.contains("sk_") || code.contains("api_key") {
+                                                issues.push("May contain hardcoded credentials".to_string());
                                             }
 
                                             if issues.is_empty() {
-                                                println!(
-                                                    "   ✅ Static analysis: No issues detected"
-                                                );
-
-                                                // Simulate mock execution
-                                                println!("   📋 Mock test data: [\"readme.txt\", \"password.txt\", \"config.yml\", \".passwd\"]");
-                                                println!("   🔄 Simulating filter operation...");
-                                                println!("   📤 Expected output: Files containing 'password' or '.pass' patterns");
+                                                println!("   ✅ Static analysis: No issues detected");
+                                                println!("   � Capability: {}", description);
+                                                println!("   ✨ Code structure looks valid for: {}", cap_name);
                                                 true
                                             } else {
                                                 println!("   ⚠️ Potential issues found:");
                                                 for issue in &issues {
                                                     println!("      - {}", issue);
                                                 }
-                                                println!("   (Code may still work if helper functions are defined inline)");
+                                                println!("   (These may be false positives if code is valid)");
                                                 true // Don't block on warnings
                                             }
                                         }
