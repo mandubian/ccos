@@ -511,6 +511,7 @@ impl GovernanceKernel {
     ) -> RuntimeResult<()> {
         let policy = &self.constitution.semantic_judge_policy;
         if !policy.enabled {
+            ccos_eprintln!("   ⚖️  [SemanticJudge] Disabled - skipping judgment");
             return Ok(());
         }
 
@@ -525,9 +526,10 @@ impl GovernanceKernel {
             Some(a) => a,
             None => {
                 if policy.fail_open {
-                    log::debug!("[GovernanceKernel] No arbiter available for semantic judgment, skipping (fail-open)");
+                    ccos_eprintln!("   ⚖️  [SemanticJudge] No arbiter available - failing open (allowed)");
                     return Ok(());
                 } else {
+                    ccos_eprintln!("   🛑 [SemanticJudge] No arbiter available - failing closed (blocked)");
                     return Err(RuntimeError::Generic("Semantic judgment required but no arbiter available (fail-closed)".to_string()));
                 }
             }
@@ -539,16 +541,9 @@ impl GovernanceKernel {
         // but the PlanJudge can still evaluate the RTFS code against the goal.
         let resolutions = HashMap::new(); 
 
-        log::info!("[GovernanceKernel] Performing semantic judgment for goal: '{}'", goal);
-        
         match self.plan_judge.judge_plan(arbiter.llm_provider(), goal, plan, &resolutions).await {
             Ok(judgment) => {
                 if judgment.allowed && judgment.risk_score <= policy.risk_threshold {
-                    log::info!(
-                        "[GovernanceKernel] Semantic judgment passed (Risk: {:.2}): {}",
-                        judgment.risk_score,
-                        judgment.reasoning
-                    );
                     Ok(())
                 } else {
                     let reason = if judgment.risk_score > policy.risk_threshold {
@@ -562,16 +557,15 @@ impl GovernanceKernel {
                             judgment.reasoning, judgment.risk_score
                         )
                     };
-                    log::warn!("[GovernanceKernel] {}", reason);
                     Err(RuntimeError::Generic(reason))
                 }
             }
             Err(e) => {
                 if policy.fail_open {
-                    log::error!("[GovernanceKernel] Semantic judge failed: {}. Failing open.", e);
+                    ccos_eprintln!("   ⚠️  [SemanticJudge] LLM judgment failed: {}. Failing open.", e);
                     Ok(())
                 } else {
-                    log::error!("[GovernanceKernel] Semantic judge failed: {}. Failing closed.", e);
+                    ccos_eprintln!("   🛑 [SemanticJudge] LLM judgment failed: {}. Failing closed.", e);
                     Err(RuntimeError::Generic(format!("Semantic judgment failed: {}", e)))
                 }
             }
