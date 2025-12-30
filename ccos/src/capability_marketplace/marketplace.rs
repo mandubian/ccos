@@ -1,7 +1,7 @@
 use super::executors::CapabilityExecutor;
 use super::executors::{
-    A2AExecutor, ExecutionContext, ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor,
-    OpenApiExecutor, RegistryExecutor,
+    A2AExecutor, ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor, OpenApiExecutor,
+    RegistryExecutor,
 };
 use super::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use super::resource_monitor::ResourceMonitor;
@@ -263,7 +263,7 @@ impl From<SerializableManifest> for CapabilityManifest {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         }
     }
 }
@@ -562,6 +562,7 @@ impl CapabilityMarketplace {
                 agent_metadata: None,
                 domains: Vec::new(),
                 categories: Vec::new(),
+            effect_type: EffectType::Effectful,
             };
 
             let mut caps = self.capabilities.write().await;
@@ -778,7 +779,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -830,7 +831,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
 
         let catalog_manifest = manifest.clone();
@@ -1139,7 +1140,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1184,7 +1185,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1227,7 +1228,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1272,7 +1273,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1320,7 +1321,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
 
         let mut caps = self.capabilities.write().await;
@@ -1368,7 +1369,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1417,7 +1418,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1465,7 +1466,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1515,7 +1516,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1559,7 +1560,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1605,7 +1606,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1651,7 +1652,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1965,6 +1966,8 @@ impl CapabilityMarketplace {
         }
 
         // Execute via executor registry or provider fallback
+        let session_pool = self.session_pool.read().await.clone();
+        let context = super::executors::ExecutionContext::new(id, &manifest.metadata, session_pool);
         let exec_result = if let Some(executor) =
             self.executor_registry.get(&match &manifest.provider {
                 ProviderType::Local(_) => std::any::TypeId::of::<LocalCapability>(),
@@ -1978,12 +1981,6 @@ impl CapabilityMarketplace {
                 ProviderType::Registry(_) => std::any::TypeId::of::<RegistryCapability>(),
                 ProviderType::Native(_) => std::any::TypeId::of::<NativeCapability>(),
             }) {
-            // Build execution context with capability ID, metadata, and session pool
-            let session_pool = {
-                let guard = self.session_pool.read().await;
-                guard.clone()
-            };
-            let context = ExecutionContext::new(id, &manifest.metadata, session_pool);
             executor
                 .execute(&manifest.provider, inputs_ref, &context)
                 .await
@@ -1993,8 +1990,6 @@ impl CapabilityMarketplace {
                 ProviderType::Http(http) => self.execute_http_capability(http, inputs_ref).await,
                 ProviderType::OpenApi(_) => {
                     let executor = OpenApiExecutor;
-                    let empty_metadata = HashMap::new();
-                    let context = ExecutionContext::new(id, &empty_metadata, None);
                     executor
                         .execute(&manifest.provider, inputs_ref, &context)
                         .await

@@ -11,6 +11,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::approval::UnifiedApprovalQueue;
 use crate::arbiter::llm_provider::{
     LlmProvider, LlmProviderConfig, LlmProviderFactory, LlmProviderType,
 };
@@ -502,6 +503,21 @@ impl ModularPlannerBuilder {
             max_decomposition_retries: 2,
         };
 
+        // Initialize approval queue if workspace-based storage is available
+        let approval_queue = if self.enable_safe_exec {
+            let storage_path =
+                crate::utils::fs::resolve_workspace_path(&env.agent_config.storage.approvals_dir);
+            if let Ok(storage) =
+                crate::approval::storage_file::FileApprovalStorage::new(storage_path)
+            {
+                Some(UnifiedApprovalQueue::new(std::sync::Arc::new(storage)))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let planner = ModularPlanner::new(
             decomposition,
             Box::new(composite_resolution),
@@ -510,8 +526,16 @@ impl ModularPlannerBuilder {
         .with_config(config)
         .with_delegating_arbiter(env.ccos.arbiter.clone());
 
-        let mut planner = if self.enable_safe_exec {
-            planner.with_safe_executor(env.ccos.get_capability_marketplace())
+        let planner = if self.enable_safe_exec {
+            if let Some(queue) = approval_queue {
+                planner.with_safe_executor_and_approval(
+                    env.ccos.get_capability_marketplace(),
+                    std::sync::Arc::new(queue),
+                    None, // Default constraints for now
+                )
+            } else {
+                planner.with_safe_executor(env.ccos.get_capability_marketplace())
+            }
         } else {
             planner
         };

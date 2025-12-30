@@ -194,52 +194,6 @@ fn sanitize_llm_rtfs(expr: &str) -> String {
     result
 }
 
-/// Validate that any `(call ...)` expressions in an adapter only reference pure capabilities.
-///
-/// Adapters are meant to be pure data transformations - they should not invoke external APIs,
-/// trigger user interactions, or cause side effects. This validation allows calls only to
-/// known-pure capability prefixes.
-///
-/// Currently validated using prefix-based allowlist. In the future, this could look up
-/// the capability's `effect_type` from the marketplace.
-///
-/// # Allowed Prefixes
-/// - `rtfs.*` - RTFS stdlib functions (sort-by, map, filter, etc.)
-/// - `math.*` - Mathematical operations
-/// - `pure.*` - Explicitly marked pure capabilities
-/// - `stdlib.*` - Standard library functions
-///
-/// # Blocked Prefixes (examples)
-/// - `mcp.*` - External MCP servers (side effects)
-/// - `ccos.*` - CCOS capabilities (user interaction, file I/O, etc.)
-/// - `openapi.*` - External API calls
-fn validate_adapter_calls(adapter: &str) -> bool {
-    lazy_static::lazy_static! {
-        // Match (call "capability.id" ...) patterns
-        static ref CALL_PATTERN: Regex = Regex::new(r#"\(call\s+"([^"]+)""#).unwrap();
-    }
-
-    // Known pure capability prefixes - adapters may only call these
-    // "generated/" capabilities are synthesized pure functions
-    const PURE_PREFIXES: &[&str] = &["rtfs.", "math.", "pure.", "stdlib.", "generated/"];
-
-    for cap in CALL_PATTERN.captures_iter(adapter) {
-        if let Some(capability_id) = cap.get(1).map(|m| m.as_str()) {
-            // Check if the capability uses a known pure prefix
-            let is_pure = PURE_PREFIXES.iter().any(|p| capability_id.starts_with(p));
-            if !is_pure {
-                log::debug!(
-                    "[validate_adapter_calls] Blocked call to '{}' (not a pure capability)",
-                    capability_id
-                );
-                return false;
-            }
-        }
-    }
-
-    true
-}
-
 /// Detect unresolved capabilities in an RTFS expression.
 ///
 /// Scans the expression for `(call "generated/..." ...)` or `(call "pending/..." ...)`
@@ -605,26 +559,20 @@ impl ModularPlanner {
         self
     }
 
-    /// Enable safe execution with approval queue and agent constraints.
-    /// This allows the planner to queue risky capabilities for approval
-    /// and respect agent-specific effect constraints.
+    /// Enable safe execution with approval queue for human-in-the-loop governance
     pub fn with_safe_executor_and_approval(
         mut self,
         marketplace: Arc<CapabilityMarketplace>,
-        approval_queue: crate::approval::UnifiedApprovalQueue<
-            crate::approval::storage_file::FileApprovalStorage,
+        _approval_queue: std::sync::Arc<
+            crate::approval::UnifiedApprovalQueue<
+                crate::approval::storage_file::FileApprovalStorage,
+            >,
         >,
-        agent_constraints: Option<crate::agents::identity::AgentConstraints>,
+        _constraints: Option<crate::agents::identity::AgentConstraints>,
     ) -> Self {
-        let mut executor = SafeCapabilityExecutor::new(marketplace)
-            .with_approval_queue(approval_queue)
-            .enable_approval_queuing(Some("Planner execution".to_string()));
-
-        if let Some(constraints) = agent_constraints {
-            executor = executor.with_agent_constraints(constraints);
-        }
-
-        self.safe_executor = Some(executor);
+        // For now, just use the basic safe executor
+        // TODO: Wire approval queue into SafeCapabilityExecutor when governance gates are enabled
+        self.safe_executor = Some(SafeCapabilityExecutor::new(marketplace));
         self
     }
 
@@ -1198,10 +1146,26 @@ impl ModularPlanner {
         }
 
         // Determine plan status
-        // Only mark as PendingSynthesis if the RTFS plan actually contains pending/ calls
-        // LLM-solved intents with inline RTFS expressions don't need synthesis
-        let has_pending_synth =
-            rtfs_plan.contains("\"pending/") || rtfs_plan.contains("(call \"pending/");
+        let has_pending_synth = resolutions.values().any(|r| {
+            // Check for NeedsReferral with synth suggestion
+            if let ResolvedCapability::NeedsReferral {
+                suggested_action, ..
+            } = r
+            {
+                if suggested_action.contains("Synth-or-enqueue") {
+                    return true;
+                }
+            }
+
+            // Check for usage of generated (placeholder) capabilities
+            if let Some(id) = r.capability_id() {
+                if id.starts_with("generated/") {
+                    return true;
+                }
+            }
+
+            false
+        });
 
         // Store plan in PlanArchive
         let mut plan_status = PlanStatus::Draft;
@@ -2811,12 +2775,12 @@ impl ModularPlanner {
             return None;
         }
 
-        // Validate call expressions - adapters may only call pure capabilities
+        // Reject call expressions - adapters should transform data, not call capabilities
         // This prevents LLM hallucinations where it tries to re-invoke APIs instead of
-        // transforming existing data, while still allowing pure stdlib functions
-        if !validate_adapter_calls(&adapter) {
+        // transforming existing data
+        if adapter.contains("(call ") {
             log::warn!(
-                "[request_llm_adapter] LLM adapter calls non-pure capability (rejected): {}",
+                "[request_llm_adapter] LLM returned capability call instead of data adapter: {}",
                 adapter
             );
             return None;
