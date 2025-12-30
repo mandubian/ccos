@@ -5,6 +5,7 @@
 //! a consistent interface.
 
 use crate::arbiter::prompt::{FilePromptStore, PromptManager};
+use crate::ccos_eprintln;
 use crate::types::{
     GenerationContext, IntentStatus, Plan, PlanBody, PlanLanguage, StorableIntent, TriggerSource,
 };
@@ -15,7 +16,7 @@ use rtfs::runtime::values::Value;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap; // for validating reduced-grammar RTFS plans
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
@@ -305,6 +306,86 @@ impl RetryMetricsSummary {
     }
 }
 
+/// Configuration for HTTP-level retry behavior on transient failures
+#[derive(Debug, Clone)]
+pub struct HttpRetryConfig {
+    /// Maximum number of retry attempts (not counting the initial attempt)
+    pub max_retries: u32,
+    /// Initial delay before first retry (doubles each time with jitter)
+    pub initial_delay: Duration,
+    /// Maximum delay between retries
+    pub max_delay: Duration,
+}
+
+impl Default for HttpRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            initial_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(10),
+        }
+    }
+}
+
+/// Determines if an error is retryable (transient network/server issue)
+fn is_retryable_error(error: &reqwest::Error) -> bool {
+    // Retry on timeout
+    if error.is_timeout() {
+        return true;
+    }
+    // Retry on connection errors
+    if error.is_connect() {
+        return true;
+    }
+    // Retry on request body errors (often connection was interrupted)
+    if error.is_body() {
+        return true;
+    }
+    false
+}
+
+/// Determines if an HTTP status code is retryable
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    // 429 Too Many Requests (rate limiting)
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return true;
+    }
+    // 5xx Server Errors
+    if status.is_server_error() {
+        return true;
+    }
+    // 408 Request Timeout
+    if status == reqwest::StatusCode::REQUEST_TIMEOUT {
+        return true;
+    }
+    false
+}
+
+/// Calculate delay with exponential backoff and jitter
+fn calculate_backoff_delay(attempt: u32, config: &HttpRetryConfig) -> Duration {
+    let base_delay = config.initial_delay.as_millis() as u64;
+    let multiplier = 2u64.saturating_pow(attempt.saturating_sub(1));
+    let delay_ms = base_delay.saturating_mul(multiplier);
+    
+    // Add jitter (±25%)
+    let jitter_range = delay_ms / 4;
+    let jitter = if jitter_range > 0 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        std::time::SystemTime::now().hash(&mut hasher);
+        (hasher.finish() % (jitter_range * 2)) as i64 - jitter_range as i64
+    } else {
+        0
+    };
+    
+    let final_delay_ms = (delay_ms as i64 + jitter).max(0) as u64;
+    let final_delay = Duration::from_millis(final_delay_ms);
+    
+    // Cap at max_delay
+    std::cmp::min(final_delay, config.max_delay)
+}
+
 /// Configuration for LLM providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmProviderConfig {
@@ -563,208 +644,277 @@ impl OpenAILlmProvider {
         })?;
         let prompt_hash = sha256_hex(&payload_bytes);
 
-        let mut request_builder = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json");
-
-        if base_url.contains("openrouter.ai") {
-            let referer = std::env::var("OPENROUTER_HTTP_REFERER")
-                .unwrap_or_else(|_| "https://github.com/mandubian/ccos".to_string());
-            let title = std::env::var("OPENROUTER_TITLE")
-                .unwrap_or_else(|_| "CCOS Smart Assistant Demo".to_string());
-            request_builder = request_builder
-                .header("HTTP-Referer", referer)
-                .header("X-Title", title);
-        }
+        // HTTP-level retry configuration
+        let retry_config = HttpRetryConfig::default();
+        let mut attempt = 0u32;
 
         let start = Instant::now();
-        let response = request_builder
-            .body(payload_bytes)
-            .send()
-            .await
-            .map_err(|e| RuntimeError::Generic(format!("HTTP request failed: {}", e)))?;
-        let status = response.status();
-        // Read bytes first so we can show them even if UTF-8 conversion fails
-        let bytes = match response.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                return Err(RuntimeError::Generic(format!(
-                    "❌ Failed to read LLM API response body\n\n\
-                    🔍 Error reading response bytes: {}\n\n\
-                    📊 HTTP Status: {}\n\n\
-                    💡 This could be due to:\n\
-                    • Network connection was interrupted\n\
-                    • Response was too large to read\n\
-                    • API endpoint is unreachable\n\n\
-                    🔧 Try checking:\n\
-                    • Network connection stability\n\
-                    • API endpoint configuration\n\
-                    • Firewall or proxy settings",
-                    e,
-                    status.as_u16()
-                )));
-            }
-        };
-
-        // Try to convert bytes to text, but show bytes if conversion fails
-        let raw_body = match String::from_utf8(bytes.to_vec()) {
-            Ok(text) => text,
-            Err(e) => {
-                // Show the raw bytes (lossy conversion) so user can see what was actually received
-                let body_preview = if bytes.len() > 500 {
-                    format!(
-                        "{}...\n[truncated, total length: {} bytes]",
-                        String::from_utf8_lossy(&bytes[..500]),
-                        bytes.len()
-                    )
-                } else {
-                    String::from_utf8_lossy(&bytes).to_string()
-                };
-
-                return Err(RuntimeError::Generic(format!(
-                    "❌ LLM API response is not valid UTF-8 text\n\n\
-                    🔍 UTF-8 conversion error: {}\n\n\
-                    📊 HTTP Status: {}\n\n\
-                    📥 Response body (raw bytes, lossy UTF-8 conversion):\n\
-                    ┌─────────────────────────────────────────────────────────\n\
-                    {}\n\
-                    └─────────────────────────────────────────────────────────\n\n\
-                    💡 This could be due to:\n\
-                    • API returned binary data instead of text\n\
-                    • Response encoding is not UTF-8\n\
-                    • Response contains invalid UTF-8 sequences\n\
-                    • API error response in unexpected format\n\n\
-                    🔧 Try checking:\n\
-                    • API logs for the actual response\n\
-                    • Response content-type header\n\
-                    • API documentation for expected response format",
-                    e,
-                    status.as_u16(),
-                    body_preview
-                )));
-            }
-        };
-
-        if !status.is_success() {
-            // Enhanced error message for HTTP errors
-            let response_preview = if raw_body.len() > 1000 {
-                format!(
-                    "{}...\n[truncated, total length: {} chars]",
-                    &raw_body[..1000],
-                    raw_body.len()
-                )
+        
+        loop {
+            attempt += 1;
+            
+            // Clone request body for retry (needed because body is consumed)
+            let request = self
+                .client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("Content-Type", "application/json")
+                .body(payload_bytes.clone());
+            
+            // Add OpenRouter-specific headers if needed
+            let request = if base_url.contains("openrouter.ai") {
+                let referer = std::env::var("OPENROUTER_HTTP_REFERER")
+                    .unwrap_or_else(|_| "https://github.com/mandubian/ccos".to_string());
+                let title = std::env::var("OPENROUTER_TITLE")
+                    .unwrap_or_else(|_| "CCOS Smart Assistant Demo".to_string());
+                request
+                    .header("HTTP-Referer", referer)
+                    .header("X-Title", title)
             } else {
-                raw_body.clone()
+                request
             };
+            
+            match request.send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    
+                    // Check if we should retry based on status code
+                    if is_retryable_status(status) && attempt <= retry_config.max_retries {
+                        let delay = calculate_backoff_delay(attempt, &retry_config);
+                        ccos_eprintln!(
+                            "   ⚠️  [LLM] HTTP {} - retrying in {:?} (attempt {}/{})",
+                            status.as_u16(),
+                            delay,
+                            attempt,
+                            retry_config.max_retries + 1
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    
+                    // Read response bytes
+                    let bytes = match response.bytes().await {
+                        Ok(b) => b,
+                        Err(e) if is_retryable_error(&e) && attempt <= retry_config.max_retries => {
+                            let delay = calculate_backoff_delay(attempt, &retry_config);
+                            ccos_eprintln!(
+                                "   ⚠️  [LLM] Error reading response body: {} - retrying in {:?} (attempt {}/{})",
+                                e,
+                                delay,
+                                attempt,
+                                retry_config.max_retries + 1
+                            );
+                            tokio::time::sleep(delay).await;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(RuntimeError::Generic(format!(
+                                "❌ Failed to read LLM API response body\n\n\
+                                🔍 Error reading response bytes: {}\n\n\
+                                📊 HTTP Status: {}\n\n\
+                                🔄 Retry attempts: {}/{}\n\n\
+                                💡 This could be due to:\n\
+                                • Network connection was interrupted\n\
+                                • Response was too large to read\n\
+                                • API endpoint is unreachable\n\n\
+                                🔧 Try checking:\n\
+                                • Network connection stability\n\
+                                • API endpoint configuration\n\
+                                • Firewall or proxy settings",
+                                e,
+                                status.as_u16(),
+                                attempt,
+                                retry_config.max_retries + 1
+                            )));
+                        }
+                    };
 
-            return Err(RuntimeError::Generic(format!(
-                "❌ LLM API request failed (HTTP {})\n\n\
-                📥 API response:\n\
-                ┌─────────────────────────────────────────────────────────\n\
-                {}\n\
-                └─────────────────────────────────────────────────────────\n\n\
-                💡 Common causes:\n\
-                • Invalid API key or authentication failure\n\
-                • Rate limiting (too many requests)\n\
-                • Quota exceeded\n\
-                • Invalid model name\n\
-                • Network connectivity issues\n\
-                • API endpoint unavailable\n\n\
-                🔧 Check the response above for specific error details.",
-                status.as_u16(),
-                response_preview
-            )));
+                    // Successfully got response bytes - process them
+                    let raw_body = match String::from_utf8(bytes.to_vec()) {
+                        Ok(text) => text,
+                        Err(e) => {
+                            let body_preview = if bytes.len() > 500 {
+                                format!(
+                                    "{}...\n[truncated, total length: {} bytes]",
+                                    String::from_utf8_lossy(&bytes[..500]),
+                                    bytes.len()
+                                )
+                            } else {
+                                String::from_utf8_lossy(&bytes).to_string()
+                            };
+
+                            return Err(RuntimeError::Generic(format!(
+                                "❌ LLM API response is not valid UTF-8 text\n\n\
+                                🔍 UTF-8 conversion error: {}\n\n\
+                                📊 HTTP Status: {}\n\n\
+                                📥 Response body (raw bytes, lossy UTF-8 conversion):\n\
+                                ┌─────────────────────────────────────────────────────────\n\
+                                {}\n\
+                                └─────────────────────────────────────────────────────────\n\n\
+                                💡 This could be due to:\n\
+                                • API returned binary data instead of text\n\
+                                • Response encoding is not UTF-8\n\
+                                • Response contains invalid UTF-8 sequences\n\
+                                • API error response in unexpected format\n\n\
+                                🔧 Try checking:\n\
+                                • API logs for the actual response\n\
+                                • Response content-type header\n\
+                                • API documentation for expected response format",
+                                e,
+                                status.as_u16(),
+                                body_preview
+                            )));
+                        }
+                    };
+
+                    if !status.is_success() {
+                        let response_preview = if raw_body.len() > 1000 {
+                            format!(
+                                "{}...\n[truncated, total length: {} chars]",
+                                &raw_body[..1000],
+                                raw_body.len()
+                            )
+                        } else {
+                            raw_body.clone()
+                        };
+
+                        return Err(RuntimeError::Generic(format!(
+                            "❌ LLM API request failed (HTTP {})\n\n\
+                            📥 API response:\n\
+                            ┌─────────────────────────────────────────────────────────\n\
+                            {}\n\
+                            └─────────────────────────────────────────────────────────\n\n\
+                            💡 Common causes:\n\
+                            • Invalid API key or authentication failure\n\
+                            • Rate limiting (too many requests)\n\
+                            • Quota exceeded\n\
+                            • Invalid model name\n\
+                            • Network connectivity issues\n\
+                            • API endpoint unavailable\n\n\
+                            🔧 Check the response above for specific error details.",
+                            status.as_u16(),
+                            response_preview
+                        )));
+                    }
+
+                    // Log successful retry if we had previous failures
+                    if attempt > 1 {
+                        ccos_eprintln!(
+                            "   ✅ [LLM] Request succeeded on attempt {}/{}",
+                            attempt,
+                            retry_config.max_retries + 1
+                        );
+                    }
+
+                    let response_hash = sha256_hex(raw_body.as_bytes());
+
+                    let response_body: OpenAIResponse = serde_json::from_str(&raw_body).map_err(|e| {
+                        let response_preview = if raw_body.len() > 1000 {
+                            format!(
+                                "{}...\n[truncated, total length: {} chars]",
+                                &raw_body[..1000],
+                                raw_body.len()
+                            )
+                        } else {
+                            raw_body.clone()
+                        };
+
+                        RuntimeError::Generic(format!(
+                            "❌ Failed to parse LLM API response as JSON\n\n\
+                            📥 Raw API response:\n\
+                            ┌─────────────────────────────────────────────────────────\n\
+                            {}\n\
+                            └─────────────────────────────────────────────────────────\n\n\
+                            🔍 JSON parsing error: {}\n\n\
+                            💡 This could be due to:\n\
+                            • API returned an error message instead of a valid response\n\
+                            • Response format changed or is unexpected\n\
+                            • Network issue causing incomplete response\n\
+                            • API rate limiting or authentication error\n\n\
+                            🔧 Check the raw response above to see what the API actually returned.",
+                            response_preview, e
+                        ))
+                    })?;
+
+                    let choice = response_body
+                        .choices
+                        .first()
+                        .ok_or_else(|| RuntimeError::Generic("LLM response missing choices".to_string()))?;
+
+                    let content = choice.message.content.clone();
+                    let finish_reason = choice.finish_reason.as_deref();
+
+                    // Handle different finish_reason values
+                    match finish_reason {
+                        Some("length") => {
+                            let max_tokens = self.config.max_tokens.unwrap_or(0);
+                            eprintln!(
+                                "⚠️  WARNING: LLM response was truncated (finish_reason: length). \
+                                Current max_tokens: {}. \
+                                Consider increasing CCOS_LLM_MAX_TOKENS environment variable or max_tokens in config.",
+                                max_tokens
+                            );
+                        }
+                        Some("content_filter") => {
+                            eprintln!(
+                                "⚠️  WARNING: LLM response was stopped by content filter (finish_reason: content_filter). \
+                                The response may be incomplete or filtered."
+                            );
+                        }
+                        Some("function_call") | Some("stop") | None => {
+                            // Normal completion - no warning needed
+                        }
+                        Some(other) => {
+                            eprintln!(
+                                "ℹ️  LLM response finished with reason: {} (unexpected value)",
+                                other
+                            );
+                        }
+                    }
+
+                    let usage = response_body.usage.unwrap_or_default();
+                    let elapsed_ms = start.elapsed().as_millis();
+
+                    return Ok(LlmCompletion {
+                        content,
+                        prompt_hash,
+                        response_hash,
+                        prompt_tokens: usage.prompt_tokens,
+                        completion_tokens: usage.completion_tokens,
+                        total_tokens: usage.total_tokens,
+                        latency_ms: elapsed_ms,
+                    });
+                }
+                Err(e) if is_retryable_error(&e) && attempt <= retry_config.max_retries => {
+                    let delay = calculate_backoff_delay(attempt, &retry_config);
+                    ccos_eprintln!(
+                        "   ⚠️  [LLM] Request failed: {} - retrying in {:?} (attempt {}/{})",
+                        e,
+                        delay,
+                        attempt,
+                        retry_config.max_retries + 1
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Err(e) => {
+                    return Err(RuntimeError::Generic(format!(
+                        "❌ LLM API request failed after {} attempts\n\n\
+                        🔍 Error: {}\n\n\
+                        💡 This could be due to:\n\
+                        • Network connectivity issues\n\
+                        • API endpoint is unreachable\n\
+                        • Firewall or proxy blocking the request\n\n\
+                        🔧 Try checking:\n\
+                        • Network connection\n\
+                        • API endpoint URL\n\
+                        • Environment variables (OPENROUTER_API_KEY, etc.)",
+                        attempt,
+                        e
+                    )));
+                }
+            }
         }
-
-        let response_hash = sha256_hex(raw_body.as_bytes());
-
-        let response_body: OpenAIResponse = serde_json::from_str(&raw_body).map_err(|e| {
-            // Enhanced error message with full response for debugging
-            let response_preview = if raw_body.len() > 1000 {
-                format!(
-                    "{}...\n[truncated, total length: {} chars]",
-                    &raw_body[..1000],
-                    raw_body.len()
-                )
-            } else {
-                raw_body.clone()
-            };
-
-            RuntimeError::Generic(format!(
-                "❌ Failed to parse LLM API response as JSON\n\n\
-                    📥 Raw API response:\n\
-                    ┌─────────────────────────────────────────────────────────\n\
-                    {}\n\
-                    └─────────────────────────────────────────────────────────\n\n\
-                    🔍 JSON parsing error: {}\n\n\
-                    💡 This could be due to:\n\
-                    • API returned an error message instead of a valid response\n\
-                    • Response format changed or is unexpected\n\
-                    • Network issue causing incomplete response\n\
-                    • API rate limiting or authentication error\n\n\
-                    🔧 Check the raw response above to see what the API actually returned.",
-                response_preview, e
-            ))
-        })?;
-
-        let choice = response_body
-            .choices
-            .first()
-            .ok_or_else(|| RuntimeError::Generic("LLM response missing choices".to_string()))?;
-
-        let content = choice.message.content.clone();
-        let finish_reason = choice.finish_reason.as_deref();
-
-        // Handle different finish_reason values
-        match finish_reason {
-            Some("length") => {
-                // Response was truncated due to token limit
-                let max_tokens = self.config.max_tokens.unwrap_or(0);
-                eprintln!(
-                    "⚠️  WARNING: LLM response was truncated (finish_reason: length). \
-                    Current max_tokens: {}. \
-                    Consider increasing CCOS_LLM_MAX_TOKENS environment variable or max_tokens in config.",
-                    max_tokens
-                );
-            }
-            Some("content_filter") => {
-                // Response was stopped due to content filter
-                eprintln!(
-                    "⚠️  WARNING: LLM response was stopped by content filter (finish_reason: content_filter). \
-                    The response may be incomplete or filtered."
-                );
-            }
-            Some("function_call") => {
-                // Response stopped for function call (this is normal for function-calling models)
-                // Don't warn, this is expected behavior
-            }
-            Some("stop") | None => {
-                // Normal completion or null (both are fine)
-                // No warning needed
-            }
-            Some(other) => {
-                // Unknown finish_reason value
-                eprintln!(
-                    "ℹ️  LLM response finished with reason: {} (unexpected value)",
-                    other
-                );
-            }
-        }
-
-        let usage = response_body.usage.unwrap_or_default();
-        let elapsed_ms = start.elapsed().as_millis();
-
-        Ok(LlmCompletion {
-            content,
-            prompt_hash,
-            response_hash,
-            prompt_tokens: usage.prompt_tokens,
-            completion_tokens: usage.completion_tokens,
-            total_tokens: usage.total_tokens,
-            latency_ms: elapsed_ms,
-        })
     }
 
     fn parse_intent_from_json(&self, json_str: &str) -> Result<StorableIntent, RuntimeError> {
