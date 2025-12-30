@@ -1231,6 +1231,17 @@ impl ModularPlanner {
             }
         }
 
+        // Clean up resolutions to only include entries for the original sub_intents
+        // During refinement, additional intent_ids and placeholder resolutions may be added
+        // but we only want to return the final working set that matches sub_intents
+        let original_intent_count = decomp_result.sub_intents.len();
+        let valid_intent_ids: HashSet<&String> =
+            intent_ids.iter().take(original_intent_count).collect();
+        resolutions.retain(|k, _| valid_intent_ids.contains(k));
+
+        // Also truncate intent_ids to match the original sub_intents count
+        intent_ids.truncate(original_intent_count);
+
         Ok(PlanResult {
             root_intent_id: root_id,
             intent_ids,
