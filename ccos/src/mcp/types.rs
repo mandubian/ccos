@@ -24,6 +24,20 @@ pub struct DiscoveredMCPTool {
     pub input_schema_json: Option<serde_json::Value>,
 }
 
+impl DiscoveredMCPTool {
+    /// Convert to MCPTool format for storage/serialization
+    pub fn to_mcp_tool(&self) -> MCPTool {
+        MCPTool {
+            name: self.tool_name.clone(),
+            description: self.description.clone(),
+            input_schema: self.input_schema_json.clone(),
+            output_schema: None, // Output schema is typically introspected lazily
+            metadata: None,
+            annotations: None,
+        }
+    }
+}
+
 /// Result of discovering tools from an MCP server
 #[derive(Debug, Clone)]
 pub struct MCPDiscoveryResult {

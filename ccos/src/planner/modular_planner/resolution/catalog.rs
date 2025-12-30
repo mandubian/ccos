@@ -100,12 +100,11 @@ impl CatalogResolution {
                 let mut args = std::collections::HashMap::new();
 
                 // First, check if the LLM already provided a detailed prompt in extracted_params
-                // LLM may use "prompt", "message", or "question" key - check all
+                // LLM may use "prompt" or "message" key - check both
                 let llm_prompt = intent
                     .extracted_params
                     .get("prompt")
-                    .or_else(|| intent.extracted_params.get("message"))
-                    .or_else(|| intent.extracted_params.get("question"));
+                    .or_else(|| intent.extracted_params.get("message"));
 
                 let prompt = if let Some(llm_text) = llm_prompt {
                     // Use the LLM-provided text if it's not empty and looks meaningful
@@ -127,15 +126,6 @@ impl CatalogResolution {
                 })
             }
             IntentType::Output { format: _ } => {
-                // Check if LLM suggested a specific tool (e.g., ccos.llm.generate for summarization)
-                if let Some(suggested_tool) = intent.extracted_params.get("_suggested_tool") {
-                    // If a specific tool was suggested, don't override with println
-                    // Return None to let the catalog search handle it
-                    if suggested_tool != "ccos.io.println" {
-                        return None;
-                    }
-                }
-
                 let mut args = std::collections::HashMap::new();
                 // Only use description as message if there are no dependencies.
                 // If dependencies exist, we want println to output the dependency result (injected via _previous_result).

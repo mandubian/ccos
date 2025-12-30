@@ -7,6 +7,7 @@ use crate::discovery::GoalDiscoveryAgent;
 use crate::utils::fs::find_workspace_root;
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
 use rtfs::runtime::error::RuntimeResult;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Options for goal-driven server discovery
@@ -34,20 +35,19 @@ impl Default for DiscoverOptions {
 }
 
 /// Create a unified approval queue
-fn create_queue() -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
-    let workspace_root = find_workspace_root();
-    let storage_path = workspace_root.join("capabilities/servers/approvals");
+fn create_queue(storage_path: PathBuf) -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
     let storage = Arc::new(FileApprovalStorage::new(storage_path)?);
     Ok(UnifiedApprovalQueue::new(storage))
 }
 
 /// Goal-driven server discovery (simple API - uses defaults)
-pub async fn discover_by_goal(goal: String) -> RuntimeResult<Vec<String>> {
-    discover_by_goal_with_options(goal, DiscoverOptions::default()).await
+pub async fn discover_by_goal(storage_path: PathBuf, goal: String) -> RuntimeResult<Vec<String>> {
+    discover_by_goal_with_options(storage_path, goal, DiscoverOptions::default()).await
 }
 
 /// Goal-driven server discovery with options
 pub async fn discover_by_goal_with_options(
+    storage_path: PathBuf,
     goal: String,
     options: DiscoverOptions,
 ) -> RuntimeResult<Vec<String>> {
@@ -55,7 +55,7 @@ pub async fn discover_by_goal_with_options(
     let mut config = DiscoveryConfig::from_env();
     config.match_threshold = options.threshold;
 
-    let queue = create_queue()?;
+    let queue = create_queue(storage_path.clone())?;
     let agent = GoalDiscoveryAgent::new_with_config(queue, config);
 
     // Show mode being used
@@ -79,7 +79,7 @@ pub async fn discover_by_goal_with_options(
                 .unwrap_or(false);
 
             if add_manual {
-                return handle_manual_url_entry(&agent, &goal, options.llm).await;
+                return handle_manual_url_entry(&agent, &goal, options.llm, &storage_path).await;
             }
         }
 
@@ -158,7 +158,7 @@ pub async fn discover_by_goal_with_options(
                 .unwrap_or(false);
 
             if add_manual {
-                return handle_manual_url_entry(&agent, &goal, options.llm).await;
+                return handle_manual_url_entry(&agent, &goal, options.llm, &storage_path).await;
             }
 
             return Ok(vec![]);
@@ -170,7 +170,7 @@ pub async fn discover_by_goal_with_options(
         let selected: Vec<_> = selections.into_iter().map(|i| results[i].clone()).collect();
 
         // Check for conflicts with already approved or pending servers and prompt user
-        let queue = create_queue()?;
+        let queue = create_queue(storage_path.clone())?;
         let mut servers_to_queue = Vec::new();
 
         for (result, score) in &selected {
@@ -384,9 +384,15 @@ pub async fn discover_by_goal_with_options(
 
                                 // Save tools to RTFS file and link to pending entry
                                 if let Err(e) = crate::ops::server::save_discovered_tools(
+                                    storage_path.to_path_buf(),
+                                    introspection
+                                        .tools
+                                        .iter()
+                                        .map(|t| t.to_mcp_tool())
+                                        .collect(),
                                     &introspection,
                                     &result.server_info,
-                                    Some(pending_id),
+                                    Some(pending_id.clone()),
                                 )
                                 .await
                                 {
@@ -496,9 +502,11 @@ pub async fn discover_by_goal_with_options(
 
                                                             // Save tools to RTFS file and link to pending entry
                                                             if let Err(e) = crate::ops::server::save_discovered_tools(
+                                                                storage_path.to_path_buf(),
+                                                                introspection.tools.iter().map(|t| t.to_mcp_tool()).collect(),
                                                                 &introspection,
                                                                 &result.server_info,
-                                                                Some(pending_id),
+                                                                Some(pending_id.clone()),
                                                             ).await {
                                                                 println!("   ⚠️  Failed to save capabilities: {}", e);
                                                             } else {
@@ -566,7 +574,7 @@ pub async fn discover_by_goal_with_options(
     }
 
     // Non-interactive mode: check for conflicts and queue
-    let queue = create_queue()?;
+    let queue = create_queue(storage_path.clone())?;
     let approved_requests = queue.list_approved_servers().await?;
     let approved: Vec<_> = approved_requests
         .iter()
@@ -616,6 +624,7 @@ async fn handle_manual_url_entry(
     agent: &GoalDiscoveryAgent,
     goal: &str,
     llm_enabled: bool,
+    storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     let mut all_ids = Vec::new();
 
@@ -650,19 +659,14 @@ async fn handle_manual_url_entry(
 
         let ids = if url_type_idx == 0 {
             // MCP Server endpoint
-            handle_mcp_url(agent, goal, &url).await?
+            handle_mcp_url(agent, goal, &url, storage_path).await?
         } else {
             // API Documentation page
             if !llm_enabled {
-                println!("⚠️  Documentation parsing requires the --llm flag.");
-                println!(
-                    "   Run again with: ccos discover goal \"{}\" --interactive --llm",
-                    goal
-                );
-                println!();
-                continue; // Let user try another URL type
+                println!("⚠️  LLM discovery required for documentation parsing. Use --llm flag.");
+                continue;
             }
-            handle_documentation_url(agent, goal, &url).await?
+            handle_documentation_url(agent, goal, &url, llm_enabled, storage_path).await?
         };
 
         all_ids.extend(ids);
@@ -694,6 +698,7 @@ async fn handle_mcp_url(
     agent: &GoalDiscoveryAgent,
     goal: &str,
     url: &str,
+    storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     println!("🔍 Introspecting MCP server at {}...", url);
 
@@ -734,9 +739,15 @@ async fn handle_mcp_url(
 
             // Save tools
             if let Err(e) = crate::ops::server::save_discovered_tools(
+                storage_path.to_path_buf(),
+                introspection
+                    .tools
+                    .iter()
+                    .map(|t| t.to_mcp_tool())
+                    .collect(),
                 &introspection,
                 &result.server_info,
-                Some(&id),
+                Some(id.clone()),
             )
             .await
             {
@@ -759,6 +770,8 @@ async fn handle_documentation_url(
     agent: &GoalDiscoveryAgent,
     goal: &str,
     url: &str,
+    llm_enabled: bool,
+    storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     println!("🔍 Fetching API documentation from {}...", url);
     println!("🤖 Using LLM to extract API endpoints...");
@@ -829,7 +842,13 @@ async fn handle_documentation_url(
             let id = agent.queue_result(goal, result.clone(), 1.0).await?;
 
             // Save the parsed API as capabilities
-            if let Err(e) = crate::ops::server::save_api_capabilities(&api_result, &id).await {
+            if let Err(e) = crate::ops::server::save_api_capabilities(
+                storage_path.to_path_buf(),
+                &api_result,
+                &id,
+            )
+            .await
+            {
                 println!("   ⚠️  Failed to save capabilities: {}", e);
             } else {
                 println!("   💾 Capabilities saved to RTFS file");

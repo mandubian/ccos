@@ -83,7 +83,8 @@ impl MCPDiscoveryService {
             approval_base
         );
 
-        let storage_path = approval_base.join("capabilities/servers/approvals");
+        let storage_path =
+            approval_base.join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
         let storage = Arc::new(
             FileApprovalStorage::new(storage_path).expect("Failed to create approval storage"),
         );
@@ -133,7 +134,8 @@ impl MCPDiscoveryService {
             approval_base
         );
 
-        let storage_path = approval_base.join("capabilities/servers/approvals");
+        let storage_path =
+            approval_base.join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
         let storage = Arc::new(
             FileApprovalStorage::new(storage_path).expect("Failed to create approval storage"),
         );
