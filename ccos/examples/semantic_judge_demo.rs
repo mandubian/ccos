@@ -55,11 +55,6 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    // Initialize logging if RUST_LOG is set
-    let _ = std::env::var("RUST_LOG").map(|_| {
-        // env_logger is optional; we just skip if not available
-    });
-
     let args = Args::parse();
 
     println!("\n╔══════════════════════════════════════════════════════════════╗");
