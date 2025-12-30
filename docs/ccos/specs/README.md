@@ -136,6 +136,9 @@ CCOS complements open protocols. External tools and agents appear as capabilitie
   - **MCP Discovery**: ./docs/ccos/specs/031-mcp-discovery-unified-service.md
   - **Missing Capability Resolution**: ./docs/ccos/specs/032-missing-capability-resolution.md
   - **Importers & Synthesis**: ./docs/ccos/specs/033-capability-importers-and-synthesis.md
+  - **Two-Tier Governance**: ./docs/ccos/specs/035-two-tier-governance.md
+  - **Semantic Plan Judge**: ./docs/ccos/specs/041-semantic-plan-judge.md
+  - **Execution Hints**: ./docs/ccos/specs/040-execution-hints.md
 
 2) Understand the RTFS language
 - RTFS 2.0 Spec Hub: ./docs/rtfs-2.0/specs/README.md

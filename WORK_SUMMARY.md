@@ -87,3 +87,16 @@ A dedicated discovery agent that replaces hard-coded heuristics with intelligent
 - **Config-Driven Storage**: Aligned the TUI with `agent_config.toml`, ensuring discovered servers and RTFS manifests are saved in the correct `capabilities_dir` (e.g., `../capabilities`).
 - **MCP Session Stability**: Rewrote the MCP session handler to correctly handle SSE (Server-Sent Events) and `Accept` headers, ensuring compatibility with standard MCP servers.
 - **Files Modified**: `ccos/src/bin/ccos_explore.rs`, `ccos/src/mcp/discovery_session.rs`, `ccos/src/tui/state.rs`, `ccos/src/tui/panels.rs`.
+
+## 11. Implemented Semantic Plan Judge (Governance Phase)
+- **Goal**: Add a "common sense" check to the governance pipeline to verify that generated plans are semantically sound, safe, and aligned with the user's goal.
+- **Plan Judge**: Implemented `PlanJudge` in `ccos/src/governance_judge.rs` which uses an LLM to evaluate plans against three criteria: Goal Alignment, Semantic Safety, and Hallucination Detection.
+- **Governance Integration**: Integrated the judge into the `GovernanceKernel` pipeline (`ccos/src/governance_kernel.rs`). The judge runs as Step 5 in the `validate_and_execute` flow, after structural validation but before execution.
+- **Constitution Policy**: Added `SemanticJudgePolicy` to the `Constitution`, allowing users to enable/disable the judge, set risk thresholds, and configure fail-open behavior.
+- **Integration Testing**: Created a comprehensive integration test `ccos/tests/test_semantic_judge.rs` using a `MockLlmProvider` to verify that the judge correctly blocks unsafe plans (e.g., "launch-nukes") while allowing safe ones.
+- **Files Created/Modified**:
+    - `ccos/src/governance_judge.rs` (New)
+    - `ccos/src/governance_kernel.rs` (Modified)
+    - `ccos/src/orchestrator.rs` (Modified - added test helpers)
+    - `ccos/src/arbiter/delegating_arbiter.rs` (Modified - added test helpers)
+    - `ccos/tests/test_semantic_judge.rs` (New)

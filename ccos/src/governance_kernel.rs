@@ -21,6 +21,7 @@ use rtfs::runtime::values::Value;
 
 use super::intent_graph::IntentGraph;
 use super::orchestrator::Orchestrator;
+use super::governance_judge::PlanJudge;
 use super::types::Intent; // for delegation validation
 use super::types::{ExecutionResult, Plan, PlanBody, StorableIntent};
 use rtfs::runtime::error::RuntimeError;
@@ -161,6 +162,29 @@ pub struct Constitution {
     rules: Vec<ConstitutionRule>,
     /// Execution hint policy limits
     pub hint_policies: ExecutionHintPolicies,
+    /// Semantic judge configuration
+    pub semantic_judge_policy: SemanticJudgePolicy,
+}
+
+/// Policy for the semantic plan judge
+#[derive(Debug, Clone)]
+pub struct SemanticJudgePolicy {
+    /// Whether the semantic judge is enabled
+    pub enabled: bool,
+    /// Whether to fail open if the LLM is unavailable or fails
+    pub fail_open: bool,
+    /// Risk score threshold (0.0 to 1.0). Plans with risk > threshold are blocked.
+    pub risk_threshold: f64,
+}
+
+impl Default for SemanticJudgePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            fail_open: true,
+            risk_threshold: 0.7,
+        }
+    }
 }
 
 /// Policy limits for execution hints
@@ -224,6 +248,7 @@ impl Default for Constitution {
         Self {
             rules,
             hint_policies: ExecutionHintPolicies::default(),
+            semantic_judge_policy: SemanticJudgePolicy::default(),
         }
     }
 }
@@ -236,6 +261,7 @@ pub struct GovernanceKernel {
     constitution: Constitution,
     /// Optional reference to the DelegatingArbiter for centralized LLM access
     delegating_arbiter: RwLock<Option<Arc<DelegatingArbiter>>>,
+    plan_judge: PlanJudge,
 }
 
 impl GovernanceKernel {
@@ -246,6 +272,7 @@ impl GovernanceKernel {
             intent_graph,
             constitution: Constitution::default(),
             delegating_arbiter: RwLock::new(None),
+            plan_judge: PlanJudge::new(),
         }
     }
 
@@ -470,6 +497,87 @@ impl GovernanceKernel {
         Ok(LlmPromptResult::Safe)
     }
 
+    /// Set the semantic judge policy.
+    pub fn set_semantic_judge_policy(&mut self, policy: SemanticJudgePolicy) {
+        self.constitution.semantic_judge_policy = policy;
+    }
+
+    /// Performs a semantic judgment of the plan using an LLM.
+    /// This acts as a "common sense" check to ensure the plan aligns with the goal.
+    pub async fn judge_plan_semantically(
+        &self,
+        plan: &Plan,
+        intent: Option<&StorableIntent>,
+    ) -> RuntimeResult<()> {
+        let policy = &self.constitution.semantic_judge_policy;
+        if !policy.enabled {
+            return Ok(());
+        }
+
+        let arbiter_opt = {
+            self.delegating_arbiter
+                .read()
+                .ok()
+                .and_then(|guard| guard.clone())
+        };
+
+        let arbiter = match arbiter_opt {
+            Some(a) => a,
+            None => {
+                if policy.fail_open {
+                    log::debug!("[GovernanceKernel] No arbiter available for semantic judgment, skipping (fail-open)");
+                    return Ok(());
+                } else {
+                    return Err(RuntimeError::Generic("Semantic judgment required but no arbiter available (fail-closed)".to_string()));
+                }
+            }
+        };
+
+        let goal = intent.map(|i| i.goal.as_str()).unwrap_or("Unknown goal");
+        
+        // For now, we don't have a full resolution map in the Plan struct,
+        // but the PlanJudge can still evaluate the RTFS code against the goal.
+        let resolutions = HashMap::new(); 
+
+        log::info!("[GovernanceKernel] Performing semantic judgment for goal: '{}'", goal);
+        
+        match self.plan_judge.judge_plan(arbiter.llm_provider(), goal, plan, &resolutions).await {
+            Ok(judgment) => {
+                if judgment.allowed && judgment.risk_score <= policy.risk_threshold {
+                    log::info!(
+                        "[GovernanceKernel] Semantic judgment passed (Risk: {:.2}): {}",
+                        judgment.risk_score,
+                        judgment.reasoning
+                    );
+                    Ok(())
+                } else {
+                    let reason = if judgment.risk_score > policy.risk_threshold {
+                        format!(
+                            "Plan rejected by semantic judge: Risk score {:.2} exceeds threshold {:.2}. Reasoning: {}",
+                            judgment.risk_score, policy.risk_threshold, judgment.reasoning
+                        )
+                    } else {
+                        format!(
+                            "Plan rejected by semantic judge: {} (Risk Score: {:.2})",
+                            judgment.reasoning, judgment.risk_score
+                        )
+                    };
+                    log::warn!("[GovernanceKernel] {}", reason);
+                    Err(RuntimeError::Generic(reason))
+                }
+            }
+            Err(e) => {
+                if policy.fail_open {
+                    log::error!("[GovernanceKernel] Semantic judge failed: {}. Failing open.", e);
+                    Ok(())
+                } else {
+                    log::error!("[GovernanceKernel] Semantic judge failed: {}. Failing closed.", e);
+                    Err(RuntimeError::Generic(format!("Semantic judgment failed: {}", e)))
+                }
+            }
+        }
+    }
+
     /// The primary entry point for processing a plan from the Arbiter.
     /// It validates the plan and, if successful, passes it to the Orchestrator.
     pub async fn validate_and_execute(
@@ -496,11 +604,14 @@ impl GovernanceKernel {
         // Pass execution mode to validation logic
         self.validate_against_constitution(&safe_plan, &execution_mode)?;
 
-        // --- 5. Execution Mode Validation ---
+        // --- 5. Semantic Judgment (New Step) ---
+        self.judge_plan_semantically(&safe_plan, intent_opt.as_ref()).await?;
+
+        // --- 6. Execution Mode Validation ---
         // Validate execution mode is compatible with plan security requirements
         self.validate_execution_mode(&safe_plan, intent_opt.as_ref(), &execution_mode)?;
 
-        // --- 6. Attestation Verification (SEP-011) ---
+        // --- 7. Attestation Verification (SEP-011) ---
         // TODO: Verify the cryptographic attestations of all capabilities
         // called within the plan.
 
@@ -511,7 +622,7 @@ impl GovernanceKernel {
             Value::String(execution_mode.clone()),
         );
 
-        // --- 7a. Pre-execution Parse Validation with LLM Repair ---
+        // --- 8a. Pre-execution Parse Validation with LLM Repair ---
         // Validate RTFS syntax before execution, attempt LLM repair if parsing fails
         let mut plan_to_execute = safe_plan.clone();
         if let PlanBody::Rtfs(ref rtfs_code) = safe_plan.body {
@@ -577,7 +688,7 @@ impl GovernanceKernel {
             }
         }
 
-        // --- 7b. Execution ---
+        // --- 8b. Execution ---
         // If all checks pass, delegate execution to the Orchestrator.
         // Execution mode is passed via context cross_plan_params for RuntimeHost to use
         let result = self
@@ -585,7 +696,7 @@ impl GovernanceKernel {
             .execute_plan(&plan_to_execute, &context_with_mode)
             .await;
 
-        // --- 7c. Reactive Auto-Repair (fast pattern-based, then LLM dialog) ---
+        // --- 8c. Reactive Auto-Repair (fast pattern-based, then LLM dialog) ---
         // On runtime errors, attempt fast pattern-based repair first, then LLM dialog
         if let Err(ref e) = result {
             let error_msg = e.to_string();
