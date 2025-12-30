@@ -356,37 +356,55 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                                             let undefined_refs: Vec<&str> = code
                                                 .split_whitespace()
                                                 .filter(|word| {
-                                                    word.ends_with('?') 
-                                                    && !word.starts_with('(')
-                                                    && !code.contains(&format!("(defn {}", word))
-                                                    && !code.contains(&format!("(fn {} [", word))
+                                                    word.ends_with('?')
+                                                        && !word.starts_with('(')
+                                                        && !code
+                                                            .contains(&format!("(defn {}", word))
+                                                        && !code
+                                                            .contains(&format!("(fn {} [", word))
                                                 })
                                                 .collect();
-                                            
-                                            if !undefined_refs.is_empty() && undefined_refs.len() <= 5 {
+
+                                            if !undefined_refs.is_empty()
+                                                && undefined_refs.len() <= 5
+                                            {
                                                 // Only warn if there are a few - might be helper fns
                                                 issues.push(format!(
-                                                    "Potentially undefined functions: {:?}", 
+                                                    "Potentially undefined functions: {:?}",
                                                     &undefined_refs[..undefined_refs.len().min(3)]
                                                 ));
                                             }
 
                                             // 2. Check for direct side-effects without (call ...)
-                                            if code.contains("http://") || code.contains("https://") {
+                                            if code.contains("http://") || code.contains("https://")
+                                            {
                                                 if !code.contains("(call ") {
-                                                    issues.push("Contains URLs without (call ...) wrapper".to_string());
+                                                    issues.push(
+                                                        "Contains URLs without (call ...) wrapper"
+                                                            .to_string(),
+                                                    );
                                                 }
                                             }
 
                                             // 3. Check for hardcoded secrets
-                                            if code.contains("Bearer ") || code.contains("sk_") || code.contains("api_key") {
-                                                issues.push("May contain hardcoded credentials".to_string());
+                                            if code.contains("Bearer ")
+                                                || code.contains("sk_")
+                                                || code.contains("api_key")
+                                            {
+                                                issues.push(
+                                                    "May contain hardcoded credentials".to_string(),
+                                                );
                                             }
 
                                             if issues.is_empty() {
-                                                println!("   ✅ Static analysis: No issues detected");
+                                                println!(
+                                                    "   ✅ Static analysis: No issues detected"
+                                                );
                                                 println!("   � Capability: {}", description);
-                                                println!("   ✨ Code structure looks valid for: {}", cap_name);
+                                                println!(
+                                                    "   ✨ Code structure looks valid for: {}",
+                                                    cap_name
+                                                );
                                                 true
                                             } else {
                                                 println!("   ⚠️ Potential issues found:");
@@ -464,10 +482,18 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 let approval_queue = UnifiedApprovalQueue::new(storage);
 
                 // Collect high-risk capabilities from resolved steps using manifest metadata
+                // Use a set to deduplicate by capability ID (same cap used in multiple steps)
+                let mut seen_caps = std::collections::HashSet::new();
                 let mut high_risk_caps = Vec::new();
-                for (intent_id, resolution) in &result.resolutions {
+                for (_intent_id, resolution) in &result.resolutions {
                     // Get capability_id from the resolution enum
                     if let Some(cap_id) = resolution.capability_id() {
+                        // Skip if we've already processed this capability
+                        if seen_caps.contains(cap_id) {
+                            continue;
+                        }
+                        seen_caps.insert(cap_id.to_string());
+
                         // Query the capability manifest from the marketplace
                         if let Some(manifest) =
                             ccos.capability_marketplace.get_capability(cap_id).await
