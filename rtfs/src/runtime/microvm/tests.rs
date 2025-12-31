@@ -965,6 +965,34 @@ else:
 }
 
 #[test]
+fn test_detect_from_source_ruby_def_not_python() {
+    let ruby_source = "def hello\n  puts \"hi\"\nend\n";
+    assert_eq!(
+        ScriptLanguage::detect_from_source(ruby_source),
+        Some(ScriptLanguage::Ruby)
+    );
+}
+
+#[test]
+fn test_detect_from_source_python_def_detected() {
+    let python_source = "def hello():\n    print('hi')\n";
+    assert_eq!(
+        ScriptLanguage::detect_from_source(python_source),
+        Some(ScriptLanguage::Python)
+    );
+}
+
+#[test]
+fn test_detect_from_source_javascript_import_not_python() {
+    let js_source = "import x from 'y';\nconsole.log(x);\n";
+    // JS detection is heuristic; `console.log` should be enough here.
+    assert_eq!(
+        ScriptLanguage::detect_from_source(js_source),
+        Some(ScriptLanguage::JavaScript)
+    );
+}
+
+#[test]
 fn test_firecracker_large_payload_and_json_return() {
     let mut factory = MicroVMFactory::new();
     

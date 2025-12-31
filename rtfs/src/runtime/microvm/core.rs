@@ -105,20 +105,33 @@ impl ScriptLanguage {
         }
         
         // Heuristic detection based on syntax patterns
-        // Python
-        if source.contains("import ") || source.contains("def ") || source.contains("print(") {
-            return Some(ScriptLanguage::Python);
+        //
+        // IMPORTANT: Order matters. Some languages share keywords (e.g. Ruby and Python both use `def`).
+        // Prefer more-specific patterns first to avoid misclassification.
+        //
+
+        // Ruby (check before Python because both use `def`)
+        let ruby_has_def = source.contains("def ");
+        let ruby_has_end = source.contains("\nend") || trimmed.ends_with("end");
+        if source.contains("puts ") || (ruby_has_def && ruby_has_end) {
+            return Some(ScriptLanguage::Ruby);
         }
-        
-        // JavaScript
-        if source.contains("const ") || source.contains("let ") || source.contains("function ") 
-           || source.contains("console.log") || source.contains("require(") || source.contains("import {") {
+
+        // JavaScript (check before Python because both may contain `import`)
+        if source.contains("const ")
+            || source.contains("let ")
+            || source.contains("function ")
+            || source.contains("console.log")
+            || source.contains("require(")
+            || source.contains("import {")
+        {
             return Some(ScriptLanguage::JavaScript);
         }
-        
-        // Ruby
-        if source.contains("puts ") || source.contains("def ") && source.contains("end") {
-            return Some(ScriptLanguage::Ruby);
+
+        // Python
+        let python_has_def = source.contains("def ") && source.contains(':');
+        if source.contains("import ") || python_has_def || source.contains("print(") {
+            return Some(ScriptLanguage::Python);
         }
         
         None
