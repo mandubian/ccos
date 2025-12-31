@@ -819,8 +819,8 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
     fn scaffold_plan(&self, mut plan: Plan) -> RuntimeResult<Plan> {
         // Extract the original body text
         let original_body = match &plan.body {
-            PlanBody::Rtfs(text) => text.clone(),
-            PlanBody::Wasm(_) => {
+            PlanBody::Source(text) | PlanBody::Rtfs(text) => text.clone(),
+            PlanBody::Binary(_) | PlanBody::Wasm(_) => {
                 return Err(RuntimeError::Generic(
                     "Cannot scaffold binary plan body".to_string(),
                 ))

@@ -65,25 +65,27 @@ A dedicated discovery agent that replaces hard-coded heuristics with intelligent
     - Updated `synthesize_adapter` prompt to use generic filtering examples (`filter_records`) instead of `filter_issues`.
     - Changed the default demo goal to "Find the weather in Paris and filter for rain" to showcase generic capabilities.
 
-## 8. Next Steps (Future Enhancements)
+## 11. Generic Sandboxing & WASM Support (Phase E)
+- **Goal**: Refactor the sandboxing architecture to support multiple languages (Python, JS, Shell, Wasm, RTFS) and providers (Firecracker, Process, Wasmtime), and enable large payload passing.
+- **Generic Architecture**:
+    - Introduced `ScriptLanguage` and `Program::Binary` variants to `rtfs` core.
+    - Implemented automatic language detection from source code.
+    - Aligned CCOS `SandboxedExecutor` with the new generic structure.
+- **WASM Provider**:
+    - Implemented `WasmMicroVMProvider` using `wasmtime` and `WASI`.
+    - Enables native execution of WASM binaries with bidirectional JSON data exchange.
+- **Firecracker & Process Enhancements**:
+    - Fixed Firecracker stability issues (non-blocking I/O, permission fixes).
+    - Implemented large payload passing (up to 100KB+) via `RTFS_INPUT_FILE` environment variable.
+    - Firecracker now uses `debugfs` to inject `input.json` into the guest rootfs.
+- **Verification**:
+    - Created `ccos/examples/sandboxed_script_demo.rs` demonstrating Python execution in both local processes and Firecracker VMs.
+    - Verified WASM execution with native integration tests.
+    - Fixed regressions in `rtfs` microvm integration tests.
+
+## 12. Next Steps (Future Enhancements)
 - **Feedback-Driven Weighting**: Track which hints lead to successful discoveries
 - **Richer Query Expansion**: Use intent constraints, plan history, workspace metadata
 - **Planner Integration**: Have planner use agent directly for hint generation (currently agent is used internally by engine)
 - **Performance Monitoring**: Track discovery success rates and query effectiveness
-
-## 9. Implemented Phase D: Execution Repair Loop
-- **Goal**: Enable the agent to recover from runtime failures by feeding errors back to the LLM.
-- **Changes**:
-    - Modified `autonomous_agent_demo.rs` to wrap the final plan execution in a retry loop (max 3 attempts).
-    - Added `repair_plan` method to `IterativePlanner` which takes the failed plan and error message, and asks the LLM to fix the RTFS code.
-    - Verified the "happy path" still works correctly.
-- **Next**: Simulate failures to verify the repair logic actually fixes broken plans.
-
-## 10. TUI Interactive Discovery & Approvals (Phase 2 - Production Ready)
-- **Goal**: Provide a full-featured Terminal User Interface (TUI) for interactive discovery, introspection, and approval of new capabilities.
-- **Approvals View**: Implemented a new view for managing the lifecycle of discovered servers (Pending, Approved, Rejected).
-- **Interactive Tool Selection**: Users can now browse introspection results, select specific tools, and save them to the pending queue with a single key press ('p').
-- **Auth Token Management**: Added interactive authentication token prompts. The TUI detects 401/403 errors, pops up an input box for the required token (e.g., `GITHUB_MCP_TOKEN`), and retries the operation automatically.
-- **Config-Driven Storage**: Aligned the TUI with `agent_config.toml`, ensuring discovered servers and RTFS manifests are saved in the correct `capabilities_dir` (e.g., `../capabilities`).
-- **MCP Session Stability**: Rewrote the MCP session handler to correctly handle SSE (Server-Sent Events) and `Accept` headers, ensuring compatibility with standard MCP servers.
-- **Files Modified**: `ccos/src/bin/ccos_explore.rs`, `ccos/src/mcp/discovery_session.rs`, `ccos/src/tui/state.rs`, `ccos/src/tui/panels.rs`.
+- **WASM Capability Marketplace**: Add support for discovering and registering WASM-based capabilities directly from the TUI.

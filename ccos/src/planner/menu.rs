@@ -303,5 +303,6 @@ fn provider_to_label(provider: &ProviderType) -> String {
         ProviderType::Registry(_) => "registry".to_string(),
         ProviderType::A2A(_) => "agent".to_string(),
         ProviderType::Native(_) => "native".to_string(),
+        ProviderType::Sandboxed(_) => "sandboxed".to_string(),
     }
 }
