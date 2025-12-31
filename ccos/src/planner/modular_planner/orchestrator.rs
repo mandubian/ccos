@@ -2757,7 +2757,7 @@ impl ModularPlanner {
 
         for (intent_id, resolution) in resolutions {
             // Extract synthesized RTFS code from resolution
-            let (cap_id, rtfs_code, description) = match resolution {
+            let (_cap_id, rtfs_code, description) = match resolution {
                 ResolvedCapability::Synthesized {
                     capability_id,
                     rtfs_code,
@@ -2766,7 +2766,7 @@ impl ModularPlanner {
                     // Find the matching sub-intent for description
                     let desc = sub_intents
                         .iter()
-                        .find(|si| intent_id.contains(&si.description) || si.description.len() > 10)
+                        .find(|si| intent_id.contains(&si.description))
                         .map(|si| si.description.clone())
                         .unwrap_or_else(|| capability_id.clone());
                     (capability_id.clone(), rtfs_code.clone(), desc)
@@ -2776,7 +2776,7 @@ impl ModularPlanner {
                 } if suggested_action.contains("Synth-or-enqueue") => {
                     // Find the matching sub-intent
                     if let Some(si) = sub_intents.iter().find(|si| {
-                        intent_id.ends_with(&format!("{:x}", fnv1a64(&si.description) as u32))
+                        intent_id.ends_with(&format!("{:016x}", fnv1a64(&si.description)))
                     }) {
                         // Check if there's inline RTFS in the extracted params
                         if let Some(inline_code) = si.extracted_params.get("_inline_rtfs") {
@@ -2792,19 +2792,19 @@ impl ModularPlanner {
                 _ => continue,
             };
 
-            // Skip if capability already exists
-            if storage.exists(&cap_id) {
-                log::debug!(
-                    "Synthesized capability already exists, skipping: {}",
-                    cap_id
-                );
-                continue;
-            }
-
-            // Create and save the synthesized capability
+            // Create the synthesized capability first to get its canonical ID
             let capability = SynthesizedCapability::new(&description, &rtfs_code)
                 .with_metadata("source_goal", goal)
                 .with_metadata("source_intent_id", intent_id);
+
+            // Skip if capability already exists (use capability.id for consistent dedup check)
+            if storage.exists(&capability.id) {
+                log::debug!(
+                    "Synthesized capability already exists, skipping: {}",
+                    capability.id
+                );
+                continue;
+            }
 
             match storage.save(&capability) {
                 Ok(path) => {
@@ -2817,7 +2817,7 @@ impl ModularPlanner {
                 Err(e) => {
                     log::warn!(
                         "Failed to save synthesized capability '{}': {}",
-                        cap_id,
+                        capability.id,
                         e
                     );
                 }
