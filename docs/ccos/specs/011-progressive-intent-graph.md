@@ -1,5 +1,6 @@
-# Progressive Intent Graph & Semantic Relationship Inference
+# CCOS Specification 011: Progressive Intent Graph & Semantic Relationship Inference
 
+**Status: Not Yet Implemented** <!-- not-yet-impl -->
 Status: Draft (Phase 0 — Spec Committed)
 Owner: TBD
 Last Updated: 2025-10-02

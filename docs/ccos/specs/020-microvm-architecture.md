@@ -1,5 +1,6 @@
 # CCOS Specification 020: MicroVM Architecture (RTFS 2.0 Edition)
 
+**Status: Not Yet Implemented** <!-- not-yet-impl -->
 **Status:** Draft for Review  
 **Version:** 1.0  
 **Date:** 2025-09-20  

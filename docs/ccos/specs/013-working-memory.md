@@ -1,6 +1,6 @@
 # CCOS Specification 013: Working Memory (RTFS 2.0 Edition)
 
-**Status:** Draft for Review  
+**Status: Implemented**
 **Version:** 1.0  
 **Date:** 2025-09-20  
 **Related:** [000: Architecture](./000-ccos-architecture-new.md), [003: Causal Chain](./003-causal-chain-new.md), [009: Context Horizon](./009-context-horizon-new.md)  

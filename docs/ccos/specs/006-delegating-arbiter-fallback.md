@@ -1,4 +1,7 @@
-# Delegating Arbiter: RTFS-First with JSON Fallback
+# CCOS Specification 006: Delegating Arbiter RTFS-First with JSON Fallback
+
+**Status: Implemented**
+**Scope**: Defines the parsing strategy for Arbiter responses (RTFS primary, JSON fallback).
 
 ## Overview
 

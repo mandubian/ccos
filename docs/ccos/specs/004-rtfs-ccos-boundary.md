@@ -1,4 +1,7 @@
-# RTFS ⇄ CCOS Purity Boundary and Prelude
+# CCOS Specification 004: RTFS ⇄ CCOS Purity Boundary and Prelude
+
+**Status: Implemented**
+**Scope**: Defines the separation between pure RTFS runtime and effectful CCOS host capabilities.
 
 This document specifies the separation of concerns between RTFS (runtime + language) and CCOS (host) and how CCOS provides effectful helpers via a host-owned prelude.
 

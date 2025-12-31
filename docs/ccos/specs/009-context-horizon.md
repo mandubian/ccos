@@ -1,6 +1,6 @@
 # CCOS Specification 009: Context Horizon (RTFS 2.0 Edition)
 
-**Status:** Draft for Review  
+**Status: Implemented**
 **Version:** 1.0  
 **Date:** 2025-09-20  
 **Related:** [000: Architecture](./000-ccos-architecture-new.md), [001: Intent Graph](./001-intent-graph-new.md), [013: Working Memory](./013-working-memory-new.md), [006: Arbiter](./006-arbiter-and-cognitive-control-new.md)  
