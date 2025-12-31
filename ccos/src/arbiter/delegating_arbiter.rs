@@ -319,6 +319,61 @@ impl AgentRegistry {
 }
 
 impl DelegatingArbiter {
+    /// Get the LLM provider
+    pub fn llm_provider(&self) -> &dyn LlmProvider {
+        self.llm_provider.as_ref()
+    }
+
+    /// Create a new delegating arbiter for testing
+    pub fn for_test(
+        llm_provider: Box<dyn LlmProvider>,
+        capability_marketplace: Arc<CapabilityMarketplace>,
+        intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
+    ) -> Self {
+        let prompt_path = if std::path::Path::new("../assets/prompts/arbiter").exists() {
+            "../assets/prompts/arbiter"
+        } else {
+            "assets/prompts/arbiter"
+        };
+        let prompt_store = FilePromptStore::new(prompt_path);
+        let prompt_manager = PromptManager::new(prompt_store);
+
+        let llm_config = LlmConfig {
+            provider_type: crate::arbiter::llm_provider::LlmProviderType::Stub,
+            model: "stub".to_string(),
+            api_key: None,
+            base_url: None,
+            max_tokens: None,
+            temperature: None,
+            timeout_seconds: None,
+            prompts: None,
+            retry_config: RetryConfig::default(),
+        };
+
+        let delegation_config = DelegationConfig {
+            enabled: false,
+            threshold: 0.0,
+            max_candidates: 0,
+            min_skill_hits: None,
+            #[allow(deprecated)]
+            agent_registry: AgentRegistryConfig::default(),
+            adaptive_threshold: None,
+            print_extracted_intent: None,
+            print_extracted_plan: None,
+        };
+
+        Self {
+            llm_config,
+            delegation_config,
+            llm_provider,
+            capability_marketplace,
+            intent_graph,
+            adaptive_threshold_calculator: None,
+            prompt_manager,
+            working_memory: None,
+        }
+    }
+
     /// Create a new delegating arbiter with the given configuration
     pub async fn new(
         llm_config: LlmConfig,
