@@ -1993,6 +1993,64 @@ impl ModularPlanner {
             }
         }
 
+        // Handle multiple step references in a string like "step_0 step_1"
+        // Convert to (str step_1 " " step_2) RTFS expression
+        if !value.starts_with('(') {
+            let step_refs: Vec<&str> = RTFS_STEP_IN_EXPR
+                .find_iter(value)
+                .map(|m| m.as_str())
+                .collect();
+
+            if step_refs.len() >= 2 {
+                // Multiple step references found - build a (str ...) expression
+                let mut parts: Vec<String> = Vec::new();
+                let mut remaining = value.to_string();
+
+                for step_ref in step_refs {
+                    // Find the step ref in remaining string
+                    if let Some(pos) = remaining.find(step_ref) {
+                        // Add text before the step ref (if any)
+                        let before = remaining[..pos].to_string();
+                        if !before.is_empty() {
+                            parts.push(format!("\"{}\"", before.replace('"', "\\\"")));
+                        }
+
+                        // Convert step_N (0-indexed from LLM) to actual binding
+                        if let Some(caps) = RTFS_STEP_VAR.captures(step_ref) {
+                            if let Some(idx_str) = caps.get(1) {
+                                if let Ok(idx) = idx_str.as_str().parse::<usize>() {
+                                    if idx < previous_bindings.len() {
+                                        parts.push(previous_bindings[idx].0.clone());
+                                    } else {
+                                        // Keep original if index out of bounds
+                                        parts.push(step_ref.to_string());
+                                    }
+                                } else {
+                                    parts.push(step_ref.to_string());
+                                }
+                            } else {
+                                parts.push(step_ref.to_string());
+                            }
+                        } else {
+                            parts.push(step_ref.to_string());
+                        }
+
+                        // Continue with remaining text after this step ref
+                        remaining = remaining[pos + step_ref.len()..].to_string();
+                    }
+                }
+
+                // Add any remaining text after the last step ref
+                if !remaining.is_empty() {
+                    parts.push(format!("\"{}\"", remaining.replace('"', "\\\"")));
+                }
+
+                if parts.len() > 1 {
+                    return format!(":{} (str {})", key, parts.join(" "));
+                }
+            }
+        }
+
         // Check if schema tells us this should be a number
         if let Some(schema) = schema {
             if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
