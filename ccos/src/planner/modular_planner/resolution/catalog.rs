@@ -875,8 +875,12 @@ impl ResolutionStrategy for CatalogResolution {
             }
 
             return Ok(ResolvedCapability::Local {
-                capability_id: cap.id,
+                capability_id: cap.id.clone(),
                 arguments,
+                input_schema: cap
+                    .input_schema
+                    .as_ref()
+                    .and_then(|s| serde_json::from_str(s).ok()),
                 confidence: score,
             });
         }

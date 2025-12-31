@@ -1,6 +1,7 @@
 use crate::capability_marketplace::types::CapabilityDiscovery;
 use crate::capability_marketplace::types::{
-    CapabilityManifest, CapabilityMarketplace, LocalCapability, MCPCapability, ProviderType,
+    CapabilityManifest, CapabilityMarketplace, EffectType, LocalCapability, MCPCapability,
+    ProviderType,
 };
 use crate::mcp::types::DiscoveredMCPTool;
 use crate::synthesis::mcp_introspector::MCPIntrospector;
@@ -505,6 +506,7 @@ impl MCPDiscoveryProvider {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         }
     }
 
@@ -2093,6 +2095,7 @@ impl MCPDiscoveryProvider {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         })
     }
 
@@ -2574,6 +2577,7 @@ impl MCPDiscoveryProvider {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         })
     }
 

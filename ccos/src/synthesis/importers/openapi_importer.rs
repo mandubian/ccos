@@ -1,6 +1,6 @@
 use crate::capability_marketplace::types::{
-    CapabilityManifest, CapabilityProvenance, OpenApiAuth, OpenApiCapability, OpenApiOperation,
-    ProviderType,
+    CapabilityManifest, CapabilityProvenance, EffectType, OpenApiAuth, OpenApiCapability,
+    OpenApiOperation, ProviderType,
 };
 use crate::synthesis::introspection::auth_injector::AuthInjector;
 use crate::utils::fs::find_workspace_root;
@@ -732,6 +732,7 @@ impl OpenAPIImporter {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         })
     }
 
@@ -1180,6 +1181,7 @@ impl OpenAPIImporter {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         })
     }
 

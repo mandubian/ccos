@@ -5,7 +5,7 @@
 //! - Compare against CapabilityMarketplace to identify missing capabilities
 //! - Attach metadata and emit audit events
 
-use crate::capability_marketplace::types::CapabilityManifest;
+use crate::capability_marketplace::types::{CapabilityManifest, EffectType};
 use regex::Regex;
 use rtfs::runtime::error::RuntimeResult;
 use std::collections::{HashMap, HashSet};
@@ -286,6 +286,7 @@ mod tests {
                 agent_metadata: None,
                 domains: Vec::new(),
                 categories: Vec::new(),
+                effect_type: EffectType::default(),
             },
             CapabilityManifest {
                 id: "travel.hotels".to_string(),
@@ -311,6 +312,7 @@ mod tests {
                 agent_metadata: None,
                 domains: Vec::new(),
                 categories: Vec::new(),
+                effect_type: EffectType::default(),
             },
         ];
 

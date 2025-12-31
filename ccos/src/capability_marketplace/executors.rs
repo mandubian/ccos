@@ -15,12 +15,6 @@ use std::net::IpAddr;
 use std::time::Duration;
 use urlencoding::encode;
 
-#[async_trait(?Send)]
-pub trait CapabilityExecutor: Send + Sync {
-    fn provider_type_id(&self) -> TypeId;
-    async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value>;
-}
-
 use crate::capabilities::native_provider::NativeCapabilityProvider;
 use crate::capabilities::SessionPoolManager;
 use std::sync::Arc;
@@ -28,6 +22,42 @@ use tokio::sync::RwLock;
 use rtfs::runtime::microvm::{ExecutionContext, MicroVMFactory, Program, ScriptLanguage};
 use std::sync::Mutex;
 use uuid::Uuid;
+
+/// Execution context passed to all capability executors.
+/// Provides access to metadata, session management, and capability identification.
+pub struct ExecutionContext<'a> {
+    /// Full capability ID (e.g., "mcp.github/github-mcp.list_issues")
+    pub capability_id: &'a str,
+    /// Metadata from the capability manifest
+    pub metadata: &'a HashMap<String, String>,
+    /// Optional session pool for session-managed execution
+    pub session_pool: Option<Arc<SessionPoolManager>>,
+}
+
+impl<'a> ExecutionContext<'a> {
+    pub fn new(
+        capability_id: &'a str,
+        metadata: &'a HashMap<String, String>,
+        session_pool: Option<Arc<SessionPoolManager>>,
+    ) -> Self {
+        Self {
+            capability_id,
+            metadata,
+            session_pool,
+        }
+    }
+}
+
+#[async_trait(?Send)]
+pub trait CapabilityExecutor: Send + Sync {
+    fn provider_type_id(&self) -> TypeId;
+    async fn execute(
+        &self,
+        provider: &ProviderType,
+        inputs: &Value,
+        context: &ExecutionContext<'_>,
+    ) -> RuntimeResult<Value>;
+}
 
 pub struct MCPExecutor {
     pub session_pool: Arc<RwLock<Option<Arc<SessionPoolManager>>>>,
@@ -38,12 +68,21 @@ impl CapabilityExecutor for MCPExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<MCPCapability>()
     }
-    async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
+    async fn execute(
+        &self,
+        provider: &ProviderType,
+        inputs: &Value,
+        context: &ExecutionContext<'_>,
+    ) -> RuntimeResult<Value> {
         if let ProviderType::MCP(mcp) = provider {
-            // eprintln!("[MCPExecutor] Executing tool '{}' on server '{}'", mcp.tool_name, mcp.server_url);
-            // eprintln!("[MCPExecutor] Inputs type: {}", inputs.type_name());
+            // Use session pool from context if available
+            if let Some(pool) = &context.session_pool {
+                // Use context metadata which includes mcp_server_endpoint, mcp_server_name, etc.
+                let args = vec![inputs.clone()];
+                return pool.execute_with_session(context.capability_id, context.metadata, &args);
+            }
 
-            // Resolve auth token: inputs > provider > env
+            // Fallback: Resolve auth token from inputs > provider > context metadata > env
             let auth_token_from_inputs = if let Value::Map(map) = inputs {
                 map.get(&MapKey::Keyword(rtfs::ast::Keyword(
                     "auth-token".to_string(),
@@ -66,28 +105,8 @@ impl CapabilityExecutor for MCPExecutor {
 
             let auth_token = auth_token_from_inputs
                 .or_else(|| mcp.auth_token.clone())
+                .or_else(|| context.metadata.get("mcp_auth_token").cloned())
                 .or_else(|| std::env::var("MCP_AUTH_TOKEN").ok());
-
-            // Try to use SessionPoolManager if available
-            let guard = self.session_pool.read().await;
-            if let Some(pool) = guard.as_ref() {
-                // eprintln!("[MCPExecutor] Using SessionPoolManager");
-                let mut metadata = HashMap::new();
-                metadata.insert("mcp_server_url".to_string(), mcp.server_url.clone());
-                metadata.insert("mcp_tool_name".to_string(), mcp.tool_name.clone());
-                metadata.insert("mcp_timeout_ms".to_string(), mcp.timeout_ms.to_string());
-
-                if let Some(token) = &auth_token {
-                    metadata.insert("mcp_auth_token".to_string(), token.clone());
-                }
-
-                let pool_clone = pool.clone();
-                let tool_name = mcp.tool_name.clone();
-                let inputs_clone = inputs.clone();
-
-                // Execute via session pool
-                return pool_clone.execute_with_session(&tool_name, &metadata, &[inputs_clone]);
-            }
 
             // No session pool - do direct MCP execution with initialization
             // Convert RTFS Value to JSON, preserving string/keyword map keys
@@ -593,7 +612,12 @@ impl CapabilityExecutor for A2AExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<A2ACapability>()
     }
-    async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
+    async fn execute(
+        &self,
+        provider: &ProviderType,
+        inputs: &Value,
+        _context: &ExecutionContext<'_>,
+    ) -> RuntimeResult<Value> {
         if let ProviderType::A2A(a2a) = provider {
             match a2a.protocol.as_str() {
                 "http" | "https" => self.execute_a2a_http(a2a, inputs).await,
@@ -674,7 +698,12 @@ impl CapabilityExecutor for LocalExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<LocalCapability>()
     }
-    async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
+    async fn execute(
+        &self,
+        provider: &ProviderType,
+        inputs: &Value,
+        _context: &ExecutionContext<'_>,
+    ) -> RuntimeResult<Value> {
         if let ProviderType::Local(local) = provider {
             (local.handler)(inputs)
         } else {
@@ -692,7 +721,12 @@ impl CapabilityExecutor for RegistryExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<RegistryCapability>()
     }
-    async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
+    async fn execute(
+        &self,
+        provider: &ProviderType,
+        inputs: &Value,
+        _context: &ExecutionContext<'_>,
+    ) -> RuntimeResult<Value> {
         if let ProviderType::Registry(registry_cap) = provider {
             let args = match inputs {
                 Value::List(list) => list.clone(),
@@ -722,7 +756,12 @@ impl CapabilityExecutor for OpenApiExecutor {
         TypeId::of::<OpenApiCapability>()
     }
 
-    async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
+    async fn execute(
+        &self,
+        provider: &ProviderType,
+        inputs: &Value,
+        _context: &ExecutionContext<'_>,
+    ) -> RuntimeResult<Value> {
         if let ProviderType::OpenApi(openapi) = provider {
             self.execute_openapi(openapi, inputs).await
         } else {
@@ -1128,7 +1167,12 @@ impl CapabilityExecutor for HttpExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<HttpCapability>()
     }
-    async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
+    async fn execute(
+        &self,
+        provider: &ProviderType,
+        inputs: &Value,
+        _context: &ExecutionContext<'_>,
+    ) -> RuntimeResult<Value> {
         if let ProviderType::Http(http) = provider {
             // Test-only shortcut pattern kept here if needed in tests
             // Normal path mirrors marketplace HTTP logic
@@ -1230,7 +1274,12 @@ impl CapabilityExecutor for SandboxedExecutor {
         TypeId::of::<SandboxedCapability>()
     }
 
-    async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
+    async fn execute(
+        &self,
+        provider: &ProviderType,
+        inputs: &Value,
+        _context: &ExecutionContext<'_>,
+    ) -> RuntimeResult<Value> {
         if let ProviderType::Sandboxed(sandboxed) = provider {
             let mut factory = self.factory.lock().map_err(|e| {
                 RuntimeError::Generic(format!("SandboxedExecutor factory mutex poisoned: {}", e))
@@ -1302,15 +1351,20 @@ pub enum ExecutorVariant {
 }
 
 impl ExecutorVariant {
-    pub async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
+    pub async fn execute(
+        &self,
+        provider: &ProviderType,
+        inputs: &Value,
+        context: &ExecutionContext<'_>,
+    ) -> RuntimeResult<Value> {
         match self {
-            ExecutorVariant::MCP(e) => e.execute(provider, inputs).await,
-            ExecutorVariant::A2A(e) => e.execute(provider, inputs).await,
-            ExecutorVariant::Local(e) => e.execute(provider, inputs).await,
-            ExecutorVariant::Http(e) => e.execute(provider, inputs).await,
-            ExecutorVariant::OpenApi(e) => e.execute(provider, inputs).await,
-            ExecutorVariant::Registry(e) => e.execute(provider, inputs).await,
-            ExecutorVariant::Sandboxed(e) => e.execute(provider, inputs).await,
+            ExecutorVariant::MCP(e) => e.execute(provider, inputs, context).await,
+            ExecutorVariant::A2A(e) => e.execute(provider, inputs, context).await,
+            ExecutorVariant::Local(e) => e.execute(provider, inputs, context).await,
+            ExecutorVariant::Http(e) => e.execute(provider, inputs, context).await,
+            ExecutorVariant::OpenApi(e) => e.execute(provider, inputs, context).await,
+            ExecutorVariant::Registry(e) => e.execute(provider, inputs, context).await,
+            ExecutorVariant::Sandboxed(e) => e.execute(provider, inputs, context).await,
             ExecutorVariant::Native(native_provider) => {
                 // For Native capabilities, the provider type contains the capability ID
                 // and we dispatch through the NativeCapabilityProvider

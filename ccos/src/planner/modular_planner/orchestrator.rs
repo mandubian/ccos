@@ -559,6 +559,23 @@ impl ModularPlanner {
         self
     }
 
+    /// Enable safe execution with approval queue for human-in-the-loop governance
+    pub fn with_safe_executor_and_approval(
+        mut self,
+        marketplace: Arc<CapabilityMarketplace>,
+        _approval_queue: std::sync::Arc<
+            crate::approval::UnifiedApprovalQueue<
+                crate::approval::storage_file::FileApprovalStorage,
+            >,
+        >,
+        _constraints: Option<crate::agents::identity::AgentConstraints>,
+    ) -> Self {
+        // For now, just use the basic safe executor
+        // TODO: Wire approval queue into SafeCapabilityExecutor when governance gates are enabled
+        self.safe_executor = Some(SafeCapabilityExecutor::new(marketplace));
+        self
+    }
+
     /// Emit a trace event - pushes to the Vec AND calls the callback if set.
     /// This enables real-time streaming of trace events to the TUI.
     #[allow(dead_code)]
@@ -1011,6 +1028,7 @@ impl ModularPlanner {
                                         ResolvedCapability::Local {
                                             capability_id: cid,
                                             arguments: HashMap::new(),
+                                            input_schema: None,
                                             confidence: 1.0,
                                         },
                                     );
@@ -1679,11 +1697,15 @@ impl ModularPlanner {
                             // Get consumer's expected input schema
                             let consumer_id = &intent_ids[consumer_idx];
                             let consumer_schema = resolutions.get(consumer_id).and_then(|r| {
-                                if let ResolvedCapability::Remote { input_schema, .. } = r {
-                                    input_schema.as_ref()
-                                } else {
-                                    // Synthesized and other types don't have input_schema
-                                    None
+                                match r {
+                                    ResolvedCapability::Remote { input_schema, .. } => {
+                                        input_schema.as_ref()
+                                    }
+                                    ResolvedCapability::Local { input_schema, .. } => {
+                                        input_schema.as_ref()
+                                    }
+                                    // Synthesized and BuiltIn types don't have input_schema
+                                    _ => None,
                                 }
                             });
 
@@ -1729,6 +1751,24 @@ impl ModularPlanner {
                                         | Some("entries")
                                 ) {
                                     synthetic_target_schema = Some(json!({ "type": "array" }));
+                                    synthetic_target_schema.as_ref()
+                                } else if matches!(
+                                    consumer_param_name.as_deref(),
+                                    Some("perPage")
+                                        | Some("per_page")
+                                        | Some("page")
+                                        | Some("pageSize")
+                                        | Some("page_size")
+                                        | Some("count")
+                                        | Some("limit")
+                                        | Some("offset")
+                                        | Some("max")
+                                        | Some("min")
+                                        | Some("size")
+                                        | Some("num")
+                                        | Some("number")
+                                ) {
+                                    synthetic_target_schema = Some(json!({ "type": "number" }));
                                     synthetic_target_schema.as_ref()
                                 } else {
                                     None
@@ -2735,6 +2775,17 @@ impl ModularPlanner {
             return None;
         }
 
+        // Reject call expressions - adapters should transform data, not call capabilities
+        // This prevents LLM hallucinations where it tries to re-invoke APIs instead of
+        // transforming existing data
+        if adapter.contains("(call ") {
+            log::warn!(
+                "[request_llm_adapter] LLM returned capability call instead of data adapter: {}",
+                adapter
+            );
+            return None;
+        }
+
         // Sanitize common LLM patterns that RTFS doesn't support
         adapter = sanitize_llm_rtfs(&adapter);
 
@@ -2880,14 +2931,21 @@ fn build_llm_adapter_prompt(
          1. Use 'input' as the variable for the upstream data.\n\
          2. RETURN ONLY the expression. No markdown, no commentary.\n\
          3. NO Clojure namespaces (e.g. avoid 'str/split', just use 'split').\n\
-            4. Regex IS supported. Use: (re-matches pattern text), (re-find pattern text), (re-seq pattern text).\n\
-               Pattern syntax follows Rust regex. Example: (re-matches \"[A-Z]+\" title)\n\
+         4. Regex IS supported. Use: (re-matches pattern text), (re-find pattern text), (re-seq pattern text).\n\
+            Pattern syntax follows Rust regex. Example: (re-matches \"[A-Z]+\" title)\n\
          5. RTFS 'get' syntax: (get map :key) NOT (get :key map) - map comes FIRST.\n\
-         6. Use RTFS functions: 'map', 'filter', 'get', 'assoc', 'str', 'split', 'substring', 'join', 're-matches', 're-find', 're-seq'.\n\
-         7. IMPORTANT: If INPUT DATA TYPE is 'Map' but you need to iterate, you MUST extract the array field first (e.g. (get input :issues)).\n\
-         8. IMPORTANT: If INPUT DATA TYPE is 'List', work on it directly with 'map' or 'filter'.\n\n\
-         Example (if input is already a list of issues):\n\
-         (map (fn [x] (let [t (get x :title)] (assoc x :title (str (substring t 1) (substring t 0 1) \"ay\")))) input)",
+         6. Use RTFS functions: 'map', 'filter', 'get', 'assoc', 'str', 'split', 'substring', 'join', 're-matches', 're-find', 're-seq', 'group-by'.\n\
+         7. IMPORTANT: If INPUT DATA TYPE is 'Map' but you need to iterate, EXTRACT the array field first (e.g. (get input :issues)).\n\
+         8. IMPORTANT: If INPUT DATA TYPE is 'List', work on it directly with 'map' or 'filter'.\n\
+         9. FORBIDDEN: Do NOT use (call ...). This is a DATA ADAPTER, not a capability invocation. Transform existing data only.\n\
+         10. FORBIDDEN: Do NOT re-fetch data. The data is already in 'input'. Just transform it.\n\n\
+         GOOD examples:\n\
+           - (get input :issues)\n\
+           - (map (fn [x] (get x :title)) input)\n\
+           - (filter (fn [x] (= (get x :state) \"open\")) (get input :issues))\n\n\
+         BAD examples (NEVER do this):\n\
+           - (call \"github-mcp.list_issues\" {{...}})  ← FORBIDDEN\n\
+           - (call :capability.id {{...}})              ← FORBIDDEN",
         target_desc,
         input_type_desc,
         bindings_str,

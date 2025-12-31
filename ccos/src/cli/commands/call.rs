@@ -1,5 +1,4 @@
 use crate::capabilities::registry::CapabilityRegistry;
-use crate::capability_marketplace::CapabilityMarketplace;
 use crate::cli::CliContext;
 use crate::cli::OutputFormat;
 use crate::cli::OutputFormatter;

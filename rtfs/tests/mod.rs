@@ -13,6 +13,7 @@ mod ir_step_params_tests;
 mod parser;
 mod realistic_model_tests;
 mod secure_stdlib_comprehensive_tests;
+mod test_union_types;
 // mod set_form_tests; // Removed - set! was removed in migration
 mod simple_secure_stdlib_test;
 mod stdlib_e2e_tests;

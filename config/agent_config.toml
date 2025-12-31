@@ -198,7 +198,7 @@ max_attempts = 3
 verbose_logging = false
 
 [llm_profiles]
-default = "openrouter_free:balanced"
+default = "openrouter_free:balanced_ds_32"
 
 # Stub profile - ONLY for testing (not realistic)
 # To use: explicitly pass --profile stub/dev
@@ -216,7 +216,7 @@ name = "openrouter_free"
 provider = "openrouter"
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
-default = "balanced_gfl"
+default = "balanced"
 
   [[llm_profiles.model_sets.models]]
   name = "fast"

@@ -11,24 +11,31 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 /// Constraints on what an agent can do autonomously.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct AgentConstraints {
     /// Maximum autonomy level (0-4, mirrors SelfProgrammingConfig trust levels)
+    #[serde(default = "default_max_autonomy_level")]
     pub max_autonomy_level: u8,
     /// Domains requiring human approval (e.g., "finance", "pii", "external_apis")
+    #[serde(default)]
     pub require_approval_domains: Vec<String>,
     /// Maximum concurrent tasks this agent can handle
+    #[serde(default = "default_max_concurrent_tasks")]
     pub max_concurrent_tasks: usize,
+    /// Effects this agent is allowed to use (if empty, uses static allowlist)
+    #[serde(default)]
+    pub allowed_effects: Vec<String>,
+    /// Effects this agent is explicitly denied from using
+    #[serde(default)]
+    pub denied_effects: Vec<String>,
 }
 
-impl Default for AgentConstraints {
-    fn default() -> Self {
-        Self {
-            max_autonomy_level: 2, // Trusted but not full autonomy
-            require_approval_domains: vec![],
-            max_concurrent_tasks: 5,
-        }
-    }
+fn default_max_autonomy_level() -> u8 {
+    2
+}
+
+fn default_max_concurrent_tasks() -> usize {
+    5
 }
 
 /// Persistent agent identity with capabilities and constraints.

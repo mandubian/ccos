@@ -1764,16 +1764,20 @@ fn load_approvals_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
     let _ = event_tx.send(TuiEvent::ApprovalsLoading);
     
     tokio::task::spawn_local(async move {
-        use ccos::discovery::approval_queue::ApprovalQueue;
-        
-        let queue_base = get_approval_queue_base();
-        let queue = ApprovalQueue::new(&queue_base);
+        let queue = match create_unified_queue() {
+            Ok(q) => q,
+            Err(e) => {
+                let _ = event_tx.send(TuiEvent::ApprovalsError(format!("Failed to create queue: {}", e)));
+                return;
+            }
+        };
         
         // Load pending servers
-        match queue.list_pending() {
-            Ok(pending) => {
-                let pending_entries: Vec<PendingServerEntry> = pending
-                    .into_iter()
+        match queue.list_pending_servers().await {
+            Ok(pending_requests) => {
+                let pending_entries: Vec<PendingServerEntry> = pending_requests
+                    .iter()
+                    .filter_map(|r| r.to_pending_discovery())
                     .map(|p| {
                         // Check if auth token is available
                         let auth_status = if let Some(ref env_var) = p.server_info.auth_env_var {
@@ -1808,10 +1812,11 @@ fn load_approvals_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
         }
         
         // Load approved servers
-        match queue.list_approved() {
-            Ok(approved) => {
-                let approved_entries: Vec<ApprovedServerEntry> = approved
-                    .into_iter()
+        match queue.list_approved_servers().await {
+            Ok(approved_requests) => {
+                let approved_entries: Vec<ApprovedServerEntry> = approved_requests
+                    .iter()
+                    .filter_map(|r| r.to_approved_discovery())
                     .map(|a| {
                         // Compute these before moving other fields
                         let error_rate = a.error_rate();
@@ -1849,12 +1854,17 @@ fn approve_server_async(
     let _ = event_tx.send(TuiEvent::ApprovalsLoading);
     
     tokio::task::spawn_local(async move {
-        use ccos::discovery::approval_queue::ApprovalQueue;
+        use ccos::approval::ApprovalAuthority;
         
-        let queue_base = get_approval_queue_base();
-        let queue = ApprovalQueue::new(&queue_base);
+        let queue = match create_unified_queue() {
+            Ok(q) => q,
+            Err(e) => {
+                let _ = event_tx.send(TuiEvent::ApprovalsError(format!("Failed to create queue: {}", e)));
+                return;
+            }
+        };
         
-        match queue.approve(&server_id, Some("Approved via TUI".to_string())) {
+        match queue.approve(&server_id, ApprovalAuthority::User("tui".to_string()), Some("Approved via TUI".to_string())).await {
             Ok(()) => {
                 let _ = event_tx.send(TuiEvent::ServerApproved { 
                     server_id: server_id.clone(), 
@@ -1879,12 +1889,17 @@ fn reject_server_async(
     let _ = event_tx.send(TuiEvent::ApprovalsLoading);
     
     tokio::task::spawn_local(async move {
-        use ccos::discovery::approval_queue::ApprovalQueue;
+        use ccos::approval::ApprovalAuthority;
         
-        let queue_base = get_approval_queue_base();
-        let queue = ApprovalQueue::new(&queue_base);
+        let queue = match create_unified_queue() {
+            Ok(q) => q,
+            Err(e) => {
+                let _ = event_tx.send(TuiEvent::ApprovalsError(format!("Failed to create queue: {}", e)));
+                return;
+            }
+        };
         
-        match queue.reject(&server_id, "Rejected via TUI".to_string()) {
+        match queue.reject(&server_id, ApprovalAuthority::User("tui".to_string()), "Rejected via TUI".to_string()).await {
             Ok(()) => {
                 let _ = event_tx.send(TuiEvent::ServerRejected { 
                     server_id: server_id.clone(), 
@@ -1909,12 +1924,15 @@ fn dismiss_server_async(
     let _ = event_tx.send(TuiEvent::ApprovalsLoading);
     
     tokio::task::spawn_local(async move {
-        use ccos::discovery::approval_queue::ApprovalQueue;
+        let queue = match create_unified_queue() {
+            Ok(q) => q,
+            Err(e) => {
+                let _ = event_tx.send(TuiEvent::ApprovalsError(format!("Failed to create queue: {}", e)));
+                return;
+            }
+        };
         
-        let queue_base = get_approval_queue_base();
-        let queue = ApprovalQueue::new(&queue_base);
-        
-        match queue.dismiss_server(&server_id, "Dismissed via TUI".to_string()) {
+        match queue.dismiss_server(&server_id, "Dismissed via TUI".to_string()).await {
             Ok(()) => {
                 let _ = event_tx.send(TuiEvent::ServerRejected { 
                     server_id: server_id.clone(), 
@@ -1959,6 +1977,14 @@ fn get_approval_queue_base() -> std::path::PathBuf {
     })
 }
 
+/// Create a UnifiedApprovalQueue with FileApprovalStorage
+fn create_unified_queue() -> Result<ccos::approval::UnifiedApprovalQueue<ccos::approval::storage_file::FileApprovalStorage>, rtfs::runtime::error::RuntimeError> {
+    let queue_base = get_approval_queue_base();
+    let storage_path = queue_base.join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
+    let storage = std::sync::Arc::new(ccos::approval::storage_file::FileApprovalStorage::new(storage_path)?);
+    Ok(ccos::approval::UnifiedApprovalQueue::new(storage))
+}
+
 /// Add a discovered server to the pending approval queue
 fn add_server_to_pending_async(
     event_tx: mpsc::UnboundedSender<TuiEvent>,
@@ -1967,16 +1993,17 @@ fn add_server_to_pending_async(
     tools: Vec<DiscoveredCapability>,
 ) {
     tokio::task::spawn_local(async move {
-        use ccos::discovery::approval_queue::{
-            ApprovalQueue, DiscoverySource, PendingDiscovery, RiskAssessment, RiskLevel, ServerInfo as QueueServerInfo,
-        };
+        use ccos::approval::{DiscoverySource, RiskAssessment, RiskLevel, ServerInfo as QueueServerInfo};
         use ccos::mcp::types::{MCPServerConfig, DiscoveredMCPTool};
         use ccos::mcp::core::MCPDiscoveryService;
-        use chrono::Utc;
-        use uuid::Uuid;
         
-        let queue_base = get_approval_queue_base();
-        let queue = ApprovalQueue::new(&queue_base);
+        let queue = match create_unified_queue() {
+            Ok(q) => q,
+            Err(e) => {
+                let _ = event_tx.send(TuiEvent::ApprovalsError(format!("Failed to create queue: {}", e)));
+                return;
+            }
+        };
         
         // 1. Convert TUI DiscoveredCapability to DiscoveredMCPTool
         let mcp_tools: Vec<DiscoveredMCPTool> = tools.iter().map(|t| {
@@ -2030,33 +2057,29 @@ fn add_server_to_pending_async(
             }
         }
 
-        // 3. Suggest auth env var based on server name
-        let auth_env_var = ApprovalQueue::suggest_auth_env_var(&server_name);
-        
-        // 4. Create pending discovery entry
+        // 3. Create server info and add via unified queue
         let tool_count = tools.len();
-        let pending = PendingDiscovery {
-            id: Uuid::new_v4().to_string(),
-            source: DiscoverySource::Manual { user: "tui_user".to_string() },
-            server_info: QueueServerInfo {
-                name: server_name.clone(),
-                endpoint: endpoint.clone(),
-                description: Some(format!("Discovered via TUI ({} tools)", tool_count)),
-                auth_env_var: Some(auth_env_var),
-                capabilities_path,
-                alternative_endpoints: vec![],
-            },
-            domain_match: vec!["discovered".to_string()],
-            risk_assessment: RiskAssessment {
+        let auth_env_var = suggest_auth_env_var(&server_name);
+        let server_info = QueueServerInfo {
+            name: server_name.clone(),
+            endpoint: endpoint.clone(),
+            description: Some(format!("Discovered via TUI ({} tools)", tool_count)),
+            auth_env_var: Some(auth_env_var),
+            capabilities_path,
+            alternative_endpoints: vec![],
+        };
+        
+        match queue.add_server_discovery(
+            DiscoverySource::Manual { user: "tui_user".to_string() },
+            server_info,
+            vec!["discovered".to_string()],
+            RiskAssessment {
                 level: RiskLevel::Medium,
                 reasons: vec!["Discovered via interactive search".to_string()],
             },
-            requested_at: Utc::now(),
-            expires_at: Utc::now() + chrono::Duration::days(30),
-            requesting_goal: None,
-        };
-        
-        match queue.add(pending) {
+            None, // requesting_goal
+            24 * 30, // expires_in_hours (30 days)
+        ).await {
             Ok(pending_id) => {
                 let _ = event_tx.send(TuiEvent::ServerAddedToPending {
                     server_name: server_name.clone(),
@@ -2077,6 +2100,13 @@ fn add_server_to_pending_async(
     });
 }
 
+/// Suggest an auth env var based on server name (helper)
+fn suggest_auth_env_var(server_name: &str) -> String {
+    let parts: Vec<&str> = server_name.split(|c| c == '/' || c == '-' || c == '_').collect();
+    let namespace = parts.first().unwrap_or(&server_name);
+    format!("{}_MCP_TOKEN", namespace.to_uppercase())
+}
+
 fn load_servers_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
     // Signal loading started
     let _ = event_tx.send(TuiEvent::ServersLoading);
@@ -2084,39 +2114,39 @@ fn load_servers_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
     // Spawn background task to load servers
     tokio::task::spawn_local(async move {
         use ccos::mcp::core::MCPDiscoveryService;
-        use ccos::discovery::approval_queue::ApprovalQueue;
         use std::collections::HashSet;
         
         let mut servers: Vec<ServerInfo> = Vec::new();
         let mut seen_endpoints: HashSet<String> = HashSet::new();
         
         // First, load approved servers from the approval queue
-        let queue_base = get_approval_queue_base();
-        let queue = ApprovalQueue::new(&queue_base);
-        
-        if let Ok(approved) = queue.list_approved() {
-            for a in approved {
-                seen_endpoints.insert(a.server_info.endpoint.clone());
-                servers.push(ServerInfo {
-                    name: format!("✓ {}", a.server_info.name), // Mark as approved
-                    endpoint: a.server_info.endpoint,
-                    status: if a.consecutive_failures > 0 {
-                        ServerStatus::Error
-                    } else if a.total_calls > 0 {
-                        ServerStatus::Connected
-                    } else {
-                        ServerStatus::Unknown
-                    },
-                    tool_count: a.capability_files.as_ref().map(|f| f.len()),
-                    tools: vec![],
-                    last_checked: None, // Would need live check
-                });
+        if let Ok(queue) = create_unified_queue() {
+            if let Ok(approved_requests) = queue.list_approved_servers().await {
+                for r in approved_requests {
+                    if let Some(a) = r.to_approved_discovery() {
+                        seen_endpoints.insert(a.server_info.endpoint.clone());
+                        servers.push(ServerInfo {
+                            name: format!("✓ {}", a.server_info.name), // Mark as approved
+                            endpoint: a.server_info.endpoint,
+                            status: if a.consecutive_failures > 0 {
+                                ServerStatus::Error
+                            } else if a.total_calls > 0 {
+                                ServerStatus::Connected
+                            } else {
+                                ServerStatus::Unknown
+                            },
+                            tool_count: a.capability_files.as_ref().map(|f| f.len()),
+                            tools: vec![],
+                            last_checked: None, // Would need live check
+                        });
+                    }
+                }
             }
         }
         
         // Then, add known servers from config (if not already in approved list)
         let service = MCPDiscoveryService::new();
-        let mcp_servers = service.list_known_servers();
+        let mcp_servers = service.list_known_servers().await;
         
         for config in mcp_servers {
             if !seen_endpoints.contains(&config.endpoint) {
@@ -2149,7 +2179,7 @@ fn discover_server_tools_async(
         let service = MCPDiscoveryService::new();
         
         // Find the server config matching this endpoint
-        let server_config = service.list_known_servers()
+        let server_config = service.list_known_servers().await
             .into_iter()
             .find(|s| s.endpoint == endpoint);
         
@@ -2194,7 +2224,7 @@ fn check_server_connection_async(
         let service = MCPDiscoveryService::new();
         
         // Find the server config matching this endpoint
-        let server_config = service.list_known_servers()
+        let server_config = service.list_known_servers().await
             .into_iter()
             .find(|s| s.endpoint == endpoint);
         
@@ -2285,7 +2315,7 @@ fn load_local_capabilities_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
 
         // Load capabilities from known MCP servers (from config)
         let service = MCPDiscoveryService::new();
-        let known_servers = service.list_known_servers();
+        let known_servers = service.list_known_servers().await;
         let options = DiscoveryOptions::default();
 
         let mut seen_endpoints = std::collections::HashSet::new();
@@ -2320,19 +2350,17 @@ fn load_local_capabilities_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
         }
 
         // Also load capabilities from approved servers (from approval queue)
-        use ccos::discovery::approval_queue::ApprovalQueue;
         use ccos::mcp::types::MCPServerConfig;
         
-        let queue_base = get_approval_queue_base();
-        let queue = ApprovalQueue::new(&queue_base);
-        
-        if let Ok(approved) = queue.list_approved() {
-            for approved_server in approved {
-                // Skip if we already loaded this endpoint
-                if seen_endpoints.contains(&approved_server.server_info.endpoint) {
-                    continue;
-                }
-                seen_endpoints.insert(approved_server.server_info.endpoint.clone());
+        if let Ok(queue) = create_unified_queue() {
+            if let Ok(approved_requests) = queue.list_approved_servers().await {
+                for r in approved_requests {
+                    if let Some(approved_server) = r.to_approved_discovery() {
+                        // Skip if we already loaded this endpoint
+                        if seen_endpoints.contains(&approved_server.server_info.endpoint) {
+                            continue;
+                        }
+                        seen_endpoints.insert(approved_server.server_info.endpoint.clone());
                 
                 // Create a temporary server config from approved server info
                 let temp_server_config = MCPServerConfig {
@@ -2367,6 +2395,8 @@ fn load_local_capabilities_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
                             effects: Vec::new(),
                             metadata: HashMap::new(),
                         });
+                    }
+                }
                     }
                 }
             }
@@ -2560,7 +2590,6 @@ fn search_discovery_async(query: String, event_tx: mpsc::UnboundedSender<TuiEven
 }
 
 async fn introspect_server_async(server_name: String, endpoint: String, event_tx: mpsc::UnboundedSender<TuiEvent>) {
-    use ccos::discovery::approval_queue::ApprovalQueue;
     use ccos::ops::server::introspect_server_by_url;
 
     let _ = event_tx.send(TuiEvent::IntrospectionLog(format!("Initializing session with {}...", endpoint)));
@@ -2571,7 +2600,7 @@ async fn introspect_server_async(server_name: String, endpoint: String, event_tx
     ));
 
     // Determine the auth env var to use
-    let suggested_env_var = ApprovalQueue::suggest_auth_env_var(&server_name);
+    let suggested_env_var = suggest_auth_env_var(&server_name);
     
     // Check if token is available
     let auth_env_var = if std::env::var(&suggested_env_var).is_ok() {
@@ -2632,7 +2661,7 @@ async fn introspect_server_async(server_name: String, endpoint: String, event_tx
                 || error_str.contains("auth")
             {
                 // Suggest auth env var based on server name
-                let env_var = ApprovalQueue::suggest_auth_env_var(&server_name);
+                let env_var = suggest_auth_env_var(&server_name);
                 
                 let _ = event_tx.send(TuiEvent::IntrospectionAuthRequired {
                     server_name: server_name.clone(),

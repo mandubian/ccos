@@ -111,7 +111,7 @@ impl RuntimeMcpDiscovery {
 #[async_trait(?Send)]
 impl McpDiscovery for RuntimeMcpDiscovery {
     async fn get_server_for_domain(&self, domain: &DomainHint) -> Option<McpServerInfo> {
-        if let Some(config) = self.discovery_service.get_server_for_domain(domain) {
+        if let Some(config) = self.discovery_service.get_server_for_domain(domain).await {
             return Some(McpServerInfo {
                 name: config.name.clone(),
                 url: config.endpoint.clone(),
@@ -201,6 +201,7 @@ impl McpDiscovery for RuntimeMcpDiscovery {
     async fn list_known_servers(&self) -> Vec<McpServerInfo> {
         self.discovery_service
             .list_known_servers()
+            .await
             .into_iter()
             .map(|config| McpServerInfo {
                 name: config.name.clone(),

@@ -7,7 +7,9 @@
 pub mod approval;
 pub mod config;
 pub mod discover;
+pub mod fs;
 pub mod governance;
+pub mod llm;
 pub mod native;
 pub mod plan;
 pub mod server;
@@ -36,14 +38,24 @@ pub struct ServerListOutput {
     pub count: usize,
 }
 
+/// Approval type for better categorization in CLI
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub enum ApprovalType {
+    ServerDiscovery,
+    Effect,
+    LlmPrompt,
+    Synthesis,
+}
+
 /// Approval queue item
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ApprovalItem {
     pub id: String,
-    pub server_name: String,
-    pub endpoint: String,
-    pub source: String,
+    pub approval_type: ApprovalType,
+    pub title: String,       // e.g. Server Name, Capability ID, or Synthesis ID
+    pub description: String, // e.g. Endpoint, Intent, or Synthesis Goal
     pub risk_level: String,
+    pub source: String, // Who requested it (e.g. "cli", "agent", "planner")
     pub goal: Option<String>,
     pub status: String,
     pub requested_at: String,

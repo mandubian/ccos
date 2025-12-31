@@ -30,6 +30,7 @@ macro_rules! ccos_eprintln {
 // Include the CCOS module structure
 // AgentRegistry migration: agent module removed (deprecated, use CapabilityMarketplace with :kind :agent)
 pub mod agents;
+pub mod approval;
 pub mod arbiter;
 pub mod archivable_types;
 pub mod catalog;

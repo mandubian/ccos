@@ -524,6 +524,7 @@ pub struct TestResult {
 mod tests {
     use super::*;
     use crate::capability_marketplace::types::CapabilityManifest;
+    use crate::capability_marketplace::types::EffectType;
     use crate::capability_marketplace::types::LocalCapability;
     use crate::capability_marketplace::ProviderType;
 
@@ -555,6 +556,7 @@ mod tests {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         };
 
         // Test registration
@@ -592,6 +594,7 @@ mod tests {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         };
 
         let validation_result = ValidationResult {

@@ -20,7 +20,7 @@ mcp_servers = ["slack"]
 
 [[domains]]
 name = "filesystem"
-keywords = ["file", "folder", "directory", "path", "read file", "write file"]
+keywords = ["file", "folder", "directory", "path", "read file", "write file", "fs", "delete"]
 mcp_servers = ["filesystem", "fs"]
 
 [[domains]]
