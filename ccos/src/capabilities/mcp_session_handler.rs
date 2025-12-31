@@ -41,16 +41,60 @@ impl MCPSessionHandler {
         }
     }
 
-    /// Get auth token from environment variable specified in metadata
-    fn get_auth_token(&self, metadata: &HashMap<String, String>) -> Option<String> {
+    /// Get auth token from environment variable specified in metadata or inferred from capability ID
+    fn get_auth_token(
+        &self,
+        capability_id: &str,
+        metadata: &HashMap<String, String>,
+    ) -> Option<String> {
         // Check for explicit token in metadata first (passed from executor)
         if let Some(token) = metadata.get("mcp_auth_token") {
             return Some(token.clone());
         }
 
-        // Fallback to env var lookup
-        let env_var = metadata.get("mcp_auth_env_var")?;
-        std::env::var(env_var).ok()
+        // Check for env var name specified in metadata
+        if let Some(env_var) = metadata.get("mcp_auth_env_var") {
+            if let Ok(token) = std::env::var(env_var) {
+                return Some(token);
+            }
+        }
+
+        // Try to get server name from metadata, or infer it from capability ID
+        // Capability ID format: mcp.{server_name}.{tool_name} (e.g., mcp.github/github-mcp.list_issues)
+        let server_name = metadata.get("mcp_server_name").cloned().or_else(|| {
+            // Infer from capability_id: "mcp.github/github-mcp.list_issues" -> "github/github-mcp"
+            if capability_id.starts_with("mcp.") {
+                let rest = &capability_id[4..]; // Remove "mcp." prefix
+                                                // Find the last dot which separates server_name from tool_name
+                if let Some(last_dot) = rest.rfind('.') {
+                    let server_name = &rest[..last_dot];
+                    if !server_name.is_empty() {
+                        return Some(server_name.to_string());
+                    }
+                }
+            }
+            None
+        });
+
+        // Fallback: try server-specific tokens (e.g., GITHUB_MCP_TOKEN, SLACK_MCP_TOKEN)
+        // Pattern: {NAMESPACE}_MCP_TOKEN where namespace is extracted from server name
+        if let Some(server_name) = server_name {
+            let namespace = if let Some(slash_pos) = server_name.find('/') {
+                &server_name[..slash_pos]
+            } else {
+                &server_name
+            };
+            let normalized = namespace.replace('-', "_").to_uppercase();
+            let server_specific_var = format!("{}_MCP_TOKEN", normalized);
+
+            if let Ok(token) = std::env::var(&server_specific_var) {
+                log::debug!("Found auth token from {}", server_specific_var);
+                return Some(token);
+            }
+        }
+
+        // Final fallback: generic MCP_AUTH_TOKEN
+        std::env::var("MCP_AUTH_TOKEN").ok()
     }
 
     /// Get server URL from metadata (with fallback to env var)
@@ -420,11 +464,12 @@ impl SessionHandler for MCPSessionHandler {
     ) -> RuntimeResult<SessionId> {
         // eprintln!("[MCPSessionHandler] initialize_session for {}: metadata keys={:?}", capability_id, metadata.keys());
 
-        // Extract server URL from metadata
+        // Extract server URL from metadata (try multiple key variations)
         let server_url = metadata
             .get("server_url")
             .or_else(|| metadata.get("url"))
-            .or_else(|| metadata.get("mcp_server_url")); // Added fallback to mcp_server_url
+            .or_else(|| metadata.get("mcp_server_url"))
+            .or_else(|| metadata.get("mcp_server_endpoint")); // RTFS exports use this key
 
         let server_url = match server_url {
             Some(url) => {
@@ -439,8 +484,8 @@ impl SessionHandler for MCPSessionHandler {
             }
         };
 
-        // Get auth token from environment variable specified in metadata
-        let auth_token = self.get_auth_token(metadata);
+        // Get auth token from environment variable specified in metadata or inferred from capability ID
+        let auth_token = self.get_auth_token(capability_id, metadata);
 
         // Initialize MCP session
         let session_id = self.initialize_mcp_session(&server_url, auth_token.as_deref())?;

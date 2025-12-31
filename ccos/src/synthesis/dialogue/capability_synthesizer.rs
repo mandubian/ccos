@@ -1,5 +1,5 @@
 use crate::arbiter::llm_provider::LlmProvider;
-use crate::capability_marketplace::types::CapabilityManifest;
+use crate::capability_marketplace::types::{CapabilityManifest, EffectType};
 use crate::synthesis::introspection::api_introspector::APIIntrospector;
 use crate::synthesis::introspection::auth_injector::AuthInjector;
 use crate::synthesis::introspection::mcp_introspector::MCPIntrospector;
@@ -387,6 +387,7 @@ Wrap your answer in ```rtfs code blocks. Keep it simple and pure:
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         }
     }
 
@@ -935,6 +936,7 @@ Wrap your answer in ```rtfs code blocks. Keep it simple and pure:
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         };
 
         let mut warnings = Vec::new();
@@ -1117,6 +1119,7 @@ Wrap your answer in ```rtfs code blocks. Keep it simple and pure:
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         };
 
         let warnings = vec![
@@ -1456,6 +1459,7 @@ mod tests {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         };
 
         assert!(synthesizer.validate_governance(&capability).unwrap());

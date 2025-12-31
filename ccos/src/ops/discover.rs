@@ -1,11 +1,15 @@
 //! Discovery operations - pure logic functions for server discovery
 
+use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
 use crate::discovery::config::DiscoveryConfig;
-use crate::discovery::{ApprovalQueue, GoalDiscoveryAgent};
+use crate::discovery::goal_discovery::LlmSearchResult;
+use crate::discovery::GoalDiscoveryAgent;
 use crate::utils::fs::find_workspace_root;
 #[cfg(feature = "tui")]
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
 use rtfs::runtime::error::RuntimeResult;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Options for goal-driven server discovery
 #[derive(Debug, Clone)]
@@ -31,13 +35,20 @@ impl Default for DiscoverOptions {
     }
 }
 
+/// Create a unified approval queue
+fn create_queue(storage_path: PathBuf) -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
+    let storage = Arc::new(FileApprovalStorage::new(storage_path)?);
+    Ok(UnifiedApprovalQueue::new(storage))
+}
+
 /// Goal-driven server discovery (simple API - uses defaults)
-pub async fn discover_by_goal(goal: String) -> RuntimeResult<Vec<String>> {
-    discover_by_goal_with_options(goal, DiscoverOptions::default()).await
+pub async fn discover_by_goal(storage_path: PathBuf, goal: String) -> RuntimeResult<Vec<String>> {
+    discover_by_goal_with_options(storage_path, goal, DiscoverOptions::default()).await
 }
 
 /// Goal-driven server discovery with options
 pub async fn discover_by_goal_with_options(
+    storage_path: PathBuf,
     goal: String,
     options: DiscoverOptions,
 ) -> RuntimeResult<Vec<String>> {
@@ -45,8 +56,7 @@ pub async fn discover_by_goal_with_options(
     let mut config = DiscoveryConfig::from_env();
     config.match_threshold = options.threshold;
 
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
+    let queue = create_queue(storage_path.clone())?;
     let agent = GoalDiscoveryAgent::new_with_config(queue, config);
 
     // Show mode being used
@@ -74,7 +84,7 @@ pub async fn discover_by_goal_with_options(
             let add_manual = false;
 
             if add_manual {
-                return handle_manual_url_entry(&agent, &goal, options.llm).await;
+                return handle_manual_url_entry(&agent, &goal, options.llm, &storage_path).await;
             }
         }
 
@@ -163,7 +173,7 @@ pub async fn discover_by_goal_with_options(
             let add_manual = false;
 
             if add_manual {
-                return handle_manual_url_entry(&agent, &goal, options.llm).await;
+                return handle_manual_url_entry(&agent, &goal, options.llm, &storage_path).await;
             }
 
             return Ok(vec![]);
@@ -175,13 +185,22 @@ pub async fn discover_by_goal_with_options(
         let selected: Vec<_> = selections.into_iter().map(|i| results[i].clone()).collect();
 
         // Check for conflicts with already approved or pending servers and prompt user
-        let workspace_root = find_workspace_root();
-        let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
+        let queue = create_queue(storage_path.clone())?;
         let mut servers_to_queue = Vec::new();
 
         for (result, score) in &selected {
-            let approved = queue.list_approved()?;
-            let pending = queue.list_pending()?;
+            // Get all approved and pending requests and convert to legacy types for compatibility
+            let approved_requests = queue.list_approved_servers().await?;
+            let pending_requests = queue.list_pending_servers().await?;
+
+            let approved: Vec<_> = approved_requests
+                .iter()
+                .filter_map(|r| r.to_approved_discovery())
+                .collect();
+            let pending: Vec<_> = pending_requests
+                .iter()
+                .filter_map(|r| r.to_pending_discovery())
+                .collect();
 
             // Check approved servers first
             let approved_conflict = approved.iter().find(|existing| {
@@ -288,7 +307,7 @@ pub async fn discover_by_goal_with_options(
                     servers_to_queue.push((result.clone(), *score));
                 } else if selection == 1 {
                     // Replace - remove old entry first
-                    queue.remove_pending(&existing.id)?;
+                    queue.remove_pending(&existing.id).await?;
                     servers_to_queue.push((result.clone(), *score));
                 } else {
                     println!("   ✓ Skipped - keeping existing pending entry");
@@ -305,9 +324,12 @@ pub async fn discover_by_goal_with_options(
         }
 
         // Queue servers to pending FIRST (before introspection)
-        let mut queued_servers = Vec::new();
+        let mut queued_servers: Vec<(
+            String,
+            crate::discovery::registry_search::RegistrySearchResult,
+        )> = Vec::new();
         for (result, score) in &servers_to_queue {
-            let id = agent.queue_result(&goal, result.clone(), *score)?;
+            let id = agent.queue_result(&goal, result.clone(), *score).await?;
             queued_servers.push((id, result.clone()));
         }
 
@@ -389,9 +411,15 @@ pub async fn discover_by_goal_with_options(
 
                                 // Save tools to RTFS file and link to pending entry
                                 if let Err(e) = crate::ops::server::save_discovered_tools(
+                                    storage_path.to_path_buf(),
+                                    introspection
+                                        .tools
+                                        .iter()
+                                        .map(|t| t.to_mcp_tool())
+                                        .collect(),
                                     &introspection,
                                     &result.server_info,
-                                    Some(pending_id),
+                                    Some(pending_id.clone()),
                                 )
                                 .await
                                 {
@@ -509,9 +537,11 @@ pub async fn discover_by_goal_with_options(
 
                                                             // Save tools to RTFS file and link to pending entry
                                                             if let Err(e) = crate::ops::server::save_discovered_tools(
+                                                                storage_path.to_path_buf(),
+                                                                introspection.tools.iter().map(|t| t.to_mcp_tool()).collect(),
                                                                 &introspection,
                                                                 &result.server_info,
-                                                                Some(pending_id),
+                                                                Some(pending_id.clone()),
                                                             ).await {
                                                                 println!("   ⚠️  Failed to save capabilities: {}", e);
                                                             } else {
@@ -579,9 +609,12 @@ pub async fn discover_by_goal_with_options(
     }
 
     // Non-interactive mode: check for conflicts and queue
-    let workspace_root = find_workspace_root();
-    let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
-    let approved = queue.list_approved()?;
+    let queue = create_queue(storage_path.clone())?;
+    let approved_requests = queue.list_approved_servers().await?;
+    let approved: Vec<_> = approved_requests
+        .iter()
+        .filter_map(|r| r.to_approved_discovery())
+        .collect();
     let mut servers_to_queue = Vec::new();
 
     for (result, score) in &results {
@@ -601,7 +634,7 @@ pub async fn discover_by_goal_with_options(
     // Queue selected results
     let mut queued_ids = Vec::new();
     for (result, score) in servers_to_queue {
-        let id = agent.queue_result(&goal, result, score)?;
+        let id = agent.queue_result(&goal, result, score).await?;
         queued_ids.push(id);
     }
 
@@ -626,6 +659,7 @@ async fn handle_manual_url_entry(
     agent: &GoalDiscoveryAgent,
     goal: &str,
     llm_enabled: bool,
+    storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     let mut all_ids = Vec::new();
 
@@ -677,19 +711,14 @@ async fn handle_manual_url_entry(
 
         let ids = if url_type_idx == 0 {
             // MCP Server endpoint
-            handle_mcp_url(agent, goal, &url).await?
+            handle_mcp_url(agent, goal, &url, storage_path).await?
         } else {
             // API Documentation page
             if !llm_enabled {
-                println!("⚠️  Documentation parsing requires the --llm flag.");
-                println!(
-                    "   Run again with: ccos discover goal \"{}\" --interactive --llm",
-                    goal
-                );
-                println!();
-                continue; // Let user try another URL type
+                println!("⚠️  LLM discovery required for documentation parsing. Use --llm flag.");
+                continue;
             }
-            handle_documentation_url(agent, goal, &url).await?
+            handle_documentation_url(agent, goal, &url, llm_enabled, storage_path).await?
         };
 
         all_ids.extend(ids);
@@ -725,6 +754,7 @@ async fn handle_mcp_url(
     agent: &GoalDiscoveryAgent,
     goal: &str,
     url: &str,
+    storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     println!("🔍 Introspecting MCP server at {}...", url);
 
@@ -746,10 +776,10 @@ async fn handle_mcp_url(
 
             // Create a synthetic RegistrySearchResult
             let result = crate::discovery::registry_search::RegistrySearchResult {
-                source: crate::discovery::approval_queue::DiscoverySource::Manual {
+                source: crate::approval::queue::DiscoverySource::Manual {
                     user: "cli".to_string(),
                 },
-                server_info: crate::discovery::approval_queue::ServerInfo {
+                server_info: crate::approval::queue::ServerInfo {
                     name: introspection.server_name.clone(),
                     endpoint: introspection.server_url.clone(),
                     description: Some("Manually added MCP server".to_string()),
@@ -761,13 +791,19 @@ async fn handle_mcp_url(
                 alternative_endpoints: Vec::new(),
             };
 
-            let id = agent.queue_result(goal, result.clone(), 1.0)?;
+            let id = agent.queue_result(goal, result.clone(), 1.0).await?;
 
             // Save tools
             if let Err(e) = crate::ops::server::save_discovered_tools(
+                storage_path.to_path_buf(),
+                introspection
+                    .tools
+                    .iter()
+                    .map(|t| t.to_mcp_tool())
+                    .collect(),
                 &introspection,
                 &result.server_info,
-                Some(&id),
+                Some(id.clone()),
             )
             .await
             {
@@ -790,6 +826,8 @@ async fn handle_documentation_url(
     agent: &GoalDiscoveryAgent,
     goal: &str,
     url: &str,
+    llm_enabled: bool,
+    storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     println!("🔍 Fetching API documentation from {}...", url);
     println!("🤖 Using LLM to extract API endpoints...");
@@ -842,10 +880,10 @@ async fn handle_documentation_url(
 
             // Create a synthetic RegistrySearchResult for the API
             let result = crate::discovery::registry_search::RegistrySearchResult {
-                source: crate::discovery::approval_queue::DiscoverySource::Manual {
+                source: crate::approval::queue::DiscoverySource::Manual {
                     user: "cli".to_string(),
                 },
-                server_info: crate::discovery::approval_queue::ServerInfo {
+                server_info: crate::approval::queue::ServerInfo {
                     name: api_result.api_title.clone(),
                     endpoint: api_result.base_url.clone(),
                     description: Some(format!("HTTP API parsed from documentation: {}", url)),
@@ -857,10 +895,16 @@ async fn handle_documentation_url(
                 alternative_endpoints: Vec::new(),
             };
 
-            let id = agent.queue_result(goal, result.clone(), 1.0)?;
+            let id = agent.queue_result(goal, result.clone(), 1.0).await?;
 
             // Save the parsed API as capabilities
-            if let Err(e) = crate::ops::server::save_api_capabilities(&api_result, &id).await {
+            if let Err(e) = crate::ops::server::save_api_capabilities(
+                storage_path.to_path_buf(),
+                &api_result,
+                &id,
+            )
+            .await
+            {
                 println!("   ⚠️  Failed to save capabilities: {}", e);
             } else {
                 println!("   💾 Capabilities saved to RTFS file");

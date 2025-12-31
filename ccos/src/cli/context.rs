@@ -146,6 +146,20 @@ impl CliContext {
         }
     }
 
+    /// Resolve a path relative to the workspace root
+    /// Uses CCOS_WORKSPACE_ROOT env var if set, otherwise uses config file parent directory
+    pub fn resolve_workspace_path(&self, relative_path: &str) -> PathBuf {
+        let workspace_root = std::env::var("CCOS_WORKSPACE_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                self.config_path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            });
+        workspace_root.join(relative_path)
+    }
+
     /// Create an LLM provider from the agent configuration
     /// Uses the default profile from llm_profiles (supports both explicit profiles and model_sets)
     pub async fn create_llm_provider(

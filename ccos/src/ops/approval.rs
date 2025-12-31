@@ -1,11 +1,14 @@
 //! Approval operations - pure logic functions for approval queue management
 
 use super::{ApprovalItem, ApprovalListOutput};
-use crate::discovery::ApprovalQueue;
+use crate::approval::{
+    storage_file::FileApprovalStorage, ApprovalAuthority, ApprovalCategory, ApprovalRequest,
+    UnifiedApprovalQueue,
+};
 use crate::utils::fs::find_workspace_root;
-use chrono::Utc;
-use rtfs::runtime::error::RuntimeResult;
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::Serialize;
+use std::sync::Arc;
 
 /// Information about a conflict when approving a server that already exists
 #[derive(Debug, Clone, Serialize)]
@@ -19,25 +22,91 @@ pub struct ApprovalConflict {
     pub pending_endpoint: String,
 }
 
-/// List pending approvals
-pub async fn list_pending() -> RuntimeResult<ApprovalListOutput> {
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
-    let pending = queue.list_pending()?;
+use std::path::PathBuf;
 
-    let items: Vec<ApprovalItem> = pending
-        .into_iter()
-        .map(|item| ApprovalItem {
-            id: item.id,
-            server_name: item.server_info.name,
-            endpoint: item.server_info.endpoint,
-            source: item.source.name(),
-            risk_level: format!("{:?}", item.risk_assessment.level),
-            goal: item.requesting_goal,
-            status: "pending".to_string(),
-            requested_at: item.requested_at.to_rfc3339(),
-        })
-        .collect();
+/// Create a unified approval queue with file storage
+fn create_queue(storage_path: PathBuf) -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
+    let storage = Arc::new(FileApprovalStorage::new(storage_path)?);
+    Ok(UnifiedApprovalQueue::new(storage))
+}
+
+/// Convert ApprovalRequest to ApprovalItem for CLI output
+fn to_approval_item(request: &ApprovalRequest) -> ApprovalItem {
+    use super::ApprovalType;
+
+    let (approval_type, title, description, source, goal) = match &request.category {
+        ApprovalCategory::ServerDiscovery {
+            source,
+            server_info,
+            requesting_goal,
+            ..
+        } => (
+            ApprovalType::ServerDiscovery,
+            server_info.name.clone(),
+            server_info.endpoint.clone(),
+            source.name(),
+            requesting_goal.clone(),
+        ),
+        ApprovalCategory::EffectApproval {
+            capability_id,
+            intent_description,
+            ..
+        } => (
+            ApprovalType::Effect,
+            capability_id.clone(),
+            intent_description.clone(),
+            "planner".to_string(),
+            None,
+        ),
+        ApprovalCategory::LlmPromptApproval { prompt, .. } => (
+            ApprovalType::LlmPrompt,
+            "LLM Prompt Approval".to_string(),
+            if prompt.len() > 100 {
+                format!("{}...", &prompt[..100])
+            } else {
+                prompt.clone()
+            },
+            "agent".to_string(),
+            None,
+        ),
+        ApprovalCategory::SynthesisApproval { capability_id, .. } => (
+            ApprovalType::Synthesis,
+            format!("Synthesis Approval: {}", capability_id),
+            "Capability synthesis".to_string(),
+            "planner".to_string(),
+            None,
+        ),
+    };
+
+    ApprovalItem {
+        id: request.id.clone(),
+        approval_type,
+        title,
+        description,
+        risk_level: format!("{:?}", request.risk_assessment.level),
+        source,
+        goal,
+        status: if request.status.is_pending() {
+            "pending".to_string()
+        } else if request.status.is_approved() {
+            "approved".to_string()
+        } else if request.status.is_rejected() {
+            "rejected".to_string()
+        } else if request.status.is_expired() {
+            "expired".to_string()
+        } else {
+            "resolved".to_string()
+        },
+        requested_at: request.requested_at.to_rfc3339(),
+    }
+}
+
+/// List all pending approvals across all categories
+pub async fn list_pending(storage_path: PathBuf) -> RuntimeResult<ApprovalListOutput> {
+    let queue = create_queue(storage_path)?;
+    let pending = queue.list_pending().await?;
+
+    let items: Vec<ApprovalItem> = pending.iter().map(to_approval_item).collect();
 
     Ok(ApprovalListOutput {
         items: items.clone(),
@@ -46,83 +115,151 @@ pub async fn list_pending() -> RuntimeResult<ApprovalListOutput> {
 }
 
 /// Check if approving a discovery would conflict with an existing approved server
-pub async fn check_approval_conflict(id: String) -> RuntimeResult<Option<ApprovalConflict>> {
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
+pub async fn check_approval_conflict(
+    storage_path: PathBuf,
+    id: String,
+) -> RuntimeResult<Option<ApprovalConflict>> {
+    let queue = create_queue(storage_path)?;
 
-    if let Some(existing) = queue.check_approval_conflict(&id)? {
-        let pending = queue.get_pending(&id)?;
-        if let Some(pending_item) = pending {
-            let tool_count = existing
-                .capability_files
-                .as_ref()
-                .map(|files| files.len())
-                .unwrap_or(0);
+    // Get the pending request
+    let pending = queue.get(&id).await?;
+    if pending.is_none() {
+        return Ok(None);
+    }
+    let pending_item = pending.unwrap();
 
-            return Ok(Some(ApprovalConflict {
-                existing_name: existing.server_info.name,
-                existing_endpoint: existing.server_info.endpoint,
-                existing_version: existing.version,
-                existing_tool_count: tool_count,
-                existing_approved_at: existing.approved_at.to_rfc3339(),
-                pending_name: pending_item.server_info.name,
-                pending_endpoint: pending_item.server_info.endpoint,
-            }));
+    // Only discovery requests have conflicts with existing servers
+    let (pending_name, pending_endpoint) =
+        if let ApprovalCategory::ServerDiscovery { server_info, .. } = &pending_item.category {
+            (server_info.name.clone(), server_info.endpoint.clone())
+        } else {
+            return Ok(None);
+        };
+
+    // Check approved servers for conflicts
+    let approved = queue.list_approved_servers().await?;
+    for approved_item in approved {
+        if let ApprovalCategory::ServerDiscovery {
+            server_info,
+            health,
+            capability_files,
+            ..
+        } = &approved_item.category
+        {
+            if server_info.name == pending_name || server_info.endpoint == pending_endpoint {
+                let tool_count = capability_files.as_ref().map(|f| f.len()).unwrap_or(0);
+
+                let (approved_at, version) =
+                    if let crate::approval::ApprovalStatus::Approved { at, .. } =
+                        &approved_item.status
+                    {
+                        (
+                            at.to_rfc3339(),
+                            health.as_ref().map(|h| h.version).unwrap_or(1),
+                        )
+                    } else {
+                        continue;
+                    };
+
+                return Ok(Some(ApprovalConflict {
+                    existing_name: server_info.name.clone(),
+                    existing_endpoint: server_info.endpoint.clone(),
+                    existing_version: version,
+                    existing_tool_count: tool_count,
+                    existing_approved_at: approved_at,
+                    pending_name,
+                    pending_endpoint,
+                }));
+            }
         }
     }
 
     Ok(None)
 }
 
-/// Approve a discovery
-pub async fn approve_discovery(id: String, reason: Option<String>) -> RuntimeResult<()> {
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
-    queue.approve(&id, reason)?;
-    Ok(())
+/// Approve a discovery or any other approval request
+pub async fn approve_discovery(
+    storage_path: PathBuf,
+    id: String,
+    reason: Option<String>,
+) -> RuntimeResult<()> {
+    approve_request(storage_path, id, reason).await
 }
 
-/// Reject a discovery
-pub async fn reject_discovery(id: String, reason: String) -> RuntimeResult<()> {
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
-    queue.reject(&id, reason)?;
-    Ok(())
+/// Reject a discovery or any other approval request
+pub async fn reject_discovery(
+    storage_path: PathBuf,
+    id: String,
+    reason: String,
+) -> RuntimeResult<()> {
+    reject_request(storage_path, id, reason).await
+}
+
+/// Approve any approval request
+pub async fn approve_request(
+    storage_path: PathBuf,
+    id: String,
+    reason: Option<String>,
+) -> RuntimeResult<()> {
+    let queue = create_queue(storage_path)?;
+
+    // Fetch the request to determine how to approve it
+    let request = queue
+        .get(&id)
+        .await?
+        .ok_or_else(|| RuntimeError::Generic(format!("Approval request {} not found", id)))?;
+
+    match &request.category {
+        ApprovalCategory::ServerDiscovery { .. } => {
+            queue
+                .approve_server(&id, ApprovalAuthority::User("cli".to_string()), reason)
+                .await
+        }
+        _ => {
+            queue
+                .approve(&id, ApprovalAuthority::User("cli".to_string()), reason)
+                .await
+        }
+    }
+}
+
+/// Reject any approval request
+pub async fn reject_request(
+    storage_path: PathBuf,
+    id: String,
+    reason: String,
+) -> RuntimeResult<()> {
+    let queue = create_queue(storage_path)?;
+    queue
+        .reject(&id, ApprovalAuthority::User("cli".to_string()), reason)
+        .await
 }
 
 /// Skip a pending item (remove without approving or rejecting)
-/// Used when user chooses to keep existing approved server instead of merging
-pub async fn skip_pending(id: String) -> RuntimeResult<()> {
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
-    queue.remove_pending(&id)?;
+pub async fn skip_pending(storage_path: PathBuf, id: String) -> RuntimeResult<()> {
+    let queue = create_queue(storage_path)?;
+    queue.remove(&id).await?;
     Ok(())
 }
 
-/// List timed-out items
-pub async fn list_timeout() -> RuntimeResult<ApprovalListOutput> {
-    let workspace_root = find_workspace_root();
-    let queue = ApprovalQueue::new(&workspace_root);
-    let timeout_items = queue.list_timeouts()?;
+/// List items that have timed out
+pub async fn list_timeout(storage_path: PathBuf) -> RuntimeResult<ApprovalListOutput> {
+    let queue = create_queue(storage_path)?;
+    // Check expirations first
+    queue.check_expirations().await?;
 
-    let items: Vec<ApprovalItem> = timeout_items
-        .into_iter()
-        .map(|item| {
-            ApprovalItem {
-                id: item.id,
-                server_name: item.server_info.name,
-                endpoint: item.server_info.endpoint,
-                source: item.source.name(),
-                risk_level: format!("{:?}", item.risk_assessment.level), // Risk level still relevant for timeouts?
-                goal: item.requesting_goal,
-                status: "timeout".to_string(),
-                requested_at: item.requested_at.to_rfc3339(),
-            }
-        })
+    // List all non-pending items and filter for expired
+    let all = queue
+        .list(crate::approval::ApprovalFilter::default())
+        .await?;
+    let timeout_items: Vec<ApprovalItem> = all
+        .iter()
+        .filter(|r| matches!(r.status, crate::approval::ApprovalStatus::Expired { .. }))
+        .map(to_approval_item)
         .collect();
 
     Ok(ApprovalListOutput {
-        items: items.clone(),
-        count: items.len(),
+        items: timeout_items.clone(),
+        count: timeout_items.len(),
     })
 }

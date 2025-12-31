@@ -2,7 +2,9 @@
 mod tests {
     use std::sync::Arc;
 
-    use crate::capability_marketplace::types::{CapabilityManifest, LocalCapability, ProviderType};
+    use crate::capability_marketplace::types::{
+        CapabilityManifest, EffectType, LocalCapability, ProviderType,
+    };
     use crate::synthesis::dialogue::schema_builder::extract_param_schema;
     use crate::synthesis::{synthesize_capabilities_with_marketplace, InteractionTurn};
 
@@ -51,6 +53,7 @@ mod tests {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         };
 
         let result = synthesize_capabilities_with_marketplace(&convo, &[manifest.clone()]);

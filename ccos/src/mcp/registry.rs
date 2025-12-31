@@ -417,6 +417,7 @@ impl MCPRegistryClient {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         };
 
         Ok(manifest)

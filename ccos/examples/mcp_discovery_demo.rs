@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n📋 Step 2: Listing Known Servers");
     println!("{}", "─".repeat(80));
 
-    let servers = unified_service.list_known_servers();
+    let servers = unified_service.list_known_servers().await;
     println!("Found {} configured servers:", servers.len());
     for server in &servers {
         println!("  - {} ({})", server.name, server.endpoint);
@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🔍 Step 3: Testing Tool Discovery");
     println!("{}", "─".repeat(80));
 
-    for server_config in servers {
+    for server_config in servers.clone() {
         println!(
             "\n  Testing server: {} ({})",
             server_config.name, server_config.endpoint
@@ -186,7 +186,7 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
     println!("  ✅ Created service with marketplace and catalog");
 
     // Try to discover from first available server
-    let servers = unified_service.list_known_servers();
+    let servers = unified_service.list_known_servers().await;
     if let Some(server_config) = servers.first() {
         println!(
             "\n  🔍 Discovering and registering tools from: {}",
@@ -257,7 +257,7 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "─".repeat(80));
 
     let unified_service = Arc::new(MCPDiscoveryService::new());
-    let servers = unified_service.list_known_servers();
+    let servers = unified_service.list_known_servers().await;
 
     if let Some(server_config) = servers.first() {
         let options = DiscoveryOptions {
@@ -400,7 +400,7 @@ async fn test_error_handling() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Test with invalid auth token (if we have a valid server)
-    let servers = unified_service.list_known_servers();
+    let servers = unified_service.list_known_servers().await;
     if let Some(server_config) = servers.first() {
         println!("  🔍 Testing discovery with invalid auth token...");
         let options_bad_auth = DiscoveryOptions {
@@ -441,7 +441,7 @@ async fn test_rate_limiting() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "─".repeat(80));
 
     let unified_service = Arc::new(MCPDiscoveryService::new());
-    let servers = unified_service.list_known_servers();
+    let servers = unified_service.list_known_servers().await;
 
     if let Some(server_config) = servers.first() {
         // Test with strict rate limiting

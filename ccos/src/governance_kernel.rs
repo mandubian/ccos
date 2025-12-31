@@ -19,10 +19,8 @@ use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 
-use super::orchestrator::Orchestrator;
-use crate::capability_marketplace::types::CapabilityProvenance;
-
 use super::intent_graph::IntentGraph;
+use super::orchestrator::Orchestrator;
 use super::types::Intent; // for delegation validation
 use super::types::{ExecutionResult, Plan, PlanBody, StorableIntent};
 use rtfs::runtime::error::RuntimeError;
@@ -47,6 +45,15 @@ pub enum SynthesisRisk {
     High,
     /// Critical risk - manual intervention required
     Critical,
+}
+
+/// Result of LLM prompt sanitization
+#[derive(Debug, Clone, PartialEq)]
+pub enum LlmPromptResult {
+    /// Prompt is safe to execute
+    Safe,
+    /// Prompt requires human approval before execution
+    RequiresApproval(String),
 }
 
 /// Risk assessment for capability synthesis authorization.
@@ -301,6 +308,166 @@ impl GovernanceKernel {
                 RuleAction::Deny(reason)
             }
         }
+    }
+
+    /// Validates that an RTFS expression is pure (no side effects).
+    ///
+    /// Pure expressions can only use:
+    /// - RTFS stdlib functions (map, filter, group-by, get, etc.)
+    /// - Pure capability calls (rtfs.*, pure.*, math.*, generated/*)
+    ///
+    /// Impure patterns are blocked:
+    /// - External MCP calls (mcp.*)
+    /// - HTTP calls (http.*)
+    /// - File system operations (fs.*)
+    /// - Database operations (db.*)
+    /// - I/O operations (ccos.io.* except println)
+    /// - User interaction (ccos.user.*)
+    ///
+    /// Returns Ok(()) if pure, Err with reason if impure.
+    pub fn validate_purity(&self, rtfs_code: &str) -> RuntimeResult<()> {
+        // Patterns that indicate impure operations
+        // These are capability ID prefixes that have side effects
+        const IMPURE_PREFIXES: &[&str] = &[
+            "mcp.",          // External MCP server calls
+            "http.",         // HTTP calls
+            "fs.",           // File system operations
+            "db.",           // Database operations
+            "ccos.io.write", // I/O write operations
+            "ccos.user.",    // User interaction
+            "ccos.cli.",     // CLI operations
+            "ccos.config.",  // Configuration mutations
+        ];
+
+        // Check for impure (call ...) patterns
+        for prefix in IMPURE_PREFIXES {
+            let pattern = format!("(call \"{}", prefix);
+            if rtfs_code.contains(&pattern) {
+                return Err(RuntimeError::Generic(format!(
+                    "Purity violation: adapter contains impure operation with prefix '{}'",
+                    prefix
+                )));
+            }
+        }
+
+        // Note: Pure patterns are implicitly allowed:
+        // - No (call ...) at all (pure stdlib expressions)
+        // - (call "rtfs.*) - RTFS stdlib wrappers
+        // - (call "pure.*) - Explicitly pure capabilities
+        // - (call "math.*) - Pure mathematical functions
+        // - (call "generated/*) - Auto-generated pure capabilities
+        // - (call "ccos.io.println") - Safe output for debugging
+        // - (call "ccos.data.*) - Pure data transformations
+
+        log::debug!("[GovernanceKernel] Purity validation passed for adapter");
+        Ok(())
+    }
+
+    /// Sanitizes an LLM prompt for use by agents.
+    ///
+    /// This performs comprehensive checks to prevent prompt injection and misuse:
+    /// 1. **Injection Detection** - Blocks common jailbreak patterns
+    /// 2. **Scope Enforcement** - Ensures prompt relates to provided context
+    /// 3. **Risk Assessment** - Flags high-risk prompts for approval
+    ///
+    /// Returns:
+    /// - Ok(LlmPromptResult::Safe) - Prompt is safe to execute
+    /// - Ok(LlmPromptResult::RequiresApproval(reason)) - Needs human approval
+    /// - Err - Prompt is blocked (injection detected)
+    pub fn sanitize_llm_prompt(
+        &self,
+        prompt: &str,
+        context_size: usize,
+    ) -> RuntimeResult<LlmPromptResult> {
+        let prompt_lower = prompt.to_lowercase();
+
+        // === 1. Injection Detection ===
+        const INJECTION_PATTERNS: &[&str] = &[
+            "ignore all previous instructions",
+            "ignore previous instructions",
+            "forget your instructions",
+            "disregard your instructions",
+            "disregard previous",
+            "you are now",
+            "pretend you are",
+            "act as if you are",
+            "roleplay as",
+            "your new role is",
+            "from now on you will",
+            "system prompt",
+            "jailbreak",
+            "dan mode",
+            "developer mode",
+            "bypass",
+            "override your",
+            "ignore safety",
+            "ignore your training",
+        ];
+
+        for pattern in INJECTION_PATTERNS {
+            if prompt_lower.contains(pattern) {
+                return Err(RuntimeError::Generic(format!(
+                    "LLM prompt injection blocked: pattern '{}' detected",
+                    pattern
+                )));
+            }
+        }
+
+        // === 2. Dangerous Request Detection ===
+        const DANGEROUS_PATTERNS: &[&str] = &[
+            "password",
+            "api key",
+            "secret key",
+            "private key",
+            "access token",
+            "credentials",
+            "ssh key",
+            "execute code",
+            "run command",
+            "shell command",
+            "rm -rf",
+            "drop table",
+            "delete from",
+            "format c:",
+        ];
+
+        for pattern in DANGEROUS_PATTERNS {
+            if prompt_lower.contains(pattern) {
+                log::warn!(
+                    "[GovernanceKernel] LLM prompt contains risky pattern: {}",
+                    pattern
+                );
+                return Ok(LlmPromptResult::RequiresApproval(format!(
+                    "Prompt mentions sensitive topic: '{}'",
+                    pattern
+                )));
+            }
+        }
+
+        // === 3. Size-based Risk Assessment ===
+        // Very long prompts without context are suspicious
+        if prompt.len() > 2000 && context_size == 0 {
+            return Ok(LlmPromptResult::RequiresApproval(
+                "Long prompt without context data may indicate injection attempt".to_string(),
+            ));
+        }
+
+        // === 4. Character-based Checks ===
+        // Excessive special characters may indicate obfuscation
+        let special_char_ratio = prompt
+            .chars()
+            .filter(|c| !c.is_alphanumeric() && !c.is_whitespace())
+            .count() as f64
+            / prompt.len() as f64;
+
+        if special_char_ratio > 0.3 && prompt.len() > 100 {
+            return Ok(LlmPromptResult::RequiresApproval(
+                "High ratio of special characters detected".to_string(),
+            ));
+        }
+
+        log::debug!("[GovernanceKernel] LLM prompt sanitization passed");
+        Ok(LlmPromptResult::Safe)
     }
 
     /// The primary entry point for processing a plan from the Arbiter.

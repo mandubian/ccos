@@ -287,6 +287,7 @@ impl From<SerializableManifest> for CapabilityManifest {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         }
     }
 }
@@ -589,6 +590,7 @@ impl CapabilityMarketplace {
                 agent_metadata: None,
                 domains: Vec::new(),
                 categories: Vec::new(),
+            effect_type: EffectType::Effectful,
             };
 
             let mut caps = self.capabilities.write().await;
@@ -805,6 +807,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -856,6 +859,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
 
         let catalog_manifest = manifest.clone();
@@ -1164,6 +1168,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1208,6 +1213,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1250,6 +1256,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1294,6 +1301,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1341,6 +1349,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
 
         let mut caps = self.capabilities.write().await;
@@ -1388,6 +1397,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1436,6 +1446,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1483,6 +1494,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1532,6 +1544,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1575,6 +1588,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1620,6 +1634,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1665,6 +1680,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1928,48 +1944,41 @@ impl CapabilityMarketplace {
 
         // Check for session management requirements (generic, metadata-driven)
         // This works for ANY provider that declares session needs via metadata
-        if !manifest.metadata.is_empty() {
-            // Check if capability requires session management (generic pattern)
-            let requires_session = manifest
-                .metadata
-                .iter()
-                .any(|(k, v)| k.ends_with("_requires_session") && (v == "true" || v == "auto"));
+        // Also auto-detect MCP provider types which inherently need session management
+        let requires_session = manifest
+            .metadata
+            .iter()
+            .any(|(k, v)| k.ends_with("_requires_session") && (v == "true" || v == "auto"));
 
-            if requires_session {
-                ccos_eprintln!(
-                    "📋 Metadata indicates session management required for: {}",
-                    id
-                );
+        // MCP capabilities always need session management for proper auth token handling
+        let is_mcp_provider = matches!(&manifest.provider, ProviderType::MCP(_));
 
-                // Delegate to session pool for session-managed execution
-                let pool_opt = {
-                    let guard = self.session_pool.read().await;
-                    guard.clone() // Clone the Arc<SessionPoolManager>
+        if requires_session || is_mcp_provider {
+            // Delegate to session pool for session-managed execution
+            let pool_opt = {
+                let guard = self.session_pool.read().await;
+                guard.clone() // Clone the Arc<SessionPoolManager>
+            };
+
+            if let Some(pool) = pool_opt {
+                let args = match inputs_ref {
+                    Value::List(list) => list.clone(),
+                    Value::Vector(vec) => vec.clone(),
+                    other => vec![other.clone()],
                 };
 
-                if let Some(pool) = pool_opt {
-                    ccos_eprintln!("🔄 Delegating to session pool for session management");
-                    let args = match inputs_ref {
-                        Value::List(list) => list.clone(),
-                        Value::Vector(vec) => vec.clone(),
-                        other => vec![other.clone()],
-                    };
-
-                    // Session pool will:
-                    // 1. Detect provider type from metadata (mcp_, graphql_, etc.)
-                    // 2. Route to appropriate SessionHandler
-                    // 3. Handler initializes/reuses session
-                    // 4. Handler executes with session (auth, headers, etc.)
-                    // 5. Returns result
-                    return pool.execute_with_session(id, &manifest.metadata, &args);
-                } else {
-                    ccos_eprintln!(
-                        "⚠️  Session management required but no session pool configured"
-                    );
-                    ccos_eprintln!(
-                        "   Falling through to normal execution (will likely fail with 401)"
-                    );
-                }
+                // Session pool will:
+                // 1. Detect provider type from metadata (mcp_, graphql_, etc.)
+                // 2. Route to appropriate SessionHandler
+                // 3. Handler initializes/reuses session
+                // 4. Handler executes with session (auth, headers, etc.)
+                // 5. Returns result
+                return pool.execute_with_session(id, &manifest.metadata, &args);
+            } else {
+                ccos_eprintln!("⚠️  Session management required but no session pool configured");
+                ccos_eprintln!(
+                    "   Falling through to normal execution (will likely fail with 401)"
+                );
             }
         }
 
@@ -1985,6 +1994,8 @@ impl CapabilityMarketplace {
         }
 
         // Execute via executor registry or provider fallback
+        let session_pool = self.session_pool.read().await.clone();
+        let context = super::executors::ExecutionContext::new(id, &manifest.metadata, session_pool);
         let exec_result = if let Some(executor) =
             self.executor_registry.get(&match &manifest.provider {
                 ProviderType::Local(_) => std::any::TypeId::of::<LocalCapability>(),
@@ -1999,14 +2010,18 @@ impl CapabilityMarketplace {
                 ProviderType::Native(_) => std::any::TypeId::of::<NativeCapability>(),
                 ProviderType::Sandboxed(_) => std::any::TypeId::of::<SandboxedCapability>(),
             }) {
-            executor.execute(&manifest.provider, inputs_ref).await
+            executor
+                .execute(&manifest.provider, inputs_ref, &context)
+                .await
         } else {
             match &manifest.provider {
                 ProviderType::Local(local) => (local.handler)(inputs_ref),
                 ProviderType::Http(http) => self.execute_http_capability(http, inputs_ref).await,
                 ProviderType::OpenApi(_) => {
                     let executor = OpenApiExecutor;
-                    executor.execute(&manifest.provider, inputs_ref).await
+                    executor
+                        .execute(&manifest.provider, inputs_ref, &context)
+                        .await
                 }
                 ProviderType::MCP(_mcp) => {
                     Err(RuntimeError::Generic("MCP not configured".to_string()))
@@ -2701,7 +2716,9 @@ impl CapabilityMarketplace {
         let mut total = 0usize;
 
         if dir.exists() {
-            total += self.import_capabilities_from_rtfs_dir_recursive(&dir).await?;
+            total += self
+                .import_capabilities_from_rtfs_dir_recursive(&dir)
+                .await?;
         } else if let Some(cb) = &self.debug_callback {
             cb(format!(
                 "Discovered capabilities directory does not exist: {}",

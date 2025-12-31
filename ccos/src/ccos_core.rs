@@ -335,6 +335,10 @@ impl CCOS {
             Arc::clone(&catalog_service),
         )
         .await?;
+        // Register native capabilities (ccos.cli.*, ccos.llm.*)
+        crate::ops::native::register_native_capabilities(&capability_marketplace).await?;
+        // Register filesystem capabilities (ccos.fs.*)
+        crate::ops::native::register_fs_capabilities(&capability_marketplace).await?;
 
         // 2. Initialize architectural components, injecting dependencies
         let plan_archive = Arc::new(match plan_archive_path {
@@ -639,6 +643,9 @@ impl CCOS {
 
         // The delegating_arbiter is now the primary arbiter
         let arbiter = Arc::clone(&delegating_arbiter);
+
+        // Wire arbiter to global accessor for LLM operations (ccos.llm.generate)
+        crate::ops::llm::set_global_arbiter(Arc::clone(&arbiter));
 
         // Wire arbiter to GovernanceKernel for centralized LLM access (repairs, validation)
         governance_kernel.set_arbiter(Arc::clone(&arbiter));

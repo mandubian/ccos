@@ -104,9 +104,23 @@ pub enum ProviderType {
 | `A2A` | Agent-to-Agent | HTTP/WebSocket | A2A agent card |
 | `Http` | Generic HTTP | HTTP | Manual definition |
 | `Local` | In-process Rust | Direct call | Code definition |
+| `Native` | Built-in CCOS capabilities | Direct call | Code definition |
 | `RemoteRTFS` | Federated CCOS | HTTP | Remote manifest |
 | `Stream` | Streaming data | Various | Manual definition |
 | `Plugin` | Native plugins | FFI | Plugin manifest |
+
+### 2.4 Native Capabilities
+
+Native capabilities are built-in CCOS capabilities implemented in Rust and registered during CCOS initialization. They include:
+
+| Capability | Description | Effects |
+|------------|-------------|---------|
+| `ccos.llm.generate` | LLM text generation with prompt sanitization (summarization, analysis) | `llm`, `network` |
+| `ccos.io.println` | Print output to console | `io` |
+| `ccos.cli.*` | CLI command capabilities | `io`, `read` |
+| `ccos.config.*` | Configuration access | `read` |
+
+Native capabilities are registered via `NativeCapabilityProvider` and `ops::native::register_native_capabilities()`.
 
 ### 2.3 Domain and Category Taxonomy
 

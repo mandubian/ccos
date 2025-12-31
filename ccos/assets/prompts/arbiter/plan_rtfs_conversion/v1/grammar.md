@@ -77,6 +77,13 @@ Note: The predicate uses:
     - Also accepts keywords as key-fn: `(group-by :state issues)` is equivalent to `(group-by (fn [x] (get x :state)) issues)`
     - Example: `(group-by :author issues)` → `{"alice" [issue1 issue3] "bob" [issue2]}`
 
+- **Type Conversion Functions**:
+  - `parse-int` - Parse string to integer: `(parse-int "123")` → `123`. Returns `nil` for invalid input.
+  - `parse-float` - Parse string to float: `(parse-float "3.14")` → `3.14`. Returns `nil` for invalid input.
+  - `int` - Coerce to integer: `(int "42")` → `42`, `(int 3.7)` → `3`, `(int true)` → `1`. Returns `0` for invalid input.
+  - `float` - Coerce to float: `(float "3.14")` → `3.14`, `(float 42)` → `42.0`. Returns `0.0` for invalid input.
+  - **Use these when user input comes as strings**: `(parse-int (get step_1 :perPage))` or `(int step_1)`
+
 - **RTFS String Functions** (use these, not namespace syntax):
   - `string-contains` - Check if a string contains a substring: `(string-contains haystack needle)`
   - `string-lower` - Convert string to lowercase: `(string-lower str)`

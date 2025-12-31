@@ -21,7 +21,7 @@
 //! 2. Call tools/list with session ID
 //! 3. Terminate session when done
 
-use crate::capability_marketplace::types::CapabilityManifest;
+use crate::capability_marketplace::types::{CapabilityManifest, EffectType};
 use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 use crate::mcp::types::DiscoveredMCPTool;
 use crate::synthesis::core::schema_serializer::type_expr_to_rtfs_compact;
@@ -734,6 +734,7 @@ impl MCPIntrospector {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         })
     }
 

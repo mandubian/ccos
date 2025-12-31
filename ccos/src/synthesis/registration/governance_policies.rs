@@ -545,6 +545,7 @@ impl GovernancePolicy for ApiDesignPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability_marketplace::types::EffectType;
     use crate::capability_marketplace::types::*;
 
     fn create_test_manifest() -> CapabilityManifest {
@@ -568,6 +569,7 @@ mod tests {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
+            effect_type: EffectType::default(),
         }
     }
 

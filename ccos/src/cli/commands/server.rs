@@ -51,7 +51,8 @@ impl ServerCommand {
     ) -> RuntimeResult<()> {
         match self {
             ServerCommand::List => {
-                let result = crate::ops::server::list_servers().await?;
+                let storage_path = ctx.resolve_workspace_path(&ctx.config.storage.approvals_dir);
+                let result = crate::ops::server::list_servers(storage_path).await?;
 
                 if result.servers.is_empty() {
                     formatter.warning("No approved servers.");
@@ -78,18 +79,23 @@ impl ServerCommand {
             }
             ServerCommand::Add { url, name } => {
                 let name_str = name.clone().unwrap_or_else(|| "manual-server".to_string());
-                let id = crate::ops::server::add_server(url.clone(), name.clone()).await?;
+                let storage_path = ctx.resolve_workspace_path(&ctx.config.storage.approvals_dir);
+                let id =
+                    crate::ops::server::add_server(storage_path, url.clone(), name.clone()).await?;
 
                 formatter.success(&format!("Added server '{}' to approval queue.", name_str));
                 formatter.kv("ID", &id);
                 formatter.list_item("Use 'ccos approval list' to view status.");
             }
             ServerCommand::Remove { name } => {
-                crate::ops::server::remove_server(name.clone()).await?;
+                let storage_path = ctx.resolve_workspace_path(&ctx.config.storage.approvals_dir);
+                crate::ops::server::remove_server(storage_path, &name).await?;
                 formatter.success("Server removed successfully.");
             }
             ServerCommand::Health { name } => {
-                let health_info = crate::ops::server::server_health(name.clone()).await?;
+                let storage_path = ctx.resolve_workspace_path(&ctx.config.storage.approvals_dir);
+                let health_info =
+                    crate::ops::server::server_health(storage_path, name.clone()).await?;
 
                 if health_info.is_empty() {
                     formatter.warning("No matching servers found.");
@@ -193,7 +199,10 @@ impl ServerCommand {
                             return Ok(());
                         }
 
+                        let storage_path =
+                            ctx.resolve_workspace_path(&ctx.config.storage.approvals_dir);
                         match crate::ops::server::add_server(
+                            storage_path,
                             selected.endpoint.clone(),
                             Some(selected.name.clone()),
                         )
@@ -215,13 +224,16 @@ impl ServerCommand {
                 }
             }
             ServerCommand::Dismiss { name, reason } => {
-                let workspace_root = find_workspace_root();
-                let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
+                let storage_path = ctx.resolve_workspace_path(&ctx.config.storage.approvals_dir);
+                let storage = std::sync::Arc::new(
+                    crate::approval::storage_file::FileApprovalStorage::new(storage_path)?,
+                );
+                let queue = crate::approval::UnifiedApprovalQueue::new(storage);
                 let reason_str = reason
                     .clone()
                     .unwrap_or_else(|| "Manual dismissal".to_string());
 
-                match queue.dismiss_server(name, reason_str.clone()) {
+                match queue.dismiss_server(name, reason_str.clone()).await {
                     Ok(_) => {
                         formatter.success(&format!("Dismissed server '{}'", name));
                         formatter.kv("Reason", &reason_str);
@@ -232,9 +244,12 @@ impl ServerCommand {
                 }
             }
             ServerCommand::Retry { name } => {
-                let workspace_root = find_workspace_root();
-                let queue = crate::discovery::ApprovalQueue::new(&workspace_root);
-                match queue.retry_server(name) {
+                let storage_path = ctx.resolve_workspace_path(&ctx.config.storage.approvals_dir);
+                let storage = std::sync::Arc::new(
+                    crate::approval::storage_file::FileApprovalStorage::new(storage_path)?,
+                );
+                let queue = crate::approval::UnifiedApprovalQueue::new(storage);
+                match queue.retry_server(name).await {
                     Ok(_) => {
                         formatter.success(&format!("Retried server '{}'", name));
                         formatter.list_item(
@@ -248,8 +263,9 @@ impl ServerCommand {
             }
             ServerCommand::Introspect { server } => {
                 formatter.info(&format!("Introspecting server: {}", server));
+                let storage_path = ctx.resolve_workspace_path(&ctx.config.storage.approvals_dir);
 
-                match crate::ops::server::introspect_server(server.clone()).await {
+                match crate::ops::server::introspect_server(storage_path, server.clone()).await {
                     Ok(result) => {
                         formatter.section(&format!("Server: {}", result.server_name));
                         formatter.kv("Endpoint", &result.server_url);
