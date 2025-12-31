@@ -35,6 +35,7 @@ use crate::synthesis::missing_capability_resolver::{
 use crate::types::{
     EdgeType, GenerationContext, IntentStatus, Plan, PlanStatus, StorableIntent, TriggerSource,
 };
+use crate::utils::hash::fnv1a64;
 use crate::utils::value_conversion::rtfs_value_to_json;
 
 const GROUNDING_VALUE_LIMIT: usize = 800;
@@ -128,16 +129,6 @@ fn slugify_description(desc: &str) -> String {
     }
 }
 
-fn fnv1a64(s: &str) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-    let mut hash = OFFSET_BASIS;
-    for b in s.as_bytes() {
-        hash ^= *b as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
-}
 
 fn generated_capability_id_from_description(desc: &str) -> String {
     let slug = slugify_description(desc);
