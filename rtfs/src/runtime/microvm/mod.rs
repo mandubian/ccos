@@ -14,6 +14,7 @@ pub mod tests;
 pub use config::{FileSystemPolicy, MicroVMConfig, NetworkPolicy};
 pub use core::{
     ExecutionContext, ExecutionMetadata, ExecutionResult, FileOperation, NetworkRequest, Program,
+    ScriptLanguage,
 };
 pub use factory::MicroVMFactory;
 pub use providers::MicroVMProvider;

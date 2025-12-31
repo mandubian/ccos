@@ -51,10 +51,13 @@ toml = { workspace = true }
 jsonschema = { workspace = true }
 sha2 = { workspace = true }
 wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasi-common = { workspace = true }
 flate2 = { workspace = true }
 bincode = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
+tempfile = "3.8"
 
 # REPL dependencies (for rtfs-repl binary)
 rustyline = { version = "13.0", optional = true }
@@ -63,6 +66,10 @@ clap = { version = "4.0", features = ["derive"] }
 # Utilities
 indexmap = "2.0"
 yansi = "1.0"
+
+# Platform-specific for non-blocking I/O
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 criterion = { version = "0.5", features = ["html_reports"] }
 

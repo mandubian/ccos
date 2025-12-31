@@ -22,6 +22,8 @@ pub fn plan_language_to_string(lang: &PlanLanguage) -> String {
         PlanLanguage::Rtfs20 => canonical_languages::RTFS20.to_string(),
         PlanLanguage::Wasm => canonical_languages::WASM.to_string(),
         PlanLanguage::Python => canonical_languages::PYTHON.to_string(),
+        PlanLanguage::JavaScript => "javascript".to_string(),
+        PlanLanguage::Shell => "shell".to_string(),
         PlanLanguage::GraphJson => canonical_languages::GRAPHJSON.to_string(),
         PlanLanguage::Other(ref s) => s.clone(),
     }
@@ -33,6 +35,8 @@ pub fn parse_language_string(lang: &str) -> Result<PlanLanguage, RtfsBridgeError
         "rtfs" | "rtfs20" | "rtfs2.0" | "rtfs 2.0" => Ok(PlanLanguage::Rtfs20),
         "wasm" => Ok(PlanLanguage::Wasm),
         "python" | "py" => Ok(PlanLanguage::Python),
+        "javascript" | "js" | "node" => Ok(PlanLanguage::JavaScript),
+        "shell" | "sh" | "bash" => Ok(PlanLanguage::Shell),
         "graph" | "graphjson" | "graph-json" => Ok(PlanLanguage::GraphJson),
         other => Ok(PlanLanguage::Other(other.to_string())),
     }

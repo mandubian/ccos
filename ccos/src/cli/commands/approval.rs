@@ -1,7 +1,8 @@
 use crate::cli::CliContext;
 use crate::cli::OutputFormatter;
 use clap::Subcommand;
-use dialoguer::Select;
+#[cfg(feature = "tui")]
+use dialoguer::{Confirm, Select};
 use rtfs::runtime::error::RuntimeResult;
 
 #[derive(Subcommand)]
@@ -107,6 +108,7 @@ pub async fn execute(ctx: &mut CliContext, command: ApprovalCommand) -> RuntimeR
                         "Cancel - Do nothing",
                     ];
 
+                    #[cfg(feature = "tui")]
                     let selection = Select::new()
                         .with_prompt("What would you like to do?")
                         .items(&options)
@@ -118,6 +120,11 @@ pub async fn execute(ctx: &mut CliContext, command: ApprovalCommand) -> RuntimeR
                                 e
                             ))
                         })?;
+
+                    #[cfg(not(feature = "tui"))]
+                    let selection = return Err(rtfs::runtime::error::RuntimeError::Generic(
+                        "Interactive approval not available in minimal build. Use --force-merge or --skip-existing.".to_string(),
+                    ));
 
                     match selection {
                         0 => {
