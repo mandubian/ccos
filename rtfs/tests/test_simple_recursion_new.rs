@@ -7,7 +7,12 @@ use rtfs::*;
 
 #[test]
 fn test_simple_mutual_recursion() {
-    let code = r#"(let [is-even (fn [n]
+    // Run on a larger stack to avoid stack overflows in some environments/toolchains.
+    std::thread::Builder::new()
+        .name("test_simple_mutual_recursion_new".to_string())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let code = r#"(let [is-even (fn [n]
                 (if (= n 0)
                   true
                   (is-odd (- n 1))))
@@ -17,37 +22,41 @@ fn test_simple_mutual_recursion() {
                  (is-even (- n 1))))]
   (vector (is-even 4) (is-odd 4) (is-even 7) (is-odd 7)))"#;
 
-    let parsed = parser::parse_expression(code).expect("Should parse successfully");
-    let module_registry = Arc::new(ModuleRegistry::new());
-    let security_context = rtfs::runtime::security::RuntimeContext::pure();
-    let host = create_pure_host();
-    let evaluator = Evaluator::new(
-        module_registry,
-        rtfs::runtime::security::RuntimeContext::pure(),
-        host,
-        rtfs::compiler::expander::MacroExpander::default(),
-    );
-    let outcome = evaluator
-        .evaluate(&parsed)
-        .expect("Should evaluate successfully");
+            let parsed = parser::parse_expression(code).expect("Should parse successfully");
+            let module_registry = Arc::new(ModuleRegistry::new());
+            let security_context = rtfs::runtime::security::RuntimeContext::pure();
+            let host = create_pure_host();
+            let evaluator = Evaluator::new(
+                module_registry,
+                rtfs::runtime::security::RuntimeContext::pure(),
+                host,
+                rtfs::compiler::expander::MacroExpander::default(),
+            );
+            let outcome = evaluator
+                .evaluate(&parsed)
+                .expect("Should evaluate successfully");
 
-    let result = match outcome {
-        rtfs::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
-        rtfs::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
-            panic!("Unexpected host call in pure test");
-        }
-    };
+            let result = match outcome {
+                rtfs::runtime::execution_outcome::ExecutionOutcome::Complete(value) => value,
+                rtfs::runtime::execution_outcome::ExecutionOutcome::RequiresHost(_) => {
+                    panic!("Unexpected host call in pure test");
+                }
+            };
 
-    // Expected: [true, false, false, true] for (is-even 4), (is-odd 4), (is-even 7), (is-odd 7)
-    if let runtime::values::Value::Vector(vec) = result {
-        assert_eq!(vec.len(), 4);
-        assert_eq!(vec[0], runtime::values::Value::Boolean(true)); // is-even 4
-        assert_eq!(vec[1], runtime::values::Value::Boolean(false)); // is-odd 4
-        assert_eq!(vec[2], runtime::values::Value::Boolean(false)); // is-even 7
-        assert_eq!(vec[3], runtime::values::Value::Boolean(true)); // is-odd 7
-    } else {
-        panic!("Expected vector result, got: {:?}", result);
-    }
+            // Expected: [true, false, false, true] for (is-even 4), (is-odd 4), (is-even 7), (is-odd 7)
+            if let runtime::values::Value::Vector(vec) = result {
+                assert_eq!(vec.len(), 4);
+                assert_eq!(vec[0], runtime::values::Value::Boolean(true)); // is-even 4
+                assert_eq!(vec[1], runtime::values::Value::Boolean(false)); // is-odd 4
+                assert_eq!(vec[2], runtime::values::Value::Boolean(false)); // is-even 7
+                assert_eq!(vec[3], runtime::values::Value::Boolean(true)); // is-odd 7
+            } else {
+                panic!("Expected vector result, got: {:?}", result);
+            }
+        })
+        .expect("Failed to spawn test thread")
+        .join()
+        .expect("Mutual recursion test thread panicked");
 }
 
 #[test]
