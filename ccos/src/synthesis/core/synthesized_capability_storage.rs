@@ -19,6 +19,7 @@
 //! - The inline RTFS implementation
 
 use crate::utils::fs::{get_workspace_root, sanitize_filename};
+use crate::utils::hash::fnv1a64;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -261,18 +262,6 @@ fn slugify(text: &str) -> String {
     // Truncate to reasonable length
     let truncated: String = result.chars().take(40).collect();
     truncated.trim_end_matches('-').to_string()
-}
-
-/// Simple FNV-1a 64-bit hash
-fn fnv1a64(s: &str) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-    let mut hash = OFFSET_BASIS;
-    for b in s.as_bytes() {
-        hash ^= *b as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
 }
 
 /// Escape a string for RTFS

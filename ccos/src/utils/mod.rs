@@ -1,4 +1,5 @@
 pub mod fs;
+pub mod hash;
 pub mod schema_cardinality;
 pub mod value_conversion;
 pub mod run_example;
