@@ -7,7 +7,17 @@ use futures::future::{BoxFuture, FutureExt};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Get the default storage path for approval queue from config
+fn get_default_storage_path() -> PathBuf {
+    let config = rtfs::config::AgentConfig::from_env();
+    let workspace_root = std::env::var("CCOS_WORKSPACE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    workspace_root.join(&config.storage.approvals_dir)
+}
 
 /// Native capability provider that exposes CLI operations as RTFS capabilities
 #[derive(Debug)]
@@ -263,6 +273,84 @@ impl NativeCapabilityProvider {
     }
 }
 
+/// Get rich description for a capability to help LLM decomposition.
+/// These descriptions are explicit about what the tool does and does NOT do
+/// to prevent semantic confusion during intent decomposition.
+fn get_capability_description(id: &str) -> &'static str {
+    match id {
+        // Server management (MCP registry, NOT filesystem)
+        "ccos.cli.server.list" => 
+            "List all MCP servers registered in the CCOS registry. \
+             Returns server names, endpoints, and status. NOT for listing files or directories.",
+        "ccos.cli.server.add" => 
+            "Register a new MCP server endpoint to the CCOS registry. \
+             Requires: name, endpoint URL. NOT for creating files or directories.",
+        "ccos.cli.server.remove" => 
+            "Remove an MCP server from the CCOS registry by name. \
+             Only unregisters the server, does NOT delete files or directories.",
+        "ccos.cli.server.health" => 
+            "Check health status of registered MCP servers. \
+             Returns connectivity and response time metrics.",
+        "ccos.cli.server.search" => 
+            "Search the MCP registry for servers matching a query. \
+             Searches by name, description, or capabilities.",
+        
+        // Discovery (introspection of capabilities, NOT filesystem)
+        "ccos.cli.discovery.goal" => 
+            "Find capabilities that match a natural language goal description. \
+             Returns matching tools from the capability catalog.",
+        "ccos.cli.discovery.search" => 
+            "Search for capabilities in the registry by keyword or semantic query. \
+             NOT for searching files or directories.",
+        "ccos.cli.discovery.inspect" => 
+            "Inspect details of a registered capability including its schema, \
+             permissions, and metadata. NOT for inspecting filesystem paths.",
+        
+        // Approval workflow
+        "ccos.cli.approval.pending" => 
+            "List pending approval requests in the CCOS approval queue. \
+             Shows effects, LLM prompts, and synthesis requests awaiting review.",
+        "ccos.cli.approval.approve" => 
+            "Approve a pending request by ID. Allows the pending action to proceed.",
+        "ccos.cli.approval.reject" => 
+            "Reject a pending request by ID with an optional reason.",
+        "ccos.cli.approval.timeout" => 
+            "List approval requests that have exceeded their timeout period.",
+        
+        // Configuration
+        "ccos.cli.config.show" => 
+            "Display current CCOS configuration including LLM profiles, storage paths, and feature flags.",
+        "ccos.cli.config.validate" => 
+            "Validate the CCOS configuration file for syntax and semantic errors.",
+        "ccos.cli.config.init" => 
+            "Initialize a new CCOS configuration file with default settings.",
+        
+        // Governance
+        "ccos.cli.governance.check" => 
+            "Check a plan against governance policies before execution.",
+        "ccos.cli.governance.constitution" => 
+            "Display the current governance constitution and policy rules.",
+        "ccos.cli.governance.audit" => 
+            "Generate an audit trail report of past governed executions.",
+        
+        // Plan management
+        "ccos.cli.plan.create" => 
+            "Create a new RTFS plan from a natural language goal.",
+        "ccos.cli.plan.validate" => 
+            "Validate an RTFS plan for syntax and capability availability.",
+        "ccos.cli.plan.execute" => 
+            "Execute an RTFS plan with governance checks and approval workflow.",
+        
+        // LLM
+        "ccos.llm.generate" => 
+            "Generate text using the configured LLM provider. \
+             Requires: prompt. Returns generated text response.",
+        
+        // Default fallback
+        _ => ""
+    }
+}
+
 impl CapabilityProvider for NativeCapabilityProvider {
     fn provider_id(&self) -> &str {
         "ccos.native"
@@ -272,12 +360,16 @@ impl CapabilityProvider for NativeCapabilityProvider {
         self.capabilities
             .iter()
             .map(|(id, cap)| {
-                // Use metadata description if available, otherwise generic
-                let description = cap
-                    .metadata
-                    .get("description")
-                    .cloned()
-                    .unwrap_or_else(|| format!("CCOS CLI capability: {}", id));
+                // Use centralized description, then metadata, then generic fallback
+                let rich_desc = get_capability_description(id);
+                let description = if !rich_desc.is_empty() {
+                    rich_desc.to_string()
+                } else {
+                    cap.metadata
+                        .get("description")
+                        .cloned()
+                        .unwrap_or_else(|| format!("CCOS CLI capability: {}", id))
+                };
                 CapabilityDescriptor {
                     id: id.clone(),
                     description,
@@ -498,7 +590,7 @@ fn create_server_list_capability() -> NativeCapability {
     let handler = Arc::new(
         |_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
             async move {
-                match ops::server::list_servers().await {
+                match ops::server::list_servers(get_default_storage_path()).await {
                     Ok(output) => {
                         let json = serde_json::to_string(&output).map_err(|e| {
                             RuntimeError::Generic(format!("Serialization error: {}", e))
@@ -527,7 +619,7 @@ fn create_server_add_capability() -> NativeCapability {
                 let url = get_string_param(&inputs, "url")?;
                 let name = get_optional_string_param(&inputs, "name");
 
-                match ops::server::add_server(url, name).await {
+                match ops::server::add_server(get_default_storage_path(), url, name).await {
                     Ok(server_id) => Ok(Value::String(server_id)),
                     Err(e) => Err(e),
                 }
@@ -550,7 +642,7 @@ fn create_server_remove_capability() -> NativeCapability {
             async move {
                 let name = get_string_param(&inputs, "name")?;
 
-                match ops::server::remove_server(name).await {
+                match ops::server::remove_server(get_default_storage_path(), &name).await {
                     Ok(_) => Ok(Value::String("Server removed successfully".to_string())),
                     Err(e) => Err(e),
                 }
@@ -573,7 +665,7 @@ fn create_server_health_capability() -> NativeCapability {
             async move {
                 let name = get_optional_string_param(&inputs, "name");
 
-                match ops::server::server_health(name).await {
+                match ops::server::server_health(get_default_storage_path(), name).await {
                     Ok(health_info) => {
                         let json = serde_json::to_string(&health_info).map_err(|e| {
                             RuntimeError::Generic(format!("Serialization error: {}", e))
@@ -637,7 +729,7 @@ fn create_discovery_goal_capability() -> NativeCapability {
                     _ => get_string_param(&inputs, "goal")?,
                 };
 
-                match ops::discover::discover_by_goal(goal).await {
+                match ops::discover::discover_by_goal(get_default_storage_path(), goal).await {
                     Ok(discovery_results) => {
                         let json = serde_json::to_string(&discovery_results).map_err(|e| {
                             RuntimeError::Generic(format!("Serialization error: {}", e))
@@ -721,7 +813,7 @@ fn create_approval_pending_capability() -> NativeCapability {
     let handler = Arc::new(
         |_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
             async move {
-                match ops::approval::list_pending().await {
+                match ops::approval::list_pending(get_default_storage_path()).await {
                     Ok(output) => {
                         let json = serde_json::to_string(&output).map_err(|e| {
                             RuntimeError::Generic(format!("Serialization error: {}", e))
@@ -755,7 +847,8 @@ fn create_approval_approve_capability() -> NativeCapability {
                     ),
                 };
 
-                match ops::approval::approve_discovery(id, reason).await {
+                match ops::approval::approve_discovery(get_default_storage_path(), id, reason).await
+                {
                     Ok(_) => Ok(Value::String("Approval successful".to_string())),
                     Err(e) => Err(e),
                 }
@@ -785,7 +878,8 @@ fn create_approval_reject_capability() -> NativeCapability {
                     ),
                 };
 
-                match ops::approval::reject_discovery(id, reason).await {
+                match ops::approval::reject_discovery(get_default_storage_path(), id, reason).await
+                {
                     Ok(_) => Ok(Value::String("Rejection successful".to_string())),
                     Err(e) => Err(e),
                 }
@@ -805,7 +899,7 @@ fn create_approval_timeout_capability() -> NativeCapability {
     let handler = Arc::new(
         |_inputs: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
             async move {
-                match ops::approval::list_timeout().await {
+                match ops::approval::list_timeout(get_default_storage_path()).await {
                     Ok(output) => {
                         let json = serde_json::to_string(&output).map_err(|e| {
                             RuntimeError::Generic(format!("Serialization error: {}", e))

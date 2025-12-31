@@ -310,6 +310,13 @@ fi
         let runtime_path = format!("/tmp/rtfs-runtime-{}.sh", container_id);
 
         match program {
+            Program::ScriptSource { language, source } => {
+                // Execute script in container using the appropriate interpreter
+                let interpreter = language.interpreter();
+                let cmd = vec![interpreter.to_string(), "-c".to_string(), source.clone()];
+                let output = self.execute_in_container(container_id, &cmd)?;
+                Ok(Value::String(output))
+            }
             Program::RtfsSource(source) => {
                 // For now, we'll simulate RTFS evaluation
                 // In a real implementation, we'd compile and execute the RTFS code

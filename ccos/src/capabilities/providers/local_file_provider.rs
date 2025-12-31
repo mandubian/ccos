@@ -1,12 +1,9 @@
-use std::fs;
-use std::io::{Read, Write};
-use std::path::Path;
-
 use crate::capabilities::provider::{
     CapabilityDescriptor, CapabilityProvider, ExecutionContext, HealthStatus, Permission,
     ProviderMetadata, ResourceLimits, SecurityRequirements,
 };
-use rtfs::ast::{PrimitiveType, TypeExpr};
+use crate::ops::fs;
+use rtfs::ast::{MapKey, PrimitiveType, TypeExpr};
 use rtfs::runtime::{RuntimeError, RuntimeResult, Value};
 
 #[derive(Debug, Default)]
@@ -50,107 +47,164 @@ impl LocalFileProvider {
         }
     }
 
-    fn read_file(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "ccos.io.read-file".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
+    fn extract_path(input: &Value) -> RuntimeResult<String> {
+        match input {
+            Value::String(s) => Ok(s.clone()),
+            Value::Map(map) => {
+                // Try "path" key
+                if let Some(val) = map
+                    .get(&MapKey::String("path".to_string()))
+                    .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword("path".to_string()))))
+                {
+                    if let Some(s) = val.as_string() {
+                        return Ok(s.to_string());
+                    }
+                }
+                // Try "args"
+                if let Some(args_val) = map
+                    .get(&MapKey::String("args".to_string()))
+                    .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword("args".to_string()))))
+                {
+                    if let Value::List(args) | Value::Vector(args) = args_val {
+                        if !args.is_empty() {
+                            if let Some(s) = args[0].as_string() {
+                                return Ok(s.to_string());
+                            }
+                        }
+                    }
+                }
+                Err(RuntimeError::Generic(
+                    "Missing 'path' parameter for filesystem operation".to_string(),
+                ))
+            }
+            Value::List(args) | Value::Vector(args) if !args.is_empty() => {
+                if let Some(s) = args[0].as_string() {
+                    Ok(s.to_string())
+                } else {
+                    Err(RuntimeError::TypeError {
+                        expected: "string".to_string(),
+                        actual: args[0].type_name().to_string(),
+                        operation: "extract_path".to_string(),
+                    })
+                }
+            }
+            _ => Err(RuntimeError::Generic(
+                "Invalid input for filesystem operation: expected string or map with 'path'"
+                    .to_string(),
+            )),
         }
-        let path = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
-            expected: "string".to_string(),
-            actual: args[0].type_name().to_string(),
-            operation: "ccos.io.read-file".to_string(),
-        })?;
-        if path.is_empty() {
-            return Err(RuntimeError::InvalidArgument(
-                "File path must not be empty".to_string(),
-            ));
+    }
+
+    fn extract_bool(input: &Value, key: &str, default: bool) -> bool {
+        if let Value::Map(map) = input {
+            if let Some(val) = map
+                .get(&MapKey::String(key.to_string()))
+                .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword(key.to_string()))))
+            {
+                if let Value::Boolean(b) = val {
+                    return *b;
+                }
+            }
         }
-        let mut file =
-            fs::File::open(Path::new(path)).map_err(|e| RuntimeError::IoError(e.to_string()))?;
-        let mut content = String::new();
-        file.read_to_string(&mut content)
-            .map_err(|e| RuntimeError::IoError(e.to_string()))?;
+        default
+    }
+
+    fn extract_content(input: &Value) -> RuntimeResult<String> {
+        if let Value::Map(map) = input {
+            if let Some(val) = map
+                .get(&MapKey::String("content".to_string()))
+                .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword("content".to_string()))))
+            {
+                if let Some(s) = val.as_string() {
+                    return Ok(s.to_string());
+                }
+            }
+            // Try args[1]
+            if let Some(args_val) = map
+                .get(&MapKey::String("args".to_string()))
+                .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword("args".to_string()))))
+            {
+                if let Value::List(args) | Value::Vector(args) = args_val {
+                    if args.len() >= 2 {
+                        if let Some(s) = args[1].as_string() {
+                            return Ok(s.to_string());
+                        }
+                    }
+                }
+            }
+        } else if let Value::List(args) | Value::Vector(args) = input {
+            if args.len() >= 2 {
+                if let Some(s) = args[1].as_string() {
+                    return Ok(s.to_string());
+                }
+            }
+        }
+        Err(RuntimeError::Generic(
+            "Missing 'content' parameter for write-file operation".to_string(),
+        ))
+    }
+
+    fn list_dir(input: &Value) -> RuntimeResult<Value> {
+        let path = Self::extract_path(input)?;
+        let entries = fs::list_dir(&path)?;
+        let mut result = Vec::new();
+        for entry in entries {
+            let mut map = std::collections::HashMap::new();
+            map.insert(
+                MapKey::Keyword(rtfs::ast::Keyword("name".to_string())),
+                Value::String(entry.name),
+            );
+            map.insert(
+                MapKey::Keyword(rtfs::ast::Keyword("path".to_string())),
+                Value::String(entry.path),
+            );
+            map.insert(
+                MapKey::Keyword(rtfs::ast::Keyword("is_dir".to_string())),
+                Value::Boolean(entry.is_dir),
+            );
+            map.insert(
+                MapKey::Keyword(rtfs::ast::Keyword("is_file".to_string())),
+                Value::Boolean(entry.is_file),
+            );
+            map.insert(
+                MapKey::Keyword(rtfs::ast::Keyword("size".to_string())),
+                Value::Integer(entry.size as i64),
+            );
+            result.push(Value::Map(map));
+        }
+        Ok(Value::Vector(result))
+    }
+
+    fn read_file(input: &Value) -> RuntimeResult<Value> {
+        let path = Self::extract_path(input)?;
+        let content = fs::read_file(&path)?;
         Ok(Value::String(content))
     }
 
-    fn write_file(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 2 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "ccos.io.write-file".to_string(),
-                expected: "2".to_string(),
-                actual: args.len(),
-            });
-        }
-        let path = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
-            expected: "string".to_string(),
-            actual: args[0].type_name().to_string(),
-            operation: "ccos.io.write-file".to_string(),
-        })?;
-        if path.is_empty() {
-            return Err(RuntimeError::InvalidArgument(
-                "File path must not be empty".to_string(),
-            ));
-        }
-        let content = args[1].as_string().ok_or_else(|| RuntimeError::TypeError {
-            expected: "string".to_string(),
-            actual: args[1].type_name().to_string(),
-            operation: "ccos.io.write-file".to_string(),
-        })?;
-        let mut file =
-            fs::File::create(Path::new(path)).map_err(|e| RuntimeError::IoError(e.to_string()))?;
-        file.write_all(content.as_bytes())
-            .map_err(|e| RuntimeError::IoError(e.to_string()))?;
+    fn write_file(input: &Value) -> RuntimeResult<Value> {
+        let path = Self::extract_path(input)?;
+        let content = Self::extract_content(input)?;
+        fs::write_file(&path, &content)?;
         Ok(Value::Boolean(true))
     }
 
-    fn delete_file(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "ccos.io.delete-file".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        let path = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
-            expected: "string".to_string(),
-            actual: args[0].type_name().to_string(),
-            operation: "ccos.io.delete-file".to_string(),
-        })?;
-        if path.is_empty() {
-            return Err(RuntimeError::InvalidArgument(
-                "File path must not be empty".to_string(),
-            ));
-        }
-        let path_ref = Path::new(path);
-        if !path_ref.exists() {
-            return Ok(Value::Boolean(false));
-        }
-        fs::remove_file(path_ref).map_err(|e| RuntimeError::IoError(e.to_string()))?;
-        Ok(Value::Boolean(true))
+    fn delete(input: &Value) -> RuntimeResult<Value> {
+        let path = Self::extract_path(input)?;
+        let recursive = Self::extract_bool(input, "recursive", false);
+        let deleted = fs::delete(&path, recursive)?;
+        Ok(Value::Boolean(deleted))
     }
 
-    fn file_exists(args: &[Value]) -> RuntimeResult<Value> {
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                function: "ccos.io.file-exists".to_string(),
-                expected: "1".to_string(),
-                actual: args.len(),
-            });
-        }
-        let path = args[0].as_string().ok_or_else(|| RuntimeError::TypeError {
-            expected: "string".to_string(),
-            actual: args[0].type_name().to_string(),
-            operation: "ccos.io.file-exists".to_string(),
-        })?;
-        if path.is_empty() {
-            return Err(RuntimeError::InvalidArgument(
-                "File path must not be empty".to_string(),
-            ));
-        }
-        Ok(Value::Boolean(Path::new(path).exists()))
+    fn exists(input: &Value) -> RuntimeResult<Value> {
+        let path = Self::extract_path(input)?;
+        Ok(Value::Boolean(fs::exists(&path)))
+    }
+
+    fn mkdir(input: &Value) -> RuntimeResult<Value> {
+        let path = Self::extract_path(input)?;
+        let recursive = Self::extract_bool(input, "recursive", false);
+        fs::mkdir(&path, recursive)?;
+        Ok(Value::Boolean(true))
     }
 }
 
@@ -162,22 +216,29 @@ impl CapabilityProvider for LocalFileProvider {
     fn list_capabilities(&self) -> Vec<CapabilityDescriptor> {
         vec![
             Self::descriptor(
-                "ccos.io.file-exists",
-                "Checks if a file is present",
+                "ccos.fs.list",
+                "List contents of a directory. Returns a list of objects with: \
+                 :name, :path, :is_dir, :is_file, :size. \
+                 Use for exploring the filesystem or finding files. \
+                 NOT for listing registered MCP servers.",
                 1,
                 false,
                 vec![Permission::FileRead(std::path::PathBuf::from("/"))],
             ),
             Self::descriptor(
-                "ccos.io.read-file",
-                "Reads file contents as string",
+                "ccos.fs.read",
+                "Read the content of a file as a string. \
+                 Use for viewing configuration, logs, or source code. \
+                 NOT for reading MCP server registry data.",
                 1,
                 true,
                 vec![Permission::FileRead(std::path::PathBuf::from("/"))],
             ),
             Self::descriptor(
-                "ccos.io.write-file",
-                "Writes string content to file",
+                "ccos.fs.write",
+                "Write string content to a file. \
+                 Use for saving logs, creating configuration files, or updating code. \
+                 NOT for writing to the MCP server registry.",
                 2,
                 false,
                 vec![
@@ -186,8 +247,29 @@ impl CapabilityProvider for LocalFileProvider {
                 ],
             ),
             Self::descriptor(
-                "ccos.io.delete-file",
-                "Deletes the specified file",
+                "ccos.fs.delete",
+                "Delete a file or directory. \
+                 Params: :path (required), :recursive (bool, optional). \
+                 Use to remove temporary files, builds, or unwanted directories. \
+                 NOT for unregistering MCP servers.",
+                1,
+                false,
+                vec![Permission::FileWrite(std::path::PathBuf::from("/"))],
+            ),
+            Self::descriptor(
+                "ccos.fs.exists",
+                "Check if a file or directory exists at the given path. \
+                 Use for verifying path availability before other operations. \
+                 NOT for checking if an MCP server is registered.",
+                1,
+                false,
+                vec![Permission::FileRead(std::path::PathBuf::from("/"))],
+            ),
+            Self::descriptor(
+                "ccos.fs.mkdir",
+                "Create a new directory. \
+                 Params: :path (required), :recursive (bool, optional). \
+                 Use for setting up workspace structures.",
                 1,
                 false,
                 vec![Permission::FileWrite(std::path::PathBuf::from("/"))],
@@ -201,16 +283,13 @@ impl CapabilityProvider for LocalFileProvider {
         inputs: &Value,
         _context: &ExecutionContext,
     ) -> RuntimeResult<Value> {
-        let args = match inputs {
-            Value::Vector(vec) => vec,
-            Value::List(list) => list,
-            single => std::slice::from_ref(single),
-        };
         match capability_id {
-            "ccos.io.file-exists" => Self::file_exists(args),
-            "ccos.io.read-file" => Self::read_file(args),
-            "ccos.io.write-file" => Self::write_file(args),
-            "ccos.io.delete-file" => Self::delete_file(args),
+            "ccos.fs.list" => Self::list_dir(inputs),
+            "ccos.fs.read" => Self::read_file(inputs),
+            "ccos.fs.write" => Self::write_file(inputs),
+            "ccos.fs.delete" => Self::delete(inputs),
+            "ccos.fs.exists" => Self::exists(inputs),
+            "ccos.fs.mkdir" => Self::mkdir(inputs),
             other => Err(RuntimeError::Generic(format!(
                 "LocalFileProvider does not support capability {}",
                 other
@@ -232,8 +311,8 @@ impl CapabilityProvider for LocalFileProvider {
     fn metadata(&self) -> ProviderMetadata {
         ProviderMetadata {
             name: "Local File Provider".to_string(),
-            version: "0.1.0".to_string(),
-            description: "Executes local file operations for development".to_string(),
+            version: "0.2.0".to_string(),
+            description: "Executes local filesystem operations".to_string(),
             author: "CCOS".to_string(),
             license: Some("MIT".to_string()),
             dependencies: vec![],

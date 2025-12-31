@@ -107,7 +107,16 @@ pub struct CapabilityDescriptor {
 #[derive(Debug, Clone)]
 pub struct ExecutionContext {
     pub trace_id: String,
-    pub timeout: Duration,
+    pub timeout: std::time::Duration,
+}
+
+impl Default for ExecutionContext {
+    fn default() -> Self {
+        Self {
+            trace_id: "default".to_string(),
+            timeout: std::time::Duration::from_secs(30),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

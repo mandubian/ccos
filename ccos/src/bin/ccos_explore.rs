@@ -1980,7 +1980,7 @@ fn get_approval_queue_base() -> std::path::PathBuf {
 /// Create a UnifiedApprovalQueue with FileApprovalStorage
 fn create_unified_queue() -> Result<ccos::approval::UnifiedApprovalQueue<ccos::approval::storage_file::FileApprovalStorage>, rtfs::runtime::error::RuntimeError> {
     let queue_base = get_approval_queue_base();
-    let storage_path = queue_base.join("capabilities/servers/approvals");
+    let storage_path = queue_base.join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
     let storage = std::sync::Arc::new(ccos::approval::storage_file::FileApprovalStorage::new(storage_path)?);
     Ok(ccos::approval::UnifiedApprovalQueue::new(storage))
 }

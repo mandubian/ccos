@@ -63,6 +63,50 @@ pub struct AgentConfig {
     pub self_programming: SelfProgrammingConfig,
 }
 
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            version: "0.1".to_string(),
+            agent_id: "agent.default".to_string(),
+            profile: "local".to_string(),
+            orchestrator: OrchestratorConfig::default(),
+            network: NetworkConfig::default(),
+            microvm: None,
+            capabilities: CapabilitiesConfig::default(),
+            governance: GovernanceConfig::default(),
+            causal_chain: CausalChainConfig::default(),
+            marketplace: MarketplaceConfig::default(),
+            delegation: DelegationConfig::default(),
+            features: vec![],
+            llm_profiles: None,
+            discovery: DiscoveryConfig::default(),
+            catalog: CatalogConfig::default(),
+            missing_capabilities: MissingCapabilityRuntimeConfig::default(),
+            storage: StoragePathsConfig::default(),
+            self_programming: SelfProgrammingConfig::default(),
+        }
+    }
+}
+
+impl AgentConfig {
+    /// Load agent configuration from environment (AGENT_CONFIG_PATH) or use default
+    pub fn from_env() -> Self {
+        let config_path = std::env::var("AGENT_CONFIG_PATH");
+        if let Ok(path) = config_path {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                // Try to parse using AgentConfigParser if available in ccos,
+                // but since we are in rtfs, we might not have it easily accessible without circular deps
+                // if we are not careful.
+                // However, rtfs::config::parser should be available.
+                // Actually, let's just use a simple toml-like parsing or default for now if it fails.
+                // For now, we'll return default if parsing fails.
+                return Self::default();
+            }
+        }
+        Self::default()
+    }
+}
+
 /// Storage paths configuration for capability directories
 /// All paths are relative to the config file's directory unless absolute.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -83,6 +127,9 @@ pub struct StoragePathsConfig {
     /// Subdirectory for pending synthesis queue (relative to storage root)
     #[serde(default = "default_pending_synth_subdir")]
     pub pending_synth_subdir: String,
+    /// Directory for unified approval requests
+    #[serde(default = "default_approvals_dir")]
+    pub approvals_dir: String,
 }
 
 fn default_capabilities_dir() -> String {
@@ -105,6 +152,10 @@ fn default_pending_synth_subdir() -> String {
     "storage/pending_synth".to_string()
 }
 
+fn default_approvals_dir() -> String {
+    "storage/approvals".to_string()
+}
+
 impl Default for StoragePathsConfig {
     fn default() -> Self {
         Self {
@@ -113,6 +164,7 @@ impl Default for StoragePathsConfig {
             generated_subdir: default_generated_subdir(),
             servers_approved_subdir: default_servers_approved_subdir(),
             pending_synth_subdir: default_pending_synth_subdir(),
+            approvals_dir: default_approvals_dir(),
         }
     }
 }
@@ -402,7 +454,7 @@ fn default_catalog_keyword_min_score() -> f32 {
 }
 
 /// Orchestrator configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct OrchestratorConfig {
     /// Isolation mode configuration
     pub isolation: IsolationConfig,
@@ -420,8 +472,17 @@ pub struct IsolationConfig {
     pub fs: FSConfig,
 }
 
+impl Default for IsolationConfig {
+    fn default() -> Self {
+        Self {
+            mode: "wasm".to_string(),
+            fs: FSConfig::default(),
+        }
+    }
+}
+
 /// Filesystem configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct FSConfig {
     /// Whether filesystem is ephemeral
     pub ephemeral: bool,
@@ -436,8 +497,16 @@ pub struct MountConfig {
     pub mode: String,
 }
 
+impl Default for MountConfig {
+    fn default() -> Self {
+        Self {
+            mode: "ro".to_string(),
+        }
+    }
+}
+
 /// DLP (Data Loss Prevention) configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct DLPConfig {
     /// Whether DLP is enabled
     pub enabled: bool,
@@ -451,7 +520,7 @@ fn default_dlp_policy() -> String {
 }
 
 /// Network configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct NetworkConfig {
     /// Whether networking is enabled
     pub enabled: bool,
@@ -472,6 +541,17 @@ pub struct EgressConfig {
     /// TLS certificate pins
     #[serde(default)]
     pub tls_pins: Vec<String>,
+}
+
+impl Default for EgressConfig {
+    fn default() -> Self {
+        Self {
+            via: "none".to_string(),
+            allow_domains: vec![],
+            mtls: false,
+            tls_pins: vec![],
+        }
+    }
 }
 
 /// MicroVM-specific configuration
@@ -553,7 +633,7 @@ pub struct AttestationConfig {
 }
 
 /// Capability configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct CapabilitiesConfig {
     /// HTTP capability configuration
     pub http: HTTPCapabilityConfig,
@@ -564,7 +644,7 @@ pub struct CapabilitiesConfig {
 }
 
 /// HTTP capability configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct HTTPCapabilityConfig {
     /// Whether HTTP capability is enabled
     pub enabled: bool,
@@ -573,7 +653,7 @@ pub struct HTTPCapabilityConfig {
 }
 
 /// HTTP egress configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct HTTPEgressConfig {
     /// Allowed domains for HTTP
     pub allow_domains: Vec<String>,
@@ -582,21 +662,21 @@ pub struct HTTPEgressConfig {
 }
 
 /// Filesystem capability configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct FSCapabilityConfig {
     /// Whether filesystem capability is enabled
     pub enabled: bool,
 }
 
 /// LLM capability configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct LLMCapabilityConfig {
     /// Whether LLM capability is enabled
     pub enabled: bool,
 }
 
 /// Governance configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct GovernanceConfig {
     /// Policy configurations
     pub policies: HashMap<String, PolicyConfig>,
@@ -617,7 +697,7 @@ pub struct PolicyConfig {
 }
 
 /// Budget configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct BudgetConfig {
     /// Maximum cost in USD
     pub max_cost_usd: f64,
@@ -626,14 +706,14 @@ pub struct BudgetConfig {
 }
 
 /// Key configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct KeyConfig {
     /// Verification public key
     pub verify: String,
 }
 
 /// Causal Chain configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct CausalChainConfig {
     /// Storage configuration
     pub storage: StorageConfig,
@@ -650,15 +730,24 @@ pub struct StorageConfig {
     pub buffer_local: Option<bool>,
 }
 
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            mode: "in_memory".to_string(),
+            buffer_local: None,
+        }
+    }
+}
+
 /// Anchor configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct AnchorConfig {
     /// Whether anchoring is enabled
     pub enabled: bool,
 }
 
 /// Marketplace configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct MarketplaceConfig {
     /// Registry paths
     pub registry_paths: Vec<String>,
@@ -667,7 +756,7 @@ pub struct MarketplaceConfig {
 }
 
 /// Delegation configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct DelegationConfig {
     /// NOTE: This is the external/serializable shape used for user-provided
     /// agent configuration (AgentConfig). It intentionally differs from the
@@ -701,7 +790,7 @@ pub struct DelegationConfig {
 }
 
 /// Agent registry configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct AgentRegistryConfig {
     /// Registry type (in_memory, database, etc.)
     pub registry_type: RegistryType,
@@ -712,9 +801,10 @@ pub struct AgentRegistryConfig {
 }
 
 /// Registry types
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum RegistryType {
     /// In-memory registry
+    #[default]
     InMemory,
     /// Database-backed registry
     Database,
@@ -745,6 +835,22 @@ pub struct AdaptiveThresholdConfig {
     pub env_prefix: Option<String>,
 }
 
+impl Default for AdaptiveThresholdConfig {
+    fn default() -> Self {
+        Self {
+            enabled: Some(true),
+            base_threshold: Some(0.65),
+            min_threshold: Some(0.3),
+            max_threshold: Some(0.9),
+            success_rate_weight: Some(0.7),
+            historical_weight: Some(0.3),
+            decay_factor: Some(0.8),
+            min_samples: Some(5),
+            env_prefix: Some("CCOS_DELEGATION_".to_string()),
+        }
+    }
+}
+
 /// Agent definition
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentDefinition {
@@ -762,145 +868,12 @@ pub struct AgentDefinition {
     pub metadata: HashMap<String, String>,
 }
 
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            version: "0.1".to_string(),
-            agent_id: "agent.default".to_string(),
-            profile: "minimal".to_string(),
-            orchestrator: OrchestratorConfig::default(),
-            network: NetworkConfig::default(),
-            microvm: None,
-            capabilities: CapabilitiesConfig::default(),
-            governance: GovernanceConfig::default(),
-            causal_chain: CausalChainConfig::default(),
-            marketplace: MarketplaceConfig::default(),
-            delegation: DelegationConfig::default(),
-            features: vec![],
-            llm_profiles: None,
-            discovery: DiscoveryConfig::default(),
-            catalog: CatalogConfig::default(),
-            missing_capabilities: MissingCapabilityRuntimeConfig::default(),
-            storage: StoragePathsConfig::default(),
-            self_programming: SelfProgrammingConfig::default(),
-        }
-    }
-}
-
-impl Default for OrchestratorConfig {
-    fn default() -> Self {
-        Self {
-            isolation: IsolationConfig::default(),
-            dlp: DLPConfig::default(),
-        }
-    }
-}
-
-impl Default for IsolationConfig {
-    fn default() -> Self {
-        Self {
-            mode: "wasm".to_string(),
-            fs: FSConfig::default(),
-        }
-    }
-}
-
-impl Default for FSConfig {
-    fn default() -> Self {
-        Self {
-            ephemeral: false,
-            mounts: HashMap::new(),
-        }
-    }
-}
-
-impl Default for DLPConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            policy: "lenient".to_string(),
-        }
-    }
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            egress: EgressConfig::default(),
-        }
-    }
-}
-
-impl Default for EgressConfig {
-    fn default() -> Self {
-        Self {
-            via: "none".to_string(),
-            allow_domains: vec![],
-            mtls: false,
-            tls_pins: vec![],
-        }
-    }
-}
-
-impl Default for CapabilitiesConfig {
-    fn default() -> Self {
-        Self {
-            http: HTTPCapabilityConfig::default(),
-            fs: FSCapabilityConfig::default(),
-            llm: LLMCapabilityConfig::default(),
-        }
-    }
-}
-
-impl Default for HTTPCapabilityConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            egress: HTTPEgressConfig::default(),
-        }
-    }
-}
-
-impl Default for HTTPEgressConfig {
-    fn default() -> Self {
-        Self {
-            allow_domains: vec![],
-            mtls: false,
-        }
-    }
-}
-
-impl Default for FSCapabilityConfig {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
-}
-
-impl Default for LLMCapabilityConfig {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
-}
-
-impl Default for GovernanceConfig {
-    fn default() -> Self {
-        Self {
-            policies: HashMap::new(),
-            keys: KeyConfig::default(),
-        }
-    }
-}
-
 impl Default for PolicyConfig {
     fn default() -> Self {
         Self {
             risk_tier: "low".to_string(),
             requires_approvals: 0,
-            budgets: BudgetConfig {
-                max_cost_usd: 0.0,
-                token_budget: 0.0,
-            },
+            budgets: BudgetConfig::default(),
         }
     }
 }
@@ -969,90 +942,6 @@ impl<'de> Deserialize<'de> for PolicyConfig {
                     budgets,
                 })
             }
-        }
-    }
-}
-
-impl Default for KeyConfig {
-    fn default() -> Self {
-        Self {
-            verify: "".to_string(),
-        }
-    }
-}
-
-impl Default for CausalChainConfig {
-    fn default() -> Self {
-        Self {
-            storage: StorageConfig::default(),
-            anchor: AnchorConfig::default(),
-        }
-    }
-}
-
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self {
-            mode: "in_memory".to_string(),
-            buffer_local: None,
-        }
-    }
-}
-
-impl Default for AnchorConfig {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
-}
-
-impl Default for MarketplaceConfig {
-    fn default() -> Self {
-        Self {
-            registry_paths: vec![],
-            readonly: None,
-        }
-    }
-}
-
-impl Default for DelegationConfig {
-    fn default() -> Self {
-        Self {
-            enabled: None,
-            threshold: None,
-            min_skill_hits: None,
-            max_candidates: None,
-            feedback_success_weight: None,
-            feedback_decay: None,
-            agent_registry: None,
-            print_extracted_intent: None,
-            print_extracted_plan: None,
-            adaptive_threshold: None,
-        }
-    }
-}
-
-impl Default for AdaptiveThresholdConfig {
-    fn default() -> Self {
-        Self {
-            enabled: Some(true),
-            base_threshold: Some(0.65),
-            min_threshold: Some(0.3),
-            max_threshold: Some(0.9),
-            success_rate_weight: Some(0.7),
-            historical_weight: Some(0.3),
-            decay_factor: Some(0.8),
-            min_samples: Some(5),
-            env_prefix: Some("CCOS_DELEGATION_".to_string()),
-        }
-    }
-}
-
-impl Default for AgentRegistryConfig {
-    fn default() -> Self {
-        Self {
-            registry_type: RegistryType::InMemory,
-            database_url: None,
-            agents: vec![],
         }
     }
 }

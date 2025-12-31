@@ -20,20 +20,8 @@
 
 use crate::utils::fs::{get_workspace_root, sanitize_filename};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-/// Approval status for synthesized capabilities
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ApprovalStatus {
-    /// Awaiting human review (default for auto-synthesized)
-    Provisional,
-    /// Approved as pure by human/constitution
-    ApprovedPure,
-    /// Demoted to effectful (cannot be used in adapters)
-    DemotedEffectful,
-}
 
 /// Represents a synthesized capability extracted from a plan
 #[derive(Debug, Clone)]
@@ -48,8 +36,6 @@ pub struct SynthesizedCapability {
     pub input_schema: String,
     /// Output schema (RTFS type expression string)
     pub output_schema: String,
-    /// Whether this is a pure capability (can be called from adapters)
-    pub is_pure: bool,
     /// Additional metadata (e.g., source plan ID, creation time)
     pub metadata: HashMap<String, String>,
 }
@@ -64,7 +50,6 @@ impl SynthesizedCapability {
             implementation: implementation.to_string(),
             input_schema: ":any".to_string(),
             output_schema: ":any".to_string(),
-            is_pure: false, // Default to PureProvisional - requires approval to become Pure
             metadata: HashMap::new(),
         }
     }
@@ -109,8 +94,6 @@ impl SynthesizedCapability {
             Ok(expr) => crate::rtfs_bridge::expression_to_pretty_rtfs_string(&expr),
             Err(_) => self.implementation.clone(),
         };
-        // Build effects array
-        let effects = if self.is_pure { "\":pure\"" } else { "" };
         let implementation_indented = indent_block(&implementation_pretty, "    ");
 
         format!(
@@ -123,7 +106,7 @@ impl SynthesizedCapability {
   :version "1.0.0"
   :language "rtfs20"
   :permissions []
-  :effects [{effects}]
+  :effects []
   :input-schema {input_schema}
   :output-schema {output_schema}
 {metadata}  :implementation
@@ -134,7 +117,6 @@ impl SynthesizedCapability {
             id = escaped_id,
             name = sanitize_name(&self.description),
             desc = escaped_desc,
-            effects = effects,
             input_schema = self.input_schema,
             output_schema = self.output_schema,
             metadata = metadata_block,
@@ -230,87 +212,6 @@ impl SynthesizedCapabilityStorage {
             }
         }
         Ok(ids)
-    }
-
-    /// Get the approval status file path
-    fn approval_file_path(&self) -> PathBuf {
-        self.storage_root.join("provisional_approvals.json")
-    }
-
-    /// Load approval statuses from file
-    fn load_approvals(&self) -> HashMap<String, ApprovalStatus> {
-        let path = self.approval_file_path();
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(map) = serde_json::from_str(&content) {
-                    return map;
-                }
-            }
-        }
-        HashMap::new()
-    }
-
-    /// Save approval statuses to file
-    fn save_approvals(&self, approvals: &HashMap<String, ApprovalStatus>) -> RuntimeResult<()> {
-        std::fs::create_dir_all(&self.storage_root).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
-        })?;
-
-        let path = self.approval_file_path();
-        let content = serde_json::to_string_pretty(approvals)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to serialize approvals: {}", e)))?;
-
-        std::fs::write(&path, content)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to write approvals: {}", e)))
-    }
-
-    /// Get approval status for a capability
-    pub fn get_approval_status(&self, capability_id: &str) -> ApprovalStatus {
-        self.load_approvals()
-            .get(capability_id)
-            .cloned()
-            .unwrap_or(ApprovalStatus::Provisional)
-    }
-
-    /// Set approval status for a capability
-    pub fn set_approval_status(
-        &self,
-        capability_id: &str,
-        status: ApprovalStatus,
-    ) -> RuntimeResult<()> {
-        let mut approvals = self.load_approvals();
-        approvals.insert(capability_id.to_string(), status);
-        self.save_approvals(&approvals)?;
-        log::info!(
-            "📋 Updated approval status for '{}': {:?}",
-            capability_id,
-            approvals.get(capability_id)
-        );
-        Ok(())
-    }
-
-    /// Promote a capability from Provisional to ApprovedPure
-    pub fn promote_to_pure(&self, capability_id: &str) -> RuntimeResult<()> {
-        self.set_approval_status(capability_id, ApprovalStatus::ApprovedPure)
-    }
-
-    /// Demote a capability from Provisional to DemotedEffectful
-    pub fn demote_to_effectful(&self, capability_id: &str) -> RuntimeResult<()> {
-        self.set_approval_status(capability_id, ApprovalStatus::DemotedEffectful)
-    }
-
-    /// List all capabilities with Provisional status
-    pub fn list_provisional(&self) -> RuntimeResult<Vec<String>> {
-        let ids = self.list_ids()?;
-        let approvals = self.load_approvals();
-
-        Ok(ids
-            .into_iter()
-            .filter(|id| {
-                approvals.get(id).unwrap_or(&ApprovalStatus::Provisional)
-                    == &ApprovalStatus::Provisional
-            })
-            .collect())
     }
 }
 
@@ -412,10 +313,7 @@ mod tests {
     #[test]
     fn test_slugify() {
         assert_eq!(slugify("Group By Author"), "group-by-author");
-        assert_eq!(
-            slugify("filter items with high score"),
-            "filter-items-with-high-score"
-        );
+        assert_eq!(slugify("filter items with high score"), "filter-items-with-high-score");
     }
 
     #[test]

@@ -65,11 +65,30 @@ A dedicated discovery agent that replaces hard-coded heuristics with intelligent
     - Updated `synthesize_adapter` prompt to use generic filtering examples (`filter_records`) instead of `filter_issues`.
     - Changed the default demo goal to "Find the weather in Paris and filter for rain" to showcase generic capabilities.
 
-## 8. Next Steps (Future Enhancements)
+## 11. Generic Sandboxing & WASM Support (Phase E)
+- **Goal**: Refactor the sandboxing architecture to support multiple languages (Python, JS, Shell, Wasm, RTFS) and providers (Firecracker, Process, Wasmtime), and enable large payload passing.
+- **Generic Architecture**:
+    - Introduced `ScriptLanguage` and `Program::Binary` variants to `rtfs` core.
+    - Implemented automatic language detection from source code.
+    - Aligned CCOS `SandboxedExecutor` with the new generic structure.
+- **WASM Provider**:
+    - Implemented `WasmMicroVMProvider` using `wasmtime` and `WASI`.
+    - Enables native execution of WASM binaries with bidirectional JSON data exchange.
+- **Firecracker & Process Enhancements**:
+    - Fixed Firecracker stability issues (non-blocking I/O, permission fixes).
+    - Implemented large payload passing (up to 100KB+) via `RTFS_INPUT_FILE` environment variable.
+    - Firecracker now uses `debugfs` to inject `input.json` into the guest rootfs.
+- **Verification**:
+    - Created `ccos/examples/sandboxed_script_demo.rs` demonstrating Python execution in both local processes and Firecracker VMs.
+    - Verified WASM execution with native integration tests.
+    - Fixed regressions in `rtfs` microvm integration tests.
+
+## 12. Next Steps (Future Enhancements)
 - **Feedback-Driven Weighting**: Track which hints lead to successful discoveries
 - **Richer Query Expansion**: Use intent constraints, plan history, workspace metadata
 - **Planner Integration**: Have planner use agent directly for hint generation (currently agent is used internally by engine)
 - **Performance Monitoring**: Track discovery success rates and query effectiveness
+- **WASM Capability Marketplace**: Add support for discovering and registering WASM-based capabilities directly from the TUI.
 
 ## 9. Implemented Phase D: Execution Repair Loop
 - **Goal**: Enable the agent to recover from runtime failures by feeding errors back to the LLM.

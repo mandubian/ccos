@@ -51,10 +51,13 @@ toml = { workspace = true }
 jsonschema = { workspace = true }
 sha2 = { workspace = true }
 wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasi-common = { workspace = true }
 flate2 = { workspace = true }
 bincode = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
+tempfile = "3.8"
 
 # REPL dependencies (for rtfs-repl binary)
 rustyline = { version = "13.0", optional = true }
@@ -63,6 +66,10 @@ clap = { version = "4.0", features = ["derive"] }
 # Utilities
 indexmap = "2.0"
 yansi = "1.0"
+
+# Platform-specific for non-blocking I/O
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 criterion = { version = "0.5", features = ["html_reports"] }
 
@@ -75,4 +82,24 @@ filetime = "0.2"
 [[test]]
 name = "test_macros"
 path = "tests/test_macros.rs"
+
+[[test]]
+name = "parser_robustness_tests"
+path = "tests/robustness/parser_robustness_tests.rs"
+
+[[test]]
+name = "runtime_error_tests"
+path = "tests/robustness/runtime_error_tests.rs"
+
+[[test]]
+name = "parser_fuzz_tests"
+path = "tests/robustness/parser_fuzz_tests.rs"
+
+[[test]]
+name = "parser_error_format_tests"
+path = "tests/robustness/parser_error_format_tests.rs"
+
+[[test]]
+name = "destructuring_runtime_tests"
+path = "tests/robustness/destructuring_runtime_tests2.rs"
 

@@ -161,7 +161,7 @@ pub fn plan_to_rtfs_map(plan: &Plan) -> Result<Expression, RtfsBridgeError> {
 
     // Add body
     match &plan.body {
-        crate::types::PlanBody::Rtfs(rtfs_code) => {
+        crate::types::PlanBody::Source(rtfs_code) | crate::types::PlanBody::Rtfs(rtfs_code) => {
             // Parse the RTFS code to get an Expression
             match rtfs::parser::parse_expression(rtfs_code) {
                 Ok(body_expr) => {
@@ -176,11 +176,11 @@ pub fn plan_to_rtfs_map(plan: &Plan) -> Result<Expression, RtfsBridgeError> {
                 }
             }
         }
-        crate::types::PlanBody::Wasm(wasm_bytes) => {
+        crate::types::PlanBody::Binary(wasm_bytes) | crate::types::PlanBody::Wasm(wasm_bytes) => {
             map.insert(
                 MapKey::String(":body".to_string()),
                 Expression::Literal(Literal::String(format!(
-                    "<WASM_BYTES:{}_bytes>",
+                    "<BINARY_BYTES:{}_bytes>",
                     wasm_bytes.len()
                 ))),
             );

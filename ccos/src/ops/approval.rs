@@ -22,48 +22,91 @@ pub struct ApprovalConflict {
     pub pending_endpoint: String,
 }
 
+use std::path::PathBuf;
+
 /// Create a unified approval queue with file storage
-fn create_queue() -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
-    let workspace_root = find_workspace_root();
-    let storage_path = workspace_root.join("capabilities/servers/approvals");
+fn create_queue(storage_path: PathBuf) -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
     let storage = Arc::new(FileApprovalStorage::new(storage_path)?);
     Ok(UnifiedApprovalQueue::new(storage))
 }
 
-/// Helper to extract server info from ApprovalRequest
-fn extract_server_item(request: &ApprovalRequest) -> Option<ApprovalItem> {
-    if let ApprovalCategory::ServerDiscovery {
-        source,
-        server_info,
-        requesting_goal,
-        ..
-    } = &request.category
-    {
-        Some(ApprovalItem {
-            id: request.id.clone(),
-            server_name: server_info.name.clone(),
-            endpoint: server_info.endpoint.clone(),
-            source: source.name(),
-            risk_level: format!("{:?}", request.risk_assessment.level),
-            goal: requesting_goal.clone(),
-            status: if request.status.is_pending() {
-                "pending".to_string()
+/// Convert ApprovalRequest to ApprovalItem for CLI output
+fn to_approval_item(request: &ApprovalRequest) -> ApprovalItem {
+    use super::ApprovalType;
+
+    let (approval_type, title, description, source, goal) = match &request.category {
+        ApprovalCategory::ServerDiscovery {
+            source,
+            server_info,
+            requesting_goal,
+            ..
+        } => (
+            ApprovalType::ServerDiscovery,
+            server_info.name.clone(),
+            server_info.endpoint.clone(),
+            source.name(),
+            requesting_goal.clone(),
+        ),
+        ApprovalCategory::EffectApproval {
+            capability_id,
+            intent_description,
+            ..
+        } => (
+            ApprovalType::Effect,
+            capability_id.clone(),
+            intent_description.clone(),
+            "planner".to_string(),
+            None,
+        ),
+        ApprovalCategory::LlmPromptApproval { prompt, .. } => (
+            ApprovalType::LlmPrompt,
+            "LLM Prompt Approval".to_string(),
+            if prompt.len() > 100 {
+                format!("{}...", &prompt[..100])
             } else {
-                "resolved".to_string()
+                prompt.clone()
             },
-            requested_at: request.requested_at.to_rfc3339(),
-        })
-    } else {
-        None
+            "agent".to_string(),
+            None,
+        ),
+        ApprovalCategory::SynthesisApproval { capability_id, .. } => (
+            ApprovalType::Synthesis,
+            format!("Synthesis Approval: {}", capability_id),
+            "Capability synthesis".to_string(),
+            "planner".to_string(),
+            None,
+        ),
+    };
+
+    ApprovalItem {
+        id: request.id.clone(),
+        approval_type,
+        title,
+        description,
+        risk_level: format!("{:?}", request.risk_assessment.level),
+        source,
+        goal,
+        status: if request.status.is_pending() {
+            "pending".to_string()
+        } else if request.status.is_approved() {
+            "approved".to_string()
+        } else if request.status.is_rejected() {
+            "rejected".to_string()
+        } else if request.status.is_expired() {
+            "expired".to_string()
+        } else {
+            "resolved".to_string()
+        },
+        requested_at: request.requested_at.to_rfc3339(),
     }
 }
 
-/// List pending approvals
-pub async fn list_pending() -> RuntimeResult<ApprovalListOutput> {
-    let queue = create_queue()?;
-    let pending = queue.list_pending_servers().await?;
+/// List all pending approvals across all categories
+pub async fn list_pending(storage_path: PathBuf) -> RuntimeResult<ApprovalListOutput> {
+    let queue = create_queue(storage_path)?;
+    let pending = queue.list_pending().await?;
 
-    let items: Vec<ApprovalItem> = pending.iter().filter_map(extract_server_item).collect();
+    let items: Vec<ApprovalItem> = pending.iter().map(to_approval_item).collect();
 
     Ok(ApprovalListOutput {
         items: items.clone(),
@@ -72,8 +115,11 @@ pub async fn list_pending() -> RuntimeResult<ApprovalListOutput> {
 }
 
 /// Check if approving a discovery would conflict with an existing approved server
-pub async fn check_approval_conflict(id: String) -> RuntimeResult<Option<ApprovalConflict>> {
-    let queue = create_queue()?;
+pub async fn check_approval_conflict(
+    storage_path: PathBuf,
+    id: String,
+) -> RuntimeResult<Option<ApprovalConflict>> {
+    let queue = create_queue(storage_path)?;
 
     // Get the pending request
     let pending = queue.get(&id).await?;
@@ -82,7 +128,7 @@ pub async fn check_approval_conflict(id: String) -> RuntimeResult<Option<Approva
     }
     let pending_item = pending.unwrap();
 
-    // Get pending server info
+    // Only discovery requests have conflicts with existing servers
     let (pending_name, pending_endpoint) =
         if let ApprovalCategory::ServerDiscovery { server_info, .. } = &pending_item.category {
             (server_info.name.clone(), server_info.endpoint.clone())
@@ -131,33 +177,74 @@ pub async fn check_approval_conflict(id: String) -> RuntimeResult<Option<Approva
     Ok(None)
 }
 
-/// Approve a discovery
-pub async fn approve_discovery(id: String, reason: Option<String>) -> RuntimeResult<()> {
-    let queue = create_queue()?;
-    queue
-        .approve_server(&id, ApprovalAuthority::User("cli".to_string()), reason)
-        .await
+/// Approve a discovery or any other approval request
+pub async fn approve_discovery(
+    storage_path: PathBuf,
+    id: String,
+    reason: Option<String>,
+) -> RuntimeResult<()> {
+    approve_request(storage_path, id, reason).await
 }
 
-/// Reject a discovery
-pub async fn reject_discovery(id: String, reason: String) -> RuntimeResult<()> {
-    let queue = create_queue()?;
+/// Reject a discovery or any other approval request
+pub async fn reject_discovery(
+    storage_path: PathBuf,
+    id: String,
+    reason: String,
+) -> RuntimeResult<()> {
+    reject_request(storage_path, id, reason).await
+}
+
+/// Approve any approval request
+pub async fn approve_request(
+    storage_path: PathBuf,
+    id: String,
+    reason: Option<String>,
+) -> RuntimeResult<()> {
+    let queue = create_queue(storage_path)?;
+
+    // Fetch the request to determine how to approve it
+    let request = queue
+        .get(&id)
+        .await?
+        .ok_or_else(|| RuntimeError::Generic(format!("Approval request {} not found", id)))?;
+
+    match &request.category {
+        ApprovalCategory::ServerDiscovery { .. } => {
+            queue
+                .approve_server(&id, ApprovalAuthority::User("cli".to_string()), reason)
+                .await
+        }
+        _ => {
+            queue
+                .approve(&id, ApprovalAuthority::User("cli".to_string()), reason)
+                .await
+        }
+    }
+}
+
+/// Reject any approval request
+pub async fn reject_request(
+    storage_path: PathBuf,
+    id: String,
+    reason: String,
+) -> RuntimeResult<()> {
+    let queue = create_queue(storage_path)?;
     queue
         .reject(&id, ApprovalAuthority::User("cli".to_string()), reason)
         .await
 }
 
 /// Skip a pending item (remove without approving or rejecting)
-/// Used when user chooses to keep existing approved server instead of merging
-pub async fn skip_pending(id: String) -> RuntimeResult<()> {
-    let queue = create_queue()?;
+pub async fn skip_pending(storage_path: PathBuf, id: String) -> RuntimeResult<()> {
+    let queue = create_queue(storage_path)?;
     queue.remove(&id).await?;
     Ok(())
 }
 
-/// List timed-out items
-pub async fn list_timeout() -> RuntimeResult<ApprovalListOutput> {
-    let queue = create_queue()?;
+/// List items that have timed out
+pub async fn list_timeout(storage_path: PathBuf) -> RuntimeResult<ApprovalListOutput> {
+    let queue = create_queue(storage_path)?;
     // Check expirations first
     queue.check_expirations().await?;
 
@@ -168,11 +255,7 @@ pub async fn list_timeout() -> RuntimeResult<ApprovalListOutput> {
     let timeout_items: Vec<ApprovalItem> = all
         .iter()
         .filter(|r| matches!(r.status, crate::approval::ApprovalStatus::Expired { .. }))
-        .filter_map(extract_server_item)
-        .map(|mut item| {
-            item.status = "timeout".to_string();
-            item
-        })
+        .map(to_approval_item)
         .collect();
 
     Ok(ApprovalListOutput {

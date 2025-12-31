@@ -19,6 +19,9 @@ use crate::capabilities::native_provider::NativeCapabilityProvider;
 use crate::capabilities::SessionPoolManager;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use rtfs::runtime::microvm::{ExecutionContext, MicroVMFactory, Program, ScriptLanguage};
+use std::sync::Mutex;
+use uuid::Uuid;
 
 /// Execution context passed to all capability executors.
 /// Provides access to metadata, session management, and capability identification.
@@ -1244,6 +1247,98 @@ impl CapabilityExecutor for HttpExecutor {
     }
 }
 
+pub struct SandboxedExecutor {
+    factory: Arc<Mutex<MicroVMFactory>>,
+}
+
+impl SandboxedExecutor {
+    pub fn new() -> Self {
+        let mut factory = MicroVMFactory::new();
+        // Get provider names first to avoid borrow issues
+        let provider_names: Vec<String> = factory.list_providers().iter().map(|s| s.to_string()).collect();
+        // Initialize all available providers
+        for provider_name in provider_names {
+            if let Some(provider) = factory.get_provider_mut(&provider_name) {
+                let _ = provider.initialize();
+            }
+        }
+        Self {
+            factory: Arc::new(Mutex::new(factory)),
+        }
+    }
+}
+
+#[async_trait(?Send)]
+impl CapabilityExecutor for SandboxedExecutor {
+    fn provider_type_id(&self) -> TypeId {
+        TypeId::of::<SandboxedCapability>()
+    }
+
+    async fn execute(
+        &self,
+        provider: &ProviderType,
+        inputs: &Value,
+        _context: &ExecutionContext<'_>,
+    ) -> RuntimeResult<Value> {
+        if let ProviderType::Sandboxed(sandboxed) = provider {
+            let mut factory = self.factory.lock().map_err(|e| {
+                RuntimeError::Generic(format!("SandboxedExecutor factory mutex poisoned: {}", e))
+            })?;
+            let provider_name = sandboxed.provider.as_deref().unwrap_or("process");
+
+            let vm_provider = factory.get_provider_mut(provider_name).ok_or_else(|| {
+                RuntimeError::Generic(format!("Provider '{}' not available", provider_name))
+            })?;
+
+            let program = if sandboxed.runtime == "wasm" {
+                // Try to decode as base64, if fails assume it's a path and read it
+                let wasm_bytes = if let Ok(bytes) = base64::decode(&sandboxed.source) {
+                    bytes
+                } else {
+                    std::fs::read(&sandboxed.source)
+                        .map_err(|e| RuntimeError::Generic(format!("Failed to read WASM file: {}", e)))?
+                };
+                Program::Binary {
+                    language: ScriptLanguage::Wasm,
+                    source: wasm_bytes,
+                }
+            } else {
+                let language = match sandboxed.runtime.as_str() {
+                    "python" | "python3" => ScriptLanguage::Python,
+                    "javascript" | "js" | "node" => ScriptLanguage::JavaScript,
+                    "shell" | "sh" | "bash" => ScriptLanguage::Shell,
+                    "ruby" => ScriptLanguage::Ruby,
+                    "lua" => ScriptLanguage::Lua,
+                    _ => ScriptLanguage::Custom {
+                        interpreter: sandboxed.runtime.clone(),
+                        file_ext: "tmp".to_string(),
+                    },
+                };
+
+                Program::ScriptSource {
+                    language,
+                    source: sandboxed.source.clone(),
+                }
+            };
+
+            let context = ExecutionContext {
+                execution_id: Uuid::new_v4().to_string(),
+                program: Some(program),
+                capability_id: None,
+                capability_permissions: vec![],
+                args: vec![inputs.clone()],
+                config: Default::default(),
+                runtime_context: None,
+            };
+
+            let result = vm_provider.execute_program(context)?;
+            Ok(result.value)
+        } else {
+            Err(RuntimeError::Generic("Invalid provider type".to_string()))
+        }
+    }
+}
+
 pub enum ExecutorVariant {
     MCP(MCPExecutor),
     A2A(A2AExecutor),
@@ -1252,6 +1347,7 @@ pub enum ExecutorVariant {
     OpenApi(OpenApiExecutor),
     Registry(RegistryExecutor),
     Native(NativeCapabilityProvider),
+    Sandboxed(SandboxedExecutor),
 }
 
 impl ExecutorVariant {
@@ -1268,6 +1364,7 @@ impl ExecutorVariant {
             ExecutorVariant::Http(e) => e.execute(provider, inputs, context).await,
             ExecutorVariant::OpenApi(e) => e.execute(provider, inputs, context).await,
             ExecutorVariant::Registry(e) => e.execute(provider, inputs, context).await,
+            ExecutorVariant::Sandboxed(e) => e.execute(provider, inputs, context).await,
             ExecutorVariant::Native(native_provider) => {
                 // For Native capabilities, the provider type contains the capability ID
                 // and we dispatch through the NativeCapabilityProvider

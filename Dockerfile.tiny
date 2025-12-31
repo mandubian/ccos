@@ -1,0 +1,47 @@
+# =============================================================================
+# CCOS Tiny - Optimized minimal image (~50-80MB target)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Build the Rust binary
+# -----------------------------------------------------------------------------
+FROM rust:1.83-alpine AS builder
+
+# Install build dependencies for Alpine
+RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static pkgconfig
+
+WORKDIR /usr/src/ccos
+
+# Copy source code
+COPY . .
+
+# Build with musl for fully static binary
+# Use release profile with size optimizations
+ENV RUSTFLAGS="-C target-feature=-crt-static"
+RUN cargo build --release --bin ccos --no-default-features --features minimal \
+    && strip /usr/src/ccos/target/release/ccos
+
+# -----------------------------------------------------------------------------
+# Stage 2: Minimal runtime image
+# -----------------------------------------------------------------------------
+FROM alpine:3.19
+
+# Install only runtime dependencies (no dev packages!)
+RUN apk add --no-cache \
+    python3 \
+    ca-certificates \
+    && rm -rf /var/cache/apk/*
+
+WORKDIR /app
+
+# Copy only the stripped binary
+COPY --from=builder /usr/src/ccos/target/release/ccos /usr/local/bin/ccos
+
+# Create directory for capabilities
+RUN mkdir -p /app/capabilities
+
+# Non-root user for security
+RUN adduser -D -u 1000 ccos
+USER ccos
+
+ENTRYPOINT ["ccos"]

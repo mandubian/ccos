@@ -469,10 +469,10 @@ Now generate the RTFS graph for this goal:"#;
     /// Validate plan using LLM provider
     async fn validate_plan(&self, plan: &Plan) -> Result<bool, RuntimeError> {
         let plan_content = match &plan.body {
-            crate::types::PlanBody::Rtfs(content) => content,
-            crate::types::PlanBody::Wasm(_) => {
+            crate::types::PlanBody::Source(content) | crate::types::PlanBody::Rtfs(content) => content,
+            crate::types::PlanBody::Binary(_) | crate::types::PlanBody::Wasm(_) => {
                 return Err(RuntimeError::Generic(
-                    "WASM plans not supported for validation".to_string(),
+                    "Binary/WASM plans not supported for validation".to_string(),
                 ));
             }
         };

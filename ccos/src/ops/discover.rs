@@ -5,8 +5,10 @@ use crate::discovery::config::DiscoveryConfig;
 use crate::discovery::goal_discovery::LlmSearchResult;
 use crate::discovery::GoalDiscoveryAgent;
 use crate::utils::fs::find_workspace_root;
+#[cfg(feature = "tui")]
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
 use rtfs::runtime::error::RuntimeResult;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Options for goal-driven server discovery
@@ -34,20 +36,19 @@ impl Default for DiscoverOptions {
 }
 
 /// Create a unified approval queue
-fn create_queue() -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
-    let workspace_root = find_workspace_root();
-    let storage_path = workspace_root.join("capabilities/servers/approvals");
+fn create_queue(storage_path: PathBuf) -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
     let storage = Arc::new(FileApprovalStorage::new(storage_path)?);
     Ok(UnifiedApprovalQueue::new(storage))
 }
 
 /// Goal-driven server discovery (simple API - uses defaults)
-pub async fn discover_by_goal(goal: String) -> RuntimeResult<Vec<String>> {
-    discover_by_goal_with_options(goal, DiscoverOptions::default()).await
+pub async fn discover_by_goal(storage_path: PathBuf, goal: String) -> RuntimeResult<Vec<String>> {
+    discover_by_goal_with_options(storage_path, goal, DiscoverOptions::default()).await
 }
 
 /// Goal-driven server discovery with options
 pub async fn discover_by_goal_with_options(
+    storage_path: PathBuf,
     goal: String,
     options: DiscoverOptions,
 ) -> RuntimeResult<Vec<String>> {
@@ -55,7 +56,7 @@ pub async fn discover_by_goal_with_options(
     let mut config = DiscoveryConfig::from_env();
     config.match_threshold = options.threshold;
 
-    let queue = create_queue()?;
+    let queue = create_queue(storage_path.clone())?;
     let agent = GoalDiscoveryAgent::new_with_config(queue, config);
 
     // Show mode being used
@@ -72,14 +73,18 @@ pub async fn discover_by_goal_with_options(
         if options.interactive {
             // Fallback: ask user if they want to add a server manually
             println!();
-            let add_manual = Confirm::with_theme(&ColorfulTheme::default())
+            #[cfg(feature = "tui")]
+            let add_manual = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
                 .with_prompt("Do you know a specific server URL you want to add?")
                 .default(false)
                 .interact()
                 .unwrap_or(false);
 
+            #[cfg(not(feature = "tui"))]
+            let add_manual = false;
+
             if add_manual {
-                return handle_manual_url_entry(&agent, &goal, options.llm).await;
+                return handle_manual_url_entry(&agent, &goal, options.llm, &storage_path).await;
             }
         }
 
@@ -137,7 +142,8 @@ pub async fn discover_by_goal_with_options(
         println!("\n📋 All servers pre-selected. Use SPACE to toggle, ENTER to confirm.\n");
 
         // Show interactive multi-select (all pre-selected - user deselects unwanted)
-        let selections = MultiSelect::with_theme(&ColorfulTheme::default())
+        #[cfg(feature = "tui")]
+        let selections = dialoguer::MultiSelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
             .with_prompt("Select servers to queue")
             .items(&items)
             .defaults(&vec![true; items.len()]) // Pre-select all
@@ -146,19 +152,28 @@ pub async fn discover_by_goal_with_options(
                 rtfs::runtime::error::RuntimeError::Generic(format!("Selection cancelled: {}", e))
             })?;
 
+        #[cfg(not(feature = "tui"))]
+        return Err(rtfs::runtime::error::RuntimeError::Generic(
+            "Interactive mode not available".to_string(),
+        ));
+
         if selections.is_empty() {
             println!("❌ No servers selected.");
 
             // Fallback: ask user if they want to add a server manually
             println!();
-            let add_manual = Confirm::with_theme(&ColorfulTheme::default())
+            #[cfg(feature = "tui")]
+            let add_manual = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
                 .with_prompt("Do you know a specific server URL you want to add instead?")
                 .default(false)
                 .interact()
                 .unwrap_or(false);
 
+            #[cfg(not(feature = "tui"))]
+            let add_manual = false;
+
             if add_manual {
-                return handle_manual_url_entry(&agent, &goal, options.llm).await;
+                return handle_manual_url_entry(&agent, &goal, options.llm, &storage_path).await;
             }
 
             return Ok(vec![]);
@@ -170,7 +185,7 @@ pub async fn discover_by_goal_with_options(
         let selected: Vec<_> = selections.into_iter().map(|i| results[i].clone()).collect();
 
         // Check for conflicts with already approved or pending servers and prompt user
-        let queue = create_queue()?;
+        let queue = create_queue(storage_path.clone())?;
         let mut servers_to_queue = Vec::new();
 
         for (result, score) in &selected {
@@ -216,7 +231,8 @@ pub async fn discover_by_goal_with_options(
                     "Skip - Keep existing, don't add to pending",
                 ];
 
-                let selection = Select::with_theme(&ColorfulTheme::default())
+                #[cfg(feature = "tui")]
+                let selection = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
                     .with_prompt("What would you like to do?")
                     .items(&options)
                     .default(0)
@@ -227,6 +243,9 @@ pub async fn discover_by_goal_with_options(
                             e
                         ))
                     })?;
+
+                #[cfg(not(feature = "tui"))]
+                let selection = 1; // Default to Skip in non-interactive
 
                 if selection == 0 {
                     // Add to pending
@@ -267,7 +286,8 @@ pub async fn discover_by_goal_with_options(
                     "Skip - Keep existing pending entry",
                 ];
 
-                let selection = Select::with_theme(&ColorfulTheme::default())
+                #[cfg(feature = "tui")]
+                let selection = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
                     .with_prompt("What would you like to do?")
                     .items(&options)
                     .default(0)
@@ -278,6 +298,9 @@ pub async fn discover_by_goal_with_options(
                             e
                         ))
                     })?;
+
+                #[cfg(not(feature = "tui"))]
+                let selection = 2; // Default to Skip in non-interactive
 
                 if selection == 0 {
                     // Merge - add will automatically merge
@@ -312,11 +335,15 @@ pub async fn discover_by_goal_with_options(
 
         // Ask if user wants to introspect tools
         println!();
-        let introspect = Confirm::with_theme(&ColorfulTheme::default())
+        #[cfg(feature = "tui")]
+        let introspect = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
             .with_prompt("Do you want to introspect queued servers to discover their tools?")
             .default(true)
             .interact()
             .unwrap_or(false);
+
+        #[cfg(not(feature = "tui"))]
+        let introspect = false; // Default to false in non-interactive
 
         if introspect {
             println!("\n🔍 Introspecting queued servers...\n");
@@ -384,9 +411,15 @@ pub async fn discover_by_goal_with_options(
 
                                 // Save tools to RTFS file and link to pending entry
                                 if let Err(e) = crate::ops::server::save_discovered_tools(
+                                    storage_path.to_path_buf(),
+                                    introspection
+                                        .tools
+                                        .iter()
+                                        .map(|t| t.to_mcp_tool())
+                                        .collect(),
                                     &introspection,
                                     &result.server_info,
-                                    Some(pending_id),
+                                    Some(pending_id.clone()),
                                 )
                                 .await
                                 {
@@ -428,6 +461,7 @@ pub async fn discover_by_goal_with_options(
 
                                         // Ask if user wants to update the token and retry
                                         println!();
+                                        #[cfg(feature = "tui")]
                                         let retry = dialoguer::Confirm::with_theme(
                                             &dialoguer::theme::ColorfulTheme::default(),
                                         )
@@ -439,8 +473,12 @@ pub async fn discover_by_goal_with_options(
                                         .interact()
                                         .unwrap_or(false);
 
+                                        #[cfg(not(feature = "tui"))]
+                                        let retry = false;
+
                                         if retry {
                                             // Prompt for token (hidden input)
+                                            #[cfg(feature = "tui")]
                                             let token = dialoguer::Password::with_theme(
                                                 &dialoguer::theme::ColorfulTheme::default(),
                                             )
@@ -450,6 +488,9 @@ pub async fn discover_by_goal_with_options(
                                             ))
                                             .interact()
                                             .ok();
+
+                                            #[cfg(not(feature = "tui"))]
+                                            let token: Option<String> = None;
 
                                             if let Some(token) = token {
                                                 // Validate env_var name before setting (set_var can panic on invalid names)
@@ -496,9 +537,11 @@ pub async fn discover_by_goal_with_options(
 
                                                             // Save tools to RTFS file and link to pending entry
                                                             if let Err(e) = crate::ops::server::save_discovered_tools(
+                                                                storage_path.to_path_buf(),
+                                                                introspection.tools.iter().map(|t| t.to_mcp_tool()).collect(),
                                                                 &introspection,
                                                                 &result.server_info,
-                                                                Some(pending_id),
+                                                                Some(pending_id.clone()),
                                                             ).await {
                                                                 println!("   ⚠️  Failed to save capabilities: {}", e);
                                                             } else {
@@ -566,7 +609,7 @@ pub async fn discover_by_goal_with_options(
     }
 
     // Non-interactive mode: check for conflicts and queue
-    let queue = create_queue()?;
+    let queue = create_queue(storage_path.clone())?;
     let approved_requests = queue.list_approved_servers().await?;
     let approved: Vec<_> = approved_requests
         .iter()
@@ -616,6 +659,7 @@ async fn handle_manual_url_entry(
     agent: &GoalDiscoveryAgent,
     goal: &str,
     llm_enabled: bool,
+    storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     let mut all_ids = Vec::new();
 
@@ -627,20 +671,32 @@ async fn handle_manual_url_entry(
             "Done - no more URLs to add",
         ];
 
-        let url_type_idx = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("What type of URL are you providing?")
-            .items(&url_types)
-            .default(0)
-            .interact()
-            .map_err(|e| {
-                rtfs::runtime::error::RuntimeError::Generic(format!("Selection error: {}", e))
-            })?;
+        let url_type_idx: usize;
+        #[cfg(feature = "tui")]
+        {
+            url_type_idx = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                .with_prompt("What type of URL are you providing?")
+                .items(&url_types)
+                .default(0)
+                .interact()
+                .map_err(|e| {
+                    rtfs::runtime::error::RuntimeError::Generic(format!("Selection error: {}", e))
+                })?;
+        }
+
+        #[cfg(not(feature = "tui"))]
+        {
+            return Err(rtfs::runtime::error::RuntimeError::Generic(
+                "Interactive mode not available".to_string(),
+            ));
+        }
 
         // Exit loop if user is done
         if url_type_idx == 2 {
             break;
         }
 
+        #[cfg(feature = "tui")]
         let url: String = dialoguer::Input::with_theme(&ColorfulTheme::default())
             .with_prompt("Enter URL")
             .interact_text()
@@ -648,32 +704,36 @@ async fn handle_manual_url_entry(
                 rtfs::runtime::error::RuntimeError::Generic(format!("Input error: {}", e))
             })?;
 
+        #[cfg(not(feature = "tui"))]
+        let url: String = return Err(rtfs::runtime::error::RuntimeError::Generic(
+            "Interactive mode not available".to_string(),
+        ));
+
         let ids = if url_type_idx == 0 {
             // MCP Server endpoint
-            handle_mcp_url(agent, goal, &url).await?
+            handle_mcp_url(agent, goal, &url, storage_path).await?
         } else {
             // API Documentation page
             if !llm_enabled {
-                println!("⚠️  Documentation parsing requires the --llm flag.");
-                println!(
-                    "   Run again with: ccos discover goal \"{}\" --interactive --llm",
-                    goal
-                );
-                println!();
-                continue; // Let user try another URL type
+                println!("⚠️  LLM discovery required for documentation parsing. Use --llm flag.");
+                continue;
             }
-            handle_documentation_url(agent, goal, &url).await?
+            handle_documentation_url(agent, goal, &url, llm_enabled, storage_path).await?
         };
 
         all_ids.extend(ids);
 
         // Ask if user wants to add more
         println!();
-        let add_more = Confirm::with_theme(&ColorfulTheme::default())
+        #[cfg(feature = "tui")]
+        let add_more = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
             .with_prompt("Do you want to add another server/API?")
             .default(false)
             .interact()
             .unwrap_or(false);
+
+        #[cfg(not(feature = "tui"))]
+        let add_more = false;
 
         if !add_more {
             break;
@@ -694,6 +754,7 @@ async fn handle_mcp_url(
     agent: &GoalDiscoveryAgent,
     goal: &str,
     url: &str,
+    storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     println!("🔍 Introspecting MCP server at {}...", url);
 
@@ -734,9 +795,15 @@ async fn handle_mcp_url(
 
             // Save tools
             if let Err(e) = crate::ops::server::save_discovered_tools(
+                storage_path.to_path_buf(),
+                introspection
+                    .tools
+                    .iter()
+                    .map(|t| t.to_mcp_tool())
+                    .collect(),
                 &introspection,
                 &result.server_info,
-                Some(&id),
+                Some(id.clone()),
             )
             .await
             {
@@ -759,6 +826,8 @@ async fn handle_documentation_url(
     agent: &GoalDiscoveryAgent,
     goal: &str,
     url: &str,
+    llm_enabled: bool,
+    storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     println!("🔍 Fetching API documentation from {}...", url);
     println!("🤖 Using LLM to extract API endpoints...");
@@ -829,7 +898,13 @@ async fn handle_documentation_url(
             let id = agent.queue_result(goal, result.clone(), 1.0).await?;
 
             // Save the parsed API as capabilities
-            if let Err(e) = crate::ops::server::save_api_capabilities(&api_result, &id).await {
+            if let Err(e) = crate::ops::server::save_api_capabilities(
+                storage_path.to_path_buf(),
+                &api_result,
+                &id,
+            )
+            .await
+            {
                 println!("   ⚠️  Failed to save capabilities: {}", e);
             } else {
                 println!("   💾 Capabilities saved to RTFS file");

@@ -44,6 +44,7 @@ urlencoding = "2.1"
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = "0.1"
 uuid = { version = "1.0", features = ["v4"] }
+base64 = { workspace = true }
 url = "2.5"
 atty = "0.2"
 
@@ -66,20 +67,24 @@ rand = "0.8"
 dashmap = "5.5"
 
 # TUI/CLI dependencies
-ratatui = { version = "0.26" }
-crossterm = { version = "0.27" }
+ratatui = { version = "0.26", optional = true }
+crossterm = { version = "0.27", optional = true }
 colored = "2.1"
 textwrap = "0.16"
-dialoguer = { version = "0.11", features = ["fuzzy-select"] }
+dialoguer = { version = "0.11", features = ["fuzzy-select"], optional = true }
 
 # Web server and websockets
-axum = { version = "0.7", features = ["ws"] }
-tokio-tungstenite = { version = "0.23", features = ["native-tls"] }
-tower-http = { version = "0.5", features = ["fs"] }
+axum = { version = "0.7", features = ["ws"], optional = true }
+tokio-tungstenite = { version = "0.23", features = ["native-tls"], optional = true }
+tower-http = { version = "0.5", features = ["fs"], optional = true }
 
 [features]
-default = ["repl"]
+default = ["repl", "tui", "server"]
 repl = ["dep:rustyline", "rtfs/repl"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:dialoguer"]
+server = ["dep:axum", "dep:tokio-tungstenite", "dep:tower-http"]
+llm = ["dep:llama_cpp"]
+minimal = []
 
 [[bin]]
 name = "ccos"
@@ -97,6 +102,7 @@ path = "src/bin/github_issue_manager.rs"
 [[bin]]
 name = "ccos-viewer"
 path = "src/bin/ccos-viewer.rs"
+required-features = ["server"]
 
 [[bin]]
 name = "diagnose_storage"
@@ -105,6 +111,12 @@ path = "src/bin/diagnose_storage.rs"
 [[bin]]
 name = "mcp-local-server"
 path = "src/bin/mcp_local_server.rs"
+required-features = ["server"]
+
+[[bin]]
+name = "ccos-explore"
+path = "src/bin/ccos_explore.rs"
+required-features = ["tui"]
 
 [[bin]]
 name = "resolve-deps"

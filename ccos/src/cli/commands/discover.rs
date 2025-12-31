@@ -68,8 +68,10 @@ pub async fn execute(ctx: &mut CliContext, command: DiscoverCommand) -> RuntimeR
                 llm,
             };
 
+            let storage_path = ctx.resolve_workspace_path(&ctx.config.storage.approvals_dir);
             let queued_ids =
-                crate::ops::discover::discover_by_goal_with_options(goal, options).await?;
+                crate::ops::discover::discover_by_goal_with_options(storage_path, goal, options)
+                    .await?;
 
             if queued_ids.is_empty() {
                 formatter.warning("No servers found matching criteria.");

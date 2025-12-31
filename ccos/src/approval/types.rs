@@ -120,6 +120,18 @@ impl ApprovalStatus {
         matches!(self, ApprovalStatus::Pending)
     }
 
+    pub fn is_approved(&self) -> bool {
+        matches!(self, ApprovalStatus::Approved { .. })
+    }
+
+    pub fn is_rejected(&self) -> bool {
+        matches!(self, ApprovalStatus::Rejected { .. })
+    }
+
+    pub fn is_expired(&self) -> bool {
+        matches!(self, ApprovalStatus::Expired { .. })
+    }
+
     pub fn is_resolved(&self) -> bool {
         !self.is_pending()
     }
