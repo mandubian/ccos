@@ -1,5 +1,6 @@
-# Generic Planner Synthesis and Agent Learning (from scratch)
+# CCOS Specification 026: Generic Planner Synthesis and Agent Learning
 
+**Status: Not Yet Implemented** <!-- not-yet-impl -->
 Status: Draft (breaking changes allowed)
 Owner: CCOS Core
 Last updated: 2025-10-11
