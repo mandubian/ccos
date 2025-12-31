@@ -2321,16 +2321,12 @@ impl SecureStandardLibrary {
                     func_env.define(&closure.params[0], item.clone());
                     match evaluator.eval_expr(&closure.body, &mut func_env)? {
                         ExecutionOutcome::Complete(v) => v,
-                        ExecutionOutcome::RequiresHost(_hc) => {
-                            return Err(RuntimeError::Generic(
-                                "Host call required in group-by key function".into(),
-                            ))
-                        }
-                        #[cfg(feature = "effect-boundary")]
                         ExecutionOutcome::RequiresHost(_) => {
-                            return Err(RuntimeError::Generic(
-                                "Host effect required in group-by key function".to_string(),
-                            ))
+                            #[cfg(feature = "effect-boundary")]
+                            let msg = "Host effect required in group-by key function".to_string();
+                            #[cfg(not(feature = "effect-boundary"))]
+                            let msg = "Host call required in group-by key function".to_string();
+                            return Err(RuntimeError::Generic(msg))
                         }
                     }
                 }

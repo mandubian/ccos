@@ -143,7 +143,7 @@ pub async fn discover_by_goal_with_options(
             })?;
 
         #[cfg(not(feature = "tui"))]
-        let selections: Vec<usize> = return Err(rtfs::runtime::error::RuntimeError::Generic(
+        return Err(rtfs::runtime::error::RuntimeError::Generic(
             "Interactive mode not available".to_string(),
         ));
 

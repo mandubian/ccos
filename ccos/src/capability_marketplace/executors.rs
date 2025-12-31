@@ -1232,17 +1232,14 @@ impl CapabilityExecutor for SandboxedExecutor {
 
     async fn execute(&self, provider: &ProviderType, inputs: &Value) -> RuntimeResult<Value> {
         if let ProviderType::Sandboxed(sandboxed) = provider {
-            let mut factory = self.factory.lock().unwrap();
+            let mut factory = self.factory.lock().map_err(|e| {
+                RuntimeError::Generic(format!("SandboxedExecutor factory mutex poisoned: {}", e))
+            })?;
             let provider_name = sandboxed.provider.as_deref().unwrap_or("process");
 
-            if factory.get_provider(provider_name).is_none() {
-                return Err(RuntimeError::Generic(format!(
-                    "Provider '{}' not available",
-                    provider_name
-                )));
-            }
-
-            let vm_provider = factory.get_provider_mut(provider_name).unwrap();
+            let vm_provider = factory.get_provider_mut(provider_name).ok_or_else(|| {
+                RuntimeError::Generic(format!("Provider '{}' not available", provider_name))
+            })?;
 
             let program = if sandboxed.runtime == "wasm" {
                 // Try to decode as base64, if fails assume it's a path and read it
