@@ -3,8 +3,10 @@
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::microvm::config::{FileSystemPolicy, NetworkPolicy};
 use crate::runtime::microvm::core::{ExecutionContext, ExecutionMetadata, ExecutionResult};
+use crate::runtime::microvm::core::ScriptLanguage;
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::values::Value;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
@@ -19,6 +21,47 @@ impl ProcessMicroVMProvider {
     }
 
     // --- Policy helpers ---------------------------------------------------
+
+    fn find_in_path(executable: &str) -> Option<String> {
+        let path_var = std::env::var_os("PATH")?;
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join(executable);
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().to_string());
+            }
+        }
+        None
+    }
+
+    fn resolve_interpreter(language: &ScriptLanguage) -> String {
+        // Prefer whatever is on PATH for the canonical interpreter name.
+        // If it's missing (common in minimal environments, e.g. only `python3` exists),
+        // fall back to known absolute-path alternatives from ScriptLanguage.
+        let primary = language.interpreter();
+        if Self::find_in_path(primary).is_some() {
+            return primary.to_string();
+        }
+
+        // Try absolute-path alternatives (and any other strings supplied there).
+        for alt in language.interpreter_alternatives() {
+            if Path::new(alt).is_file() {
+                return alt.to_string();
+            }
+            if Self::find_in_path(alt).is_some() {
+                return alt.to_string();
+            }
+        }
+
+        // Last resort: try common python3 name when "python" isn't present.
+        if *language == ScriptLanguage::Python {
+            if Self::find_in_path("python3").is_some() {
+                return "python3".to_string();
+            }
+        }
+
+        // Fall back to the canonical name even if it doesn't exist; execution will error.
+        primary.to_string()
+    }
 
     fn extract_host_from_url(url: &str) -> Option<String> {
         // naive parse: scheme://host[:port]/...
@@ -193,6 +236,25 @@ impl ProcessMicroVMProvider {
         let mut command = Command::new(path);
         command.args(args);
 
+        // Create a temporary file for input if there are arguments
+        let mut _temp_input_file = None;
+        if let Some(first_arg) = context.args.first() {
+            let json_val = crate::utils::rtfs_value_to_json(first_arg)
+                .map_err(|e| RuntimeError::Generic(format!("Failed to serialize input: {}", e)))?;
+            let json_str = serde_json::to_string(&json_val)
+                .map_err(|e| RuntimeError::Generic(format!("Failed to stringify input: {}", e)))?;
+            
+            let mut temp_file = tempfile::NamedTempFile::new()
+                .map_err(|e| RuntimeError::Generic(format!("Failed to create temp file: {}", e)))?;
+            use std::io::Write;
+            temp_file.write_all(json_str.as_bytes())
+                .map_err(|e| RuntimeError::Generic(format!("Failed to write temp file: {}", e)))?;
+            
+            let path = temp_file.path().to_path_buf();
+            command.env("RTFS_INPUT_FILE", &path);
+            _temp_input_file = Some(temp_file);
+        }
+
         // Set environment variables from config
         for (key, value) in &context.config.env_vars {
             command.env(key, value);
@@ -208,6 +270,15 @@ impl ProcessMicroVMProvider {
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
+            let trimmed = stdout.trim();
+
+            // Try to parse as JSON first (for complex return values)
+            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if let Ok(rtfs_val) = crate::utils::json_to_rtfs_value(&json_val) {
+                    return Ok(rtfs_val);
+                }
+            }
+
             Ok(Value::String(stdout.to_string()))
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -311,6 +382,24 @@ impl MicroVMProvider for ProcessMicroVMProvider {
 
         let result_value = match context.program {
             Some(ref program) => match program {
+                crate::runtime::microvm::core::Program::ScriptSource { language, source } => {
+                    // Execute script in a subprocess using the appropriate interpreter
+                    let interpreter = Self::resolve_interpreter(language);
+                    let flag = language.execute_flag();
+
+                    let mut args = vec![flag.to_string(), source.clone()];
+                    for arg in &context.args {
+                        let json_val = crate::utils::rtfs_value_to_json(arg).unwrap_or(serde_json::Value::Null);
+                        args.push(serde_json::to_string(&json_val).unwrap_or_default());
+                    }
+
+                    match self.execute_external_process(&interpreter, &args, &context) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            Value::String(format!("Process {:?} execution error: {}", language, e))
+                        }
+                    }
+                }
                 crate::runtime::microvm::core::Program::RtfsSource(source) => {
                     match self.execute_rtfs_in_process(&source, &context) {
                         Ok(v) => v,
@@ -338,6 +427,18 @@ impl MicroVMProvider for ProcessMicroVMProvider {
                     match self.execute_external_process(&path, &args, &context) {
                         Ok(v) => v,
                         Err(e) => Value::String(format!("Process external execution error: {}", e)),
+                    }
+                }
+                crate::runtime::microvm::core::Program::Binary { language, source } => {
+                    if *language == crate::runtime::microvm::core::ScriptLanguage::Wasm {
+                        // For process provider, we can try to run wasmtime if available
+                        let args = vec!["--dir=.".to_string(), "-".to_string()];
+                        match self.execute_external_process("wasmtime", &args, &context) {
+                            Ok(v) => v,
+                            Err(e) => Value::String(format!("Process WASM execution error: {}", e)),
+                        }
+                    } else {
+                        Value::String(format!("Binary execution for {:?} not supported in process provider", language))
                     }
                 }
             },

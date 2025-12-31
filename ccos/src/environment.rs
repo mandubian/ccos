@@ -826,7 +826,7 @@ impl CCOSEnvironment {
                                 // This is a lightweight execution without full orchestrator
                                 // For full orchestrator support, use CCOS core instead
                                 match &plan.body {
-                                    crate::types::PlanBody::Rtfs(rtfs_body) => {
+                                    crate::types::PlanBody::Source(rtfs_body) | crate::types::PlanBody::Rtfs(rtfs_body) => {
                                         if self.config.verbose {
                                             println!("Executing plan body...");
                                         }
@@ -847,9 +847,9 @@ impl CCOSEnvironment {
                                             }
                                         }
                                     }
-                                    crate::types::PlanBody::Wasm(_) => {
+                                    crate::types::PlanBody::Binary(_) | crate::types::PlanBody::Wasm(_) => {
                                         return Err(RuntimeError::Generic(
-                                            "WASM plan bodies not supported in environment execution".to_string(),
+                                            "Binary/WASM plan bodies not supported in environment execution".to_string(),
                                         ));
                                     }
                                 }

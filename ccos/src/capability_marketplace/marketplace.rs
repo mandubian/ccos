@@ -1,7 +1,7 @@
 use super::executors::CapabilityExecutor;
 use super::executors::{
-    A2AExecutor, ExecutionContext, ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor,
-    OpenApiExecutor, RegistryExecutor,
+    A2AExecutor, ExecutorVariant, HttpExecutor, LocalExecutor, MCPExecutor, OpenApiExecutor,
+    RegistryExecutor, SandboxedExecutor,
 };
 use super::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use super::resource_monitor::ResourceMonitor;
@@ -75,6 +75,12 @@ enum SerializableProvider {
         timeout_ms: u64,
         auth_token: Option<String>,
     },
+    Sandboxed {
+        runtime: String,
+        source: String,
+        entry_point: Option<String>,
+        provider: Option<String>,
+    },
     // Non-serializable variants (Local/Stream/Registry/Plugin) are intentionally omitted
 }
 
@@ -108,6 +114,12 @@ impl SerializableProvider {
                 endpoint: r.endpoint.clone(),
                 timeout_ms: r.timeout_ms,
                 auth_token: r.auth_token.clone(),
+            }),
+            ProviderType::Sandboxed(s) => Some(SerializableProvider::Sandboxed {
+                runtime: s.runtime.clone(),
+                source: s.source.clone(),
+                entry_point: s.entry_point.clone(),
+                provider: s.provider.clone(),
             }),
             // Skip non-serializable providers
             ProviderType::Local(_)
@@ -172,6 +184,17 @@ impl SerializableProvider {
                 timeout_ms,
                 auth_token,
             }),
+            SerializableProvider::Sandboxed {
+                runtime,
+                source,
+                entry_point,
+                provider,
+            } => ProviderType::Sandboxed(SandboxedCapability {
+                runtime,
+                source,
+                entry_point,
+                provider,
+            }),
         }
     }
 }
@@ -203,6 +226,7 @@ fn infer_catalog_source(manifest: &CapabilityManifest) -> CatalogSource {
         | ProviderType::Http(_)
         | ProviderType::Plugin(_)
         | ProviderType::A2A(_)
+        | ProviderType::Sandboxed(_)
         | ProviderType::Native(_) => CatalogSource::Generated,
     }
 }
@@ -263,7 +287,7 @@ impl From<SerializableManifest> for CapabilityManifest {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         }
     }
 }
@@ -327,6 +351,10 @@ impl CapabilityMarketplace {
         marketplace.executor_registry.insert(
             TypeId::of::<RegistryCapability>(),
             ExecutorVariant::Registry(RegistryExecutor),
+        );
+        marketplace.executor_registry.insert(
+            TypeId::of::<SandboxedCapability>(),
+            ExecutorVariant::Sandboxed(SandboxedExecutor::new()),
         );
         marketplace.executor_registry.insert(
             TypeId::of::<NativeCapability>(),
@@ -562,6 +590,7 @@ impl CapabilityMarketplace {
                 agent_metadata: None,
                 domains: Vec::new(),
                 categories: Vec::new(),
+            effect_type: EffectType::Effectful,
             };
 
             let mut caps = self.capabilities.write().await;
@@ -778,7 +807,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -830,7 +859,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
 
         let catalog_manifest = manifest.clone();
@@ -1139,7 +1168,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1184,7 +1213,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1227,7 +1256,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1272,7 +1301,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1320,7 +1349,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
 
         let mut caps = self.capabilities.write().await;
@@ -1368,7 +1397,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1417,7 +1446,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1465,7 +1494,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1515,7 +1544,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1559,7 +1588,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1605,7 +1634,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1651,7 +1680,7 @@ impl CapabilityMarketplace {
             agent_metadata: None,
             domains: Vec::new(),
             categories: Vec::new(),
-            effect_type: EffectType::default(),
+            effect_type: EffectType::Effectful,
         };
         let mut caps = self.capabilities.write().await;
         caps.insert(id, capability);
@@ -1965,6 +1994,8 @@ impl CapabilityMarketplace {
         }
 
         // Execute via executor registry or provider fallback
+        let session_pool = self.session_pool.read().await.clone();
+        let context = super::executors::ExecutionContext::new(id, &manifest.metadata, session_pool);
         let exec_result = if let Some(executor) =
             self.executor_registry.get(&match &manifest.provider {
                 ProviderType::Local(_) => std::any::TypeId::of::<LocalCapability>(),
@@ -1977,13 +2008,8 @@ impl CapabilityMarketplace {
                 ProviderType::Stream(_) => std::any::TypeId::of::<StreamCapabilityImpl>(),
                 ProviderType::Registry(_) => std::any::TypeId::of::<RegistryCapability>(),
                 ProviderType::Native(_) => std::any::TypeId::of::<NativeCapability>(),
+                ProviderType::Sandboxed(_) => std::any::TypeId::of::<SandboxedCapability>(),
             }) {
-            // Build execution context with capability ID, metadata, and session pool
-            let session_pool = {
-                let guard = self.session_pool.read().await;
-                guard.clone()
-            };
-            let context = ExecutionContext::new(id, &manifest.metadata, session_pool);
             executor
                 .execute(&manifest.provider, inputs_ref, &context)
                 .await
@@ -1993,8 +2019,6 @@ impl CapabilityMarketplace {
                 ProviderType::Http(http) => self.execute_http_capability(http, inputs_ref).await,
                 ProviderType::OpenApi(_) => {
                     let executor = OpenApiExecutor;
-                    let empty_metadata = HashMap::new();
-                    let context = ExecutionContext::new(id, &empty_metadata, None);
                     executor
                         .execute(&manifest.provider, inputs_ref, &context)
                         .await
@@ -2019,6 +2043,9 @@ impl CapabilityMarketplace {
                     "Registry provider missing executor".to_string(),
                 )),
                 ProviderType::Native(native) => (native.handler)(inputs_ref).await,
+                ProviderType::Sandboxed(_) => Err(RuntimeError::Generic(
+                    "Sandboxed capability executor not found".to_string(),
+                )),
             }
         }?;
 
@@ -2288,6 +2315,7 @@ impl CapabilityMarketplace {
                 ProviderType::Stream(_) => "stream",
                 ProviderType::Registry(_) => "registry",
                 ProviderType::Native(_) => "native",
+                ProviderType::Sandboxed(_) => "sandboxed",
             };
             // Namespace heuristic: split by '.' keep first or use entire if absent
             let namespace = id.split('.').next().unwrap_or("");
@@ -2319,6 +2347,7 @@ impl CapabilityMarketplace {
                 ProviderType::Stream(_) => "stream",
                 ProviderType::Registry(_) => "registry",
                 ProviderType::Native(_) => "native",
+                ProviderType::Sandboxed(_) => "sandboxed",
             };
             *by_provider.entry(provider_label).or_insert(0) += 1;
             let ns = id.split('.').next().unwrap_or("").to_string();
@@ -2364,7 +2393,8 @@ impl CapabilityMarketplace {
                 | ProviderType::Stream(_)
                 | ProviderType::Registry(_)
                 | ProviderType::Plugin(_)
-                | ProviderType::Native(_) => {
+                | ProviderType::Native(_)
+                | ProviderType::Sandboxed(_) => {
                     if let Some(cb) = &self.debug_callback {
                         cb(format!(
                             "Skipping RTFS export for non-serializable provider: {}",

@@ -21,16 +21,14 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 /// Create a unified approval queue with file storage
-fn create_queue() -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
-    let workspace_root = find_workspace_root();
-    let storage_path = workspace_root.join("capabilities/servers/approvals");
+fn create_queue(storage_path: PathBuf) -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
     let storage = Arc::new(FileApprovalStorage::new(storage_path)?);
     Ok(UnifiedApprovalQueue::new(storage))
 }
 
 /// List configured servers
-pub async fn list_servers() -> RuntimeResult<ServerListOutput> {
-    let queue = create_queue()?;
+pub async fn list_servers(storage_path: PathBuf) -> RuntimeResult<ServerListOutput> {
+    let queue = create_queue(storage_path)?;
     let approved_requests = queue.list_approved_servers().await?;
 
     let servers: Vec<ServerInfo> = approved_requests
@@ -79,9 +77,14 @@ pub async fn list_servers() -> RuntimeResult<ServerListOutput> {
 }
 
 /// Add a new server
-pub async fn add_server(url: String, name: Option<String>) -> RuntimeResult<String> {
-    let queue = create_queue()?;
-    let name_str = name.unwrap_or_else(|| "manual-server".to_string());
+/// Add a new server
+pub async fn add_server(
+    storage_path: PathBuf,
+    url: String,
+    name: Option<String>,
+) -> RuntimeResult<String> {
+    let queue = create_queue(storage_path)?;
+    let name_str = name.clone().unwrap_or_else(|| "manual-server".to_string());
 
     let server_info = DiscoveryServerInfo {
         name: name_str.clone(),
@@ -112,14 +115,34 @@ pub async fn add_server(url: String, name: Option<String>) -> RuntimeResult<Stri
 }
 
 /// Remove a server
-pub async fn remove_server(name: String) -> RuntimeResult<()> {
-    // TODO: Implement server removal logic
-    Ok(())
+pub async fn remove_server(storage_path: PathBuf, name: &str) -> RuntimeResult<()> {
+    let queue = create_queue(storage_path)?;
+    let approved = queue.list_approved_servers().await?;
+    let target = approved.iter().find(|r| {
+        if let ApprovalCategory::ServerDiscovery { server_info, .. } = &r.category {
+            server_info.name == name || r.id == name
+        } else {
+            false
+        }
+    });
+
+    if let Some(r) = target {
+        queue.remove(&r.id).await?;
+        Ok(())
+    } else {
+        Err(RuntimeError::Generic(format!(
+            "Server '{}' not found",
+            name
+        )))
+    }
 }
 
 /// Show server health status
-pub async fn server_health(name: Option<String>) -> RuntimeResult<Vec<ServerInfo>> {
-    let queue = create_queue()?;
+pub async fn server_health(
+    storage_path: PathBuf,
+    name: Option<String>,
+) -> RuntimeResult<Vec<ServerInfo>> {
+    let queue = create_queue(storage_path)?;
     let approved_requests = queue.list_approved_servers().await?;
 
     let target_servers: Vec<_> = approved_requests
@@ -279,8 +302,11 @@ pub async fn search_servers(
 /// Can be called with either:
 /// - Server name (looks up endpoint from approved/pending servers)
 /// - Direct endpoint URL
-pub async fn introspect_server(server: String) -> RuntimeResult<MCPIntrospectionResult> {
-    let queue = create_queue()?;
+pub async fn introspect_server(
+    storage_path: PathBuf,
+    server: String,
+) -> RuntimeResult<MCPIntrospectionResult> {
+    let queue = create_queue(storage_path)?;
 
     // Try to find server by name in approved or pending
     let (endpoint, auth_env_var_owned) = if server.starts_with("http") {
@@ -467,26 +493,12 @@ pub async fn introspect_server_by_url(
 
 /// Save discovered tools to RTFS capabilities file and link to pending entry
 pub async fn save_discovered_tools(
+    storage_path: PathBuf,
+    mcp_tools: Vec<MCPTool>,
     introspection: &MCPIntrospectionResult,
     server_info: &DiscoveryServerInfo,
-    pending_id: Option<&str>,
+    pending_id: Option<String>,
 ) -> RuntimeResult<String> {
-    // Convert DiscoveredMCPTool to MCPTool
-    let mcp_tools: Vec<MCPTool> = introspection
-        .tools
-        .iter()
-        .map(|tool| {
-            MCPTool {
-                name: tool.tool_name.clone(),
-                description: tool.description.clone(),
-                input_schema: tool.input_schema_json.clone(),
-                output_schema: None, // DiscoveredMCPTool doesn't have output_schema_json
-                metadata: None,
-                annotations: None,
-            }
-        })
-        .collect();
-
     if mcp_tools.is_empty() {
         return Err(RuntimeError::Generic("No tools to save".to_string()));
     }
@@ -508,7 +520,7 @@ pub async fn save_discovered_tools(
 
     // Find the pending entry to get the server ID
     // Use workspace root to ensure server.json is saved in the correct location
-    let queue = create_queue()?;
+    let queue = create_queue(storage_path)?;
     let pending_requests = queue.list_pending_servers().await?;
     let pending: Vec<_> = pending_requests
         .iter()
@@ -518,9 +530,9 @@ pub async fn save_discovered_tools(
     // Find the pending entry for this server
     // Use server_info from the parameter (which matches the discovery result) rather than introspection
     // because introspection.server_name might differ from the discovery server_info.name
-    let entry = if let Some(id) = pending_id {
+    let entry = if let Some(id) = &pending_id {
         // Use provided ID if available
-        pending.iter().find(|e| e.id == id)
+        pending.iter().find(|e| e.id == *id)
     } else {
         // Fallback to name/endpoint matching using server_info (from discovery) not introspection
         pending.iter().find(|e| {
@@ -607,12 +619,13 @@ pub async fn save_discovered_tools(
 
 /// Save API capabilities discovered from documentation parsing
 pub async fn save_api_capabilities(
+    storage_path: PathBuf,
     api_result: &crate::synthesis::introspection::APIIntrospectionResult,
     pending_id: &str,
 ) -> RuntimeResult<String> {
     use std::io::Write;
 
-    let queue = create_queue()?;
+    let queue = create_queue(storage_path)?;
     let pending_requests = queue.list_pending_servers().await?;
     let pending: Vec<_> = pending_requests
         .iter()

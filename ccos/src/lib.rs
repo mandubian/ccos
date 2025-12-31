@@ -56,6 +56,7 @@ pub mod security_policies;
 pub mod storage;
 pub mod storage_backends;
 pub mod synthesis;
+#[cfg(feature = "tui")]
 pub mod tui;
 pub mod types;
 pub mod wm_integration;
@@ -98,6 +99,7 @@ pub mod runtime_service;
 pub mod utils;
 
 // Example helpers
+#[cfg(feature = "tui")]
 pub mod planner_viz_common;
 
 // Re-export some arbiter sub-modules for historic import paths

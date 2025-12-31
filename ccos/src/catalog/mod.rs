@@ -491,7 +491,8 @@ fn infer_source_from_provider(
         ProviderType::Local(_)
         | ProviderType::RemoteRTFS(_)
         | ProviderType::Stream(_)
-        | ProviderType::Native(_) => CatalogSource::Generated,
+        | ProviderType::Native(_)
+        | ProviderType::Sandboxed(_) => CatalogSource::Generated,
         ProviderType::Http(_) | ProviderType::A2A(_) | ProviderType::Plugin(_) => {
             CatalogSource::Unknown
         }
@@ -511,6 +512,7 @@ fn provider_to_string(provider: &crate::capability_marketplace::types::ProviderT
         ProviderType::Stream(_) => "stream",
         ProviderType::Registry(_) => "registry",
         ProviderType::Native(_) => "native",
+        ProviderType::Sandboxed(_) => "sandboxed",
     }
     .to_string()
 }
