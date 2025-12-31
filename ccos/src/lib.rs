@@ -40,6 +40,7 @@ pub mod cli;
 pub mod discovery;
 pub mod event_sink;
 pub mod execution_context;
+pub mod governance_judge;
 pub mod governance_kernel;
 pub mod intent_archive;
 pub mod intent_graph;

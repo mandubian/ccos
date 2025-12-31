@@ -67,6 +67,9 @@ graph TD
 ### 4. Advanced: Formal Verification
 Kernel's rule engine can be formally verified (e.g., via Rust proofs) to ensure no bypasses. Arbiter federation includes Ethics sub-arbiter for pre-checks.
 
+### 5. Semantic Plan Judgment
+Beyond formal rules, the Kernel employs a **Semantic Plan Judge** (see [041: Semantic Plan Judge](./041-semantic-plan-judge.md)) to perform "common sense" validation. This ensures that even if a plan follows all formal rules, it is blocked if it is semantically nonsensical or misaligned with the user's goal.
+
 Constitution + Kernel = Human in the loop: Enforceable ethics for pure, reentrant AI.
 
 Next: Capability Attestation in 011.

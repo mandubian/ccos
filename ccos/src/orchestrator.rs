@@ -600,6 +600,16 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
+    /// Creates a new Orchestrator for testing purposes.
+    pub fn for_test(
+        causal_chain: Arc<Mutex<CausalChain>>,
+        intent_graph: Arc<Mutex<IntentGraph>>,
+        capability_marketplace: Arc<CapabilityMarketplace>,
+        plan_archive: Arc<PlanArchive>,
+    ) -> Self {
+        Self::new(causal_chain, intent_graph, capability_marketplace, plan_archive)
+    }
+
     /// Creates a new Orchestrator.
     ///
     /// # Security Note

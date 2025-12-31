@@ -19,6 +19,7 @@ GovKernel.validate_and_execute()
     ├── sanitize_intent()
     ├── scaffold_plan()
     ├── validate_against_constitution()
+    ├── judge_plan_semantically() ← SEMANTIC JUDGE: Common sense check
     └── validate_execution_hints() ← TIER 1: Policy limits check
     ↓
 Orchestrator.execute_plan()
