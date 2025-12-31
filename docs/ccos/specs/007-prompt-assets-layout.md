@@ -1,4 +1,7 @@
-# Prompt Assets Layout (CCOS Arbiter)
+# CCOS Specification 007: Prompt Assets Layout (CCOS Arbiter)
+
+**Status: Implemented**
+**Scope**: Defines the directory structure and resolution logic for Arbiter prompts.
 
 ## Single Source of Truth
 All arbiter prompt assets live under the repository root:

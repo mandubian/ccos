@@ -1,7 +1,7 @@
-# 020 — Multi-Agent Architecture (CCOS Autonomous Agents)
+# CCOS Specification 023: Multi-Agent Architecture (CCOS Autonomous Agents)
 
-## Status
-**Draft** — Design specification for multi-agent coordination in CCOS.
+**Status: Implemented**
+**Scope**: Defines agent identity, addressing, and coordination.
 
 ## Context
 The 015-capabilities-vs-agents spec established that agents are capabilities with `:kind :agent` metadata. This document extends that foundation to define how **multiple agents** coordinate, delegate, and communicate—enabling CCOS to run autonomous agent ecosystems.
