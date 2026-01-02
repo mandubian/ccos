@@ -61,6 +61,30 @@ pub struct LlmApiParseResponse {
     pub auth: Option<ExtractedAuth>,
 }
 
+/// Discovered API link from documentation exploration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredApiLink {
+    /// Type of API: "rest", "websocket", "openapi", "graphql", "documentation"
+    pub api_type: String,
+    /// Full URL to the API documentation or spec
+    pub url: String,
+    /// Human-readable label for the link
+    pub label: String,
+    /// Brief description of what this API does
+    pub description: String,
+}
+
+/// LLM response for link discovery
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmLinkDiscoveryResponse {
+    /// List of discovered API links
+    pub api_links: Vec<DiscoveredApiLink>,
+    /// OpenAPI/Swagger spec URLs if found
+    pub openapi_specs: Vec<String>,
+    /// Whether this page appears to be API documentation
+    pub is_api_documentation: bool,
+}
+
 /// LLM-based API documentation parser
 /// Uses the Arbiter's LlmProvider for all LLM calls
 pub struct LlmDocParser {
@@ -112,6 +136,212 @@ impl LlmDocParser {
             "No documentation URLs available for domain: {}. Please provide a documentation URL manually.",
             api_domain
         )))
+    }
+
+    /// Explore a documentation page to find links to API documentation
+    /// This is the first step in the documentation crawler - it identifies:
+    /// - REST API documentation links
+    /// - WebSocket API links
+    /// - OpenAPI/Swagger specification URLs
+    /// - GraphQL endpoints
+    pub async fn explore_documentation(
+        &self,
+        landing_url: &str,
+        llm_provider: &dyn LlmProvider,
+    ) -> RuntimeResult<LlmLinkDiscoveryResponse> {
+        log::info!("🔍 Exploring documentation at: {}", landing_url);
+
+        // Fetch the landing page
+        let html_content = self.fetch_page(landing_url).await?;
+
+        // Extract links and text from HTML (keeping href attributes)
+        let (links, text_content) = self.extract_links_and_text(&html_content, landing_url)?;
+
+        // Use LLM to identify API-related links
+        let response = self
+            .discover_api_links(&links, &text_content, landing_url, llm_provider)
+            .await?;
+
+        log::info!(
+            "✅ Found {} API links, {} OpenAPI specs",
+            response.api_links.len(),
+            response.openapi_specs.len()
+        );
+
+        Ok(response)
+    }
+
+    /// Parse documentation page to extract API endpoints
+    /// This is the second step - once a relevant page is found, this extracts:
+    /// - API Endpoints (methods, paths, parameters)
+    /// - Authentication requirements
+    /// - Data types
+    pub async fn parse_documentation(
+        &self,
+        doc_url: &str,
+        llm_provider: &dyn LlmProvider,
+    ) -> RuntimeResult<LlmApiParseResponse> {
+        log::info!("📖 Parsing documentation at: {}", doc_url);
+
+        // Fetch the page
+        let html_content = self.fetch_page(doc_url).await?;
+
+        // Extract text content
+        let text_content = self.extract_text_from_html(&html_content)?;
+
+        // Extract domain from URL for context
+        let api_domain = doc_url
+            .split("://")
+            .nth(1)
+            .unwrap_or(doc_url)
+            .split('/')
+            .next()
+            .unwrap_or("unknown");
+
+        // Use LLM to parse endpoints
+        self.parse_with_llm(&text_content, api_domain, llm_provider)
+            .await
+    }
+
+    /// Extract links and text content from HTML
+    fn extract_links_and_text(
+        &self,
+        html: &str,
+        base_url: &str,
+    ) -> RuntimeResult<(Vec<(String, String)>, String)> {
+        let mut links = Vec::new();
+
+        // Extract href links with their text
+        let link_re =
+            regex::Regex::new(r#"<a[^>]+href=["']([^"']+)["'][^>]*>([^<]*)</a>"#).unwrap();
+        for cap in link_re.captures_iter(html) {
+            let href = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let text = cap.get(2).map(|m| m.as_str()).unwrap_or("").trim();
+
+            // Make URL absolute if relative
+            let full_url = if href.starts_with("http") {
+                href.to_string()
+            } else if href.starts_with('/') {
+                // Extract base domain from URL
+                if let Some(domain_end) = base_url.find("://").map(|i| {
+                    base_url[i + 3..]
+                        .find('/')
+                        .map(|j| i + 3 + j)
+                        .unwrap_or(base_url.len())
+                }) {
+                    format!("{}{}", &base_url[..domain_end], href)
+                } else {
+                    href.to_string()
+                }
+            } else {
+                href.to_string()
+            };
+
+            if !full_url.is_empty() && !text.is_empty() {
+                links.push((full_url, text.to_string()));
+            }
+        }
+
+        // Also extract text content
+        let text_content = self.extract_text_from_html(html)?;
+
+        Ok((links, text_content))
+    }
+
+    /// Use LLM to discover API links from page content
+    async fn discover_api_links(
+        &self,
+        links: &[(String, String)],
+        text_content: &str,
+        base_url: &str,
+        llm_provider: &dyn LlmProvider,
+    ) -> RuntimeResult<LlmLinkDiscoveryResponse> {
+        let prompt = self.create_link_discovery_prompt(links, text_content, base_url);
+
+        let llm_response = llm_provider.generate_text(&prompt).await?;
+
+        self.parse_link_discovery_response(&llm_response)
+    }
+
+    /// Create prompt for LLM to identify API links
+    fn create_link_discovery_prompt(
+        &self,
+        links: &[(String, String)],
+        text_content: &str,
+        base_url: &str,
+    ) -> String {
+        let links_text: String = links
+            .iter()
+            .take(100) // Limit to avoid token overflow
+            .map(|(url, text)| format!("- [{}]({})", text, url))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Truncate text content
+        let truncated_text = if text_content.len() > 5000 {
+            &text_content[..5000]
+        } else {
+            text_content
+        };
+
+        format!(
+            r#"You are analyzing a developer documentation website to find API documentation links.
+
+Base URL: {}
+
+Links found on the page:
+{}
+
+Page text excerpt:
+{}
+
+Find and categorize all API-related links. Look for:
+1. REST API documentation (paths like /api, /rest, /v1, /docs/api)
+2. WebSocket API documentation (paths containing websocket, ws, streaming)
+3. OpenAPI/Swagger specification files (swagger.json, openapi.yaml, /swagger, /openapi)
+4. GraphQL endpoints (graphql, /graphql)
+5. General API reference pages
+
+Respond with ONLY this JSON structure:
+{{
+  "api_links": [
+    {{
+      "api_type": "rest|websocket|graphql|documentation",
+      "url": "full URL to the API documentation",
+      "label": "Link text or title",
+      "description": "What this API does based on context"
+    }}
+  ],
+  "openapi_specs": [
+    "full URL to any OpenAPI/Swagger JSON or YAML files"
+  ],
+  "is_api_documentation": true
+}}
+
+If no API links are found, return empty arrays. Only include links that are clearly API-related."#,
+            base_url, links_text, truncated_text
+        )
+    }
+
+    /// Parse LLM response for link discovery
+    fn parse_link_discovery_response(
+        &self,
+        response: &str,
+    ) -> RuntimeResult<LlmLinkDiscoveryResponse> {
+        let json_str = self.extract_json_from_response(response);
+
+        match serde_json::from_str::<LlmLinkDiscoveryResponse>(&json_str) {
+            Ok(parsed) => Ok(parsed),
+            Err(e) => {
+                log::warn!("Failed to parse link discovery response: {}", e);
+                // Return empty result on parse failure
+                Ok(LlmLinkDiscoveryResponse {
+                    api_links: vec![],
+                    openapi_specs: vec![],
+                    is_api_documentation: false,
+                })
+            }
+        }
     }
 
     /// Fetch a web page

@@ -25,5 +25,5 @@ pub use api_introspector::{
 pub use apis_guru::{ApisGuruClient, ApisGuruSearchResult};
 pub use auth_injector::{AuthInjector, AuthType};
 pub use known_apis::KnownApisRegistry;
-pub use llm_doc_parser::LlmDocParser;
+pub use llm_doc_parser::{DiscoveredApiLink, LlmDocParser, LlmLinkDiscoveryResponse};
 pub use mcp_introspector::MCPIntrospector;

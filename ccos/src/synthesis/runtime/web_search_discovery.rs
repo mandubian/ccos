@@ -83,6 +83,155 @@ impl RateLimiter {
     }
 }
 
+/// Persistent file-based cache for web search results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchCacheEntry {
+    /// The cached results
+    pub results: Vec<WebSearchResult>,
+    /// When this entry was created
+    pub created_at: i64, // Unix timestamp
+    /// TTL in seconds
+    pub ttl_secs: u64,
+}
+
+impl SearchCacheEntry {
+    /// Check if this cache entry is still valid
+    pub fn is_valid(&self) -> bool {
+        let now = chrono::Utc::now().timestamp();
+        (now - self.created_at) < self.ttl_secs as i64
+    }
+}
+
+/// Search cache with file persistence
+#[derive(Debug)]
+pub struct SearchCache {
+    /// Cache file path
+    cache_file: std::path::PathBuf,
+    /// In-memory cache
+    cache: HashMap<String, SearchCacheEntry>,
+    /// Default TTL in seconds (1 day = 86400)
+    default_ttl: u64,
+}
+
+impl SearchCache {
+    /// Create a new search cache with default settings
+    pub fn new() -> Self {
+        // Get cache directory (use $HOME/.cache/ccos or current dir)
+        let cache_dir = std::env::var("HOME")
+            .map(|h| std::path::PathBuf::from(h).join(".cache").join("ccos"))
+            .unwrap_or_else(|_| std::path::PathBuf::from(".ccos_cache"));
+
+        // Create cache directory if it doesn't exist
+        let _ = std::fs::create_dir_all(&cache_dir);
+
+        let cache_file = cache_dir.join("web_search_cache.json");
+        let cache = Self::load_from_file(&cache_file);
+
+        Self {
+            cache_file,
+            cache,
+            default_ttl: 86400, // 1 day
+        }
+    }
+
+    /// Create with custom cache path
+    pub fn with_path(path: &std::path::Path) -> Self {
+        let cache = Self::load_from_file(path);
+        Self {
+            cache_file: path.to_path_buf(),
+            cache,
+            default_ttl: 86400,
+        }
+    }
+
+    /// Set custom TTL in seconds
+    pub fn with_ttl(mut self, ttl_secs: u64) -> Self {
+        self.default_ttl = ttl_secs;
+        self
+    }
+
+    /// Load cache from file
+    fn load_from_file(path: &std::path::Path) -> HashMap<String, SearchCacheEntry> {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(cache) = serde_json::from_str(&content) {
+                return cache;
+            }
+        }
+        HashMap::new()
+    }
+
+    /// Save cache to file
+    fn save_to_file(&self) {
+        if let Ok(content) = serde_json::to_string_pretty(&self.cache) {
+            let _ = std::fs::write(&self.cache_file, content);
+        }
+    }
+
+    /// Get cached results for a query
+    pub fn get(&self, query: &str) -> Option<Vec<WebSearchResult>> {
+        let key = Self::normalize_query(query);
+        if let Some(entry) = self.cache.get(&key) {
+            if entry.is_valid() {
+                return Some(entry.results.clone());
+            }
+        }
+        None
+    }
+
+    /// Cache results for a query
+    pub fn set(&mut self, query: &str, results: Vec<WebSearchResult>) {
+        let key = Self::normalize_query(query);
+        let entry = SearchCacheEntry {
+            results,
+            created_at: chrono::Utc::now().timestamp(),
+            ttl_secs: self.default_ttl,
+        };
+        self.cache.insert(key, entry);
+        self.save_to_file();
+    }
+
+    /// Normalize query for cache key (lowercase, trimmed)
+    fn normalize_query(query: &str) -> String {
+        query.trim().to_lowercase()
+    }
+
+    /// Clear the entire cache
+    pub fn clear(&mut self) {
+        self.cache.clear();
+        self.save_to_file();
+        eprintln!("🗑️  Search cache cleared");
+    }
+
+    /// Remove expired entries
+    pub fn cleanup_expired(&mut self) {
+        let before_count = self.cache.len();
+        self.cache.retain(|_, entry| entry.is_valid());
+        let removed = before_count - self.cache.len();
+        if removed > 0 {
+            self.save_to_file();
+            eprintln!("🧹 Cleaned up {} expired cache entries", removed);
+        }
+    }
+
+    /// Get cache statistics
+    pub fn stats(&self) -> (usize, usize) {
+        let total = self.cache.len();
+        let valid = self.cache.values().filter(|e| e.is_valid()).count();
+        (valid, total)
+    }
+
+    /// Get cache file path
+    pub fn cache_path(&self) -> &std::path::Path {
+        &self.cache_file
+    }
+}
+
+impl Default for SearchCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Web Search Discovery Provider
 pub struct WebSearchDiscovery {
     /// Web search engine provider (google, duckduckgo, bing, scraping)
@@ -95,6 +244,8 @@ pub struct WebSearchDiscovery {
     api_keys: HashMap<String, String>,
     /// User agent for web scraping
     user_agent: String,
+    /// Persistent search cache
+    cache: Option<SearchCache>,
 }
 
 impl WebSearchDiscovery {
@@ -124,6 +275,7 @@ impl WebSearchDiscovery {
             rate_limiter: RateLimiter::new(10), // Conservative rate limit
             api_keys,
             user_agent: "CCOS-WebSearch/1.0 (Capability Discovery Bot)".to_string(),
+            cache: Some(SearchCache::new()),
         }
     }
 
@@ -135,6 +287,7 @@ impl WebSearchDiscovery {
             rate_limiter: RateLimiter::new(1000), // No rate limiting in mock mode
             api_keys: HashMap::new(),
             user_agent: "CCOS-WebSearch-Mock/1.0".to_string(),
+            cache: None, // No caching in mock mode
         }
     }
 
@@ -145,7 +298,50 @@ impl WebSearchDiscovery {
         instance
     }
 
+    /// Enable or disable caching
+    pub fn with_cache(mut self, enabled: bool) -> Self {
+        if enabled {
+            if self.cache.is_none() {
+                self.cache = Some(SearchCache::new());
+            }
+        } else {
+            self.cache = None;
+        }
+        self
+    }
+
+    /// Clear the search cache
+    pub fn clear_cache(&mut self) {
+        if let Some(ref mut cache) = self.cache {
+            cache.clear();
+        } else {
+            eprintln!("ℹ️  No cache to clear (caching disabled)");
+        }
+    }
+
+    /// Get cache statistics: (valid_entries, total_entries)
+    pub fn cache_stats(&self) -> Option<(usize, usize)> {
+        self.cache.as_ref().map(|c| c.stats())
+    }
+
+    /// Get the cache file path
+    pub fn cache_path(&self) -> Option<&std::path::Path> {
+        self.cache.as_ref().map(|c| c.cache_path())
+    }
+
+    /// Cleanup expired cache entries
+    pub fn cleanup_expired_cache(&mut self) {
+        if let Some(ref mut cache) = self.cache {
+            cache.cleanup_expired();
+        }
+    }
+
     /// Search for API specs and documentation
+    ///
+    /// Generates multiple search strategies:
+    /// 1. General API searches (most useful for finding actual APIs)
+    /// 2. MCP server searches (for direct tool integration)
+    /// 3. OpenAPI/REST spec searches (for automatic client generation)
     pub async fn search_for_api_specs(
         &mut self,
         capability_name: &str,
@@ -154,15 +350,17 @@ impl WebSearchDiscovery {
             return self.get_mock_results(capability_name);
         }
 
-        // Build search queries for different API discovery targets
+        // Build search queries with multiple strategies
+        // Priority: General APIs > MCP Servers > OpenAPI Specs
         let queries = vec![
-            format!(
-                "{} OpenAPI spec site:github.com OR site:openapis.org",
-                capability_name
-            ),
-            format!("{} GraphQL schema site:github.com", capability_name),
-            format!("{} API documentation", capability_name),
-            format!("{} REST API docs", capability_name),
+            // Strategy 1: General API searches (most likely to find useful results)
+            format!("{} API", capability_name),
+            format!("{} free API service", capability_name),
+            // Strategy 2: MCP server searches (for direct integration)
+            format!("{} MCP server", capability_name),
+            // Strategy 3: Spec-based searches (for automatic generation)
+            format!("{} REST API documentation", capability_name),
+            format!("{} OpenAPI specification", capability_name),
         ];
 
         let mut all_results = Vec::new();
@@ -190,14 +388,41 @@ impl WebSearchDiscovery {
 
     /// Perform actual web search with multiple fallback strategies
     async fn perform_search(&mut self, query: &str) -> RuntimeResult<Vec<WebSearchResult>> {
-        eprintln!("🔍 WEB SEARCH: Searching for '{}'", query);
+        // Check cache first
+        if let Some(ref cache) = self.cache {
+            if let Some(cached_results) = cache.get(query) {
+                eprintln!("📦 CACHE HIT: Using cached results for '{}'", query);
+                return Ok(cached_results);
+            }
+        }
+
+        eprintln!(
+            "🔍 WEB SEARCH: Searching for '{}'{}",
+            query,
+            if self.cache.is_some() {
+                " (will cache)"
+            } else {
+                ""
+            }
+        );
+
+        // Helper to cache results before returning
+        let cache_results =
+            |s: &mut Self, q: &str, results: Vec<WebSearchResult>| -> Vec<WebSearchResult> {
+                if let Some(ref mut cache) = s.cache {
+                    cache.set(q, results.clone());
+                    eprintln!("💾 Cached {} results for '{}'", results.len(), q);
+                }
+                results
+            };
 
         // Try different search methods in order of preference (free first)
         // DuckDuckGo first (free, no API key)
         match self.search_duckduckgo_api(query).await {
             Ok(results) if !results.is_empty() => {
                 eprintln!("✅ Found {} results via DuckDuckGo", results.len());
-                return Ok(results);
+                let cached = cache_results(self, query, results);
+                return Ok(cached);
             }
             Ok(_) => {
                 // Silently continue to next search method
@@ -214,7 +439,8 @@ impl WebSearchDiscovery {
         match self.search_google_api(query).await {
             Ok(results) if !results.is_empty() => {
                 eprintln!("✅ Found {} results via Google", results.len());
-                return Ok(results);
+                let cached = cache_results(self, query, results);
+                return Ok(cached);
             }
             Ok(_) => eprintln!("⚠️ No results from Google"),
             Err(e) => eprintln!("❌ Google failed: {}", e),
@@ -224,7 +450,8 @@ impl WebSearchDiscovery {
         match self.search_bing_api(query).await {
             Ok(results) if !results.is_empty() => {
                 eprintln!("✅ Found {} results via Bing", results.len());
-                return Ok(results);
+                let cached = cache_results(self, query, results);
+                return Ok(cached);
             }
             Ok(_) => eprintln!("⚠️ No results from Bing"),
             Err(e) => eprintln!("❌ Bing failed: {}", e),
@@ -234,7 +461,8 @@ impl WebSearchDiscovery {
         match self.search_via_scraping(query).await {
             Ok(results) if !results.is_empty() => {
                 eprintln!("✅ Found {} results via scraping", results.len());
-                return Ok(results);
+                let cached = cache_results(self, query, results);
+                return Ok(cached);
             }
             Ok(_) => eprintln!("⚠️ No results from scraping"),
             Err(e) => eprintln!("❌ Scraping failed: {}", e),

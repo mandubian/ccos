@@ -171,19 +171,13 @@ impl RegistrySearcher {
         Ok(results)
     }
 
-    /// Search web for MCP servers
+    /// Search web for APIs (MCP servers, OpenAPI specs, and general APIs)
     async fn search_web(&self, query: &str) -> RuntimeResult<Vec<RegistrySearchResult>> {
         let mut web_searcher = WebSearchDiscovery::new("auto".to_string());
 
-        // Search specifically for MCP servers, not just any API
-        let mcp_query = if query.to_lowercase().contains("mcp") {
-            query.to_string()
-        } else {
-            format!("{} MCP server", query)
-        };
-
-        // Search for MCP servers and API specs
-        let search_results = web_searcher.search_for_api_specs(&mcp_query).await?;
+        // Pass the query directly - search_for_api_specs will generate appropriate search patterns
+        // for general APIs, MCP servers, and OpenAPI specs
+        let search_results = web_searcher.search_for_api_specs(query).await?;
 
         let results: Vec<RegistrySearchResult> = search_results
             .into_iter()
@@ -454,8 +448,15 @@ impl RegistrySearcher {
     }
 
     /// Check if web search is enabled by checking both environment variable and config file
-    fn is_web_search_enabled() -> bool {
-        // First check environment variable (takes precedence)
+    pub fn is_web_search_enabled() -> bool {
+        // First check environment variable to ENABLE (takes precedence)
+        if let Ok(enable) = std::env::var("CCOS_ENABLE_WEB_SEARCH") {
+            if enable == "1" || enable.to_lowercase() == "true" || enable.to_lowercase() == "on" {
+                return true;
+            }
+        }
+
+        // Check for DISABLE env var
         if let Ok(disable) = std::env::var("CCOS_DISABLE_WEB_SEARCH") {
             if disable == "1" || disable.to_lowercase() == "true" || disable.to_lowercase() == "on"
             {
