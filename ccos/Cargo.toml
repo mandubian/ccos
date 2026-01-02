@@ -126,6 +126,9 @@ path = "src/bin/resolve_deps.rs"
 name = "test-multi-capability-synthesis"
 path = "src/bin/test_multi_capability_synthesis.rs"
 
+[[bin]]
+name = "dialogue_planner_demo"
+path = "src/bin/dialogue_planner_demo.rs"
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"

@@ -245,7 +245,7 @@ fn intent_from_function_call(expr: &rtfs::ast::Expression) -> Option<Intent> {
 pub struct DelegatingArbiter {
     llm_config: LlmConfig,
     delegation_config: DelegationConfig,
-    llm_provider: Box<dyn LlmProvider>,
+    llm_provider: Arc<dyn LlmProvider>,
     capability_marketplace: Arc<CapabilityMarketplace>,
     intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
     adaptive_threshold_calculator: Option<crate::adaptive_threshold::AdaptiveThresholdCalculator>,
@@ -383,7 +383,7 @@ impl DelegatingArbiter {
     ) -> Result<Self, RuntimeError> {
         // Create LLM provider
         let llm_provider =
-            LlmProviderFactory::create_provider(llm_config.to_provider_config()).await?;
+            Arc::from(LlmProviderFactory::create_provider(llm_config.to_provider_config()).await?);
 
         // Create adaptive threshold calculator if configured
         let adaptive_threshold_calculator =
@@ -435,6 +435,11 @@ impl DelegatingArbiter {
     /// Get the LLM configuration used by this arbiter
     pub fn get_llm_config(&self) -> &LlmConfig {
         &self.llm_config
+    }
+
+    /// Get the LLM provider
+    pub fn get_llm_provider(&self) -> Arc<dyn LlmProvider> {
+        self.llm_provider.clone()
     }
 
     /// Query the LLM directly with a prompt
