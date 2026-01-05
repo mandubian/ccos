@@ -1,4 +1,6 @@
 use super::types::*;
+use crate::secrets::SecretStore;
+use crate::utils::fs::get_workspace_root;
 use crate::utils::value_conversion;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -1113,9 +1115,17 @@ impl OpenApiExecutor {
     }
 
     fn read_env_token(auth: &OpenApiAuth) -> Option<String> {
-        auth.env_var_name
-            .as_ref()
-            .and_then(|env| std::env::var(env).ok())
+        let env_var = auth.env_var_name.as_ref()?;
+
+        // Try SecretStore lookup first (covers local secrets file AND env vars via fallback)
+        if let Ok(store) = SecretStore::new(Some(get_workspace_root())) {
+            if let Some(val) = store.get(env_var) {
+                return Some(val);
+            }
+        }
+
+        // Direct fallback if store failed to load (though store.get does this too)
+        std::env::var(env_var).ok()
     }
 
     fn apply_auth(
