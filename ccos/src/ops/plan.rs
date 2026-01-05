@@ -158,7 +158,7 @@ pub async fn create_plan_with_options(
             config.missing_capabilities.verbose_logging = Some(true);
         } else {
             // Create default config with verbose logging
-            let mut config = rtfs::config::types::AgentConfig::default();
+            let mut config = crate::config::types::AgentConfig::default();
             config.missing_capabilities.verbose_logging = Some(true);
             agent_config = Some(config);
         }

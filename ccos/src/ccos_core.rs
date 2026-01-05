@@ -13,8 +13,6 @@ pub use crate::arbiter::delegating_arbiter;
 
 // --- Core CCOS System ---
 
-use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -23,17 +21,15 @@ use std::sync::{Arc, Mutex};
 use crate::arbiter::prompt::{FilePromptStore, PromptStore};
 use crate::arbiter::DelegatingArbiter;
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::catalog::{CatalogEntryKind, CatalogFilter, CatalogHit, CatalogService};
+use crate::catalog::CatalogService;
 use crate::host::RuntimeHost;
-use crate::rtfs_bridge::RtfsErrorExplainer;
-use rtfs::ast::{Keyword, MapKey};
-use rtfs::config::types::AgentConfig;
+use crate::config::types::AgentConfig;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 use rtfs::runtime::{ModuleRegistry, RTFSRuntime, Runtime};
 
-use crate::types::{ActionType, ExecutionResult};
+use crate::types::ExecutionResult;
 
 use crate::causal_chain::CausalChain;
 use crate::event_sink::CausalChainIntentEventSink;
@@ -279,7 +275,7 @@ impl CCOS {
     pub async fn new_with_agent_config_and_configs_and_debug_callback(
         intent_graph_config: IntentGraphConfig,
         plan_archive_path: Option<std::path::PathBuf>,
-        agent_config_opt: Option<rtfs::config::types::AgentConfig>,
+        agent_config_opt: Option<crate::config::types::AgentConfig>,
         debug_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
     ) -> RuntimeResult<Self> {
         // 1. Initialize shared, stateful components

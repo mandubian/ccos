@@ -74,7 +74,7 @@ impl DiscoveryEngine {
     pub fn new_with_agent_config(
         marketplace: Arc<CapabilityMarketplace>,
         intent_graph: Arc<Mutex<IntentGraph>>,
-        agent_config: &rtfs::config::types::AgentConfig,
+        agent_config: &crate::config::types::AgentConfig,
     ) -> Self {
         let config = DiscoveryConfig::from_agent_config(&agent_config.discovery);
         let discovery_agent = Some(Arc::new(DiscoveryAgent::new(
@@ -117,7 +117,7 @@ impl DiscoveryEngine {
         marketplace: Arc<CapabilityMarketplace>,
         intent_graph: Arc<Mutex<IntentGraph>>,
         delegating_arbiter: Option<Arc<DelegatingArbiter>>,
-        agent_config: &rtfs::config::types::AgentConfig,
+        agent_config: &crate::config::types::AgentConfig,
     ) -> Self {
         let config = DiscoveryConfig::from_agent_config(&agent_config.discovery);
         let discovery_agent = Some(Arc::new(DiscoveryAgent::new(

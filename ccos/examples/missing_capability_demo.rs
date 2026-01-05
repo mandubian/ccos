@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         CCOS::new_with_agent_config_and_configs_and_debug_callback(
             ccos::intent_graph::config::IntentGraphConfig::default(),
             None,
-            Some(rtfs::config::types::AgentConfig::default()),
+            Some(ccos::config::types::AgentConfig::default()),
             None,
         )
         .await?,

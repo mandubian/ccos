@@ -2,7 +2,7 @@ use std::{error::Error, fs, path::Path};
 
 use crossterm::style::Stylize;
 use rtfs::config::profile_selection::expand_profiles;
-use rtfs::config::types::{AgentConfig, LlmProfile};
+use crate::config::types::{AgentConfig, LlmProfile};
 
 pub fn load_agent_config(path: &str) -> Result<AgentConfig, Box<dyn Error>> {
     let data = fs::read_to_string(path)?;
@@ -83,7 +83,12 @@ pub fn print_architecture_summary(config: &AgentConfig, profile_name: Option<&st
     );
 
     if let Some(llm_profiles) = &config.llm_profiles {
-        let (profiles, _meta, _why) = expand_profiles(config);
+        // Convert CCOS AgentConfig to RTFS AgentConfig for expand_profiles
+        // (types are identical, just in different crates)
+        let rtfs_config: rtfs::config::types::AgentConfig = serde_json::from_value(
+            serde_json::to_value(config).expect("Failed to serialize AgentConfig")
+        ).expect("Failed to deserialize AgentConfig");
+        let (profiles, _meta, _why) = expand_profiles(&rtfs_config);
         println!("\n  {} LLM Profile:", "4.".bold());
         let chosen = profile_name
             .map(|s| s.to_string())

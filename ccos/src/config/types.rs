@@ -1,10 +1,12 @@
-//! Agent configuration types for RTFS
+//! Agent configuration types for CCOS
 //!
-//! **DEPRECATED**: These types have been migrated to `ccos::config::types` as part of issue #166.
-//! This module is kept for backwards compatibility only. New code should use `ccos::config::types`.
+//! This module defines the data structures for CCOS agent runtime configurations,
+//! including orchestrator settings, governance policies, delegation settings,
+//! marketplace config, causal chain storage, LLM profiles, discovery settings,
+//! and missing capability resolution.
 //!
-//! This module defines the data structures for RTFS agent configurations,
-//! including MicroVM deployment profiles and security policies.
+//! These types were migrated from `rtfs::config::types` as part of issue #166
+//! to properly separate language concerns (RTFS) from runtime concerns (CCOS).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -93,16 +95,15 @@ impl Default for AgentConfig {
 
 impl AgentConfig {
     /// Load agent configuration from environment (AGENT_CONFIG_PATH) or use default
+    /// 
+    /// Note: For full parsing support, use `ccos::config::parser::AgentConfigParser`
+    /// or the CCOS CLI/config loading utilities.
     pub fn from_env() -> Self {
         let config_path = std::env::var("AGENT_CONFIG_PATH");
         if let Ok(path) = config_path {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                // Try to parse using AgentConfigParser if available in ccos,
-                // but since we are in rtfs, we might not have it easily accessible without circular deps
-                // if we are not careful.
-                // However, rtfs::config::parser should be available.
-                // Actually, let's just use a simple toml-like parsing or default for now if it fails.
-                // For now, we'll return default if parsing fails.
+            if let Ok(_content) = std::fs::read_to_string(&path) {
+                // TODO: Integrate with CCOS config parser when available
+                // For now, return default if file exists but parsing is deferred
                 return Self::default();
             }
         }
