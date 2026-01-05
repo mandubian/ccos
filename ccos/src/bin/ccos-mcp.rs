@@ -1196,61 +1196,6 @@ fn register_ccos_tools(
                             }), false)
                         }
                     }
-                    Err(RuntimeError::SecretPending { secret_name, capability_id: cap_id_err, approval_id: _ }) => {
-                        // Push approval request to queue
-                        let approval_url = "http://localhost:3000/approvals".to_string();
-                        
-                        // Check for existing pending approval for this secret and capability to avoid duplicates
-                        let pending = aq.list_pending_by_category("SecretRequired").await.unwrap_or_default();
-                        let existing = pending.iter().find(|p| {
-                            if let ApprovalCategory::SecretRequired { secret_name: sn, capability_id: cid, .. } = &p.category {
-                                sn == &secret_name && cid == &cap_id_err
-                            } else {
-                                false
-                            }
-                        });
-
-                        let approval_id = if let Some(existing) = existing {
-                            existing.id.clone()
-                        } else {
-                            // Suggest a more descriptive environment variable name if possible
-                            let suggested_env_var = if secret_name == "API_KEY" || secret_name == "TOKEN" || secret_name == "SECRET" {
-                                Some(ccos::approval::unified_queue::suggest_auth_env_var(&cap_id_err))
-                            } else {
-                                Some(secret_name.clone())
-                            };
-
-                            let request = ccos::approval::types::ApprovalRequest::new(
-                                ApprovalCategory::SecretRequired {
-                                    secret_name: secret_name.clone(),
-                                    purpose: format!("Required by capability '{}'", cap_id_err),
-                                    capability_id: cap_id_err.clone(),
-                                    suggested_env_var,
-                                    provided_env_var: None,
-                                },
-                                RiskAssessment {
-                                    level: RiskLevel::Medium,
-                                    reasons: vec!["Secret access required".to_string()],
-                                },
-                                24, // expires in 24 hours
-                                None,
-                            );
-                            let id = request.id.clone();
-                            let _ = aq.add(request).await;
-                            id
-                        };
-                        
-                        (json!({
-                            "error": "secret_pending",
-                            "secret_name": secret_name,
-                            "capability_id": cap_id_err,
-                            "approval_id": approval_id,
-                            "message": format!("Secret '{}' is required. An approval request has been created or already exists.", secret_name),
-                            "action_required": format!("User MUST visit {} to provide the secret '{}'", approval_url, secret_name),
-                            "approval_url": approval_url,
-                            "agent_guidance": "CRITICAL: A required secret is missing. You MUST stop execution now. Tell the user exactly this: 'Required secret <SECRET_NAME> is missing. Please visit http://localhost:3000/approvals to approve the request.' Do NOT attempt to find the secret yourself. Do NOT continue the plan until the user confirms approval."
-                        }), false)
-                    }
                     Err(e) => (json!({
                         "error": format!("{}", e),
                         "capability_id": capability_id,
@@ -1648,7 +1593,6 @@ fn register_ccos_tools(
                         panic!("Failed to create SecretStore")
                     }));
 
-                let pending = aq.list_pending_by_category("SecretRequired").await.unwrap_or_default();
                 let mut available = Vec::new();
                 let mut missing = Vec::new();
                 let mut missing_details = Vec::new();
@@ -1658,20 +1602,9 @@ fn register_ccos_tools(
                         available.push(name.clone());
                     } else {
                         missing.push(name.clone());
-                        
-                        // Check if there's already a pending approval for this secret
-                        let existing = pending.iter().find(|p| {
-                            if let ApprovalCategory::SecretRequired { secret_name: sn, .. } = &p.category {
-                                sn == name
-                            } else {
-                                false
-                            }
-                        });
-                        
                         missing_details.push(json!({
                             "name": name,
-                            "status": if existing.is_some() { "pending_approval" } else { "not_requested" },
-                            "approval_id": existing.map(|e| e.id.clone())
+                            "status": "not_available"
                         }));
                     }
                 }
