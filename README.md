@@ -431,6 +431,12 @@ My world is built from these components:
 | Modular Planner | In Progress | Plan, Discover |
 | **Reflective Loop** | Planned | Learn |
 
+### Current work (meta-planner) & what’s next
+
+- **Meta-planner pattern as RTFS capabilities**: `capabilities/core/meta-planner.rtfs` provides `meta-planner/resolve-goal` and `meta-planner/quick-plan`, showing a recursive flow that can call `planner.resolve_intent`, `planner.discover_tools`, `planner.decompose`, `planner.synthesize_capability`, and `planner.validate`.
+- **Missing capability resolution + discovery loop**: Spec [032-missing-capability-resolution](./docs/ccos/specs/032-missing-capability-resolution.md) documents what’s implemented (resolver + strategies, planner integration steps, meta-planner discovery integration) and what’s still in progress (continuous resolution loop) / planned (deferred execution checkpoints).
+- **Modular Planner foundations**: Spec [025-modular-planner-architecture](./docs/ccos/specs/025-modular-planner-architecture.md) defines the decomposition/resolution split and describes “iterative refinement (future)” (granularity + confidence checks). For a runnable entry point, see `ccos/examples/modular_planner_demo.rs` (and a meta-planner test harness exists in `ccos/src/bin/meta_planner_test.rs`).
+
 ---
 
 ## The Vision: A Partnership
