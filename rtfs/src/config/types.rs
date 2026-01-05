@@ -1,5 +1,8 @@
 //! Agent configuration types for RTFS
 //!
+//! **DEPRECATED**: These types have been migrated to `ccos::config::types` as part of issue #166.
+//! This module is kept for backwards compatibility only. New code should use `ccos::config::types`.
+//!
 //! This module defines the data structures for RTFS agent configurations,
 //! including MicroVM deployment profiles and security policies.
 

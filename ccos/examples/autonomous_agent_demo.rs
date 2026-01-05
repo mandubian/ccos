@@ -41,7 +41,8 @@ use ccos::mcp::types::DiscoveredMCPTool;
 use ccos::synthesis::mcp_introspector::MCPIntrospector;
 use ccos::CCOS;
 use clap::Parser;
-use rtfs::config::types::AgentConfig;
+use ccos::config::types::AgentConfig;
+use serde_json;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
@@ -2309,8 +2310,16 @@ fn apply_llm_profile(
     profile: Option<&str>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     if let Some(profile_name) = profile {
+        // `expand_profiles` lives in RTFS and expects RTFS config types.
+        // CCOS config types are structurally identical, so convert via serde.
+        let rtfs_config: rtfs::config::types::AgentConfig = serde_json::from_value(
+            serde_json::to_value(agent_config)
+                .map_err(|e| format!("failed to serialize AgentConfig: {}", e))?,
+        )
+        .map_err(|e| format!("failed to deserialize AgentConfig: {}", e))?;
+
         let (expanded_profiles, _, _) =
-            rtfs::config::profile_selection::expand_profiles(agent_config);
+            rtfs::config::profile_selection::expand_profiles(&rtfs_config);
 
         if let Some(llm_profile) = expanded_profiles.iter().find(|p| p.name == profile_name) {
             std::env::set_var("CCOS_DELEGATING_PROVIDER", llm_profile.provider.clone());

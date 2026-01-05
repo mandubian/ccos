@@ -5,7 +5,7 @@ use crate::arbiter::llm_provider::{
 };
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::mcp::core::MCPDiscoveryService;
-use rtfs::config::types::AgentConfig;
+use crate::config::types::AgentConfig;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -232,9 +232,9 @@ impl CliContext {
     /// Find an LLM profile by name (supports both explicit profiles and model_sets)
     fn find_llm_profile(
         &self,
-        profiles_config: &rtfs::config::types::LlmProfilesConfig,
+        profiles_config: &crate::config::types::LlmProfilesConfig,
         profile_name: &str,
-    ) -> RuntimeResult<rtfs::config::types::LlmProfile> {
+    ) -> RuntimeResult<crate::config::types::LlmProfile> {
         // 1. Check explicit profiles first
         if let Some(profile) = profiles_config
             .profiles
@@ -250,7 +250,7 @@ impl CliContext {
                 if let Some(set) = model_sets.iter().find(|s| s.name == set_name) {
                     if let Some(spec) = set.models.iter().find(|m| m.name == spec_name) {
                         // Construct synthetic profile from model set
-                        return Ok(rtfs::config::types::LlmProfile {
+                        return Ok(crate::config::types::LlmProfile {
                             name: profile_name.to_string(),
                             provider: set.provider.clone(),
                             model: spec.model.clone(),

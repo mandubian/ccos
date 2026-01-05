@@ -43,7 +43,7 @@ use crossterm::style::Stylize;
 use once_cell::sync::Lazy;
 use rtfs::ast::{Expression, Keyword, Literal, MapKey, MapTypeEntry, PrimitiveType, TypeExpr};
 use rtfs::config::profile_selection::expand_profiles;
-use rtfs::config::types::{AgentConfig, LlmProfile};
+use ccos::config::types::{AgentConfig, LlmProfile};
 use rtfs::parser::parse_expression;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
@@ -901,7 +901,22 @@ fn print_architecture_summary(config: &AgentConfig, profile_name: Option<&str>) 
 
     // Show LLM profile
     if let Some(llm_profiles) = &config.llm_profiles {
-        let (profiles, _meta, _why) = expand_profiles(config);
+        // `expand_profiles` lives in RTFS and expects RTFS config types.
+        // CCOS config types are structurally identical, so convert via serde.
+        let rtfs_config: rtfs::config::types::AgentConfig = serde_json::from_value(
+            serde_json::to_value(config).expect("Failed to serialize AgentConfig"),
+        )
+        .expect("Failed to deserialize AgentConfig");
+        let (rtfs_profiles, _meta, _why) = expand_profiles(&rtfs_config);
+        let profiles: Vec<LlmProfile> = rtfs_profiles
+            .into_iter()
+            .map(|p| {
+                serde_json::from_value(
+                    serde_json::to_value(&p).expect("Failed to serialize LlmProfile"),
+                )
+                .expect("Failed to deserialize LlmProfile")
+            })
+            .collect();
         let chosen = profile_name
             .map(|s| s.to_string())
             .or_else(|| llm_profiles.default.clone())
@@ -984,7 +999,20 @@ fn apply_llm_profile(config: &AgentConfig, profile_name: Option<&str>) -> DemoRe
     std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
 
     if let Some(llm_profiles) = &config.llm_profiles {
-        let (profiles, _meta, _why) = expand_profiles(config);
+        let rtfs_config: rtfs::config::types::AgentConfig = serde_json::from_value(
+            serde_json::to_value(config).expect("Failed to serialize AgentConfig"),
+        )
+        .expect("Failed to deserialize AgentConfig");
+        let (rtfs_profiles, _meta, _why) = expand_profiles(&rtfs_config);
+        let profiles: Vec<LlmProfile> = rtfs_profiles
+            .into_iter()
+            .map(|p| {
+                serde_json::from_value(
+                    serde_json::to_value(&p).expect("Failed to serialize LlmProfile"),
+                )
+                .expect("Failed to deserialize LlmProfile")
+            })
+            .collect();
         let chosen = profile_name
             .map(|s| s.to_string())
             .or_else(|| llm_profiles.default.clone())
@@ -7263,7 +7291,20 @@ fn apply_llm_profile(
     std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
 
     if let Some(_) = &config.llm_profiles {
-        let (profiles, _meta, _why) = expand_profiles(config);
+        let rtfs_config: rtfs::config::types::AgentConfig = serde_json::from_value(
+            serde_json::to_value(config).expect("Failed to serialize AgentConfig"),
+        )
+        .expect("Failed to deserialize AgentConfig");
+        let (rtfs_profiles, _meta, _why) = expand_profiles(&rtfs_config);
+        let profiles: Vec<LlmProfile> = rtfs_profiles
+            .into_iter()
+            .map(|p| {
+                serde_json::from_value(
+                    serde_json::to_value(&p).expect("Failed to serialize LlmProfile"),
+                )
+                .expect("Failed to deserialize LlmProfile")
+            })
+            .collect();
         let chosen = profile_name
             .map(ToOwned::to_owned)
             .or_else(|| config.llm_profiles.as_ref()?.default.clone())

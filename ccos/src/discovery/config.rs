@@ -53,7 +53,7 @@ impl Default for DiscoveryConfig {
 
 impl DiscoveryConfig {
     /// Create config from RTFS AgentConfig discovery section
-    pub fn from_agent_config(agent_config: &rtfs::config::types::DiscoveryConfig) -> Self {
+    pub fn from_agent_config(agent_config: &crate::config::types::DiscoveryConfig) -> Self {
         Self {
             match_threshold: agent_config.match_threshold,
             use_embeddings: agent_config.use_embeddings,

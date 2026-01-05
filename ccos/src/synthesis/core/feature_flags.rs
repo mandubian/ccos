@@ -3,7 +3,7 @@
 //! This module provides feature flags and configuration options to control
 //! the behavior of the missing capability resolution system in production.
 
-use rtfs::config::types::AgentConfig;
+use crate::config::types::AgentConfig;
 use serde::{Deserialize, Serialize};
 
 /// Feature flags for missing capability resolution

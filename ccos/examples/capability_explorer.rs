@@ -37,7 +37,7 @@ use ccos::catalog::CatalogService;
 use ccos::mcp::core::MCPDiscoveryService;
 use ccos::mcp::types::DiscoveryOptions;
 use rtfs::ast::{Keyword, MapKey};
-use rtfs::config::types::AgentConfig;
+use ccos::config::types::AgentConfig;
 use rtfs::runtime::values::Value;
 use tokio::sync::RwLock;
 

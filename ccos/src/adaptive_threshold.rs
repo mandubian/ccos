@@ -1,4 +1,4 @@
-use rtfs::config::types::AdaptiveThresholdConfig;
+use crate::config::types::AdaptiveThresholdConfig;
 use std::collections::HashMap;
 use std::env;
 

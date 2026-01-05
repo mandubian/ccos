@@ -115,7 +115,7 @@ pub struct DelegationConfig {
     /// Agent registry configuration
     pub agent_registry: AgentRegistryConfig,
     /// Adaptive threshold configuration
-    pub adaptive_threshold: Option<rtfs::config::types::AdaptiveThresholdConfig>,
+    pub adaptive_threshold: Option<crate::config::types::AdaptiveThresholdConfig>,
     /// Optional convenience flag to print the extracted RTFS intent s-expression
     /// when generating intents. When Some(true), the arbiter will print the
     /// extracted `(intent ...)` s-expression. This is intended for diagnostics.

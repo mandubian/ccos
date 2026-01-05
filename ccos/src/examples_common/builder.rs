@@ -35,7 +35,7 @@ use crate::planner::modular_planner::{
 };
 use crate::planner::CcosCatalogAdapter;
 use async_trait::async_trait;
-use rtfs::config::types::{AgentConfig, LlmProfile};
+use crate::config::types::{AgentConfig, LlmProfile};
 use tokio::sync::Mutex as AsyncMutex;
 
 // ============================================================================
