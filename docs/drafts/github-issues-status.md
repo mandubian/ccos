@@ -72,6 +72,9 @@ The following issues are active and represent the current development roadmap.
 ### Older Architectural Issues (Audit)
 | Issue # | Title | Description | Status |
 |---------|-------|-------------|--------|
+| #18 | Advanced provider types | ✅ **MOSTLY IMPLEMENTED** - MCP, Plugin, RemoteRTFS, Stream complete. A2A needs WebSocket/gRPC protocols. | Partial |
+| #16 | Policy-driven routing | ✅ **PARTIALLY IMPLEMENTED** - Basic delegation engine exists. Policy scorers (cost/privacy/latency) may need implementation. | Partial |
+| #14 | Resource management | ✅ **IMPLEMENTED** (Host-mediated) - Resource management via Host capabilities, not ResourceHandle (deprecated). Permission checks and secure execution exist. | Partial |
 | #99 | Track defensive test-runtime fixes | Review temporary shims in `wip/ir-step-params-binding`. | Open |
 | #95 | Negative & Edge-Case Tests | Augment test suite with explicit negative scenarios for delegation. | Open |
 | #92 | Wire Task Protocol into Orchestrator | Implement execution path for structured delegated tasks. | Open |
