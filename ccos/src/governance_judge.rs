@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use crate::arbiter::llm_provider::LlmProvider;
 use crate::ccos_eprintln;
 use crate::types::{Plan, PlanBody};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Result of a semantic judgment
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,21 +29,25 @@ impl PlanJudge {
         plan: &Plan,
         resolutions: &HashMap<String, String>,
     ) -> RuntimeResult<Judgment> {
-        ccos_eprintln!("   ⚖️  [SemanticJudge] Evaluating plan against goal: \"{}\"", goal);
-        
+        ccos_eprintln!(
+            "   ⚖️  [SemanticJudge] Evaluating plan against goal: \"{}\"",
+            goal
+        );
+
         let plan_content = match &plan.body {
             PlanBody::Rtfs(code) => code,
-            PlanBody::Wasm(_) => {
-                ccos_eprintln!("   ⚖️  [SemanticJudge] WASM plans are skipped (auto-allowed)");
+            PlanBody::Wasm(_) | PlanBody::Source(_) | PlanBody::Binary(_) => {
+                ccos_eprintln!("   ⚖️  [SemanticJudge] Non-RTFS plans are skipped (auto-allowed)");
                 return Ok(Judgment {
                     allowed: true,
-                    reasoning: "WASM plans are currently skipped by semantic judge".to_string(),
+                    reasoning: "Non-RTFS plans are currently skipped by semantic judge".to_string(),
                     risk_score: 0.0,
                 });
             }
         };
 
-        let resolutions_str = resolutions.iter()
+        let resolutions_str = resolutions
+            .iter()
             .map(|(k, v)| format!("- {} -> {}", k, v))
             .collect::<Vec<_>>()
             .join("\n");
@@ -79,19 +83,29 @@ Respond ONLY with a JSON object in the following format:
 
         ccos_eprintln!("   ⚖️  [SemanticJudge] Consulting LLM for semantic judgment...");
         let response = provider.generate_text(&prompt).await?;
-        
+
         // Strip markdown code fences if present (LLMs sometimes wrap JSON in ```json ... ```)
         let cleaned_response = Self::strip_markdown_code_fences(&response);
-        
+
         // Try to parse JSON from response
-        let judgment: Judgment = serde_json::from_str(&cleaned_response)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse judge response: {}. Response was: {}", e, response)))?;
+        let judgment: Judgment = serde_json::from_str(&cleaned_response).map_err(|e| {
+            RuntimeError::Generic(format!(
+                "Failed to parse judge response: {}. Response was: {}",
+                e, response
+            ))
+        })?;
 
         if judgment.allowed && judgment.risk_score <= 0.7 {
-            ccos_eprintln!("   ✅ [SemanticJudge] Plan APPROVED (risk: {:.2})", judgment.risk_score);
+            ccos_eprintln!(
+                "   ✅ [SemanticJudge] Plan APPROVED (risk: {:.2})",
+                judgment.risk_score
+            );
         } else {
-            ccos_eprintln!("   🛑 [SemanticJudge] Plan REJECTED (risk: {:.2}): {}", 
-                judgment.risk_score, judgment.reasoning);
+            ccos_eprintln!(
+                "   🛑 [SemanticJudge] Plan REJECTED (risk: {:.2}): {}",
+                judgment.risk_score,
+                judgment.reasoning
+            );
         }
 
         Ok(judgment)
@@ -101,7 +115,7 @@ Respond ONLY with a JSON object in the following format:
     /// LLMs sometimes wrap JSON in ```json ... ``` blocks.
     fn strip_markdown_code_fences(response: &str) -> String {
         let trimmed = response.trim();
-        
+
         // Try to find JSON content between code fences
         if trimmed.starts_with("```") {
             // Find the end of the opening fence (first newline after ```)
@@ -113,7 +127,7 @@ Respond ONLY with a JSON object in the following format:
                 }
             }
         }
-        
+
         // No code fences found, return as-is
         trimmed.to_string()
     }

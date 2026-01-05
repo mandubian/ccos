@@ -365,6 +365,8 @@ impl TurnProcessor {
                         {
                             Ok(discovery) => {
                                 let mut msg = format!("✅ Analysis complete for: {}\n\n", doc_url);
+                                let mut new_results = Vec::new();
+                                let mut additional_msg = String::new();
 
                                 if discovery.is_api_documentation {
                                     msg.push_str("found valid API documentation page.\n");
@@ -428,9 +430,6 @@ impl TurnProcessor {
                                         }
                                     }
                                 }
-
-                                let mut new_results = Vec::new();
-                                let mut additional_msg = String::new();
 
                                 if !discovery.openapi_specs.is_empty() {
                                     msg.push_str("\n📜 **OpenAPI Specifications**:\n");
