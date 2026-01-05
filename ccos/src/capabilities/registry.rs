@@ -5,7 +5,9 @@
 use crate::capabilities::capability::Capability;
 use crate::capabilities::provider::CapabilityProvider;
 use crate::capabilities::providers::{JsonProvider, LocalFileProvider};
+use crate::secrets::SecretStore;
 use crate::synthesis::missing_capability_resolver::MissingCapabilityResolver;
+use crate::utils::fs::get_workspace_root;
 use crate::utils::value_conversion;
 use reqwest::blocking::Client as BlockingHttpClient;
 use reqwest::{Method as HttpMethod, Url};
@@ -102,10 +104,19 @@ impl LocalProvider {
         }
 
         match &args[0] {
-            Value::String(key) => match std::env::var(key) {
-                Ok(value) => Ok(Value::String(value)),
-                Err(_) => Ok(Value::Nil),
-            },
+            Value::String(key) => {
+                // Try SecretStore first (handles mappings)
+                if let Ok(store) = SecretStore::new(Some(get_workspace_root())) {
+                    if let Some(value) = store.get(key) {
+                        return Ok(Value::String(value));
+                    }
+                }
+                // Fallback to direct env var
+                match std::env::var(key) {
+                    Ok(value) => Ok(Value::String(value)),
+                    Err(_) => Ok(Value::Nil),
+                }
+            }
             _ => Err(RuntimeError::TypeError {
                 expected: "string".to_string(),
                 actual: args[0].type_name().to_string(),
