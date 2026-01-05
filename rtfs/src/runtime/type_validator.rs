@@ -545,8 +545,10 @@ impl TypeValidator {
                 },
             ) => {
                 for entry in entries {
-                    let key = MapKey::Keyword(entry.key.clone());
-                    if let Some(value) = map.get(&key) {
+                    let keyword_key = MapKey::Keyword(entry.key.clone());
+                    let string_key = MapKey::String(entry.key.0.clone());
+
+                    if let Some(value) = map.get(&keyword_key).or_else(|| map.get(&string_key)) {
                         let field_path = format!("{}.{}", path, entry.key.0);
                         self.validate_value_at_path(value, &entry.value_type, &field_path)?;
                     } else if !entry.optional {
