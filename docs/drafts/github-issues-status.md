@@ -35,7 +35,7 @@ The following issues are active and represent the current development roadmap.
 | #178 | Planner: lightweight adapters | Bridge incompatible tool I/O with tiny RTFS adapters. | Open |
 | #177 | Planner: synthesis-or-queue | Synthesize capabilities for missing data/format or queue for implementation. | Open |
 | #176 | Planner: iterative refinement | Iterative refinement and opportunistic safe execution for grounding. | Open |
-| #166 | Move AgentConfig from RTFS to CCOS | Architectural refactoring to move runtime config out of the language crate. | Open |
+| #166 | Move AgentConfig from RTFS to CCOS | ✅ **COMPLETED** (2026-01-05) - Commit 73c8172. All types migrated, imports updated, backwards compatibility maintained. | Completed |
 | #163 | Sandbox/isolation strategy | Implement isolation for plan execution (microVMs/containers). | Open |
 | #117 | GovernanceKernel: constitutional validation | Implement logic to validate plans against constitutional rules. | Partial |
 | #103 | Pluggable remote prompt stores | Support Git/HTTP backends for prompt management. | Open |
@@ -89,11 +89,9 @@ The following issues are active and represent the current development roadmap.
 3. **Prioritize Planner Grounding Fixes** (#176, #177, #178) as they are critical for autonomous agent reliability.
    - All three issues are currently **OPEN** and ready for work
    - Reference plan: `docs/drafts/iterative-planner-synthesis-plan.md`
-4. **Address AgentConfig Migration** (#166) to clean up crate dependencies.
-   - Currently **OPEN** - architectural refactoring task
-   - Impact: ~1000+ lines to move, 14+ files to update
 
 ### 📊 Status Summary
 - **Closed Issues**: #173, #157 (completed)
+- **Completed Migrations**: #166 (AgentConfig migration - commit 73c8172)
 - **Merged PRs**: #179 (completed)
-- **Active High-Priority Issues**: #176, #177, #178, #166 (4 issues)
+- **Active High-Priority Issues**: #176, #177, #178 (3 issues)
