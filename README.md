@@ -217,7 +217,7 @@ If you want to understand (or extend) CCOS, these are the best entry points:
 - **Intent Graph**: [001-intent-graph](./docs/ccos/specs/001-intent-graph.md)
 - **Plans & Orchestration**: [002-plans-and-orchestration](./docs/ccos/specs/002-plans-and-orchestration.md)
 - **Causal Chain**: [003-causal-chain](./docs/ccos/specs/003-causal-chain.md)
-- **Capabilities & Marketplace**: [004-capabilities-and-marketplace](./docs/ccos/specs/004-capabilities-and-marketplace.md)
+- **Capability System**: [030-capability-system-architecture](./docs/ccos/specs/030-capability-system-architecture.md)
 - **Modular Planner Architecture**: [025-modular-planner-architecture](./docs/ccos/specs/025-modular-planner-architecture.md)
 
 ### Language + integration specs (RTFS 2.0)
@@ -225,7 +225,7 @@ If you want to understand (or extend) CCOS, these are the best entry points:
 - **RTFS Philosophy**: [00-philosophy](./docs/rtfs-2.0/specs/00-philosophy.md)
 - **Host Boundary**: [03-host-boundary](./docs/rtfs-2.0/specs/03-host-boundary.md)
 - **Continuations & Host Yield**: [09-continuations-and-the-host-yield](./docs/rtfs-2.0/specs/09-continuations-and-the-host-yield.md)
-- **RTFS ↔ CCOS integration**: [13-rtfs-ccos-integration-guide](./docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md)
+- **RTFS ⇄ CCOS boundary**: [004-rtfs-ccos-boundary](./docs/ccos/specs/004-rtfs-ccos-boundary.md)
 
 **RTFS 2.0 status**: operational (compiler + runtime tested; CCOS integration is globally complete), but still evolving — treat the specs as the source of truth.
 
@@ -436,6 +436,12 @@ My world is built from these components:
 - **Meta-planner pattern as RTFS capabilities**: `capabilities/core/meta-planner.rtfs` provides `meta-planner/resolve-goal` and `meta-planner/quick-plan`, showing a recursive flow that can call `planner.resolve_intent`, `planner.discover_tools`, `planner.decompose`, `planner.synthesize_capability`, and `planner.validate`.
 - **Missing capability resolution + discovery loop**: Spec [032-missing-capability-resolution](./docs/ccos/specs/032-missing-capability-resolution.md) documents what’s implemented (resolver + strategies, planner integration steps, meta-planner discovery integration) and what’s still in progress (continuous resolution loop) / planned (deferred execution checkpoints).
 - **Modular Planner foundations**: Spec [025-modular-planner-architecture](./docs/ccos/specs/025-modular-planner-architecture.md) defines the decomposition/resolution split and describes “iterative refinement (future)” (granularity + confidence checks). For a runnable entry point, see `ccos/examples/modular_planner_demo.rs` (and a meta-planner test harness exists in `ccos/src/bin/meta_planner_test.rs`).
+
+### Capability ecosystem (discovery → typed contracts → RTFS → synthesis)
+
+- **Typed capability manifests (provider-agnostic)**: MCP/OpenAPI/A2A/local capabilities share a single manifest with explicit input/output schemas, effects, and provenance (see [030-capability-system-architecture](./docs/ccos/specs/030-capability-system-architecture.md)).
+- **Discovery + importers**: MCP discovery is unified behind a single service (see [031-mcp-discovery-unified-service](./docs/ccos/specs/031-mcp-discovery-unified-service.md)); importers/synthesis cover OpenAPI/GraphQL/HTTP wrappers and guarded LLM-based generation (see [033-capability-importers-and-synthesis](./docs/ccos/specs/033-capability-importers-and-synthesis.md)).
+- **Missing capability resolution**: detect missing calls, fan out to discovery/import/synthesis strategies, and gate risky synthesis (see [032-missing-capability-resolution](./docs/ccos/specs/032-missing-capability-resolution.md)).
 
 ---
 

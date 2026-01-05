@@ -217,7 +217,7 @@ If you want to understand (or extend) CCOS, these are the best entry points:
 - **Intent Graph**: [001-intent-graph](./docs/ccos/specs/001-intent-graph.md)
 - **Plans & Orchestration**: [002-plans-and-orchestration](./docs/ccos/specs/002-plans-and-orchestration.md)
 - **Causal Chain**: [003-causal-chain](./docs/ccos/specs/003-causal-chain.md)
-- **Capabilities & Marketplace**: [004-capabilities-and-marketplace](./docs/ccos/specs/004-capabilities-and-marketplace.md)
+- **Capability System**: [030-capability-system-architecture](./docs/ccos/specs/030-capability-system-architecture.md)
 - **Modular Planner Architecture**: [025-modular-planner-architecture](./docs/ccos/specs/025-modular-planner-architecture.md)
 
 ### Language + integration specs (RTFS 2.0)
@@ -225,7 +225,7 @@ If you want to understand (or extend) CCOS, these are the best entry points:
 - **RTFS Philosophy**: [00-philosophy](./docs/rtfs-2.0/specs/00-philosophy.md)
 - **Host Boundary**: [03-host-boundary](./docs/rtfs-2.0/specs/03-host-boundary.md)
 - **Continuations & Host Yield**: [09-continuations-and-the-host-yield](./docs/rtfs-2.0/specs/09-continuations-and-the-host-yield.md)
-- **RTFS ↔ CCOS integration**: [13-rtfs-ccos-integration-guide](./docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md)
+- **RTFS ⇄ CCOS boundary**: [004-rtfs-ccos-boundary](./docs/ccos/specs/004-rtfs-ccos-boundary.md)
 
 **RTFS 2.0 status**: operational (compiler + runtime tested; CCOS integration is globally complete), but still evolving — treat the specs as the source of truth.
 
