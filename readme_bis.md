@@ -218,6 +218,7 @@ If you want to understand (or extend) CCOS, these are the best entry points:
 - **Plans & Orchestration**: [002-plans-and-orchestration](./docs/ccos/specs/002-plans-and-orchestration.md)
 - **Causal Chain**: [003-causal-chain](./docs/ccos/specs/003-causal-chain.md)
 - **Capabilities & Marketplace**: [004-capabilities-and-marketplace](./docs/ccos/specs/004-capabilities-and-marketplace.md)
+- **Modular Planner Architecture**: [025-modular-planner-architecture](./docs/ccos/specs/025-modular-planner-architecture.md)
 
 ### Language + integration specs (RTFS 2.0)
 
@@ -274,6 +275,25 @@ Two focused discovery samples are available, each demonstrating the full lifecyc
 - **GitHub via MCP discovery**
   - Requires: `MCP_SERVER_URL` (e.g., `https://api.githubcopilot.com/mcp/`). If auth is needed, set `MCP_AUTH_TOKEN` (include scheme like `Bearer ...` if required).
   - Run from `rtfs_compiler/`: `cargo run --bin discover_github_mcp`
+
+### Guides
+
+- [Quick Start](./docs/ccos/guides/quick-start.md) - Get started with CCOS demos
+- [Goal Examples](./docs/ccos/guides/goal-examples.md) - Examples of goal-agnostic demos
+- [MicroVM Security](./docs/ccos/guides/microvm-security.md) - Security and isolation guide
+- [Streaming Basics](./docs/rtfs-2.0/guides/streaming-basics.md) - RTFS streaming capabilities
+- [Streaming Roadmap](./docs/rtfs-2.0/guides/streaming-roadmap.md) - RTFS streaming development plan
+
+### See the Code (developer entry points)
+
+- **RTFS compiler/runtime reference implementation**: `./rtfs_compiler/`
+- **Reentrancy / continuation demo**: `./rtfs_compiler/examples/rtfs_reentrance_demo.rs`
+- **Interactive assistant (human ↔ agent loop)**: `./rtfs_compiler/examples/live_interactive_assistant.rs`
+  - Run: `cargo run --example live_interactive_assistant -- --help`
+  - Common flags:
+    - `--seed "initial goal"`: provide an initial request before the REPL starts
+    - `--debug`: surface internal delegation / prompt traces (if enabled)
+    - `--value-preview 200` or `--show-full-value`: control how results are printed
 
 ---
 
