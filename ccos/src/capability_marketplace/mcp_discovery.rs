@@ -1918,7 +1918,53 @@ impl MCPDiscoveryProvider {
             || metadata.contains_key("openapi_endpoint_path")
             || metadata.contains_key("openapi_endpoint_method");
 
-        let provider = if has_openapi_metadata {
+        let provider = if let Some(impl_expr) = implementation_expr.clone() {
+            // Pure RTFS implementation -> run locally
+            let impl_expr_cloned = impl_expr.clone();
+            let rtfs_host_factory = std::sync::Arc::clone(&self.rtfs_host_factory);
+            let capability_name = name.clone();
+            ProviderType::Local(LocalCapability {
+                handler: std::sync::Arc::new(move |inputs: &rtfs::runtime::values::Value| {
+                    // Build a tiny RTFS evaluator with stdlib and a bound `input`
+                    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
+                    let _ = rtfs::runtime::stdlib::load_stdlib(&module_registry);
+
+                    let mut env = Environment::new();
+                    if let Some(stdlib) = module_registry.get_module("stdlib") {
+                        if let Ok(exports) = stdlib.exports.read() {
+                            for (name, export) in exports.iter() {
+                                env.define(&Symbol(name.clone()), export.value.clone());
+                            }
+                        }
+                    }
+                    env.define(&Symbol("input".to_string()), inputs.clone());
+
+                    let host = (rtfs_host_factory)();
+                    // Ensure the host has a minimal execution context to avoid fatal errors
+                    let plan_id = format!("rtfs-{}", uuid::Uuid::new_v4());
+                    let intent_id = capability_name.clone();
+                    host.set_execution_context(
+                        plan_id,
+                        vec![intent_id],
+                        "rtfs-standalone".to_string(),
+                    );
+                    let evaluator = Evaluator::with_environment(
+                        module_registry.clone(),
+                        env,
+                        RuntimeContext::pure(),
+                        host,
+                    );
+                    let mut runtime = Runtime::new(Box::new(TreeWalkingStrategy::new(evaluator)));
+
+                    let call_expr = Expression::FunctionCall {
+                        callee: Box::new(impl_expr_cloned.clone()),
+                        arguments: vec![Expression::Symbol(Symbol("input".to_string()))],
+                    };
+
+                    runtime.run(&call_expr)
+                }),
+            })
+        } else if has_openapi_metadata {
             // Create OpenApiCapability from metadata - this properly handles query params
             let base_url = metadata
                 .get("openapi_base_url")
@@ -1993,52 +2039,6 @@ impl MCPDiscoveryProvider {
             } else {
                 self.convert_rtfs_provider_to_manifest(&provider_map)?
             }
-        } else if let Some(impl_expr) = implementation_expr.clone() {
-            // Pure RTFS implementation -> run locally
-            let impl_expr_cloned = impl_expr.clone();
-            let rtfs_host_factory = std::sync::Arc::clone(&self.rtfs_host_factory);
-            let capability_name = name.clone();
-            ProviderType::Local(LocalCapability {
-                handler: std::sync::Arc::new(move |inputs: &rtfs::runtime::values::Value| {
-                    // Build a tiny RTFS evaluator with stdlib and a bound `input`
-                    let module_registry = std::sync::Arc::new(ModuleRegistry::new());
-                    let _ = rtfs::runtime::stdlib::load_stdlib(&module_registry);
-
-                    let mut env = Environment::new();
-                    if let Some(stdlib) = module_registry.get_module("stdlib") {
-                        if let Ok(exports) = stdlib.exports.read() {
-                            for (name, export) in exports.iter() {
-                                env.define(&Symbol(name.clone()), export.value.clone());
-                            }
-                        }
-                    }
-                    env.define(&Symbol("input".to_string()), inputs.clone());
-
-                    let host = (rtfs_host_factory)();
-                    // Ensure the host has a minimal execution context to avoid fatal errors
-                    let plan_id = format!("rtfs-{}", uuid::Uuid::new_v4());
-                    let intent_id = capability_name.clone();
-                    host.set_execution_context(
-                        plan_id,
-                        vec![intent_id],
-                        "rtfs-standalone".to_string(),
-                    );
-                    let evaluator = Evaluator::with_environment(
-                        module_registry.clone(),
-                        env,
-                        RuntimeContext::pure(),
-                        host,
-                    );
-                    let mut runtime = Runtime::new(Box::new(TreeWalkingStrategy::new(evaluator)));
-
-                    let call_expr = Expression::FunctionCall {
-                        callee: Box::new(impl_expr_cloned.clone()),
-                        arguments: vec![Expression::Symbol(Symbol("input".to_string()))],
-                    };
-
-                    runtime.run(&call_expr)
-                }),
-            })
         } else {
             // No provider info and no implementation - default to pure local no-op
             debug!(
