@@ -540,22 +540,6 @@ async fn handle_api_approvals_list(
         .iter()
         .map(|req| {
             let (category_type, details) = match &req.category {
-                ApprovalCategory::SecretRequired {
-                    secret_name,
-                    purpose,
-                    capability_id,
-                    suggested_env_var,
-                    provided_env_var,
-                } => (
-                    "SecretRequired",
-                    json!({
-                        "secret_name": secret_name,
-                        "purpose": purpose,
-                        "capability_id": capability_id,
-                        "suggested_env_var": suggested_env_var,
-                        "provided_env_var": provided_env_var
-                    }),
-                ),
                 ApprovalCategory::ServerDiscovery {
                     server_info,
                     domain_match,
@@ -635,44 +619,7 @@ async fn handle_api_approval_approve(
     Json(body): Json<ApproveSecretRequest>,
 ) -> impl IntoResponse {
     if let Some(ref queue) = state.approval_queue {
-        // If this is a secret approval with a value or mapping, handle it
-        if body.secret_value.is_some() || body.provided_env_var.is_some() {
-            if let Ok(Some(req)) = queue.get(&id).await {
-                if let ApprovalCategory::SecretRequired { secret_name, .. } = &req.category {
-                    let mut store =
-                        SecretStore::new(Some(get_workspace_root())).unwrap_or_else(|_| {
-                            SecretStore::new(None).expect("Failed to create SecretStore")
-                        });
-
-                    // Store the secret mapping if provided
-                    if let Some(actual_name) = &body.provided_env_var {
-                        if let Err(e) = store.set_mapping(secret_name, actual_name.clone()) {
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(json!({ "error": e.to_string() })),
-                            );
-                        }
-                    }
-
-                    // Store the secret value if provided
-                    if let Some(secret_value) = body.secret_value {
-                        if let Err(e) = store.set_local(secret_name, secret_value) {
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(json!({ "error": e.to_string() })),
-                            );
-                        }
-                    }
-
-                    if let Err(e) = store.save() {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({ "error": e.to_string() })),
-                        );
-                    }
-                }
-            }
-        }
+        // Note: SecretRequired handling was removed as the feature was deprecated
 
         // Approve the request
         match queue
@@ -822,11 +769,6 @@ fn generate_approvals_html(pending: &[ApprovalRequest]) -> String {
             .iter()
             .map(|req| {
                 let (title, details, has_secret_input) = match &req.category {
-                    ApprovalCategory::SecretRequired { secret_name, purpose, capability_id, .. } => {
-                        (format!("🔑 Secret Required: {}", secret_name),
-                         format!("<p><strong>Purpose:</strong> {}</p><p><strong>Capability:</strong> {}</p>", purpose, capability_id),
-                         true)
-                    }
                     ApprovalCategory::ServerDiscovery { server_info, domain_match, .. } => {
                         (format!("🌐 Server Discovery: {}", server_info.name),
                          format!("<p><strong>Endpoint:</strong> {}</p><p><strong>Domains:</strong> {}</p>", server_info.endpoint, domain_match.join(", ")),

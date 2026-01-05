@@ -18,8 +18,10 @@
 pub mod cache;
 pub mod core;
 pub mod discovery_session;
+pub mod http_transport;
 pub mod rate_limiter;
 pub mod registry;
+pub mod server;
 pub mod types;
 
 // Re-export main types with consistent naming (all caps for acronyms)

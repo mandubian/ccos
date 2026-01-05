@@ -60,6 +60,5 @@ capabilities/generated/
 capabilities/discovered/
 capabilities/pending_synth/
 capabilities/servers/
-
-storage.ccos/
+.ccos/
 storage/

@@ -319,7 +319,7 @@ Respond with ONLY the JSON array, no markdown formatting."#,
     }
 
     /// Fallback intent analysis when LLM parsing fails
-    fn fallback_intent_analysis(&self, goal: &str) -> IntentAnalysis {
+    pub fn fallback_intent_analysis(&self, goal: &str) -> IntentAnalysis {
         let goal_lower = goal.to_lowercase();
         let words: Vec<&str> = goal_lower.split_whitespace().collect();
 
