@@ -1,6 +1,6 @@
 # GitHub Issues Status Report - mandubian/ccos
 
-**Date:** 27 décembre 2025
+**Date:** 2 janvier 2026 (Last Updated)
 
 ## Summary
 This document summarizes the current state of GitHub issues and pull requests for the `mandubian/ccos` project, identifying items that can be closed and those requiring further work.
@@ -10,19 +10,19 @@ This document summarizes the current state of GitHub issues and pull requests fo
 ## 1. Recently Closed Issues
 The following issues have been closed as they are completed.
 
-| Issue # | Title | Reason for Closing |
-|---------|-------|--------------------|
-| #173 | [Phase 6] Expose CLI as Governed Native Capabilities | Marked as "Done" in umbrella issue #167. Implementation verified in `ccos/src/ops/` and `NativeCapabilityProvider`. |
-| #157 | Defmacro in RTFS | Implementation completed and merged via PR #158. |
-| #116 | Orchestrator: IntentGraph status | Verified `orchestrator.rs` updates `IntentGraph` after execution. |
-| #102 | Provenance logging | Verified `ccos/src/causal_chain/provenance.rs` exists and is used. |
+| Issue # | Title | Reason for Closing | Closed Date |
+|---------|-------|--------------------|-------------|
+| #173 | [Phase 6] Expose CLI as Governed Native Capabilities | ✅ **CLOSED** - Closed on 2025-12-27. Implementation verified in `ccos/src/ops/` and `NativeCapabilityProvider`. | 2025-12-27 |
+| #157 | Defmacro in RTFS | ✅ **CLOSED** - Closed on 2025-12-27. Implementation completed and merged via PR #158. | 2025-12-27 |
+| #116 | Orchestrator: IntentGraph status | Verified `orchestrator.rs` updates `IntentGraph` after execution. | - |
+| #102 | Provenance logging | Verified `ccos/src/causal_chain/provenance.rs` exists and is used. | - |
 
 ---
 
 ## 2. Pull Requests
 | PR # | Title | Status | Notes |
 |------|-------|--------|-------|
-| #179 | test(rtfs): Comprehensive RTFS robustness test suite | **RECOMMEND MERGE** | Implements comprehensive robustness testing, fuzzing, and error formatting. Directly addresses issues #53 and #46. |
+| #179 | test(rtfs): Comprehensive RTFS robustness test suite | ✅ **MERGED** (2025-12-31) | Successfully merged. Implements comprehensive robustness testing, fuzzing, and error formatting. Directly addresses issues #53 and #46. |
 
 ---
 
@@ -80,7 +80,20 @@ The following issues are active and represent the current development roadmap.
 ---
 
 ## 4. Next Steps
-1. **Close #173 and #157** on GitHub.
-2. **Review and Merge PR #179** to improve RTFS test coverage.
+
+### ✅ Completed
+1. ✅ **Close #173 and #157** on GitHub - **DONE** (both closed on 2025-12-27)
+2. ✅ **Review and Merge PR #179** - **DONE** (merged on 2025-12-31)
+
+### 🔄 In Progress / Next Actions
 3. **Prioritize Planner Grounding Fixes** (#176, #177, #178) as they are critical for autonomous agent reliability.
+   - All three issues are currently **OPEN** and ready for work
+   - Reference plan: `docs/drafts/iterative-planner-synthesis-plan.md`
 4. **Address AgentConfig Migration** (#166) to clean up crate dependencies.
+   - Currently **OPEN** - architectural refactoring task
+   - Impact: ~1000+ lines to move, 14+ files to update
+
+### 📊 Status Summary
+- **Closed Issues**: #173, #157 (completed)
+- **Merged PRs**: #179 (completed)
+- **Active High-Priority Issues**: #176, #177, #178, #166 (4 issues)
