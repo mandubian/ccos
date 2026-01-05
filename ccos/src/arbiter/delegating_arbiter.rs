@@ -365,7 +365,7 @@ impl DelegatingArbiter {
         Self {
             llm_config,
             delegation_config,
-            llm_provider,
+            llm_provider: Arc::from(llm_provider),
             capability_marketplace,
             intent_graph,
             adaptive_threshold_calculator: None,

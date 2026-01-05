@@ -17,10 +17,12 @@ use urlencoding::encode;
 
 use crate::capabilities::native_provider::NativeCapabilityProvider;
 use crate::capabilities::SessionPoolManager;
+use rtfs::runtime::microvm::{
+    ExecutionContext as MicroVMExecutionContext, MicroVMFactory, Program, ScriptLanguage,
+};
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use rtfs::runtime::microvm::{ExecutionContext, MicroVMFactory, Program, ScriptLanguage};
 use std::sync::Mutex;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// Execution context passed to all capability executors.
@@ -1255,7 +1257,11 @@ impl SandboxedExecutor {
     pub fn new() -> Self {
         let mut factory = MicroVMFactory::new();
         // Get provider names first to avoid borrow issues
-        let provider_names: Vec<String> = factory.list_providers().iter().map(|s| s.to_string()).collect();
+        let provider_names: Vec<String> = factory
+            .list_providers()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         // Initialize all available providers
         for provider_name in provider_names {
             if let Some(provider) = factory.get_provider_mut(&provider_name) {
@@ -1295,8 +1301,9 @@ impl CapabilityExecutor for SandboxedExecutor {
                 let wasm_bytes = if let Ok(bytes) = base64::decode(&sandboxed.source) {
                     bytes
                 } else {
-                    std::fs::read(&sandboxed.source)
-                        .map_err(|e| RuntimeError::Generic(format!("Failed to read WASM file: {}", e)))?
+                    std::fs::read(&sandboxed.source).map_err(|e| {
+                        RuntimeError::Generic(format!("Failed to read WASM file: {}", e))
+                    })?
                 };
                 Program::Binary {
                     language: ScriptLanguage::Wasm,
@@ -1321,7 +1328,7 @@ impl CapabilityExecutor for SandboxedExecutor {
                 }
             };
 
-            let context = ExecutionContext {
+            let context = MicroVMExecutionContext {
                 execution_id: Uuid::new_v4().to_string(),
                 program: Some(program),
                 capability_id: None,
