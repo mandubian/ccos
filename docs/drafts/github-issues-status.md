@@ -14,6 +14,12 @@ The following issues have been closed as they are completed.
 |---------|-------|--------------------|-------------|
 | #173 | [Phase 6] Expose CLI as Governed Native Capabilities | ✅ **CLOSED** - Closed on 2025-12-27. Implementation verified in `ccos/src/ops/` and `NativeCapabilityProvider`. | 2025-12-27 |
 | #157 | Defmacro in RTFS | ✅ **CLOSED** - Closed on 2025-12-27. Implementation completed and merged via PR #158. | 2025-12-27 |
+| #166 | Move AgentConfig from RTFS to CCOS | ✅ **CLOSED** (2026-01-05) - Commit 73c8172. All types migrated, imports updated, backwards compatibility maintained. | 2026-01-05 |
+| #53 | RTFS Unit Test Stabilization | ✅ **CLOSED** (2026-01-05) - Addressed by PR #179. Production-ready with 96% integration test success. | 2026-01-05 |
+| #46 | Fuzz Testing for Parser | ✅ **CLOSED** (2026-01-05) - Implemented in PR #179. Parser robustness testing with 300 test cases. | 2026-01-05 |
+| #21 | Capability attestation and provenance | ✅ **CLOSED** (2026-01-05) - Implemented in `ccos/src/capability_marketplace/types.rs` and registration flow. | 2026-01-05 |
+| #20 | Input/output schema validation | ✅ **CLOSED** (2026-01-05) - Implemented in `ccos/src/capability_marketplace/marketplace.rs` with runtime enforcement. | 2026-01-05 |
+| #15 | Module loading and dependency resolution | ✅ **CLOSED** (2026-01-05) - Implemented in `rtfs/src/runtime/module_runtime.rs` with circular dependency detection. | 2026-01-05 |
 | #116 | Orchestrator: IntentGraph status | Verified `orchestrator.rs` updates `IntentGraph` after execution. | - |
 | #102 | Provenance logging | Verified `ccos/src/causal_chain/provenance.rs` exists and is used. | - |
 
@@ -74,8 +80,6 @@ The following issues are active and represent the current development roadmap.
 | #77 | L4 Content-Addressable RTFS Cache | Integrate bytecode caching with unified storage. | Open |
 | #66-#63 | Agent Isolation & MicroVMs | Connect to actual MicroVM providers (Firecracker, gVisor). | Open |
 | #55 | CCOS RTFS Library for Intent Graph | Create RTFS bindings for Intent Graph functions. | Open |
-| #53 | RTFS Unit Test Stabilization | Resolve remaining unit test failures (addressed by PR #179). | Open |
-| #46 | Fuzz Testing for Parser | Implement fuzz testing (addressed by PR #179). | Open |
 
 ---
 
@@ -91,7 +95,7 @@ The following issues are active and represent the current development roadmap.
    - Reference plan: `docs/drafts/iterative-planner-synthesis-plan.md`
 
 ### 📊 Status Summary
-- **Closed Issues**: #173, #157 (completed)
+- **Closed Issues**: #173, #157, #166, #53, #46, #21, #20, #15 (8 issues completed)
 - **Completed Migrations**: #166 (AgentConfig migration - commit 73c8172)
 - **Merged PRs**: #179 (completed)
 - **Active High-Priority Issues**: #176, #177, #178 (3 issues)
