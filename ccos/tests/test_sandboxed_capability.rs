@@ -2,8 +2,10 @@
 //!
 //! Tests the sandboxed execution path using the MicroVM process provider.
 
-use ccos::capability_marketplace::executors::{CapabilityExecutor, SandboxedExecutor};
-use ccos::capability_marketplace::types::{ProviderType, SandboxedCapability};
+use ccos::capability_marketplace::executors::{
+    CapabilityExecutor, ExecutionContext, SandboxedExecutor,
+};
+use ccos::capability_marketplace::types::{EffectType, ProviderType, SandboxedCapability};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 
@@ -69,7 +71,9 @@ else:
     );
     let inputs = Value::Map(input_map);
 
-    let result = executor.execute(&provider, &inputs).await;
+    let metadata = HashMap::new();
+    let context = ExecutionContext::new("test.sandboxed", &metadata, None);
+    let result = executor.execute(&provider, &inputs, &context).await;
 
     match result {
         Ok(value) => {
@@ -140,7 +144,9 @@ else:
     );
     let inputs = Value::Map(input_map);
 
-    let result = executor.execute(&provider, &inputs).await;
+    let metadata = HashMap::new();
+    let context = ExecutionContext::new("test.sandboxed", &metadata, None);
+    let result = executor.execute(&provider, &inputs, &context).await;
 
     match result {
         Ok(value) => {
@@ -154,7 +160,10 @@ else:
                 println!("Skipping test: process provider not available");
             } else if err_msg.contains("SecurityViolation") {
                 // Security violations are expected in test environments without proper permissions
-                println!("Security violation (expected in restricted environment): {:?}", e);
+                println!(
+                    "Security violation (expected in restricted environment): {:?}",
+                    e
+                );
             } else {
                 panic!("Unexpected error: {:?}", e);
             }
@@ -177,7 +186,9 @@ async fn test_sandboxed_invalid_provider() {
     let provider = ProviderType::Sandboxed(sandboxed);
     let inputs = Value::Nil;
 
-    let result = executor.execute(&provider, &inputs).await;
+    let metadata = HashMap::new();
+    let context = ExecutionContext::new("test.sandboxed", &metadata, None);
+    let result = executor.execute(&provider, &inputs, &context).await;
 
     // Should fail because the provider doesn't exist
     assert!(result.is_err());
@@ -198,7 +209,9 @@ async fn test_sandboxed_wrong_provider_type() {
     });
 
     let inputs = Value::Nil;
-    let result = executor.execute(&http_provider, &inputs).await;
+    let metadata = HashMap::new();
+    let context = ExecutionContext::new("test.sandboxed", &metadata, None);
+    let result = executor.execute(&http_provider, &inputs, &context).await;
 
     // Should fail with "Invalid provider type"
     assert!(result.is_err());
@@ -221,7 +234,9 @@ async fn test_marketplace_sandboxed_capability() {
     }
 
     // Create a minimal capability registry
-    let registry = Arc::new(RwLock::new(ccos::capabilities::registry::CapabilityRegistry::new()));
+    let registry = Arc::new(RwLock::new(
+        ccos::capabilities::registry::CapabilityRegistry::new(),
+    ));
 
     // Create marketplace
     let marketplace = CapabilityMarketplace::new(registry);
@@ -254,11 +269,16 @@ print(json.dumps({"result": "sandbox works!"}))
         agent_metadata: None,
         domains: vec!["test".to_string()],
         categories: vec!["sandbox".to_string()],
+        effect_type: EffectType::Effectful,
     };
 
     // Register the capability
     let register_result = marketplace.register_capability_manifest(manifest).await;
-    assert!(register_result.is_ok(), "Failed to register sandboxed capability: {:?}", register_result);
+    assert!(
+        register_result.is_ok(),
+        "Failed to register sandboxed capability: {:?}",
+        register_result
+    );
 
     // Verify it's registered
     let has_cap = marketplace.has_capability("test.sandboxed.hello").await;
@@ -266,7 +286,9 @@ print(json.dumps({"result": "sandbox works!"}))
 
     // Try to execute it
     let inputs = Value::Nil;
-    let exec_result = marketplace.execute_capability("test.sandboxed.hello", &inputs).await;
+    let exec_result = marketplace
+        .execute_capability("test.sandboxed.hello", &inputs)
+        .await;
 
     match exec_result {
         Ok(value) => {
@@ -296,7 +318,7 @@ fn is_firecracker_available() -> bool {
 #[test]
 fn test_firecracker_provider_availability() {
     let factory = rtfs::runtime::microvm::MicroVMFactory::new();
-    
+
     if is_firecracker_available() {
         println!("Firecracker binary found, provider should be available");
         // Note: Provider may still not be available if kernel/rootfs missing
@@ -318,46 +340,57 @@ async fn test_firecracker_python_execution() {
         println!("Skipping test: Firecracker not installed");
         return;
     }
-    
+
     // Check if kernel and rootfs exist
     let kernel_exists = std::path::Path::new("/opt/firecracker/vmlinux").exists();
     let rootfs_exists = std::path::Path::new("/opt/firecracker/rootfs.ext4").exists();
-    
+
     if !kernel_exists || !rootfs_exists {
         println!("Skipping test: Firecracker kernel or rootfs not found in /opt/firecracker/");
-        println!("  kernel: {} (exists: {})", "/opt/firecracker/vmlinux", kernel_exists);
-        println!("  rootfs: {} (exists: {})", "/opt/firecracker/rootfs.ext4", rootfs_exists);
+        println!(
+            "  kernel: {} (exists: {})",
+            "/opt/firecracker/vmlinux", kernel_exists
+        );
+        println!(
+            "  rootfs: {} (exists: {})",
+            "/opt/firecracker/rootfs.ext4", rootfs_exists
+        );
         return;
     }
-    
+
     println!("Firecracker setup found, testing execution...");
-    
+
     let executor = SandboxedExecutor::new();
-    
+
     // Simple Python test
     let python_code = r#"
 import json
 result = {"message": "Hello from Firecracker!", "calculated": 2 + 2}
 print(json.dumps(result))
 "#;
-    
+
     let sandboxed = SandboxedCapability {
         runtime: "python".to_string(),
         source: python_code.to_string(),
         entry_point: None,
         provider: Some("firecracker".to_string()),
     };
-    
+
     let provider = ProviderType::Sandboxed(sandboxed);
     let inputs = Value::Nil;
-    
-    match executor.execute(&provider, &inputs).await {
+
+    let metadata = HashMap::new();
+    let context = ExecutionContext::new("test.sandboxed", &metadata, None);
+    match executor.execute(&provider, &inputs, &context).await {
         Ok(value) => {
             println!("Firecracker execution result: {:?}", value);
             // Verify we got valid output
             if let Value::String(s) = &value {
-                assert!(s.contains("Hello from Firecracker") || s.contains("calculated"), 
-                    "Expected Python output, got: {}", s);
+                assert!(
+                    s.contains("Hello from Firecracker") || s.contains("calculated"),
+                    "Expected Python output, got: {}",
+                    s
+                );
             }
         }
         Err(e) => {
