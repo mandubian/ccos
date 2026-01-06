@@ -82,6 +82,8 @@ pub struct DiscoveryOptions {
     pub ignore_approved_files: bool,
     /// Whether to force discovery even if export file exists
     pub force_refresh: bool,
+    /// Whether to run in non-interactive mode (auto-approve prompts)
+    pub non_interactive: bool,
 }
 
 impl Default for DiscoveryOptions {
@@ -99,6 +101,7 @@ impl Default for DiscoveryOptions {
             lazy_output_schemas: true,   // Skip expensive introspection by default
             ignore_approved_files: false,
             force_refresh: false,
+            non_interactive: false,
         }
     }
 }

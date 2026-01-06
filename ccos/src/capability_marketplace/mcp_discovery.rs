@@ -1989,14 +1989,69 @@ impl MCPDiscoveryProvider {
                 description: None,
             };
 
-            // Check for auth - OpenWeatherMap uses query param "appid"
-            let auth = Some(crate::capability_marketplace::types::OpenApiAuth {
-                auth_type: "apiKey".to_string(),
-                location: "query".to_string(),
-                parameter_name: "appid".to_string(),
-                env_var_name: Some("OPENWEATHER_API_KEY".to_string()),
-                required: true,
-            });
+            // Extract auth configuration from RTFS metadata
+            // Extract auth configuration from RTFS metadata
+            let mut auth = None;
+
+            // Re-traverse the capability expression to find nested auth metadata
+            // (The generic metadata loop above flattens keys and only keeps strings, losing the nested auth map)
+            if let Expression::Map(capability_map) = &rtfs_def.capability {
+                if let Some(Expression::Map(metadata_map)) = capability_map
+                    .iter()
+                    .find(|(k, _)| matches!(k, MapKey::Keyword(kw) if kw.0 == "metadata"))
+                    .map(|(_, v)| v)
+                {
+                    if let Some(Expression::Map(openapi_map)) = metadata_map
+                        .iter()
+                        .find(|(k, _)| matches!(k, MapKey::Keyword(kw) if kw.0 == "openapi"))
+                        .map(|(_, v)| v)
+                    {
+                        let auth_expr = openapi_map
+                            .iter()
+                            .find(|(k, _)| matches!(k, MapKey::Keyword(kw) if kw.0 == "auth"))
+                            .map(|(_, v)| v);
+
+                        if let Some(Expression::Map(auth_map)) = auth_expr {
+                            // Helper to extract string values from the auth map
+                            let get_str = |key: &str| -> Option<String> {
+                                auth_map
+                                    .iter()
+                                    .find(|(k, _)| matches!(k, MapKey::Keyword(kw) if kw.0 == key))
+                                    .and_then(|(_, v)| match v {
+                                        Expression::Literal(Literal::String(s)) => Some(s.clone()),
+                                        Expression::Literal(Literal::Keyword(k)) => {
+                                            Some(k.0.clone())
+                                        }
+                                        _ => None,
+                                    })
+                            };
+
+                            let auth_type = get_str("type").unwrap_or_else(|| "apiKey".to_string());
+                            let location =
+                                get_str("location").unwrap_or_else(|| "header".to_string());
+                            let param_name = get_str("param_name")
+                                .or_else(|| get_str("param")) // alias
+                                .unwrap_or_else(|| "Authorization".to_string());
+                            let env_var = get_str("env_var");
+
+                            if let Some(env_name) = env_var {
+                                auth = Some(crate::capability_marketplace::types::OpenApiAuth {
+                                    auth_type,
+                                    location,
+                                    parameter_name: param_name,
+                                    env_var_name: Some(env_name.clone()),
+                                    required: true,
+                                });
+
+                                debug!(
+                                     "Found generic auth configuration for capability '{}': env_var={}",
+                                     name, env_name
+                                 );
+                            }
+                        }
+                    }
+                }
+            }
 
             ProviderType::OpenApi(crate::capability_marketplace::types::OpenApiCapability {
                 base_url,
