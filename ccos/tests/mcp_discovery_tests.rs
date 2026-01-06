@@ -418,6 +418,7 @@ mod discovery_options_tests {
             rate_limit: RateLimitConfig::strict(),
             ignore_approved_files: false,
             force_refresh: false,
+            non_interactive: true,
         };
 
         assert!(options.introspect_output_schemas);

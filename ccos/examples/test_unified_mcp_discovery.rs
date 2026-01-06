@@ -112,6 +112,7 @@ async fn test_discovery_with_config(
         lazy_output_schemas: true,
         ignore_approved_files: false,
         force_refresh: false,
+            non_interactive: true,
     };
 
     println!("    🔍 Discovering tools...");
@@ -199,6 +200,7 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
             lazy_output_schemas: true,
             ignore_approved_files: false,
             force_refresh: false,
+            non_interactive: true,
         };
 
         // Use discover_and_export_tools which handles registration and export automatically
@@ -266,6 +268,7 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
             lazy_output_schemas: true,
             ignore_approved_files: false,
             force_refresh: false,
+            non_interactive: true,
         };
 
         // First discovery (should hit the server)
