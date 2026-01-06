@@ -100,12 +100,23 @@ impl GroundedLlmDecomposition {
 
         // 2. Initial domain filtering (unless no domains inferred)
         let domain_filtered_tools: Vec<&ToolSummary> = if !inferred_domains.is_empty() {
+            log::debug!(
+                "[GroundedLlm] Inferred domains from goal: {:?}",
+                inferred_domains
+            );
             available_tools
                 .iter()
                 .filter(|t| {
-                    // Include if tool domain matches any inferred domain
-                    // OR if tool is Generic (always available)
-                    inferred_domains.contains(&t.domain) || t.domain == DomainHint::Generic
+                    let matches =
+                        inferred_domains.contains(&t.domain) || t.domain == DomainHint::Generic;
+                    if !matches {
+                        log::trace!(
+                            "[GroundedLlm] Filtering out tool {} (domain: {:?})",
+                            t.name,
+                            t.domain
+                        );
+                    }
+                    matches
                 })
                 .collect()
         } else {

@@ -18,6 +18,7 @@ pub struct CapabilityInfo {
     pub name: String,
     pub description: String,
     pub input_schema: Option<String>,
+    pub output_schema: Option<String>,
     /// Domains this capability belongs to
     pub domains: Vec<String>,
     /// Categories for this capability
@@ -346,6 +347,7 @@ mod tests {
                     name: "list_issues".to_string(),
                     description: "List issues in a GitHub repository".to_string(),
                     input_schema: None,
+                    output_schema: None,
                     domains: vec!["github".to_string()],
                     categories: vec!["list".to_string(), "crud".to_string()],
                 },
@@ -354,6 +356,7 @@ mod tests {
                     name: "create_issue".to_string(),
                     description: "Create a new issue".to_string(),
                     input_schema: None,
+                    output_schema: None,
                     domains: vec!["github".to_string()],
                     categories: vec!["create".to_string(), "crud".to_string()],
                 },

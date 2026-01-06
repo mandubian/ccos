@@ -952,6 +952,14 @@ impl ResolutionStrategy for CatalogResolution {
                     .or_else(|| DomainHint::infer_from_text(&cap.name))
                     .unwrap_or(DomainHint::Generic);
 
+                // DEBUG: Print tool and its inferred domain if it looks like weather
+                if cap.id.contains("weather")
+                    || cap.id.contains("forecast")
+                    || cap.name.contains("weather")
+                {
+                    ccos_println!("   🏷️  Tool '{}' inferred domain: {:?}", cap.id, domain);
+                }
+
                 // Infer action from ID (which has the verb)
                 let action = if cap.id.contains(".list") || cap.id.contains("_list") {
                     ApiAction::List
