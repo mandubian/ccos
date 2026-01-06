@@ -33,6 +33,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 fn maybe_set_capability_storage_from_config(config_path: &str) {
+    // Set workspace root to the directory containing the config file
+    if let Some(parent) = Path::new(config_path).parent() {
+        if !parent.as_os_str().is_empty() {
+            crate::utils::fs::set_workspace_root(parent.to_path_buf());
+        }
+    }
+
     // Respect explicit env override
     if std::env::var("CCOS_CAPABILITY_STORAGE").is_ok() {
         return;
@@ -227,8 +234,11 @@ pub async fn create_plan_with_options(
     let marketplace = ccos.get_capability_marketplace();
 
     // Ensure native CLI capabilities plus approved MCP capabilities are registered.
+    println!("🔍 Registering native capabilities...");
     crate::ops::native::register_native_capabilities(&marketplace).await?;
+    println!("🔍 LOAD_APPROVED START");
     load_approved_capabilities(&marketplace).await?;
+    println!("🔍 LOAD_GENERATED START");
     load_generated_capabilities(&marketplace).await?;
 
     // Keep catalog in sync so planner queries see the latest capabilities.
@@ -1056,9 +1066,13 @@ async fn load_approved_capabilities(marketplace: &Arc<CapabilityMarketplace>) ->
     // Use workspace-relative path for approved servers directory
     // Workspace root is the config dir, so ../capabilities goes to <workspace>/capabilities
     let approved_dir = crate::utils::fs::resolve_workspace_path("../capabilities/servers/approved");
+    println!("🔍 Loading approved capabilities from: {:?}", approved_dir);
 
     if !approved_dir.exists() {
-        log::debug!("No approved servers directory found at {:?}", approved_dir);
+        println!(
+            "⚠️  Approved servers directory not found at {:?}",
+            approved_dir
+        );
         return Ok(());
     }
 
@@ -1083,9 +1097,13 @@ async fn load_generated_capabilities(
     // Use workspace-relative path for generated capabilities directory
     // Workspace root is the config dir, so ../capabilities goes to <workspace>/capabilities
     let gen_dir = crate::utils::fs::resolve_workspace_path("../capabilities/generated");
+    println!("🔍 Loading generated capabilities from: {:?}", gen_dir);
 
     if !gen_dir.exists() {
-        log::debug!("No generated capabilities directory found at {:?}", gen_dir);
+        println!(
+            "⚠️  Generated capabilities directory not found at {:?}",
+            gen_dir
+        );
         return Ok(());
     }
 
