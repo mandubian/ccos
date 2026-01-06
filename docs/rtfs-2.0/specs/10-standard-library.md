@@ -1,6 +1,32 @@
 # RTFS 2.0 Standard Library
 
+**Implementation Status**: ✅ **Mostly Implemented** (verified against codebase)
+
 This document provides a comprehensive reference for the RTFS 2.0 standard library, which contains **only pure, deterministic functions** with **no side effects**.
+
+## Implementation Verification
+
+The functions listed below have been **verified** against the actual implementation in `rtfs/src/runtime/secure_stdlib.rs`:
+
+| Category | Status | Notes |
+|----------|--------|-------|
+| **Arithmetic** | ✅ **Implemented** | All listed functions implemented |
+| **Comparison** | ✅ **Implemented** | All listed functions implemented (includes `!=` and `not=`) |
+| **Boolean Logic** | ✅ **Implemented** | All listed functions implemented |
+| **String Functions** | ✅ **Implemented** | All listed functions implemented, plus regex (`re-matches`, `re-find`, `re-seq`) |
+| **Collection Functions** | ✅ **Implemented** | Most functions implemented; some listed in spec but may have different names |
+| **Type Predicates** | ✅ **Implemented** | All listed functions implemented |
+
+**Additional Functions in Implementation** (not listed in spec tables):
+- `parse-int`, `parse-float` - String to number conversion
+- `factorial`, `abs`, `sqrt`, `pow` - Additional math functions
+- `starts-with?`, `string-join`, `string-upper`, `string-lower`, `string-trim` - Additional string functions
+- `re-matches`, `re-find`, `re-seq` - Regex functions
+- `group-by`, `apply`, `assoc`, `dissoc`, `conj` - Additional collection functions
+- `int`, `float` - Type coercion functions
+
+**Functions Listed in Spec but Not Implemented**:
+- `map-indexed`, `sort-by`, `distinct`, `frequencies`, `get-in`, `range`, `numbers`, `remove`, `update`
 
 ## 1. Core Philosophy
 
@@ -81,35 +107,43 @@ The standard library is organized into the following categories:
 |---|---|---|
 | `vector` | `(-> ... :vector)` | Creates a new vector. |
 | `map` | `(-> :function :collection :collection)` | Applies a function to each element of a collection. |
-| `map-indexed` | `(-> :function :collection :collection)` | Applies a function to each element of a collection, with the index. |
+| `map-indexed` | `(-> :function :collection :collection)` | ❌ Not Implemented | Applies a function to each element of a collection, with the index. |
 | `filter` | `(-> :function :collection :collection)` | Returns a new collection with only the elements that satisfy a predicate. |
 | `reduce` | `(-> :function :collection :any)` | Reduces a collection to a single value using a function. |
 | `sort` | `(-> :collection :collection)` | Sorts a collection. |
-| `sort-by` | `(-> :function :collection :collection)` | Sorts a collection by a key function. |
-| `distinct` | `(-> :collection :collection)` | Returns a new collection with duplicate values removed. |
-| `frequencies` | `(-> :collection :map)` | Returns a map of the frequencies of the elements in a collection. |
+| `sort-by` | `(-> :function :collection :collection)` | ❌ Not Implemented | Sorts a collection by a key function. |
+| `distinct` | `(-> :collection :collection)` | ❌ Not Implemented | Returns a new collection with duplicate values removed. |
+| `frequencies` | `(-> :collection :map)` | ❌ Not Implemented | Returns a map of the frequencies of the elements in a collection. |
 | `contains?` | `(-> :collection :any :bool)` | Returns `true` if a collection contains an element. |
 | `keys` | `(-> :map :vector)` | Returns a vector of the keys in a map. |
 | `vals` | `(-> :map :vector)` | Returns a vector of the values in a map. |
 | `get` | `(-> :map :any :any)` | Returns the value for a key in a map, or a default value. |
-| `get-in` | `(-> :map :vector :any)` | Returns the value at a nested path in a map. |
+| `get-in` | `(-> :map :vector :any)` | ❌ Not Implemented | Returns the value at a nested path in a map. |
+| `assoc` | `(-> :collection :any ... :collection)` | Returns new map/vector with key-value pairs associated. |
+| `dissoc` | `(-> :map :keyword ... :map)` | Returns new map with specified keys removed. |
 | `cons` | `(-> :any :collection :collection)` | Adds an element to the beginning of a collection. |
 | `concat` | `(-> ... :collection)` | Concatenates two or more collections. |
+| `conj` | `(-> :collection :any ... :collection)` | Appends elements to a vector (returns new vector). |
 | `first` | `(-> :collection :any)` | Returns the first element of a collection. |
 | `rest` | `(-> :collection :collection)` | Returns all but the first element of a collection. |
 | `nth` | `(-> :collection :int :any)` | Returns the element at a given index in a collection. |
 | `count` | `(-> :collection :int)` | Returns the number of elements in a collection. |
 | `empty?` | `(-> :collection :bool)` | Returns `true` if a collection is empty. |
-| `range` | `(-> :int :int :int :vector)` | Returns a vector of numbers in a given range. |
+| `range` | `(-> :int :int :int :vector)` | ❌ Not Implemented | Returns a vector of numbers in a given range. |
 | `hash-map` | `(-> ... :map)` | Creates a new map. |
 | `take` | `(-> :int :collection :collection)` | Returns the first n elements of a collection. |
 | `drop` | `(-> :int :collection :collection)` | Returns all but the first n elements of a collection. |
 | `last` | `(-> :collection :any)` | Returns the last element of a collection. |
 | `reverse` | `(-> :collection :collection)` | Returns a new collection with elements in reverse order. |
-| `numbers` | `(-> :int :int :vector)` | Returns a vector of numbers from start to end. |
+| `numbers` | `(-> :int :int :vector)` | ❌ Not Implemented | Returns a vector of numbers from start to end. |
 
-**Removed Functions:** The following functions have been removed as they are effectful (mutate data structures):
-- `assoc`, `dissoc`, `conj`, `remove`, `update`
+**Pure Immutable Operations:** The following functions return new collections without mutating the original:
+- `assoc` - Returns new map or vector with key-value pairs associated
+- `dissoc` - Returns new map with specified keys removed
+- `conj` - Returns new vector with elements appended
+
+**Not Implemented Functions:** The following functions are not in the current implementation:
+- `remove`, `update`
 
 For data structure mutations, use CCOS capabilities like `(call :ccos.state.kv/put ...)` or other appropriate state management capabilities.
 

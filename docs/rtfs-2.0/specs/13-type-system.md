@@ -1,8 +1,40 @@
 # RTFS Type System: Formal Specification
 
-**Version**: 1.0  
-**Status**: Implemented  
-**Location**: `rtfs/src/ir/type_checker.rs`
+**Version**: 1.0
+**Status**: ⚠️ **Formal Specification / Partial Implementation**
+**Location**: `rtfs/src/runtime/type_validator.rs` (runtime validation), `rtfs/src/ast.rs` (type expressions)
+
+## Implementation Status
+
+**⚠️ Formal Specification vs. Current Implementation**
+
+This document presents the **formal specification** of the RTFS type system, which includes theoretical foundations and design goals. The **current implementation** provides a subset of these features:
+
+| Feature | Status | Implementation Details |
+|---------|--------|----------------------|
+| **Structural Type Checking** | ✅ **Implemented** | Runtime validation in `type_validator.rs` |
+| **Primitive Types** | ✅ **Implemented** | Int, Float, String, Bool, Nil, Keyword, Symbol |
+| **Collection Types** | ✅ **Implemented** | Vector, Map, Tuple, Array |
+| **Union Types** | ⚠️ **Partial** | Basic union support exists but lacks formal subtyping |
+| **Intersection Types** | ❌ **Not Implemented** | Formal specification only |
+| **Refinement Types** | ⚠️ **Partial** | Basic predicates supported (`is-url`, `is-email`) |
+| **Function Types** | ✅ **Implemented** | Basic function type validation |
+| **Formal Subtyping** | ❌ **Not Implemented** | Specification describes subtyping relation; implementation uses simple validation |
+| **Soundness Proofs** | ❌ **Not Implemented** | Theoretical foundation only |
+| **Bidirectional Checking** | ⚠️ **Partial** | Basic type inference for simple cases |
+
+**Key Differences**:
+- **Formal specification**: Describes a complete type system with subtyping, union/intersection types, and formal proofs
+- **Current implementation**: Provides runtime type validation with structural checking and basic predicates
+- **Type inference**: Limited to simple cases; complex inference not implemented
+- **Subtyping**: Simple numeric coercion (Int → Float) implemented; formal subtyping system not implemented
+
+**Practical Usage**: The type system is **optional** and used primarily for:
+1. **Capability input/output validation** at host boundaries
+2. **Runtime type checking** for safety-critical code paths
+3. **Documentation** of expected types in capabilities and plans
+
+See the [Type Checking Guide](../guides/type-checking-guide.md) for practical usage examples.
 
 ---
 

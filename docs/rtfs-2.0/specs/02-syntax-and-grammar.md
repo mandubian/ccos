@@ -191,20 +191,26 @@ RTFS includes a structural type system:
 
 ## Macros and Metaprogramming
 
-**Note**: The macro system (`defmacro`, quasiquote syntax) is a **design target** and is **not currently implemented** in RTFS 2.0. The following syntax represents the planned macro system:
+RTFS 2.0 provides a full macro system for compile-time code transformation:
 
 ```clojure
-;; Planned macro definition (not yet implemented)
+;; Macro definition
 (defmacro when [condition & body]
   `(if ~condition (do ~@body)))
 
-;; Planned macro usage (not yet implemented)
+;; Macro usage
 (when (> x 0)
   (call :ccos.io/println "positive")
   (* x 2))
 ```
 
-Currently, RTFS code must use explicit control flow constructs like `if` and `do` instead of macros.
+The macro system includes:
+- **`defmacro`**: Define custom syntax transformations
+- **Quasiquote** (`` ` ``): Quote code with selective unquoting
+- **Unquote** (`~`): Evaluate expressions within quasiquote
+- **Unquote-splicing** (`~@`): Splice sequences into quasiquote
+
+Implementation: `compiler/expander.rs` with full `MacroExpander` support including quasiquote level tracking and variadic parameters.
 
 ## Host Integration
 

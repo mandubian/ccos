@@ -1,5 +1,35 @@
 # RTFS 2.0: Concurrency Model
 
+## Implementation Status
+
+**⚠️ Host-mediated via capabilities**
+
+Concurrency in RTFS 2.0 is implemented through host-mediated capabilities rather than native language primitives. The implementation status is:
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **`step-parallel` Special Form** | ❌ **Not Implemented** | Design specification only; not in grammar or AST |
+| **Host-Mediated Parallelism** | ✅ **Implemented** | Via `:ccos.concurrent/parallel` capability and other concurrency capabilities |
+| **Async Operations** | ✅ **Implemented** | Futures and promises via host capabilities |
+| **Isolated Execution** | ✅ **Implemented** | Forked evaluators with shared code but isolated environments |
+| **Task Coordination** | ⚠️ **Via Capabilities** | Cancellation, timeouts through host capabilities |
+| **Parallel Collections** | ❌ **Design** | `pmap`, `preduce` operations not implemented |
+| **Channel Communication** | ❌ **Design** | Go-style channels not implemented |
+
+### Key Implementation Details
+- **Host Delegation**: All concurrent execution delegated to CCOS host via capabilities
+- **Closure-Based Tasks**: Parallel work units defined as RTFS closures capturing lexical environment
+- **Safety by Design**: Isolated execution contexts prevent shared mutable state
+- **Capability Integration**: Uses existing `:ccos.concurrent/parallel` capability for parallel execution
+- **No Native Concurrency**: RTFS evaluator remains single-threaded and synchronous
+
+### Implementation Reference
+- **Host Capabilities**: `:ccos.concurrent/parallel`, `:ccos.async/compute-heavy-task`, `:ccos.async/await`
+- **Runtime Context**: Forked evaluators with shared macro/type registries
+- **Security Model**: Concurrency capabilities subject to same governance as other host calls
+
+**Note**: This specification describes a comprehensive concurrency model, but only host-mediated parallelism via capabilities is currently implemented. The `step-parallel` special form and other concurrency primitives are design specifications for future implementation.
+
 ## 1. Overview
 
 RTFS 2.0 enforces a **strict host-mediated concurrency model**. The RTFS evaluator itself is single-threaded and synchronous. All parallel execution is achieved by delegating units of work (Tasks) to the CCOS Host.

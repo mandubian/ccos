@@ -332,7 +332,7 @@ Destructuring is compiled into explicit binding operations:
 
 ### With Macros
 
-Destructuring works seamlessly with macro-generated code:
+RTFS provides a full macro system with `defmacro`, quasiquote (`` ` ``), unquote (`~`), and unquote-splicing (`~@`). Destructuring works seamlessly with macro-generated code:
 
 ```rtfs
 (defmacro with-config [bindings & body]
