@@ -9,6 +9,16 @@
 # - mcp_servers: MCP server names that typically handle this domain
 
 [[domains]]
+name = "weather"
+keywords = ["weather", "forecast", "temperature", "rain", "snow", "wind", "humidity"]
+mcp_servers = ["openweathermap", "weather"]
+
+[[domains]]
+name = "geocoding"
+keywords = ["location", "address", "coordinates", "latitude", "longitude", "city", "country", "geocode"]
+mcp_servers = ["geocoding", "openstreetmap"]
+
+[[domains]]
 name = "github"
 keywords = ["github", "repo", "repository", "issue", "issues", "pull request", "pr", "prs", "commit", "branch", "fork", "star", "gist", "release", "workflow"]
 mcp_servers = ["github", "gh"]
@@ -30,7 +40,7 @@ mcp_servers = ["postgres", "mysql", "sqlite", "database"]
 
 [[domains]]
 name = "web"
-keywords = ["http", "url", "api", "endpoint", "request", "fetch url"]
+keywords = ["http", "fetch url", "browse", "website", "html"]
 mcp_servers = ["fetch", "http"]
 
 [[domains]]
