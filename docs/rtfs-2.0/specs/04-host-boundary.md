@@ -1,5 +1,48 @@
 # RTFS 2.0 Host Boundary and Capabilities
 
+## Implementation Status
+
+**✅ Implemented - Production-ready**
+
+The RTFS 2.0 host boundary and capability system is fully implemented and integrated with CCOS governance. The implementation status is:
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Host Boundary Model** | ✅ **Implemented** | `ExecutionOutcome::Complete/RequiresHost` in `runtime/execution_outcome.rs` |
+| **Capability Invocation** | ✅ **Implemented** | `call` special form with keyword/string capability IDs |
+| **Security Context** | ✅ **Implemented** | `RuntimeContext` with agent identity, intent, permissions in `runtime/security.rs` |
+| **Causal Context** | ✅ **Implemented** | Audit trail tracking in causal chain |
+| **Call Metadata** | ✅ **Implemented** | Timeout, idempotency, performance hints in `HostCall` |
+| **CCOS Governance** | ✅ **Implemented** | Policy evaluation, provider selection, audit logging |
+| **Provider Architecture** | ✅ **Implemented** | LocalProvider, Marketplace providers, custom providers |
+| **Capability Marketplace** | ✅ **Implemented** | Service discovery, dynamic capability loading |
+| **Execution Policies** | ✅ **Implemented** | Marketplace, Hybrid, InlineDev policy modes |
+| **Resource Management** | ✅ **Implemented** | Host-mediated resource cleanup with automatic finalization |
+| **Async Operations** | ✅ **Implemented** | Host-mediated futures and promises via capabilities |
+| **Streaming Integration** | ✅ **Implemented** | MCP streaming and marketplace stream capabilities |
+| **Error Propagation** | ✅ **Implemented** | Structured error handling across boundary |
+| **Testing Support** | ✅ **Implemented** | Capability mocking for pure host interface |
+
+### Key Implementation Details
+- **Strict Separation**: Pure RTFS computation yields to host for all effects via `ExecutionOutcome::RequiresHost`
+- **Mandatory Security**: Every host call includes `RuntimeContext` for governance and audit
+- **Provider Plugability**: Multiple provider types (Local, Marketplace, Custom) with policy-based selection
+- **Capability Contracts**: Input/output schemas using `TypeExpr` for validation
+- **Causal Chain Integration**: All host calls recorded in immutable audit trail
+- **Performance Hints**: `CallMetadata` with timeout, idempotency, semantic hashing
+- **Resource Safety**: Automatic cleanup through host-mediated resource management
+
+### Implementation Reference
+- `runtime/execution_outcome.rs`: `ExecutionOutcome` and `HostCall` types
+- `runtime/security.rs`: `RuntimeContext` and security metadata
+- `runtime/host_interface.rs`: `HostInterface` trait definition
+- `runtime/host.rs`: Host implementation and integration
+- `ccos/src/capability_marketplace/`: CCOS capability marketplace implementation
+- `ccos/src/environment.rs`: Plan-to-capability registration and host wiring
+- `ccos/src/governance/`: Governance kernel and policy evaluation
+
+**Note**: The host boundary is production-ready with comprehensive security, audit, and governance features. All external interactions are properly mediated through CCOS capabilities with mandatory security context.
+
 ## Overview
 
 RTFS 2.0 maintains a **strict separation** between pure computation and side effects through a **host boundary**. All external interactions are mediated through CCOS capabilities with mandatory security and audit controls.

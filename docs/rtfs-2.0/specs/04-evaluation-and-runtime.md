@@ -1,5 +1,45 @@
 # RTFS 2.0 Evaluation and Runtime
 
+## Implementation Status
+
+**✅ Implemented - Fully functional**
+
+The RTFS 2.0 evaluation and runtime model is fully implemented with multiple execution strategies and a complete host boundary system. The implementation status is:
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Tree Walking Evaluator** | ✅ **Implemented** | Recursive AST interpreter in `runtime/evaluator.rs` |
+| **IR Runtime** | ✅ **Implemented** | Trampoline-based execution in `runtime/ir_runtime.rs` |
+| **MicroVM** | ✅ **Implemented** | Isolated execution environment in `runtime/microvm/` |
+| **Host Boundary** | ✅ **Implemented** | `ExecutionOutcome::Complete/RequiresHost` in `runtime/execution_outcome.rs` |
+| **Macro Integration** | ✅ **Implemented** | `MacroExpander` injection into evaluators with compile-time expansion |
+| **Lexical Scoping** | ✅ **Implemented** | Immutable environments with proper closure capture |
+| **Special Forms** | ✅ **Implemented** | `def`, `defn`, `let`, `if`, `do`, `match`, `try/catch/finally`, `for`, `dotimes` |
+| **Function Application** | ✅ **Implemented** | First-class functions with lexical closures |
+| **Continuation Model** | ✅ **Implemented** | Yield-based control flow inversion through host boundary |
+| **Error Handling** | ✅ **Implemented** | Structured error propagation with `RuntimeError` enum |
+| **Type Checking Integration** | ✅ **Implemented** | Optional runtime type validation via `TypeValidator` |
+| **Concurrency Model** | ⚠️ **Via Capabilities** | Host-mediated parallelism through capability system |
+| **Resource Management** | ✅ **Implemented** | Host-mediated resource cleanup with automatic finalization |
+
+### Key Implementation Details
+- **Multiple Runtime Strategies**: AST interpreter, IR compiler, MicroVM with configurable optimization levels
+- **Macro-Aware Evaluation**: `MacroExpander` required at evaluator construction for runtime macro expansion
+- **Pure Functional Core**: Referentially transparent evaluation with all effects via host boundary
+- **Immutable Environments**: Lexical scoping with persistent data structures
+- **Trampoline Execution**: IR runtime uses trampoline for tail-call optimization and stack safety
+- **Host Interface**: `HostInterface` trait defines boundary between RTFS and CCOS capabilities
+
+### Implementation Reference
+- `runtime/evaluator.rs`: AST-walking evaluator (development/testing)
+- `runtime/ir_runtime.rs`: IR trampoline runtime (production)
+- `runtime/microvm/`: MicroVM execution environment
+- `runtime/execution_outcome.rs`: `ExecutionOutcome` enum with host yielding
+- `runtime/host_interface.rs`, `runtime/host.rs`: Host interaction interfaces
+- `compiler/expander.rs`: `MacroExpander` implementation with quasiquote level tracking
+
+**Note**: The evaluation model is production-ready with comprehensive test coverage. All core language features are implemented and functional.
+
 ## Evaluation Model
 
 RTFS 2.0 uses a **hybrid compile-time/runtime evaluation model** where:

@@ -306,13 +306,9 @@ While RTFS has a dynamic type system, it supports optional type annotations. Typ
 ;; Custom type symbols (any symbol works)
 (defn process [x : CustomType] : MyResult
   (do-something x))
-
-;; Type assertions
-(assert-type x integer)
-(cast-to string value)
 ```
 
-**Important**: Type annotations are optional and act as documentation/hints. They don't enforce runtime type checking unless explicitly used with `assert-type` or similar.
+**⚠️ Note**: `assert-type` and `cast-to` functions shown in earlier drafts are **not implemented**. Type annotations are optional and act as documentation/hints. Runtime type checking is performed by the `TypeValidator` at configurable levels (basic/standard/strict).
 
 ## 9. Error Conditions
 

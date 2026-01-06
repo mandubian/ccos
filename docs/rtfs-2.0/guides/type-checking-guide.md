@@ -1,7 +1,51 @@
 # RTFS Type Checking: Quick Reference Guide
 
-**For**: Developers using RTFS  
-**See Also**: [Full Formal Specification](../specs/13-type-system.md)
+## Implementation Status
+
+**⚠️ Partial - Basic runtime validation implemented**
+
+This guide describes the RTFS type system as documented in the formal specification. However, the **actual implementation status differs**:
+
+| Feature | Specification Status | Implementation Status | Notes |
+|---------|---------------------|----------------------|-------|
+| **Type Annotations** | ✅ **Full** | ✅ **Implemented** | `:type` annotations on functions and `let` bindings |
+| **Runtime Validation** | ✅ **Full** | ✅ **Implemented** | `TypeValidator` with configurable strictness levels |
+| **Primitive Types** | ✅ **Full** | ✅ **Implemented** | `:int`, `:float`, `:string`, `:bool`, `:nil`, etc. |
+| **Collection Types** | ✅ **Full** | ✅ **Implemented** | `[:vector :int]`, `[:map {:name :string}]`, etc. |
+| **Function Types** | ✅ **Full** | ✅ **Implemented** | `[:fn [:int :int] :int]` syntax |
+| **Union Types** | ✅ **Full** | ⚠️ **Basic** | Simple union support; lacks formal subtyping |
+| **Intersection Types** | ✅ **Full** | ❌ **Not Implemented** | Formal specification only |
+| **Subtyping System** | ✅ **Formal** | ❌ **Not Implemented** | 12 subtyping axioms not implemented |
+| **Refinement Types** | ✅ **Full** | ⚠️ **Partial** | Basic predicates (`is-url`, `is-email`) |
+| **Type Inference** | ✅ **Bidirectional** | ⚠️ **Basic** | Simple cases only; lacks formal inference |
+
+### Key Differences from Formal Specification
+- **Runtime vs. Compile-time**: Implementation uses runtime validation, not formal compile-time type checking
+- **No Formal Proofs**: Implementation lacks soundness proofs and formal subtyping relations
+- **Basic Union Support**: Simple union types work but lack formal subtyping axioms
+- **No Intersection Types**: `:intersection` type not implemented
+- **Limited Inference**: Type inference handles basic cases but not complex bidirectional inference
+
+### What Actually Works Today
+- Type annotations on functions and variables: `(defn add [x :int y :int] :int ...)`
+- Runtime type validation with configurable strictness levels
+- Basic union types: `[:union :int :string]`
+- Collection type schemas: `[:vector :int]`, `[:map {:name :string :age :int}]`
+- Function type signatures: `[:fn [:int :int] :int]`
+- Type predicates: `(int? x)`, `(string? x)`, etc.
+
+### What's Different from the Spec
+- **No formal subtyping**: `Int ≤ Number` works but not via formal subtyping system
+- **No intersection types**: `[:intersection TypeA TypeB]` not supported
+- **Limited refinement types**: Only basic predicates, not full logical constraints
+- **Runtime errors vs. compile-time**: Type errors occur at runtime during validation
+
+**For the actual implementation**, see the `TypeValidator` in `runtime/type_validator.rs` rather than the formal specification.
+
+---
+
+**For**: Developers using RTFS
+**See Also**: [Full Formal Specification](../specs/13-type-system.md) | [Implementation Status](../guides/implementation-status.md)
 
 ---
 

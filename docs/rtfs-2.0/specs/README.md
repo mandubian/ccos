@@ -10,6 +10,18 @@ The original specifications in `../specs/` were written before the decoupling an
 - **Architectural Clarity**: Understanding gained from CCOS-RTFS decoupling
 - **Implementation Truth**: Specifications match what was actually built
 
+## Documentation Status
+
+**⚠️ IMPORTANT**: This documentation is being cleaned up to ensure accuracy. Some specifications describe design targets or aspirational features that are not yet fully implemented. Each specification file now includes an "Implementation Status" section indicating what is implemented versus planned.
+
+**Key Documentation Updates**:
+- ✅ **Implemented**: Features fully implemented and tested
+- ⚠️ **Partial**: Partially implemented or basic support exists
+- 🚧 **Design**: Design specification; implementation in progress or planned
+- ❌ **Not Implemented**: Described but not yet implemented
+
+**Verification Status**: Examples in this documentation are being validated against the actual implementation. Check the [Implementation Status Guide](../guides/implementation-status.md) for detailed feature-by-feature tracking.
+
 ## Philosophy
 
 RTFS 2.0 is a **pure functional language** designed to be securely hosted by a governing runtime like CCOS. It operates on a principle of a **strict host boundary**:
@@ -153,18 +165,60 @@ RTFS serves as CCOS's **computational substrate**:
 
 ## Implementation Status
 
-These specifications reflect the **implemented architecture** as of the decoupling migration. Key components:
+These specifications document both **implemented features** and **design targets** for RTFS 2.0. The table below shows the current implementation status of each component:
 
-- ✅ **AST**: Comprehensive expression types
-- ✅ **Runtime**: Yield-based host boundary
-- ✅ **Type System**: Structural types with predicates
-- ✅ **Macro System**: Basic compile-time transformation
-- ✅ **Standard Library**: Pure and impure function categories
-- ✅ **Host Integration**: CCOS capability invocation
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **AST** | ✅ **Implemented** | Comprehensive expression types |
+| **Parser** | ✅ **Implemented** | Pest grammar with full S-expression support |
+| **Runtime** | ✅ **Implemented** | Yield-based host boundary with `ExecutionOutcome::RequiresHost` |
+| **Type System** | ⚠️ **Partial** | Basic structural type checking with predicates, but lacks formal subtyping system and advanced inference |
+| **Standard Library** | ✅ **Implemented** | Pure functions only; effectful operations via capabilities |
+| **Host Integration** | ✅ **Implemented** | CCOS capability invocation with security context |
+| **Module System** | ⚠️ **Partial** | Module registry exists but syntax support limited |
+| **Macro System** | ✅ **Implemented** | Full implementation with `defmacro`, quasiquote, unquote, unquote-splicing via `MacroExpander` |
+| **Pattern Matching** | ✅ **Implemented** | Comprehensive destructuring in AST and runtime |
+| **Error Handling** | ✅ **Implemented** | `try/catch/finally` special forms |
+| **Streaming** | ⚠️ **Via Capabilities** | Host-mediated through capability system |
+| **Concurrency** | ⚠️ **Via Capabilities** | Host-mediated parallelism |
+| **Performance Optimization** | ✅ **Implemented** | IR compilation, MicroVM, bytecode support |
+| **Security Model** | ✅ **Implemented** | Runtime context, capability-based security |
 
-## Future Directions
+### Detailed Status by Specification
 
-The architecture analysis identifies areas for improvement:
+| Specification | Implementation Status | Key Features |
+|---------------|----------------------|--------------|
+| **00-philosophy.md** | ✅ **Accurate** | Core principles match implementation |
+| **01-language-overview.md** | ⚠️ **Mostly Accurate** | Some examples may need verification |
+| **02-syntax-and-grammar.md** | ✅ **Accurate** | Grammar matches parser implementation |
+| **03-core-syntax-data-types.md** | ✅ **Accurate** | Data types match AST implementation |
+| **04-evaluation-and-runtime.md** | ✅ **Accurate** | Evaluation model correctly documented |
+| **04-host-boundary.md** | ✅ **Accurate** | Host interaction model implemented |
+| **05-pattern-matching-destructuring.md** | ✅ **Accurate** | Pattern matching fully implemented |
+| **07-module-system.md** | ⚠️ **Partial** | Module registry exists; syntax TBD |
+| **08-macro-system.md** | ✅ **Accurate** | Fully implemented macro system |
+| **09-streaming-capabilities.md** | ⚠️ **Via Capabilities** | Streaming through host-mediated capabilities |
+| **10-standard-library.md** | ✅ **Mostly Accurate** | Pure functions implemented; verify completeness |
+| **11-architecture-analysis.md** | ✅ **Accurate** | Architectural analysis valid |
+| **12-ir-and-compilation.md** | ✅ **Accurate** | IR compilation implemented |
+| **13-type-system.md** | ⚠️ **Formal Spec/Partial Impl** | Formal specification; implementation lacks formal proofs |
+| **14-concurrency-model.md** | ⚠️ **Via Capabilities** | Host-mediated concurrency |
+| **15-error-handling-recovery.md** | ✅ **Accurate** | Error handling implemented |
+| **16-security-model.md** | ✅ **Accurate** | Security model implemented |
+| **17-performance-optimization.md** | ✅ **Accurate** | Optimization strategies implemented |
+| **18-interoperability.md** | ✅ **Accurate** | Host integration implemented |
+
+> **Note**: Specifications marked with ⚠️ or 🚧 may describe design targets or partially implemented features. See individual specification files for detailed implementation notes.
+
+## Future Directions & Implementation Gaps
+
+The following areas represent future work or partially implemented features. These gaps are being addressed in ongoing development:
+
+### Core Language Features
+- **Macro System Enhancement**: Advanced hygiene mechanisms and macro documentation
+- **Module System Syntax**: Complete module definition and import/export syntax
+- **Type System Enhancement**: Formal subtyping proofs, advanced inference, full union/intersection types
+- **Streaming Primitives**: Native streaming operators (currently host-mediated via capabilities)
 
 ### LLM-Driven Development Priorities
 - **Type System Simplification**: Reduce complexity for reliable LLM generation
@@ -176,11 +230,14 @@ The architecture analysis identifies areas for improvement:
 - **Host Boundary Optimization**: Reduce latency for LLM-generated workflows
 - **Evaluation Speed**: Fast feedback for interactive LLM development
 - **Memory Efficiency**: Optimize for LLM context window constraints
+- **Compiler Optimizations**: Additional IR optimizations and bytecode improvements
 
 ### Ecosystem Growth
+- **Standard Library Expansion**: Additional pure functions and data structure utilities
 - **LLM Integration Tools**: Code generation assistance and validation
 - **Task Templates**: Reusable patterns for common intent types
 - **Workflow Composition**: High-level constructs for combining task steps
+- **Development Tooling**: Enhanced REPL, debugging, and profiling tools
 
 ## Reading Order
 

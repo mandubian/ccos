@@ -1,5 +1,30 @@
 # RTFS 2.0 Macro System
 
+## Implementation Status
+
+**✅ Implemented**
+
+The RTFS 2.0 macro system is fully implemented and functional:
+
+| Feature | Status | Implementation |
+|---------|--------|----------------|
+| **`defmacro` syntax** | ✅ **Implemented** | Grammar in `rtfs.pest` (line 279, 317) |
+| **Quasiquote** | ✅ **Implemented** | AST node in `ast.rs` (line 601), tracked via `quasiquote_level` |
+| **Unquote** | ✅ **Implemented** | AST node, handled by `replace_unquotes()` in `MacroExpander` |
+| **Unquote-splicing** | ✅ **Implemented** | AST node, handles sequence splicing via `substitute()` |
+| **Macro expansion pass** | ✅ **Implemented** | Full `MacroExpander::expand()` method with quasiquote level tracking |
+| **Macro registry** | ✅ **Implemented** | `HashMap<Symbol, MacroDef>` in `MacroExpander` |
+| **Variadic parameters** | ✅ **Implemented** | `variadic_param: Option<ParamDef>` in `MacroDef` |
+| **Hygiene mechanisms** | ⚠️ **Basic** | Artifact cleanup via `substitute()` and `replace_unquotes()` |
+
+**Implementation Details**:
+- `compiler/expander.rs`: 573-line `MacroExpander` implementation
+- `compiler/macro_def.rs`: `MacroDef` struct with variadic parameter support
+- `ast.rs`: `Quasiquote`, `Unquote`, `UnquoteSplicing` AST nodes
+- `rtfs.pest`: `defmacro_expr` grammar rule (line 279)
+
+**Code examples in this document are functional** and can be used in RTFS 2.0 programs.
+
 ## Overview
 
 RTFS macros are a hygienic-ish, template-oriented code-transformation facility built on top of quasiquote/unquote/unquote-splicing. Macros allow programs to generate and transform RTFS ASTs before they are evaluated or compiled to IR.
@@ -11,8 +36,6 @@ This document describes the runtime- and compiler-visible behavior added in the 
 - A dedicated top-level expansion pass that runs before AST evaluation and before IR conversion
 - A persistent, shared `MacroExpander` registry that is captured by the compiler and injected into runtime evaluators (mandatory at construction)
 - Replacement of temporary unquote/quasiquote artifacts before IR conversion so IR never sees macro-templating artifacts
-
-RTFS is designed to support a simple macro system for code transformation using quasiquote and unquote, but this functionality is not yet available in the current implementation.
 
 Use `defmacro` to define a macro. Macros receive AST nodes as arguments (not evaluated values), and must return an AST node or list of nodes.
 

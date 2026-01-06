@@ -1,5 +1,38 @@
 # RTFS 2.0: Streaming Capabilities
 
+## Implementation Status
+
+**⚠️ Partial - Host-mediated via capabilities**
+
+Streaming in RTFS 2.0 is implemented through host-mediated capabilities rather than native language primitives. The implementation status is:
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **MCP Streaming** | ✅ **Implemented** | `mcp-stream` macro with continuation-based processing (Phase 4-5 features) |
+| **Streaming Inspection** | ✅ **Implemented** | `:mcp.stream.inspect` capability for live metrics |
+| **Source/Channel-based** | ⚠️ **Partial** | Via `:marketplace.stream.start` and `:marketplace.stream.next` |
+| **Callback-based** | ⚠️ **Partial** | Via `:marketplace.stream.register-callbacks` |
+| **Sink/Produce** | ⚠️ **Partial** | Via `:marketplace.stream.open-sink` and `:marketplace.stream.send` |
+| **Advanced Streaming** | ❌ **Design** | File streams, network streams, processing operations (map/filter/aggregation) |
+| **Backpressure** | ⚠️ **Basic** | Queue capacity and pause/resume directives via processor actions |
+| **State Management** | ⚠️ **Partial** | Processor state persists across chunks with continuation tokens |
+| **Type Validation** | ❌ **Not Implemented** | Stream schemas and type validation |
+
+### Key Implementation Details
+- **MCP Integration**: Fully implemented with `mcp-stream` macro that lowers to `(call :mcp.stream.start ...)`
+- **Continuation Processing**: Processors return `{:action :continue/:pause/:complete}` with updated state
+- **Observability**: `:mcp.stream.inspect` capability provides live metrics and queue diagnostics
+- **Host Boundary**: All streaming goes through CCOS capability marketplace
+- **Phase Features**: Current implementation includes Phase 4-5 features (persistent state, bounded queues)
+
+### Implementation Reference
+– `mcp_streaming_provider.rs`: MCP streaming provider implementation
+– `McpStreamingProvider::process_chunk`: Continuation processing logic
+– `examples/stream_mcp_example.rtfs`: Example usage
+– `tests/ccos-integration/mcp_streaming_mock_tests.rs`: Integration tests
+
+**Note**: This specification describes comprehensive streaming capabilities, but only MCP streaming and basic marketplace integration are currently implemented. File streams, network streams, and advanced processing operations are design specifications for future implementation.
+
 ## 1. Streaming Overview
 
 RTFS provides comprehensive streaming capabilities for processing large or continuous data through the host boundary. Streaming enables efficient handling of data that doesn't fit in memory, real-time processing, and incremental computation.

@@ -1,6 +1,30 @@
 # RTFS 2.0: Complete Language Features Overview
 
+**Implementation Status**: ⚠️ **Mostly Implemented** (see notes for exceptions)
+
 This document provides a comprehensive overview of all RTFS 2.0 language features, organized by category. RTFS is a pure functional, homoiconic language designed for safe, verifiable computation within the CCOS (Cognitive-Causal Orchestration System) framework.
+
+## Feature Implementation Status
+
+| Feature Category | Status | Notes |
+|-----------------|--------|-------|
+| **Core Language** | ✅ **Implemented** | Atoms, collections, special forms, functions |
+| **Pattern Matching** | ✅ **Implemented** | Vector/map destructuring, wildcards, `:as`, `:keys` |
+| **Host Boundary** | ✅ **Implemented** | `ExecutionOutcome::RequiresHost`, capability calls |
+| **Macro System** | ✅ **Implemented** | `defmacro`, quasiquote, unquote, unquote-splicing via `MacroExpander` |
+| **Module System** | ⚠️ **Partial** | Module registry exists; `module`/`import`/`export` syntax not implemented |
+| **Type System** | ⚠️ **Partial** | Runtime validation implemented; formal subtyping not implemented |
+| **Standard Library** | ✅ **Implemented** | Pure functions only; effectful ops via capabilities |
+| **Error Handling** | ✅ **Implemented** | `try`/`catch`/`finally` special forms |
+| **Streaming** | ⚠️ **Via Capabilities** | Host-mediated through capability system |
+
+**Key Notes**:
+- **Macros**: Fully implemented with `defmacro`, quasiquote, unquote, unquote-splicing (see section 4)
+- **Modules**: `module`/`import`/`export` syntax not implemented; module registry exists for runtime use
+- **Type System**: Formal specification vs. practical implementation (see type-system.md)
+- **Examples**: Code examples are tested where possible; some are conceptual for unimplemented features
+
+See the [Implementation Status Guide](../guides/implementation-status.md) for detailed feature tracking.
 
 ## 1. Core Language Constructs
 
@@ -86,15 +110,27 @@ RTFS supports incremental data processing through host-mediated streaming:
    :on-complete (fn [result] (finalize result))})
 ```
 
-## 4. Macro System (design, not yet implemented)
+## 4. Macro System
 
-RTFS 2.0 currently **does not implement a user-facing `defmacro` form or quasiquote syntax** in the shipped grammar.
-The macro system described in `08-macro-system.md` is a **design target** for future versions and should be treated as aspirational.
+RTFS 2.0 provides a full macro system with compile-time code transformation:
 
-- Macros today are effectively handled by CCOS- or compiler-level transformations, not by RTFS code using `defmacro`.
-- Examples using `defmacro`, backtick (`` ` ``), `~`, or `~@` are **conceptual** and will not parse in the current RTFS 2.0 implementation.
+- **`defmacro`**: Define custom syntax transformations and macros
+- **Quasiquote** (`` ` ``): Quote code with selective unquoting
+- **Unquote** (`~`): Evaluate expressions within quasiquote
+- **Unquote-splicing** (`~@`): Splice sequences into quasiquote
 
-When generating RTFS code today, prefer **functions and higher-order combinators** instead of relying on macros.
+The `MacroExpander` handles macro expansion with proper quasiquote level tracking for nested macros.
+
+```rtfs
+(defmacro when [condition & body]
+  `(if ~condition
+     (do ~@body)
+     nil))
+
+(when (> x 0)
+  (println "positive")
+  (inc x))
+```
 
 ## 5. Module and Namespace System
 

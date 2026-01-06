@@ -1,5 +1,27 @@
 # RTFS 2.0: Module System
 
+## Implementation Status
+
+**⚠️ Partial Implementation / Design Specification**
+
+The module system described in this document represents the **design target** for RTFS 2.0. Key components exist in the codebase, but the full syntax and feature set are not yet implemented:
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Module registry** | ✅ **Implemented** | `ModuleRegistry` struct exists in `runtime/module_runtime.rs` |
+| **Module loading infrastructure** | ⚠️ **Partial** | Basic module loading framework exists |
+| **Module syntax (`module`, `import`, `export`)** | 🚧 **Design** | Grammar does not currently support `module` form |
+| **Namespace isolation** | ⚠️ **Partial** | Module registry provides basic isolation |
+| **Dependency tracking** | 📋 **Planned** | Not yet implemented |
+| **Incremental loading** | 📋 **Planned** | Not yet implemented |
+
+**Current State**: The `ModuleRegistry` and related infrastructure exist (`runtime/module_runtime.rs`), but the `module`, `import`, and `export` syntax shown in examples is **not yet supported** by the parser. Modules are currently handled programmatically via the runtime API.
+
+**Workaround**: For now, code organization can be achieved through:
+1. **File-based separation** with separate RTFS files
+2. **Runtime module registration** via `ModuleRegistry` API
+3. **CCOS capability system** for service isolation
+
 ## 1. Module System Overview
 
 RTFS provides a comprehensive module system for organizing code into reusable, composable units. The module system supports explicit imports/exports, namespace isolation, and dependency management.
@@ -15,11 +37,13 @@ RTFS provides a comprehensive module system for organizing code into reusable, c
 
 ### Basic Module Structure
 
+**⚠️ Note**: The `module`, `import`, and `export` syntax shown below is **conceptual** and not yet implemented in the parser. See [Implementation Status](#implementation-status) for current capabilities.
+
 ```rtfs
 ;; Module declaration with exports
 (module my.app/math
   (:exports [add multiply PI])
-  
+
   ;; Import declarations - dependencies
   (import my.app/core :as core)
   (import my.app/string :only [join split])
