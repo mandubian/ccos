@@ -1,7 +1,7 @@
 // Server command implementation
 use crate::cli::output::OutputFormatter;
 use crate::cli::CliContext;
-use crate::utils::fs::find_workspace_root;
+// removed unused find_workspace_root import
 use clap::Subcommand;
 use rtfs::runtime::error::RuntimeResult;
 

@@ -106,7 +106,7 @@ pub fn find_capability_file(capability_id: &str) -> Option<PathBuf> {
     let root = get_workspace_root();
 
     // Check generated capabilities
-    let generated_dir = root.join("capabilities").join("generated");
+    let generated_dir = crate::utils::fs::get_configured_generated_path();
     if let Ok(entries) = fs::read_dir(&generated_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -126,7 +126,7 @@ pub fn find_capability_file(capability_id: &str) -> Option<PathBuf> {
     }
 
     // Check discovered capabilities
-    let discovered_dir = root.join("capabilities").join("discovered");
+    let discovered_dir = crate::utils::fs::get_configured_discovered_path();
     if let Ok(entries) = fs::read_dir(&discovered_dir) {
         for entry in entries.flatten() {
             let path = entry.path();

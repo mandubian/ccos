@@ -3,7 +3,7 @@ use crate::capability_marketplace::types::{
     OpenApiOperation, ProviderType,
 };
 use crate::synthesis::introspection::auth_injector::AuthInjector;
-use crate::utils::fs::find_workspace_root;
+// removed unused find_workspace_root import
 use chrono::Utc;
 use rtfs::ast::TypeExpr;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
@@ -189,7 +189,7 @@ impl OpenAPIImporter {
     pub fn new(base_url: String) -> Self {
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| find_workspace_root().join("capabilities"));
+            .unwrap_or_else(|_| crate::utils::fs::get_configured_capabilities_path());
 
         Self {
             base_url,

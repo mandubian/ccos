@@ -5,7 +5,7 @@ use crate::approval::{
     storage_file::FileApprovalStorage, ApprovalAuthority, ApprovalCategory, ApprovalRequest,
     UnifiedApprovalQueue,
 };
-use crate::utils::fs::find_workspace_root;
+// removed unused find_workspace_root import
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::Serialize;
 use std::sync::Arc;

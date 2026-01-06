@@ -4,7 +4,7 @@ use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
 use crate::discovery::config::DiscoveryConfig;
 use crate::discovery::goal_discovery::LlmSearchResult;
 use crate::discovery::GoalDiscoveryAgent;
-use crate::utils::fs::find_workspace_root;
+// removed unused find_workspace_root import
 #[cfg(feature = "tui")]
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
 use rtfs::runtime::error::RuntimeResult;
@@ -74,11 +74,12 @@ pub async fn discover_by_goal_with_options(
             // Fallback: ask user if they want to add a server manually
             println!();
             #[cfg(feature = "tui")]
-            let add_manual = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                .with_prompt("Do you know a specific server URL you want to add?")
-                .default(false)
-                .interact()
-                .unwrap_or(false);
+            let add_manual =
+                dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                    .with_prompt("Do you know a specific server URL you want to add?")
+                    .default(false)
+                    .interact()
+                    .unwrap_or(false);
 
             #[cfg(not(feature = "tui"))]
             let add_manual = false;
@@ -143,14 +144,18 @@ pub async fn discover_by_goal_with_options(
 
         // Show interactive multi-select (all pre-selected - user deselects unwanted)
         #[cfg(feature = "tui")]
-        let selections = dialoguer::MultiSelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
-            .with_prompt("Select servers to queue")
-            .items(&items)
-            .defaults(&vec![true; items.len()]) // Pre-select all
-            .interact()
-            .map_err(|e| {
-                rtfs::runtime::error::RuntimeError::Generic(format!("Selection cancelled: {}", e))
-            })?;
+        let selections =
+            dialoguer::MultiSelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                .with_prompt("Select servers to queue")
+                .items(&items)
+                .defaults(&vec![true; items.len()]) // Pre-select all
+                .interact()
+                .map_err(|e| {
+                    rtfs::runtime::error::RuntimeError::Generic(format!(
+                        "Selection cancelled: {}",
+                        e
+                    ))
+                })?;
 
         #[cfg(not(feature = "tui"))]
         return Err(rtfs::runtime::error::RuntimeError::Generic(
@@ -163,11 +168,12 @@ pub async fn discover_by_goal_with_options(
             // Fallback: ask user if they want to add a server manually
             println!();
             #[cfg(feature = "tui")]
-            let add_manual = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                .with_prompt("Do you know a specific server URL you want to add instead?")
-                .default(false)
-                .interact()
-                .unwrap_or(false);
+            let add_manual =
+                dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                    .with_prompt("Do you know a specific server URL you want to add instead?")
+                    .default(false)
+                    .interact()
+                    .unwrap_or(false);
 
             #[cfg(not(feature = "tui"))]
             let add_manual = false;
@@ -232,17 +238,18 @@ pub async fn discover_by_goal_with_options(
                 ];
 
                 #[cfg(feature = "tui")]
-                let selection = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                    .with_prompt("What would you like to do?")
-                    .items(&options)
-                    .default(0)
-                    .interact()
-                    .map_err(|e| {
-                        rtfs::runtime::error::RuntimeError::Generic(format!(
-                            "Selection error: {}",
-                            e
-                        ))
-                    })?;
+                let selection =
+                    dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                        .with_prompt("What would you like to do?")
+                        .items(&options)
+                        .default(0)
+                        .interact()
+                        .map_err(|e| {
+                            rtfs::runtime::error::RuntimeError::Generic(format!(
+                                "Selection error: {}",
+                                e
+                            ))
+                        })?;
 
                 #[cfg(not(feature = "tui"))]
                 let selection = 1; // Default to Skip in non-interactive
@@ -287,17 +294,18 @@ pub async fn discover_by_goal_with_options(
                 ];
 
                 #[cfg(feature = "tui")]
-                let selection = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                    .with_prompt("What would you like to do?")
-                    .items(&options)
-                    .default(0)
-                    .interact()
-                    .map_err(|e| {
-                        rtfs::runtime::error::RuntimeError::Generic(format!(
-                            "Selection error: {}",
-                            e
-                        ))
-                    })?;
+                let selection =
+                    dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                        .with_prompt("What would you like to do?")
+                        .items(&options)
+                        .default(0)
+                        .interact()
+                        .map_err(|e| {
+                            rtfs::runtime::error::RuntimeError::Generic(format!(
+                                "Selection error: {}",
+                                e
+                            ))
+                        })?;
 
                 #[cfg(not(feature = "tui"))]
                 let selection = 2; // Default to Skip in non-interactive
@@ -336,11 +344,12 @@ pub async fn discover_by_goal_with_options(
         // Ask if user wants to introspect tools
         println!();
         #[cfg(feature = "tui")]
-        let introspect = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
-            .with_prompt("Do you want to introspect queued servers to discover their tools?")
-            .default(true)
-            .interact()
-            .unwrap_or(false);
+        let introspect =
+            dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                .with_prompt("Do you want to introspect queued servers to discover their tools?")
+                .default(true)
+                .interact()
+                .unwrap_or(false);
 
         #[cfg(not(feature = "tui"))]
         let introspect = false; // Default to false in non-interactive
@@ -674,14 +683,18 @@ async fn handle_manual_url_entry(
         let url_type_idx: usize;
         #[cfg(feature = "tui")]
         {
-            url_type_idx = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                .with_prompt("What type of URL are you providing?")
-                .items(&url_types)
-                .default(0)
-                .interact()
-                .map_err(|e| {
-                    rtfs::runtime::error::RuntimeError::Generic(format!("Selection error: {}", e))
-                })?;
+            url_type_idx =
+                dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                    .with_prompt("What type of URL are you providing?")
+                    .items(&url_types)
+                    .default(0)
+                    .interact()
+                    .map_err(|e| {
+                        rtfs::runtime::error::RuntimeError::Generic(format!(
+                            "Selection error: {}",
+                            e
+                        ))
+                    })?;
         }
 
         #[cfg(not(feature = "tui"))]

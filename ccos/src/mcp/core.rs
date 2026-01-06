@@ -1320,8 +1320,8 @@ impl MCPDiscoveryService {
                         }
                     })
                     .unwrap_or_else(|_| {
-                        // Default to capabilities/discovered in workspace root
-                        get_workspace_root().join("capabilities/discovered")
+                        // Default to configured discovered capabilities path
+                        crate::utils::fs::get_configured_discovered_path()
                     })
             });
 
