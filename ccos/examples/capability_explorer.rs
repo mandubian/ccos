@@ -34,10 +34,10 @@ use ccos::capability_marketplace::mcp_discovery::MCPServerConfig;
 use ccos::capability_marketplace::types::{CapabilityManifest, ProviderType};
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::catalog::CatalogService;
+use ccos::config::types::AgentConfig;
 use ccos::mcp::core::MCPDiscoveryService;
 use ccos::mcp::types::DiscoveryOptions;
 use rtfs::ast::{Keyword, MapKey};
-use ccos::config::types::AgentConfig;
 use rtfs::runtime::values::Value;
 use tokio::sync::RwLock;
 
@@ -697,6 +697,7 @@ impl CapabilityExplorer {
             lazy_output_schemas: true,
             ignore_approved_files: false,
             force_refresh: false,
+            non_interactive: true,
         };
 
         // Use discover_and_export_tools to ensure RTFS files are created

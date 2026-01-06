@@ -123,6 +123,7 @@ async fn test_discovery_with_config(
         lazy_output_schemas: true,
         ignore_approved_files: false,
         force_refresh: false,
+            non_interactive: true,
     };
 
     println!("    🔍 Discovering tools (with rate limiting and retry)...");
@@ -210,6 +211,7 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
             lazy_output_schemas: true,
             ignore_approved_files: false,
             force_refresh: false,
+            non_interactive: true,
         };
 
         // Use discover_and_export_tools which handles registration and export automatically
@@ -277,6 +279,7 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
             lazy_output_schemas: true,
             ignore_approved_files: false,
             force_refresh: false,
+            non_interactive: true,
         };
 
         // First discovery (should hit the server)
@@ -331,6 +334,7 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
         let options_no_cache = DiscoveryOptions {
             use_cache: false,
             force_refresh: false,
+            non_interactive: true,
             ..options.clone()
         };
         let start3 = std::time::Instant::now();
@@ -384,6 +388,7 @@ async fn test_error_handling() -> Result<(), Box<dyn std::error::Error>> {
         lazy_output_schemas: true,
         ignore_approved_files: false,
         force_refresh: false,
+            non_interactive: true,
     };
 
     println!("  🔍 Testing discovery with invalid server (no retries)...");
@@ -463,6 +468,7 @@ async fn test_rate_limiting() -> Result<(), Box<dyn std::error::Error>> {
             lazy_output_schemas: true,
             ignore_approved_files: false,
             force_refresh: false,
+            non_interactive: true,
         };
 
         let start = std::time::Instant::now();
