@@ -1960,9 +1960,10 @@ fn get_capabilities_base_path() -> std::path::PathBuf {
             resolve_workspace_path(&config.storage.capabilities_dir)
         }
         Err(_) => {
-            // Fallback to root capabilities directory
-            use ccos::utils::fs::get_workspace_root;
-            get_workspace_root().join("capabilities")
+            let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| ccos::utils::fs::get_configured_capabilities_path());
+            storage_dir
         }
     }
 }

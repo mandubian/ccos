@@ -2708,9 +2708,7 @@ impl CapabilityMarketplace {
                 std::env::var("CCOS_CAPABILITY_STORAGE")
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|_| {
-                        crate::utils::fs::find_workspace_root()
-                            .join("capabilities")
-                            .join("discovered")
+                        crate::utils::fs::get_configured_capabilities_path().join("discovered")
                     })
             });
 

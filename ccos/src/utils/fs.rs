@@ -136,6 +136,62 @@ pub fn default_plan_archive_path() -> PathBuf {
     storage_path
 }
 
+/// Helper to load the agent configuration from the default location (config/agent_config.toml).
+fn load_agent_config() -> Option<crate::config::types::AgentConfig> {
+    let config_path = get_workspace_root().join("config/agent_config.toml");
+    if !config_path.exists() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(&config_path).ok()?;
+    toml::from_str(&content).ok()
+}
+
+/// Get the configured capabilities directory path.
+///
+/// Resolution order:
+/// 1. `CCOS_CAPABILITY_STORAGE` environment variable
+/// 2. Agent config `storage.capabilities_dir` (loaded from config file)
+/// 3. Fallback: `<workspace>/capabilities`
+pub fn get_configured_capabilities_path() -> PathBuf {
+    // Check environment variable first
+    if let Ok(path) = std::env::var("CCOS_CAPABILITY_STORAGE") {
+        let p = PathBuf::from(&path);
+        return if p.is_absolute() {
+            p
+        } else {
+            resolve_workspace_path(&path)
+        };
+    }
+
+    // Try to load config
+    if let Some(config) = load_agent_config() {
+        let caps_path = &config.storage.capabilities_dir;
+        return resolve_workspace_path(caps_path);
+    }
+
+    // Fallback to workspace/capabilities
+    get_workspace_root().join("capabilities")
+}
+
+/// Get the configured discovered capabilities path (capabilities_dir/discovered_subdir).
+pub fn get_configured_discovered_path() -> PathBuf {
+    if let Some(config) = load_agent_config() {
+        let base = resolve_workspace_path(&config.storage.capabilities_dir);
+        return base.join(&config.storage.discovered_subdir);
+    }
+    get_configured_capabilities_path().join("discovered")
+}
+
+/// Get the configured generated capabilities path (capabilities_dir/generated_subdir).
+pub fn get_configured_generated_path() -> PathBuf {
+    if let Some(config) = load_agent_config() {
+        let base = resolve_workspace_path(&config.storage.capabilities_dir);
+        return base.join(&config.storage.generated_subdir);
+    }
+    get_configured_capabilities_path().join("generated")
+}
+
 /// Legacy alias for backward compatibility. Prefer `get_workspace_root()`.
 #[deprecated(since = "0.2.0", note = "Use get_workspace_root() instead")]
 pub fn find_workspace_root() -> PathBuf {

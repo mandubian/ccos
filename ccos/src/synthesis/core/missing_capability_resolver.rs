@@ -29,7 +29,7 @@ use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;
 use crate::synthesis::runtime::server_trust::{
     create_default_trust_registry, ServerCandidate, ServerSelectionHandler, ServerTrustRegistry,
 };
-use crate::utils::fs::find_workspace_root;
+// removed unused find_workspace_root import
 use crate::utils::value_conversion;
 use rtfs::ast::TypeExpr;
 use rtfs::ast::{
@@ -1778,7 +1778,7 @@ impl MissingCapabilityResolver {
 
         let storage_root = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| find_workspace_root().join("capabilities"));
+            .unwrap_or_else(|_| crate::utils::fs::get_configured_capabilities_path());
         let storage_root = storage_root.join("discovered").join("mcp");
         std::fs::create_dir_all(&storage_root).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create MCP discovery directory: {}", e))
@@ -3834,7 +3834,7 @@ impl MissingCapabilityResolver {
     ) -> RuntimeResult<()> {
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| find_workspace_root().join("capabilities"));
+            .unwrap_or_else(|_| crate::utils::fs::get_configured_capabilities_path());
 
         std::fs::create_dir_all(&storage_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
@@ -3940,7 +3940,7 @@ impl MissingCapabilityResolver {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| {
                 // Find workspace root and use capabilities there
-                find_workspace_root().join("capabilities")
+                crate::utils::fs::get_configured_capabilities_path()
             });
 
         std::fs::create_dir_all(&storage_dir).map_err(|e| {
