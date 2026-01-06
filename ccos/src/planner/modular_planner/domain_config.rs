@@ -68,8 +68,16 @@ pub fn infer_domain(text: &str) -> Option<String> {
     let config = DOMAIN_CONFIG.read().ok()?;
 
     for domain in &config.domains {
-        if domain.keywords.iter().any(|kw| lower.contains(kw)) {
-            return Some(domain.name.clone());
+        for kw in &domain.keywords {
+            if lower.contains(kw) {
+                ccos_println!(
+                    "   🧩 [DomainConfig] Text '{}' matched domain '{}' via keyword '{}'",
+                    text,
+                    domain.name,
+                    kw
+                );
+                return Some(domain.name.clone());
+            }
         }
     }
 

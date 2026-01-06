@@ -30,9 +30,10 @@ impl CcosCatalogAdapter {
             id: hit.entry.id,
             name: hit.entry.name.unwrap_or_else(|| "unknown".to_string()),
             description: hit.entry.description.unwrap_or_default(),
-            input_schema: None,
-            domains: Vec::new(),
-            categories: Vec::new(),
+            input_schema: hit.entry.input_schema,
+            output_schema: hit.entry.output_schema,
+            domains: hit.entry.domains,
+            categories: hit.entry.categories,
         }
     }
 }
