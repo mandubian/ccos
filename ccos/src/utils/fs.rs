@@ -218,4 +218,29 @@ mod tests {
         assert_eq!(sanitize_filename("!@#$%^&*()"), "");
         assert_eq!(sanitize_filename("foo/bar/baz"), "foo_bar_baz");
     }
+
+    #[test]
+    fn test_get_configured_paths() {
+        // Test environment variable override
+        let test_path = "/tmp/ccos_test_caps";
+        std::env::set_var("CCOS_CAPABILITY_STORAGE", test_path);
+        assert_eq!(get_configured_capabilities_path(), PathBuf::from(test_path));
+        assert!(get_configured_discovered_path().starts_with(test_path));
+        assert!(get_configured_generated_path().starts_with(test_path));
+
+        // Clean up env var for next tests
+        std::env::remove_var("CCOS_CAPABILITY_STORAGE");
+
+        // Test default (should be workspace/capabilities)
+        let default_path = get_workspace_root().join("capabilities");
+        assert_eq!(get_configured_capabilities_path(), default_path);
+        assert_eq!(
+            get_configured_discovered_path(),
+            default_path.join("discovered")
+        );
+        assert_eq!(
+            get_configured_generated_path(),
+            default_path.join("generated")
+        );
+    }
 }
