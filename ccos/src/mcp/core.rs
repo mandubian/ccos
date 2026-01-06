@@ -1227,38 +1227,44 @@ impl MCPDiscoveryService {
 
         // Warn if capabilities already exist
         if !existing_capabilities.is_empty() || export_file_exists {
-            ccos_eprintln!();
-            ccos_eprintln!("⚠️  Warning: Some capabilities were already discovered:");
-            if !existing_capabilities.is_empty() {
-                ccos_eprintln!(
-                    "   • {} capability(ies) already registered in marketplace:",
-                    existing_capabilities.len()
+            if options.non_interactive {
+                ccos_println!(
+                    "🔍 Discovery found existing capabilities, proceeding in non-interactive mode."
                 );
-                for cap_id in &existing_capabilities {
-                    ccos_eprintln!("     - {}", cap_id);
+            } else {
+                ccos_eprintln!();
+                ccos_eprintln!("⚠️  Warning: Some capabilities were already discovered:");
+                if !existing_capabilities.is_empty() {
+                    ccos_eprintln!(
+                        "   • {} capability(ies) already registered in marketplace:",
+                        existing_capabilities.len()
+                    );
+                    for cap_id in &existing_capabilities {
+                        ccos_eprintln!("     - {}", cap_id);
+                    }
                 }
-            }
-            if export_file_exists {
-                ccos_eprintln!("   • RTFS export file already exists for this server");
-            }
-            ccos_eprintln!();
+                if export_file_exists {
+                    ccos_eprintln!("   • RTFS export file already exists for this server");
+                }
+                ccos_eprintln!();
 
-            // Ask for confirmation before proceeding
-            print!("Continue and overwrite? (y/n): ");
-            use std::io::{self, Write};
-            io::stdout()
-                .flush()
-                .map_err(|e| RuntimeError::Generic(format!("Failed to flush stdout: {}", e)))?;
+                // Ask for confirmation before proceeding
+                print!("Continue and overwrite? (y/n): ");
+                use std::io::{self, Write};
+                io::stdout()
+                    .flush()
+                    .map_err(|e| RuntimeError::Generic(format!("Failed to flush stdout: {}", e)))?;
 
-            let mut confirm = String::new();
-            io::stdin()
-                .read_line(&mut confirm)
-                .map_err(|e| RuntimeError::Generic(format!("Failed to read input: {}", e)))?;
-            let confirm = confirm.trim().to_lowercase();
+                let mut confirm = String::new();
+                io::stdin()
+                    .read_line(&mut confirm)
+                    .map_err(|e| RuntimeError::Generic(format!("Failed to read input: {}", e)))?;
+                let confirm = confirm.trim().to_lowercase();
 
-            if confirm != "y" && confirm != "yes" {
-                ccos_eprintln!("   Skipping registration and export.");
-                return Ok(manifests); // Return manifests but don't register/export
+                if confirm != "y" && confirm != "yes" {
+                    ccos_eprintln!("   Skipping registration and export.");
+                    return Ok(manifests); // Return manifests but don't register/export
+                }
             }
         }
 
