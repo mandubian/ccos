@@ -159,6 +159,7 @@ pub enum PlanBody {
 pub struct Action {
     pub action_id: ActionId,
     pub parent_action_id: Option<ActionId>,
+    pub session_id: Option<String>, // Session this action belongs to
     pub plan_id: PlanId,
     pub intent_id: IntentId,
     pub action_type: ActionType,
@@ -477,6 +478,7 @@ impl Action {
         Self {
             action_id: format!("action-{}", Uuid::new_v4()),
             parent_action_id: None,
+            session_id: None,
             plan_id,
             intent_id,
             action_type,
@@ -526,6 +528,11 @@ impl Action {
 
     pub fn with_result(mut self, result: ExecutionResult) -> Self {
         self.result = Some(result);
+        self
+    }
+
+    pub fn with_session(mut self, session_id: &str) -> Self {
+        self.session_id = Some(session_id.to_string());
         self
     }
 

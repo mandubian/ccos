@@ -733,6 +733,7 @@ impl CausalChain {
         let mut action = Action {
             action_id: uuid::Uuid::new_v4().to_string(),
             parent_action_id: None,
+            session_id: None,
             plan_id: "delegation".to_string(),
             intent_id: intent_id.clone(),
             action_type: ActionType::InternalStep,
