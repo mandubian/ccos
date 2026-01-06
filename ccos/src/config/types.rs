@@ -95,7 +95,7 @@ impl Default for AgentConfig {
 
 impl AgentConfig {
     /// Load agent configuration from environment (AGENT_CONFIG_PATH) or use default
-    /// 
+    ///
     /// Note: For full parsing support, use `ccos::config::parser::AgentConfigParser`
     /// or the CCOS CLI/config loading utilities.
     pub fn from_env() -> Self {
@@ -134,6 +134,9 @@ pub struct StoragePathsConfig {
     /// Directory for unified approval requests
     #[serde(default = "default_approvals_dir")]
     pub approvals_dir: String,
+    /// Subdirectory for sessions within storage root or capabilities_dir
+    #[serde(default = "default_sessions_subdir")]
+    pub sessions_subdir: String,
 }
 
 fn default_capabilities_dir() -> String {
@@ -160,6 +163,10 @@ fn default_approvals_dir() -> String {
     "storage/approvals".to_string()
 }
 
+fn default_sessions_subdir() -> String {
+    "sessions".to_string()
+}
+
 impl Default for StoragePathsConfig {
     fn default() -> Self {
         Self {
@@ -169,6 +176,7 @@ impl Default for StoragePathsConfig {
             servers_approved_subdir: default_servers_approved_subdir(),
             pending_synth_subdir: default_pending_synth_subdir(),
             approvals_dir: default_approvals_dir(),
+            sessions_subdir: default_sessions_subdir(),
         }
     }
 }

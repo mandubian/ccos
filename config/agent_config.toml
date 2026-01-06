@@ -54,16 +54,18 @@ enabled = false
 registry_paths = []
 
 # Storage paths configuration
-# All paths are relative to this config file's directory (config/)
+# All paths are relative to the workspace root (directory containing config/)
 [storage]
 # Base directory for all capabilities
-capabilities_dir = "../capabilities"
+capabilities_dir = "capabilities"
 # Subdirectory for discovered capabilities
 discovered_subdir = "discovered"
 # Subdirectory for generated/synthesized capabilities  
 generated_subdir = "generated"
 # Subdirectory for approved server capabilities
 servers_approved_subdir = "servers/approved"
+# Subdirectory for sessions
+sessions_subdir = "sessions"
 
 # LLM Validation Configuration
 # Controls schema and plan validation using LLM

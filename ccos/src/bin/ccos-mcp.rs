@@ -37,6 +37,193 @@ use ccos::synthesis::dialogue::capability_synthesizer::{CapabilitySynthesizer, S
 use ccos::utils::fs::get_workspace_root;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 
+// ============================================================================
+// RTFS Teaching Tools Constants
+// ============================================================================
+
+const GRAMMAR_OVERVIEW: &str = r#"RTFS Grammar Overview
+
+RTFS uses homoiconic s-expression syntax where code and data share the same representation.
+
+Core Syntax:
+- Lists: (func arg1 arg2) - code and function calls
+- Vectors: [1 2 3] - ordered sequences  
+- Maps: {:key "value"} - key-value associations
+- Comments: ;; single line or #| block |#
+
+Basic Pattern:
+(operator operand1 operand2 ...)
+
+;; Example
+(let [x 1]
+  (if (> x 0)
+    (call :io/println "positive")
+    "negative"))
+"#;
+
+const GRAMMAR_LITERALS: &str = r#"RTFS Literals
+
+;; --- Primitives ---
+42                    ; integer
+3.14                  ; float
+"hello world"         ; string (UTF-8, escapes: \n \t \")
+true                  ; boolean true
+false                 ; boolean false
+nil                   ; null/empty value
+
+;; --- Extended Types ---
+:keyword              ; keyword (self-evaluating, starts with :)
+:my.ns/qualified      ; namespaced keyword
+:com.acme:v1.0/api    ; versioned keyword
+2026-01-06T10:00:00Z  ; ISO 8601 timestamp
+resource://handle     ; resource handle
+"#;
+
+const GRAMMAR_COLLECTIONS: &str = r#"RTFS Collections
+
+;; --- Lists (Code) ---
+(+ 1 2 3)                  ; function call => 6
+(if true "yes" "no")       ; special form
+(first (1 2 3))            ; => 1
+(cons 0 (1 2))             ; => (0 1 2)
+
+;; --- Vectors (Data) ---
+[1 2 3 4]                  ; literal vector
+(vector 1 2 3)             ; construct vector
+(get [10 20 30] 1)         ; => 20 (indexed access)
+(conj [1 2] 3)             ; => [1 2 3]
+
+;; --- Maps ---
+{:name "Alice" :age 30}    ; map literal
+(get {:a 1 :b 2} :a)       ; => 1
+(assoc {:a 1} :b 2)        ; => {:a 1 :b 2}
+(keys {:a 1 :b 2})         ; => (:a :b)
+"#;
+
+const GRAMMAR_SPECIAL_FORMS: &str = r#"RTFS Special Forms
+
+;; --- Variable Binding ---
+(def pi 3.14159)           ; global definition
+
+(let [x 1 y (+ x 2)]       ; lexical scoping
+  (* x y))                 ; => 3
+
+;; defn in let body creates closures
+(let [factor 10]
+  (defn scale [x] (* x factor))  ; captures 'factor'
+  (scale 5))                     ; => 50
+
+;; --- Destructuring ---
+(let [[a b] [1 2]] (+ a b))                    ; vector => 3
+(let [{:keys [name age]} {:name "Al" :age 30}] 
+  name)                                         ; map => "Al"
+
+;; --- Control Flow ---
+(if (> x 0) "positive" "non-positive")
+
+(do                        ; sequencing
+  (call :io/println "step1")
+  (call :io/println "step2")
+  42)                      ; returns last expr
+
+(match value               ; pattern matching
+  0 "zero"
+  [x y] (str "pair: " x y)
+  {:name n} (str "hi " n)
+  _ "other")
+
+;; --- Functions ---
+(fn [x] (* x x))           ; anonymous function
+(defn add [x y] (+ x y))   ; named function
+(defn sum [& args]         ; variadic (rest args)
+  (reduce + 0 args))
+
+;; --- Host Calls ---
+(call :ccos.http/get {:url "..."})
+(call :ccos.state.kv/set "key" value)
+"#;
+
+const GRAMMAR_TYPES: &str = r#"RTFS Type Expressions
+
+;; --- Primitive Types ---
+:int :float :string :bool :nil :any
+
+;; --- Collection Types ---
+[:vector :int]                          ; vector of ints
+[:tuple :string :int]                   ; fixed tuple
+[:map [:name :string] [:age :int]]      ; map schema
+
+;; --- Function Types ---
+[:fn [:int :int] :int]                  ; (int, int) -> int
+[:fn [:string & :any] :string]          ; variadic
+
+;; --- Union & Optional ---
+[:union :int :string :nil]              ; one of these types
+:string?                                ; sugar for [:union :string :nil]
+
+;; --- Refined Types (constraints) ---
+[:and :int [:> 0]]                      ; positive int
+[:and :int [:>= 0] [:< 100]]            ; int in [0, 100)
+[:and :string [:min-length 1] [:max-length 255]]
+[:and :string [:matches-regex "^[a-z]+$"]]
+
+;; --- Schema Example ---
+[:map
+  [:id :string]
+  [:name :string]
+  [:age [:and :int [:>= 0]]]
+  [:email {:optional true} :string]]
+"#;
+
+const GRAMMAR_PURITY_EFFECTS: &str = r#"RTFS Purity and Effect Boundaries
+
+CRITICAL: RTFS is a PURE language. ALL side effects are delegated to the host.
+
+;; --- The Golden Rule ---
+;; Pure code: arithmetic, logic, data transformation - runs in RTFS
+;; Effectful code: I/O, network, state - MUST use (call ...) to delegate to host
+
+;; --- Pure (no call needed) ---
+(+ 1 2 3)                          ; arithmetic - pure
+(map inc [1 2 3])                  ; data transformation - pure
+(filter even? [1 2 3 4])           ; filtering - pure
+(let [x 10] (* x x))               ; binding and computation - pure
+
+;; --- Effectful (REQUIRES call) ---
+(call :ccos.io/println "Hello")    ; I/O - effect via host
+(call :ccos.http/get {:url "..."}) ; network - effect via host
+(call :ccos.fs/read-file "/path")  ; file system - effect via host
+(call :ccos.state.kv/get "key")    ; state access - effect via host
+
+;; --- Why Purity Matters ---
+;; 1. Deterministic: same inputs always give same outputs
+;; 2. Testable: pure functions can be tested in isolation
+;; 3. Safe: LLM-generated code can't accidentally cause side effects
+;; 4. Auditable: all effects go through CCOS governance pipeline
+
+;; --- Capabilities Declare Effects ---
+(capability "my-tool/fetch-data"
+  :effects [:io :network]          ; <-- declares what effects are used
+  :implementation
+  (fn [input]
+    (let [url (str "https://api.example.com/" (:id input))]
+      (call :ccos.http/get {:url url}))))  ; effect delegated to host
+
+;; --- Effect Categories ---
+;; :io       - console, logging, printing
+;; :network  - HTTP requests, API calls
+;; :fs       - file system read/write
+;; :state    - key-value store, database
+;; :time     - current time, timestamps
+;; :random   - random number generation
+
+;; --- Execution Model ---
+;; 1. RTFS evaluates pure code
+;; 2. When (call ...) encountered, YIELDS to host
+;; 3. Host performs effect, returns result
+;; 4. RTFS continues with pure code
+"#;
+
 /// Stub LLM provider for fallback mode when no real LLM is available
 struct StubLlmProvider;
 
@@ -316,17 +503,35 @@ fn slugify_goal(goal: &str) -> String {
 }
 
 /// Save a session to an RTFS file in the sessions directory
-pub fn save_session(session: &Session, sessions_dir: Option<&std::path::Path>) -> std::io::Result<std::path::PathBuf> {
-    let default_dir = std::path::PathBuf::from(".ccos/sessions");
-    let dir = sessions_dir.unwrap_or(&default_dir);
+pub fn save_session(
+    session: &Session,
+    sessions_dir: Option<&std::path::Path>,
+    filename: Option<&str>,
+) -> std::io::Result<std::path::PathBuf> {
+    let dir = match sessions_dir {
+        Some(d) => d.to_path_buf(),
+        None => ccos::utils::fs::get_configured_sessions_path(),
+    };
     
     // Create sessions directory if it doesn't exist
-    std::fs::create_dir_all(dir)?;
+    std::fs::create_dir_all(&dir)?;
     
-    // Generate human-readable filename
-    let goal_slug = slugify_goal(&session.goal);
-    let filename = format!("{}_{}.rtfs", session.id, goal_slug);
-    let filepath = dir.join(&filename);
+    // Generate filename: use override if provided, otherwise slugify goal
+    let actual_filename = match filename {
+        Some(f) => {
+            if f.ends_with(".rtfs") {
+                f.to_string()
+            } else {
+                format!("{}.rtfs", f)
+            }
+        }
+        None => {
+            let goal_slug = slugify_goal(&session.goal);
+            format!("{}_{}.rtfs", session.id, goal_slug)
+        }
+    };
+    
+    let filepath = dir.join(&actual_filename);
     
     // Generate and write RTFS content
     let content = session.to_rtfs_session();
@@ -404,10 +609,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             None
         }
     };
-    if let Some(ref config) = agent_config {
-        ccos::utils::fs::set_workspace_root(std::path::PathBuf::from(
-            &config.storage.capabilities_dir,
-        ));
+    if let Some(ref _config) = agent_config {
+        // Set workspace root based on config file location
+        // The config is at <workspace>/config/agent_config.toml, so workspace is parent of parent
+        // Must canonicalize first since args.config may be relative (e.g., "config/agent_config.toml")
+        let config_path = std::path::PathBuf::from(&args.config);
+        let abs_config_path = if config_path.is_absolute() {
+            config_path
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&config_path))
+                .unwrap_or(config_path)
+        };
+        
+        if let Some(config_parent) = abs_config_path.parent() {
+            if let Some(workspace_root) = config_parent.parent() {
+                if args.verbose {
+                    eprintln!("[ccos-mcp] Setting workspace root to: {}", workspace_root.display());
+                }
+                ccos::utils::fs::set_workspace_root(workspace_root.to_path_buf());
+            } else {
+                // Config is at top level, use parent
+                ccos::utils::fs::set_workspace_root(config_parent.to_path_buf());
+            }
+        }
     }
 
     // Populate marketplace with approved capabilities
@@ -1127,9 +1352,13 @@ fn register_ccos_tools(
                         "capability_id": cap.id,
                         "capability_name": cap.name,
                         "description": cap.description,
-                        "inputs": inputs,
-                        "outputs": [],
-                        "match_score": *score
+                        "input_schema": cap.input_schema,
+                        "inputs_template": inputs,
+                        "match_score": *score,
+                        "how_to_call": format!(
+                            "Call ccos_execute_capability with capability_id=\"{}\" and inputs={{...}}",
+                            cap.id
+                        )
                     }));
                     step_number += 1;
                 }
@@ -1146,34 +1375,60 @@ fn register_ccos_tools(
 
                 let ready_to_execute = feasibility >= 0.5 && !execution_steps.is_empty();
 
-                // Step 7: Build final output expression
-                let final_output = if step_number > 1 {
-                    format!("$step_{}", step_number - 1)
+                // Build explicit next action guidance for LLM
+                let first_step_id = execution_steps.first()
+                    .and_then(|s| s.get("capability_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
+                let next_action = if ready_to_execute {
+                    json!({
+                        "tool": "ccos_execute_capability",
+                        "capability_id": first_step_id,
+                        "instruction": format!(
+                            "Execute step 1 by calling ccos_execute_capability with capability_id='{}'. Check the input_schema in step 1 to know which parameters are required.",
+                            first_step_id
+                        )
+                    })
                 } else {
-                    "$result".to_string()
+                    json!({
+                        "tool": "ccos_discover_capabilities",
+                        "instruction": "No suitable capabilities found. Search for alternatives."
+                    })
                 };
 
                 Ok(json!({
                     "success": true,
                     "goal": goal,
                     "feasibility": feasibility,
+                    "ready_to_execute": ready_to_execute,
+                    
+                    // EXPLICIT GUIDANCE FOR LLM
+                    "important": "The capabilities below are CCOS tools you can execute NOW using ccos_execute_capability. Do NOT search for other tools - use these capability_id values directly.",
+                    "next_action": next_action,
+                    
                     "execution_plan": {
                         "steps": execution_steps,
-                        "final_output": final_output,
-                        "step_count": execution_steps.len()
+                        "step_count": execution_steps.len(),
+                        "workflow": "For each step: call ccos_execute_capability with the capability_id and inputs based on input_schema"
                     },
+                    
                     "analysis": {
                         "primary_action": analysis.primary_action,
                         "target_object": analysis.target_object,
                         "domain_keywords": analysis.domain_keywords,
                         "confidence": analysis.confidence
                     },
-                    "ready_to_execute": ready_to_execute,
-                    "usage_hint": if ready_to_execute {
-                        "Use ccos_start_session, then call ccos_execute_capability for each step in order"
-                    } else {
-                        "Some capabilities may be missing. Use ccos_discover_capabilities to find alternatives"
-                    }
+                    
+                    "execution_instructions": [
+                        "1. Call ccos_execute_capability with the first step's capability_id",
+                        format!("2. Use capability_id='{}' and build inputs from input_schema", first_step_id),
+                        "3. A session will be auto-created - note the session_id in the response",
+                        "4. For subsequent steps, include session_id to build a complete RTFS plan",
+                        "5. After all steps complete, call ccos_get_session_plan to get the full RTFS code"
+                    ],
+                    
+                    "session_note": "Sessions track your execution and build an RTFS plan. Either: (A) let sessions auto-create, or (B) call ccos_start_session first for explicit control. Always pass session_id to subsequent steps."
                 }))
             })
         }),
@@ -1314,6 +1569,7 @@ fn register_ccos_tools(
                 let action = match cc.try_lock() {
                     Ok(mut chain) => {
                         match chain.log_capability_call(
+                            session_id,
                             &plan_id,
                             &intent_id,
                             &capability_id.to_string(),
@@ -1380,30 +1636,55 @@ fn register_ccos_tools(
                     }
                 }
 
-                // Record in session if provided
-                let step_info = if let Some(sid) = session_id {
+                // AUTO-SESSION: Create session automatically if not provided
+                // This ensures every execution is tracked and LLM learns about sessions
+                let (effective_session_id, session_was_created) = if let Some(sid) = session_id {
+                    (sid.to_string(), false)
+                } else {
+                    // Auto-create a session for this capability execution
                     let mut store = ss.write().await;
-                    if let Some(session) = store.get_mut(sid) {
+                    let auto_session = Session::new(&format!("Auto-session for {}", capability_id));
+                    let new_sid = auto_session.id.clone();
+                    store.insert(new_sid.clone(), auto_session);
+                    (new_sid, true)
+                };
+
+                // Record in session
+                let step_info = {
+                    let mut store = ss.write().await;
+                    if let Some(session) = store.get_mut(&effective_session_id) {
                         let step = session.add_step(capability_id, inputs.clone(), result.clone(), success);
+                        let rtfs_plan = session.to_rtfs_plan();
                         Some(json!({
+                            "session_id": effective_session_id,
                             "step_number": step.step_number,
-                            "session_id": sid
+                            "total_steps": session.steps.len(),
+                            "rtfs_plan_so_far": rtfs_plan,
+                            "session_was_auto_created": session_was_created
                         }))
                     } else {
                         None
                     }
-                } else {
-                    None
                 };
 
+                // Build response with session guidance
+                let session_guidance = if session_was_created {
+                    "A session was auto-created for this execution. Use the returned session_id in subsequent ccos_execute_capability calls to build a multi-step RTFS plan. Call ccos_get_session_plan when done to get the complete RTFS code."
+                } else {
+                    "Step recorded to session. Continue with next step or call ccos_get_session_plan to get the complete RTFS code."
+                };
 
                 Ok(json!({
                     "success": success,
                     "result": result,
                     "capability_id": capability_id,
                     "rtfs_equivalent": rtfs_equivalent,
-                    "rtfs_tip": "In RTFS, capabilities are called using: (call \"capability.id\" :param value)",
-                    "session": step_info
+                    "session": step_info,
+                    "session_guidance": session_guidance,
+                    "next_steps": [
+                        "To continue: call ccos_execute_capability with same session_id",
+                        "To get full plan: call ccos_get_session_plan with session_id"
+                    ]
                 }))
             })
         }),
@@ -1466,9 +1747,38 @@ fn register_ccos_tools(
                         "created_at": session.created_at
                     }))
                 } else {
+                    // Session not in memory - try to find on disk
+                    let sessions_dir = ccos::utils::fs::get_configured_sessions_path();
+                    
+                    // Look for session file matching the ID
+                    let mut found_file = None;
+                    if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
+                        for entry in entries.flatten() {
+                            let filename = entry.file_name().to_string_lossy().to_string();
+                            if filename.starts_with(session_id) && filename.ends_with(".rtfs") {
+                                found_file = Some(entry.path());
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if let Some(filepath) = found_file {
+                        if let Ok(content) = std::fs::read_to_string(&filepath) {
+                            return Ok(json!({
+                                "success": true,
+                                "session_id": session_id,
+                                "loaded_from_disk": true,
+                                "filepath": filepath.display().to_string(),
+                                "rtfs_content": content,
+                                "note": "Session was loaded from saved file. In-memory session was not found (server may have restarted)."
+                            }));
+                        }
+                    }
+                    
                     Ok(json!({
                         "success": false,
-                        "error": format!("Session '{}' not found", session_id)
+                        "error": format!("Session '{}' not found in memory or on disk at {}", session_id, sessions_dir.display()),
+                        "hint": "Sessions are stored in memory during execution. If the server restarted, the session was lost. Check if a .rtfs file exists in the sessions directory."
                     }))
                 }
             })
@@ -1515,21 +1825,13 @@ fn register_ccos_tools(
                     let rtfs_plan = session.to_rtfs_plan();
                     let steps_count = session.steps.len();
 
-                    // Optionally save to file
-                    let saved_path = if let Some(filename) = save_as {
-                        let path = std::path::Path::new(filename);
-                        match std::fs::write(path, &rtfs_plan) {
-                            Ok(_) => Some(filename.to_string()),
-                            Err(e) => {
-                                return Ok(json!({
-                                    "success": false,
-                                    "error": format!("Failed to save plan: {}", e),
-                                    "rtfs_plan": rtfs_plan
-                                }));
-                            }
+                    // Always save session to file by default
+                    let saved_path = match save_session(&session, None, save_as) {
+                        Ok(p) => Some(p.to_string_lossy().to_string()),
+                        Err(e) => {
+                            eprintln!("[ccos-mcp] Failed to auto-save session: {}", e);
+                            None
                         }
-                    } else {
-                        None
                     };
 
                     Ok(json!({
@@ -1749,7 +2051,7 @@ fn register_ccos_tools(
             "required": ["secret_names"]
         }),
         Box::new(move |params| {
-            let aq = aq_check.clone();
+            let _aq = aq_check.clone();
             Box::pin(async move {
                 let secret_names: Vec<String> = params.get("secret_names")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -2070,6 +2372,477 @@ fn register_ccos_tools(
             })
         }),
     );
+
+    // ============================================================================
+    // RTFS Teaching Tools
+    // ============================================================================
+
+    // rtfs_get_grammar - Get RTFS grammar reference by category
+    server.register_tool(
+        "rtfs_get_grammar",
+        "Get RTFS language grammar reference. Returns syntax rules by category.",
+        json!({
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": ["overview", "literals", "collections", "special_forms", "types", "purity_effects", "all"],
+                    "default": "overview",
+                    "description": "Grammar category to retrieve"
+                }
+            }
+        }),
+        Box::new(move |params| {
+            Box::pin(async move {
+                let category = params.get("category")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("overview");
+
+                let content = match category {
+                    "overview" => GRAMMAR_OVERVIEW,
+                    "literals" => GRAMMAR_LITERALS,
+                    "collections" => GRAMMAR_COLLECTIONS,
+                    "special_forms" => GRAMMAR_SPECIAL_FORMS,
+                    "types" => GRAMMAR_TYPES,
+                    "purity_effects" => GRAMMAR_PURITY_EFFECTS,
+                    "all" => &format!("{}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}",
+                        GRAMMAR_OVERVIEW, GRAMMAR_LITERALS, GRAMMAR_COLLECTIONS,
+                        GRAMMAR_SPECIAL_FORMS, GRAMMAR_TYPES, GRAMMAR_PURITY_EFFECTS),
+                    _ => GRAMMAR_OVERVIEW,
+                };
+
+                Ok(json!({
+                    "category": category,
+                    "content": content
+                }))
+            })
+        }),
+    );
+
+    // rtfs_get_samples - Get example RTFS code snippets by category
+    server.register_tool(
+        "rtfs_get_samples",
+        "Get example RTFS code snippets by category",
+        json!({
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": ["basic", "bindings", "control_flow", "functions", "capabilities", "types", "all"],
+                    "default": "basic",
+                    "description": "Sample category to retrieve"
+                }
+            }
+        }),
+        Box::new(move |params| {
+            Box::pin(async move {
+                let category = params.get("category")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("basic");
+
+                let samples = get_samples_for_category(category);
+
+                Ok(json!({
+                    "category": category,
+                    "samples": samples
+                }))
+            })
+        }),
+    );
+
+    // rtfs_compile - Parse/compile RTFS code and return result or detailed errors
+    server.register_tool(
+        "rtfs_compile",
+        "Compile RTFS code. Returns success info or detailed parse errors.",
+        json!({
+            "type": "object",
+            "properties": {
+                "code": { "type": "string", "description": "RTFS source code" },
+                "show_ast": { "type": "boolean", "default": false }
+            },
+            "required": ["code"]
+        }),
+        Box::new(move |params| {
+            Box::pin(async move {
+                let code = params.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                let show_ast = params.get("show_ast").and_then(|v| v.as_bool()).unwrap_or(false);
+
+                if code.is_empty() {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "No code provided"
+                    }));
+                }
+
+                match rtfs::parser::parse(code) {
+                    Ok(ast) => {
+                        let mut result = json!({
+                            "success": true,
+                            "message": "Compilation successful",
+                            "expression_count": ast.len()
+                        });
+
+                        if show_ast {
+                            result["ast"] = json!(format!("{:#?}", ast));
+                        }
+
+                        Ok(result)
+                    }
+                    Err(parse_error) => {
+                        Ok(json!({
+                            "success": false,
+                            "error": {
+                                "message": format!("{:?}", parse_error)
+                            },
+                            "code_preview": code.chars().take(100).collect::<String>()
+                        }))
+                    }
+                }
+            })
+        }),
+    );
+
+    // rtfs_explain_error - Explain error messages in plain English with common causes
+    server.register_tool(
+        "rtfs_explain_error",
+        "Explain an RTFS error message in plain English with common causes",
+        json!({
+            "type": "object",
+            "properties": {
+                "error_message": { "type": "string", "description": "The error message to explain" },
+                "code": { "type": "string", "description": "The code that produced error (optional)" }
+            },
+            "required": ["error_message"]
+        }),
+        Box::new(move |params| {
+            Box::pin(async move {
+                let error_msg = params.get("error_message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let code = params.get("code").and_then(|v| v.as_str());
+
+                Ok(json!(explain_rtfs_error(error_msg, code)))
+            })
+        }),
+    );
+
+    // rtfs_repair - Suggest repairs for broken RTFS code using heuristics
+    server.register_tool(
+        "rtfs_repair",
+        "Suggest repairs for broken RTFS code",
+        json!({
+            "type": "object",
+            "properties": {
+                "code": { "type": "string", "description": "Broken RTFS code" },
+                "error_message": { "type": "string", "description": "Optional error message from compilation" }
+            },
+            "required": ["code"]
+        }),
+        Box::new(move |params| {
+            Box::pin(async move {
+                let code = params.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                let _error = params.get("error_message").and_then(|v| v.as_str());
+
+                let suggestions = repair_rtfs_code(code);
+
+                Ok(json!(suggestions))
+            })
+        }),
+    );
+}
+
+/// Get RTFS code samples for a given category
+fn get_samples_for_category(category: &str) -> Vec<serde_json::Value> {
+    match category {
+        "basic" => vec![
+            json!({
+                "name": "Arithmetic",
+                "code": "(+ 1 2 3)",
+                "result": "6",
+                "explanation": "Add numbers together"
+            }),
+            json!({
+                "name": "String concatenation",
+                "code": "(str \"Hello, \" \"World!\")",
+                "result": "\"Hello, World!\"",
+                "explanation": "Concatenate strings"
+            }),
+            json!({
+                "name": "Vector creation",
+                "code": "[1 2 3 4 5]",
+                "result": "[1, 2, 3, 4, 5]",
+                "explanation": "Create a vector literal"
+            }),
+        ],
+        "bindings" => vec![
+            json!({
+                "name": "Simple let binding",
+                "code": "(let [x 5] x)",
+                "result": "5",
+                "explanation": "Bind x to 5, return x"
+            }),
+            json!({
+                "name": "Multiple bindings",
+                "code": "(let [x 5 y 10] (+ x y))",
+                "result": "15",
+                "explanation": "Bind multiple values, use in expression"
+            }),
+            json!({
+                "name": "Destructuring",
+                "code": "(let [{:keys [name age]} {:name \"Alice\" :age 30}] name)",
+                "result": "\"Alice\"",
+                "explanation": "Extract values from map using destructuring"
+            }),
+        ],
+        "control_flow" => vec![
+            json!({
+                "name": "If expression",
+                "code": "(if (> 5 3) \"yes\" \"no\")",
+                "result": "\"yes\"",
+                "explanation": "Conditional expression"
+            }),
+            json!({
+                "name": "Pattern matching",
+                "code": "(match 42\n  0 \"zero\"\n  n (str \"number: \" n))",
+                "result": "\"number: 42\"",
+                "explanation": "Match value against patterns"
+            }),
+        ],
+        "functions" => vec![
+            json!({
+                "name": "Anonymous function",
+                "code": "((fn [x] (* x x)) 5)",
+                "result": "25",
+                "explanation": "Define and immediately call anonymous function"
+            }),
+            json!({
+                "name": "Named function",
+                "code": "(defn greet [name]\n  (str \"Hello, \" name))\n(greet \"World\")",
+                "result": "\"Hello, World\"",
+                "explanation": "Define named function, then call it"
+            }),
+            json!({
+                "name": "Higher-order function",
+                "code": "(map (fn [x] (* x 2)) [1 2 3])",
+                "result": "[2, 4, 6]",
+                "explanation": "Apply function to each element"
+            }),
+        ],
+        "capabilities" => vec![
+            json!({
+                "name": "Call capability",
+                "code": "(call :ccos.http/get {:url \"https://api.example.com\"})",
+                "explanation": "Call CCOS HTTP capability"
+            }),
+            json!({
+                "name": "Capability definition",
+                "code": "(capability \"my-tool/greet\"\n  :description \"Greet a user\"\n  :input-schema [:map [:name :string]]\n  :output-schema :string\n  :implementation\n  (fn [input]\n    (str \"Hello, \" (:name input))))",
+                "explanation": "Define a new capability with schema"
+            }),
+        ],
+        "types" => vec![
+            json!({
+                "name": "Type annotation",
+                "code": "(defn add [x :int y :int] :int\n  (+ x y))",
+                "explanation": "Function with type annotations"
+            }),
+            json!({
+                "name": "Complex schema",
+                "code": "[:map\n  [:name :string]\n  [:age [:and :int [:>= 0]]]\n  [:email {:optional true} :string]]",
+                "explanation": "Map schema with optional field and refined type"
+            }),
+        ],
+        "all" | _ => {
+            let mut all = vec![];
+            for cat in ["basic", "bindings", "control_flow", "functions", "capabilities", "types"] {
+                all.extend(get_samples_for_category(cat));
+            }
+            all
+        }
+    }
+}
+
+/// Explain RTFS error messages in plain English
+fn explain_rtfs_error(error: &str, code: Option<&str>) -> serde_json::Value {
+    let error_lower = error.to_lowercase();
+
+    let (explanation, common_causes, fix_suggestions) = if error_lower.contains("expected") && error_lower.contains("expression") {
+        (
+            "The parser expected an expression but found something else.",
+            vec![
+                "Unbalanced parentheses - missing opening or closing paren",
+                "Empty list without proper content",
+                "Incomplete expression at end of input"
+            ],
+            vec![
+                "Check that all ( have matching )",
+                "Ensure lists have at least an operator: (+ 1 2) not ()",
+                "Complete any unfinished expressions"
+            ]
+        )
+    } else if error_lower.contains("unexpected") && error_lower.contains("token") {
+        (
+            "The parser encountered a token it didn't expect in this position.",
+            vec![
+                "Wrong syntax for the construct being used",
+                "Missing required elements",
+                "Extra tokens that don't belong"
+            ],
+            vec![
+                "Review the syntax for the form you're using",
+                "Check for typos in keywords",
+                "Ensure proper ordering of elements"
+            ]
+        )
+    } else if error_lower.contains("unbalanced") || error_lower.contains("unclosed") {
+        (
+            "There are mismatched brackets in the code.",
+            vec![
+                "Missing closing ) ] or }",
+                "Extra opening ( [ or {",
+                "Brackets of wrong type used"
+            ],
+            vec![
+                "Count opening and closing brackets",
+                "Use an editor with bracket matching",
+                "Remember: () for calls, [] for vectors/bindings, {} for maps"
+            ]
+        )
+    } else if error_lower.contains("undefined") || error_lower.contains("not found") {
+        (
+            "A symbol or function was referenced but not defined.",
+            vec![
+                "Typo in function or variable name",
+                "Using a variable before it's defined",
+                "Missing import or require"
+            ],
+            vec![
+                "Check spelling of the symbol",
+                "Ensure definitions come before usage",
+                "Use :keys in let bindings for map destructuring"
+            ]
+        )
+    } else {
+        (
+            "This error indicates a problem with the RTFS code.",
+            vec!["Syntax error", "Semantic error"],
+            vec![
+                "Review the code structure",
+                "Compare with working examples",
+                "Use rtfs_get_samples to see correct syntax"
+            ]
+        )
+    };
+
+    let mut result = json!({
+        "error": error,
+        "explanation": explanation,
+        "common_causes": common_causes,
+        "suggestions": fix_suggestions
+    });
+
+    if let Some(code) = code {
+        let open_parens = code.matches('(').count();
+        let close_parens = code.matches(')').count();
+        let open_brackets = code.matches('[').count();
+        let close_brackets = code.matches(']').count();
+        let open_braces = code.matches('{').count();
+        let close_braces = code.matches('}').count();
+
+        let mut issues = vec![];
+        if open_parens != close_parens {
+            issues.push(format!("Paren mismatch: {} '(' vs {} ')'", open_parens, close_parens));
+        }
+        if open_brackets != close_brackets {
+            issues.push(format!("Bracket mismatch: {} '[' vs {} ']'", open_brackets, close_brackets));
+        }
+        if open_braces != close_braces {
+            issues.push(format!("Brace mismatch: {} '{{' vs {} '}}'", open_braces, close_braces));
+        }
+
+        if !issues.is_empty() {
+            result["bracket_analysis"] = json!(issues);
+        }
+    }
+
+    result
+}
+
+/// Suggest repairs for broken RTFS code using heuristics
+fn repair_rtfs_code(code: &str) -> serde_json::Value {
+    let mut suggestions: Vec<serde_json::Value> = vec![];
+
+    let open_parens = code.matches('(').count();
+    let close_parens = code.matches(')').count();
+
+    if open_parens > close_parens {
+        let missing = open_parens - close_parens;
+        let repaired = format!("{}{}", code, ")".repeat(missing));
+        suggestions.push(json!({
+            "type": "bracket_fix",
+            "description": format!("Add {} missing closing parenthesis", missing),
+            "repaired_code": repaired,
+            "confidence": "high"
+        }));
+    } else if close_parens > open_parens {
+        let extra = close_parens - open_parens;
+        suggestions.push(json!({
+            "type": "bracket_fix",
+            "description": format!("Remove {} extra closing parenthesis or add opening", extra),
+            "confidence": "medium"
+        }));
+    }
+
+    let typo_fixes = vec![
+        ("defun", "defn"),
+        ("lambda", "fn"),
+        ("define", "def"),
+        ("cond", "match"),
+        ("null", "nil"),
+        ("True", "true"),
+        ("False", "false"),
+        ("None", "nil"),
+    ];
+
+    for (wrong, right) in typo_fixes {
+        if code.contains(wrong) {
+            suggestions.push(json!({
+                "type": "typo_fix",
+                "description": format!("Replace '{}' with '{}'", wrong, right),
+                "repaired_code": code.replace(wrong, right),
+                "confidence": "high"
+            }));
+        }
+    }
+
+    if code.contains("let ") && !code.contains("let [") {
+        suggestions.push(json!({
+            "type": "syntax_fix",
+            "description": "let requires bindings in square brackets: (let [x 1] ...)",
+            "example": "(let [x 1 y 2] (+ x y))",
+            "confidence": "medium"
+        }));
+    }
+
+    let best_repair = if let Some(first) = suggestions.first() {
+        first.get("repaired_code").and_then(|v| v.as_str()).map(String::from)
+    } else {
+        None
+    };
+
+    let repair_valid = if let Some(ref repair) = best_repair {
+        rtfs::parser::parse(repair).is_ok()
+    } else {
+        false
+    };
+
+    json!({
+        "original_code": code,
+        "suggestions": suggestions,
+        "best_repair": best_repair,
+        "repair_valid": repair_valid,
+        "note": "Suggestions are heuristic-based. Review before using."
+    })
 }
 
 /// Calculate a simple match score between intent and capability

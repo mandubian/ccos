@@ -587,6 +587,18 @@ async fn handle_api_approvals_list(
                         "risk_reasons": risk_reasons
                     }),
                 ),
+                ApprovalCategory::SecretRequired {
+                    capability_id,
+                    secret_type,
+                    description,
+                } => (
+                    "SecretRequired",
+                    json!({
+                        "capability_id": capability_id,
+                        "secret_type": secret_type,
+                        "description": description
+                    }),
+                ),
             };
             json!({
                 "id": req.id,
@@ -789,6 +801,11 @@ fn generate_approvals_html(pending: &[ApprovalRequest]) -> String {
                          format!("<p><strong>Preview:</strong> {}...</p><p><strong>Risks:</strong> {}</p>", 
                                  prompt.chars().take(100).collect::<String>(), risk_reasons.join(", ")),
                          false)
+                    }
+                    ApprovalCategory::SecretRequired { capability_id, secret_type, description } => {
+                        (format!("🔑 Secret Required: {}", capability_id),
+                         format!("<p><strong>Type:</strong> {}</p><p><strong>Description:</strong> {}</p>", secret_type, description),
+                         true)
                     }
                 };
 
