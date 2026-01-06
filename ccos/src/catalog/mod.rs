@@ -132,6 +132,8 @@ pub struct CatalogEntry {
     pub domains: Vec<String>,
     /// Categories describing operation type (e.g., "crud", "search", "transform")
     pub categories: Vec<String>,
+    pub input_schema: Option<String>,
+    pub output_schema: Option<String>,
 }
 
 impl CatalogEntry {
@@ -199,6 +201,16 @@ impl CatalogEntry {
             embedding,
             domains: manifest.domains.clone(),
             categories: manifest.categories.clone(),
+            input_schema: manifest
+                .input_schema
+                .as_ref()
+                .and_then(|s| s.to_json().ok())
+                .map(|v| v.to_string()),
+            output_schema: manifest
+                .output_schema
+                .as_ref()
+                .and_then(|s| s.to_json().ok())
+                .map(|v| v.to_string()),
         }
     }
 
@@ -257,6 +269,8 @@ impl CatalogEntry {
             embedding,
             domains: Vec::new(),    // Plans don't have domains yet
             categories: Vec::new(), // Plans don't have categories yet
+            input_schema: plan.input_schema.as_ref().map(|v| v.to_string()),
+            output_schema: plan.output_schema.as_ref().map(|v| v.to_string()),
         }
     }
 }

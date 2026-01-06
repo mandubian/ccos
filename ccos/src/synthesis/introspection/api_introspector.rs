@@ -565,8 +565,10 @@ impl APIIntrospector {
         if let Some(type_str) = schema.get("type").and_then(|t| t.as_str()) {
             match type_str {
                 "string" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
-                "integer" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Int)),
-                "number" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Float)),
+                "integer" | "long" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Int)),
+                "number" | "decimal" | "double" | "float" => {
+                    Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Float))
+                }
                 "boolean" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Bool)),
                 "array" => {
                     let element_type = if let Some(items) = schema.get("items") {
@@ -728,6 +730,24 @@ impl APIIntrospector {
             }
             if let Some(rpd) = rate_limits.requests_per_day {
                 metadata.insert("rate_limit_per_day".to_string(), rpd.to_string());
+            }
+        }
+
+        if introspection.auth_requirements.required {
+            metadata.insert(
+                "auth_type".to_string(),
+                introspection.auth_requirements.auth_type.clone(),
+            );
+            metadata.insert(
+                "auth_location".to_string(),
+                introspection.auth_requirements.auth_location.clone(),
+            );
+            metadata.insert(
+                "auth_param_name".to_string(),
+                introspection.auth_requirements.auth_param_name.clone(),
+            );
+            if let Some(env) = &introspection.auth_requirements.env_var_name {
+                metadata.insert("auth_env_var".to_string(), env.clone());
             }
         }
 
@@ -1228,6 +1248,36 @@ impl APIIntrospector {
             .map(|s| s.as_str())
             .unwrap_or("API");
 
+        // Extract auth metadata
+        let auth_block = if let (Some(auth_type), Some(env_var)) = (
+            capability.metadata.get("auth_type"),
+            capability.metadata.get("auth_env_var"),
+        ) {
+            let location = capability
+                .metadata
+                .get("auth_location")
+                .map(|s| s.as_str())
+                .unwrap_or("header");
+            let param = capability
+                .metadata
+                .get("auth_param_name")
+                .map(|s| s.as_str())
+                .unwrap_or("Authorization");
+
+            format!(
+                r#"
+      :auth {{
+        :type "{}"
+        :location "{}"
+        :param_name "{}"
+        :env_var "{}"
+      }}"#,
+                auth_type, location, param, env_var
+            )
+        } else {
+            String::new()
+        };
+
         format!(
             r#";; Capability: {}
 ;; Generated from API introspection
@@ -1245,7 +1295,7 @@ impl APIIntrospector {
     :openapi {{
       :base_url "{}"
       :endpoint_method "{}"
-      :endpoint_path "{}"
+      :endpoint_path "{}"{}
     }}
     :discovery {{
       :method "api_introspection"
@@ -1274,6 +1324,7 @@ impl APIIntrospector {
             base_url,
             endpoint_method,
             endpoint_path,
+            auth_block,
             base_url,
             chrono::Utc::now().to_rfc3339(),
             input_schema_str,
