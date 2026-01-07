@@ -290,9 +290,14 @@ impl APIIntrospector {
 
         // Parse JSON or YAML
         if spec_url.ends_with(".yaml") || spec_url.ends_with(".yml") {
-            // For now, assume JSON - in production you'd use a YAML parser
-            serde_json::from_str(&spec_text)
-                .map_err(|e| RuntimeError::Generic(format!("Failed to parse OpenAPI spec: {}", e)))
+            // Parse as YAML first, then convert to serde_json::Value for uniform handling
+            let yaml_value: serde_yaml::Value = serde_yaml::from_str(&spec_text).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to parse YAML OpenAPI spec: {}", e))
+            })?;
+            // Convert YAML value to JSON value
+            serde_json::to_value(yaml_value).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to convert YAML to JSON: {}", e))
+            })
         } else {
             serde_json::from_str(&spec_text)
                 .map_err(|e| RuntimeError::Generic(format!("Failed to parse OpenAPI spec: {}", e)))
@@ -455,9 +460,26 @@ impl APIIntrospector {
         // Extract request body
         if let Some(request_body) = operation.get("requestBody") {
             if let Some(content) = request_body.get("content") {
-                if let Some(json_content) = content.get("application/json") {
-                    if let Some(schema) = json_content.get("schema") {
-                        let body_type = self.json_schema_to_rtfs_type(schema)?;
+                // Try application/json first, then application/x-www-form-urlencoded
+                let schema = content
+                    .get("application/json")
+                    .and_then(|c| c.get("schema"))
+                    .or_else(|| {
+                        content
+                            .get("application/x-www-form-urlencoded")
+                            .and_then(|c| c.get("schema"))
+                    });
+
+                if let Some(schema) = schema {
+                    let body_type = self.json_schema_to_rtfs_type(schema)?;
+
+                    // For form-urlencoded, extract properties directly into map entries
+                    // instead of wrapping in a "body" key
+                    if let TypeExpr::Map { entries, .. } = body_type {
+                        for entry in entries {
+                            map_entries.push(entry);
+                        }
+                    } else {
                         map_entries.push(MapTypeEntry {
                             key: Keyword("body".to_string()),
                             value_type: Box::new(body_type),

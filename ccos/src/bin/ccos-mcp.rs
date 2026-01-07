@@ -636,9 +636,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // Populate marketplace with approved capabilities
-    load_capabilities_from_dir(&marketplace, "capabilities/servers/approved", args.verbose).await;
-    // Load core capabilities
-    load_capabilities_from_dir(&marketplace, "capabilities/core", args.verbose).await;
+    let _ = marketplace.import_capabilities_from_rtfs_dir_recursive(ccos::utils::fs::get_workspace_root().join("capabilities/servers/approved")).await;
+    let _ = marketplace.import_capabilities_from_rtfs_dir_recursive(ccos::utils::fs::get_workspace_root().join("capabilities/core")).await;
 
     // Create discovery service
     let discovery_service = if let Some(config) = &agent_config {
@@ -743,7 +742,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let session_store = create_session_store();
     register_ccos_tools(
         &mut server,
-        marketplace,
+        marketplace.clone(),
         causal_chain,
         discovery_service,
         session_store,
@@ -762,7 +761,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 port: args.port,
                 keep_alive_secs: 30,
             };
-            run_http_transport_with_approvals(server, config, Some(approval_queue)).await?;
+            run_http_transport_with_approvals(server, config, Some(approval_queue), Some(marketplace.clone())).await?;
         }
         Transport::Stdio => {
             if args.verbose {
@@ -902,6 +901,263 @@ fn register_ccos_tools(
             })
         }),
     );
+
+    // ccos_suggest_apis - Pure LLM suggestions for external APIs (no auto-approval)
+    // Returns suggestions for user selection, then user can approve and introspect
+    let ds_suggest = discovery_service.clone();
+    server.register_tool(
+        "ccos_suggest_apis",
+        "Ask LLM to suggest well-known APIs for a given goal. Returns suggestions without auto-queueing approvals - agent should present options to user, then call ccos_introspect_server on selected API.",
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What you want to accomplish (e.g., 'send SMS notifications', 'get weather data')"
+                }
+            },
+            "required": ["query"]
+        }),
+        Box::new(move |params| {
+            let ds = ds_suggest.clone();
+            Box::pin(async move {
+                let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
+
+                if query.is_empty() {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "query is required"
+                    }));
+                }
+
+                eprintln!("[CCOS] Suggesting APIs for: '{}'...", query);
+
+                // Use LLM to suggest APIs (no URL hint = pure LLM suggestions)
+                let suggestions = match ds.search_external_apis(query, None).await {
+                    Ok(results) => results,
+                    Err(e) => {
+                        return Ok(json!({
+                            "success": false,
+                            "suggestions": [],
+                            "error": format!("LLM suggestion failed: {}", e)
+                        }));
+                    }
+                };
+
+                if suggestions.is_empty() {
+                    return Ok(json!({
+                        "success": true,
+                        "suggestions": [],
+                        "note": "No APIs suggested for this query. Try a more specific description."
+                    }));
+                }
+
+                // Convert to simple JSON format for user selection
+                let api_list: Vec<_> = suggestions.iter().take(5).map(|api| {
+                    json!({
+                        "name": api.name,
+                        "endpoint": api.endpoint,
+                        "docs_url": api.docs_url,
+                        "description": api.description,
+                        "auth_env_var": api.auth_env_var
+                    })
+                }).collect();
+
+                Ok(json!({
+                    "success": true,
+                    "suggestions": api_list,
+                    "next_steps": [
+                        "Present these options to the user",
+                        "When user selects one, call ccos_introspect_server with the docs_url (NOT the endpoint)",
+                        "After introspection, capabilities will be queued for approval"
+                    ]
+                }))
+            })
+        }),
+    );
+
+    /* DISABLED: ccos_find_capability - replaced by ccos_suggest_apis for interactive flow
+    // ccos_find_capability - Unified capability search (local + optional external discovery)
+    // This is the primary tool agents should use to find capabilities
+    let mp_find = marketplace.clone();
+    let ds_find = discovery_service.clone();
+    let aq_find = approval_queue.clone();
+    server.register_tool(
+        "ccos_find_capability",
+        "PRIMARY: Find capabilities matching a query. Searches local capabilities first. If allow_external is true and no local match found, discovers from external sources (MCP, OpenAPI, web docs).",
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What capability you're looking for (e.g., 'get weather forecast', 'send email')"
+                },
+                "allow_external": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "If true and no local match, search external sources (slower, requires approval)"
+                },
+                "url_hint": {
+                    "type": "string",
+                    "description": "Optional URL hint for external discovery (e.g., 'https://openweathermap.org/api')"
+                },
+                "min_score": {
+                    "type": "number",
+                    "default": 0.3,
+                    "description": "Minimum relevance score (0-1) for local matches"
+                }
+            },
+            "required": ["query"]
+        }),
+        Box::new(move |params| {
+            let mp = mp_find.clone();
+            let ds = ds_find.clone();
+            let aq = aq_find.clone();
+            Box::pin(async move {
+                let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                let allow_external = params.get("allow_external").and_then(|v| v.as_bool()).unwrap_or(false);
+                let url_hint = params.get("url_hint").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let min_score = params.get("min_score").and_then(|v| v.as_f64()).unwrap_or(0.3);
+
+                if query.is_empty() {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "query is required"
+                    }));
+                }
+
+                // Step 1: Search local capabilities
+                let all_caps = mp.list_capabilities().await;
+                let mut scored_results: Vec<_> = all_caps
+                    .into_iter()
+                    .map(|c| {
+                        let score = calculate_match_score(query, &c.description, &c.id);
+                        (c, score)
+                    })
+                    .filter(|(_, score)| *score >= min_score)
+                    .collect();
+
+                // Sort by score descending
+                scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+                let local_results: Vec<_> = scored_results.iter().take(5).map(|(c, score)| {
+                    json!({
+                        "id": c.id,
+                        "name": c.name, 
+                        "description": c.description,
+                        "match_score": score,
+                        "source": "local"
+                    })
+                }).collect();
+
+                // If we found local results, return them
+                if !local_results.is_empty() {
+                    return Ok(json!({
+                        "success": true,
+                        "capabilities": local_results,
+                        "source": "local",
+                        "hint": "Use ccos_execute_capability to run these"
+                    }));
+                }
+
+                // Step 2: If no local results and external allowed, try external discovery
+                if !allow_external {
+                    return Ok(json!({
+                        "success": true,
+                        "capabilities": [],
+                        "source": "local",
+                        "note": "No local capabilities found. Set allow_external: true to search external sources (slower, requires approval)."
+                    }));
+                }
+
+                // External discovery - use LLM to search for APIs
+                eprintln!("[CCOS] No local match for '{}', attempting external discovery...", query);
+
+                // Try to discover external APIs
+                let discovery_result = match ds.search_external_apis(query, url_hint.as_deref()).await {
+                    Ok(results) => results,
+                    Err(e) => {
+                        return Ok(json!({
+                            "success": false,
+                            "capabilities": [],
+                            "source": "external_search_failed",
+                            "error": format!("External discovery failed: {}", e),
+                            "hint": "Try providing a url_hint to a known API documentation page"
+                        }));
+                    }
+                };
+
+                if discovery_result.is_empty() {
+                    return Ok(json!({
+                        "success": true,
+                        "capabilities": [],
+                        "source": "external",
+                        "note": "No external APIs found matching the query. Try a more specific query or provide a url_hint."
+                    }));
+                }
+
+                // Create approval requests for discovered APIs
+                let mut pending_approvals = Vec::new();
+                for api in discovery_result.iter().take(3) {
+                    // Create approval request
+                    use ccos::approval::queue::{DiscoverySource, ServerInfo};
+                    
+                    let server_info = ServerInfo {
+                        name: api.name.clone(),
+                        endpoint: api.endpoint.clone(),
+                        description: Some(api.description.clone()),
+                        auth_env_var: api.auth_env_var.clone(),
+                        capabilities_path: None,
+                        alternative_endpoints: vec![],
+                    };
+
+                    let category = ApprovalCategory::ServerDiscovery {
+                        source: DiscoverySource::WebSearch { 
+                            url: format!("llm-discovery:{}", query),
+                        },
+                        server_info: server_info.clone(),
+                        domain_match: vec![query.to_string()],
+                        requesting_goal: Some(query.to_string()),
+                        health: None,
+                        capability_files: None,
+                    };
+
+                    let approval_request = ccos::approval::types::ApprovalRequest::new(
+                        category,
+                        RiskAssessment {
+                            level: RiskLevel::Medium,
+                            reasons: vec!["External API discovery requires approval".to_string()],
+                        },
+                        24, // 24 hour expiry
+                        Some(format!("Discovered via query: {}", query)),
+                    );
+
+                    let approval_id = approval_request.id.clone();
+                    if let Err(e) = aq.add(approval_request).await {
+                        eprintln!("[CCOS] Failed to submit approval: {}", e);
+                    } else {
+                        pending_approvals.push(json!({
+                            "approval_id": approval_id,
+                            "api_name": api.name,
+                            "endpoint": api.endpoint,
+                            "description": api.description
+                        }));
+                    }
+                }
+
+                Ok(json!({
+                    "success": true,
+                    "capabilities": [],
+                    "source": "external_discovery",
+                    "pending_approvals": pending_approvals,
+                    "note": "External APIs discovered and queued for approval. Once approved, they will be available as local capabilities.",
+                    "next_step": "Use ccos_list_capabilities to check for newly approved capabilities"
+                }))
+            })
+        }),
+    );
+    END DISABLED */
+
 
     // ccos/log_thought
     // Note: Direct CausalChain log_plan_event requires ActionType which is private.
@@ -2111,15 +2367,16 @@ fn register_ccos_tools(
     // ccos_introspect_server - Introspect an external MCP/OpenAPI server and queue for approval
     let aq_introspect = approval_queue.clone();
     let mp_introspect = marketplace.clone();
+    let ds_introspect = discovery_service.clone(); // For HTML docs fallback
     server.register_tool(
         "ccos_introspect_server",
-        "Introspect an external MCP or OpenAPI server to discover its tools. Creates an approval request for the server.",
+        "Introspect an external server (MCP, OpenAPI, or HTML documentation) to discover its capabilities. Works with MCP endpoints, OpenAPI specs, and API documentation pages. Creates an approval request for the server.",
         json!({
             "type": "object",
             "properties": {
                 "endpoint": {
                     "type": "string",
-                    "description": "Server endpoint URL (e.g., 'https://api.example.com') or npx command (e.g., 'npx -y @modelcontextprotocol/server-github')"
+                    "description": "Server endpoint URL (e.g., 'https://api.example.com'), documentation URL (e.g., 'https://example.com/docs/api'), or npx command (e.g., 'npx -y @modelcontextprotocol/server-github')"
                 },
                 "name": {
                     "type": "string",
@@ -2135,6 +2392,7 @@ fn register_ccos_tools(
         Box::new(move |params| {
             let aq = aq_introspect.clone();
             let mp = mp_introspect.clone();
+            let ds = ds_introspect.clone();
             Box::pin(async move {
                 let endpoint = params.get("endpoint").and_then(|v| v.as_str()).unwrap_or("");
                 let name = params.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -2147,12 +2405,121 @@ fn register_ccos_tools(
                     }));
                 }
 
+                // Detect if this looks like an OpenAPI spec URL
+                let is_openapi_url = endpoint.ends_with(".json") 
+                    || endpoint.ends_with(".yaml") 
+                    || endpoint.ends_with(".yml")
+                    || endpoint.contains("swagger")
+                    || endpoint.contains("openapi");
+
                 // Create server config for introspection
                 let server_name = name.clone().unwrap_or_else(|| {
-                    // Extract name from endpoint
-                    endpoint.split('/').last().unwrap_or("unknown").to_string()
+                    // Extract name from endpoint - try to get domain or last path segment
+                    if let Ok(url) = url::Url::parse(endpoint) {
+                        url.host_str()
+                            .map(|h| h.replace(".", "_"))
+                            .unwrap_or_else(|| endpoint.split('/').last().unwrap_or("unknown").to_string())
+                    } else {
+                        endpoint.split('/').last().unwrap_or("unknown").to_string()
+                    }
                 });
 
+                // If it looks like an OpenAPI spec, use IntrospectionService
+                if is_openapi_url {
+                    eprintln!("[CCOS] Detected OpenAPI spec URL, using IntrospectionService...");
+                    
+                    let introspection_service = ccos::ops::introspection_service::IntrospectionService::new();
+                    
+                    match introspection_service.introspect_openapi(endpoint, &server_name).await {
+                        Ok(result) if result.success => {
+                            let api_result = result.api_result.as_ref().unwrap();
+                            eprintln!("[CCOS] IntrospectionService found {} endpoints", api_result.endpoints.len());
+                            
+                            // Create approval request
+                            let approval_id = match introspection_service.create_approval_request(
+                                &result,
+                                endpoint,
+                                &aq,
+                                24 * 7, // 7 days
+                            ).await {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    return Ok(json!({
+                                        "success": false,
+                                        "error": format!("Failed to create approval request: {}", e)
+                                    }));
+                                }
+                            };
+
+                            // Generate RTFS files
+                            let workspace_root = ccos::utils::fs::get_workspace_root();
+                            let server_id = ccos::utils::fs::sanitize_filename(&server_name);
+                            let pending_dir = workspace_root.join("capabilities/servers/pending").join(&server_id);
+                            
+                            match introspection_service.generate_rtfs_files(&result, &pending_dir, endpoint) {
+                                Ok(gen_result) => {
+                                    eprintln!("[CCOS] Saved {} RTFS capabilities to: {}", 
+                                        gen_result.capability_files.len(), 
+                                        gen_result.output_dir.display());
+                                    
+                                    // Return detailed discovery result
+                                    let endpoint_previews: Vec<_> = api_result.endpoints.iter().take(10).map(|ep| {
+                                        json!({
+                                            "id": ep.endpoint_id,
+                                            "name": ep.name,
+                                            "method": ep.method,
+                                            "path": ep.path,
+                                            "description": ep.description
+                                        })
+                                    }).collect();
+
+                                    return Ok(json!({
+                                        "success": true,
+                                        "approval_id": approval_id,
+                                        "server_name": server_name,
+                                        "source": "openapi",
+                                        "api_title": api_result.api_title,
+                                        "api_version": api_result.api_version,
+                                        "base_url": api_result.base_url,
+                                        "discovered_endpoints_count": api_result.endpoints.len(),
+                                        "capability_files_count": gen_result.capability_files.len(),
+                                        "endpoint_previews": endpoint_previews,
+                                        "capabilities_path": gen_result.output_dir.to_string_lossy(),
+                                        "auth_type": api_result.auth_requirements.auth_type,
+                                        "agent_guidance": format!(
+                                            "OpenAPI spec '{}' introspected with {} endpoints. \
+                                             {} RTFS capability files (with schemas) + server.json saved to {}. \
+                                             Approval required before use. Once approved, call ccos_register_server with approval_id: '{}'",
+                                            api_result.api_title, api_result.endpoints.len(), 
+                                            gen_result.capability_files.len(), 
+                                            gen_result.output_dir.display(), 
+                                            approval_id
+                                        )
+                                    }));
+                                }
+                                Err(e) => {
+                                    return Ok(json!({
+                                        "success": true,
+                                        "approval_id": approval_id,
+                                        "server_name": server_name,
+                                        "source": "openapi",
+                                        "warning": format!("Failed to generate RTFS files: {}", e)
+                                    }));
+                                }
+                            }
+                        }
+                        Ok(result) => {
+                            eprintln!("[CCOS] IntrospectionService failed: {:?}, falling back to MCP...", result.error);
+                            // Fall through to MCP introspection below
+                        }
+                        Err(e) => {
+                            eprintln!("[CCOS] IntrospectionService error: {}, falling back to MCP...", e);
+                            // Fall through to MCP introspection below
+                        }
+                    }
+                }
+
+                // Try to introspect as MCP server
                 let config = MCPServerConfig {
                     name: server_name.clone(),
                     endpoint: endpoint.to_string(),
@@ -2161,7 +2528,7 @@ fn register_ccos_tools(
                     protocol_version: "2024-11-05".to_string(),
                 };
 
-                // Try to introspect the server
+                let mut discovery_source = "mcp";
                 let discovery_result = match MCPDiscoveryProvider::new_with_rtfs_host_factory(
                     config.clone(),
                     mp.get_rtfs_host_factory(),
@@ -2170,20 +2537,75 @@ fn register_ccos_tools(
                         match provider.discover_tools().await {
                             Ok(caps) => Some(caps),
 
-                            Err(e) => {
-                                return Ok(json!({
-                                    "success": false,
-                                    "error": format!("Failed to introspect server: {}", e),
-                                    "hint": "Check if the server is running and accessible"
-                                }));
+                            Err(mcp_err) => {
+                                // MCP failed - try HTML docs fallback
+                                eprintln!("[CCOS] MCP introspection failed: {}, trying HTML docs fallback...", mcp_err);
+                                discovery_source = "html_docs";
+                                
+                                // Use LLM to parse documentation page
+                                match ds.search_external_apis(&server_name, Some(endpoint)).await {
+                                    Ok(apis) if !apis.is_empty() => {
+                                        // Convert ExternalApiResult to DiscoveredMCPTool-like info
+                                        // For now, return info about the discovered API
+                                        return Ok(json!({
+                                            "success": true,
+                                            "source": "html_docs",
+                                            "discovered_apis": apis.iter().map(|api| json!({
+                                                "name": api.name,
+                                                "endpoint": api.endpoint,
+                                                "description": api.description,
+                                                "auth_env_var": api.auth_env_var
+                                            })).collect::<Vec<_>>(),
+                                            "note": "Discovered API info from documentation. To create detailed capabilities, provide an OpenAPI spec URL or approve this server and manually add capabilities.",
+                                            "next_step": "If this looks correct, you can use ccos_execute_capability to call these endpoints directly, or create an approval request manually."
+                                        }));
+                                    }
+                                    Ok(_) => {
+                                        return Ok(json!({
+                                            "success": false,
+                                            "source": "html_docs",
+                                            "error": format!("Could not extract API information from documentation at {}", endpoint),
+                                            "hint": "Try providing an OpenAPI spec URL or a more detailed API reference page"
+                                        }));
+                                    }
+                                    Err(doc_err) => {
+                                        return Ok(json!({
+                                            "success": false,
+                                            "error": format!("MCP introspection failed: {}. HTML docs fallback also failed: {}", mcp_err, doc_err),
+                                            "hint": "Check if the URL is accessible and contains API documentation"
+                                        }));
+                                    }
+                                }
                             }
                         }
                     }
                     Err(e) => {
-                        return Ok(json!({
-                            "success": false,
-                            "error": format!("Failed to create discovery provider: {}", e)
-                        }));
+                        // Provider creation failed - also try HTML docs fallback
+                        eprintln!("[CCOS] MCP provider creation failed: {}, trying HTML docs fallback...", e);
+                        discovery_source = "html_docs";
+                        
+                        match ds.search_external_apis(&server_name, Some(endpoint)).await {
+                            Ok(apis) if !apis.is_empty() => {
+                                return Ok(json!({
+                                    "success": true,
+                                    "source": "html_docs",
+                                    "discovered_apis": apis.iter().map(|api| json!({
+                                        "name": api.name,
+                                        "endpoint": api.endpoint,
+                                        "description": api.description,
+                                        "auth_env_var": api.auth_env_var
+                                    })).collect::<Vec<_>>(),
+                                    "note": "Discovered API info from documentation.",
+                                    "next_step": "To use this API, you may need to manually configure capabilities."
+                                }));
+                            }
+                            _ => {
+                                return Ok(json!({
+                                    "success": false,
+                                    "error": format!("Failed to create discovery provider: {}. HTML docs fallback found no APIs.", e)
+                                }));
+                            }
+                        }
                     }
                 };
 
@@ -2193,7 +2615,7 @@ fn register_ccos_tools(
                 let server_info = ccos::approval::queue::ServerInfo {
                     name: server_name.clone(),
                     endpoint: endpoint.to_string(),
-                    description: Some(format!("Discovered {} capabilities", capabilities.len())),
+                    description: Some(format!("Discovered {} capabilities via {}", capabilities.len(), discovery_source)),
                     auth_env_var,
                     capabilities_path: None,
                     alternative_endpoints: vec![],
@@ -2206,7 +2628,7 @@ fn register_ccos_tools(
                     vec!["dynamic".to_string()],
                     RiskAssessment {
                         level: RiskLevel::Medium,
-                        reasons: vec!["Dynamically discovered server".to_string()],
+                        reasons: vec![format!("Dynamically discovered server via {}", discovery_source)],
                     },
                     Some("Agent requested introspection".to_string()),
                     24, // expires in 24 hours
@@ -2233,12 +2655,13 @@ fn register_ccos_tools(
                     "success": true,
                     "approval_id": approval_id,
                     "server_name": server_name,
+                    "source": discovery_source,
                     "discovered_tools_count": capabilities.len(),
                     "tool_previews": tool_previews,
                     "agent_guidance": format!(
-                        "Server '{}' discovered with {} tools. Approval required before tools can be used. \
+                        "Server '{}' discovered with {} tools via {}. Approval required before tools can be used. \
                          Once approved, call ccos_register_server with approval_id: '{}'",
-                        server_name, capabilities.len(), approval_id
+                        server_name, capabilities.len(), discovery_source, approval_id
                     )
                 }))
             })
@@ -2315,7 +2738,37 @@ fn register_ccos_tools(
                     }
                 };
 
-                // Create config and discover capabilities
+                // NEW: Check if this is an OpenAPI server with already-generated RTFS files in the approved directory
+                let server_id = ccos::utils::fs::sanitize_filename(&server_name);
+                let workspace_root = ccos::utils::fs::get_workspace_root();
+                let approved_dir = workspace_root.join("capabilities/servers/approved").join(&server_id);
+                
+                if approved_dir.exists() {
+                     eprintln!("[ccos-mcp] Dynamically loading approved RTFS capabilities for {}", server_name);
+                     
+                     match mp.import_capabilities_from_rtfs_dir_recursive(&approved_dir).await {
+                         Ok(loaded_count) => {
+                             return Ok(json!({
+                                "success": true,
+                                "server_name": server_name,
+                                "registered_count": loaded_count,
+                                "total_discovered": loaded_count,
+                                "agent_guidance": format!(
+                                    "Successfully loaded {} RTFS capabilities from '{}'. They are now available via ccos_search_tools and ccos_execute_capability.",
+                                    loaded_count, server_name
+                                )
+                            }));
+                         }
+                         Err(e) => {
+                             return Ok(json!({
+                                "success": false,
+                                "error": format!("Failed to load capabilities: {}", e)
+                            }));
+                         }
+                     }
+                }
+
+                // Fallback: Original MCP discovery for native MCP servers
                 let config = MCPServerConfig {
                     name: server_name.clone(),
                     endpoint: endpoint.clone(),
@@ -2887,103 +3340,5 @@ fn calculate_match_score(intent: &str, description: &str, id: &str) -> f64 {
         (matches / max_score).min(1.0)
     } else {
         0.0
-    }
-}
-
-/// Extract a city name from a goal string (simple heuristic)
-
-
-fn collect_rtfs_files_recursive(dir: &std::path::Path, rtfs_files: &mut Vec<std::path::PathBuf>) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                collect_rtfs_files_recursive(&path, rtfs_files);
-            } else if path.extension().and_then(|s| s.to_str()) == Some("rtfs") {
-                rtfs_files.push(path);
-            }
-        }
-    }
-}
-
-async fn load_capabilities_from_dir(
-    marketplace: &CapabilityMarketplace,
-    relative_path: &str,
-    verbose: bool,
-) {
-    let workspace_root = get_workspace_root();
-    let approved_dir = workspace_root.join(relative_path);
-
-    if !approved_dir.exists() {
-        if verbose {
-            eprintln!(
-                "[ccos-mcp] Warning: Capabilities directory not found: {:?}",
-                approved_dir
-            );
-        }
-        return;
-    }
-
-    let mut rtfs_files = Vec::new();
-    collect_rtfs_files_recursive(&approved_dir, &mut rtfs_files);
-
-    if verbose {
-        eprintln!("[ccos-mcp] Found {} .rtfs files to load", rtfs_files.len());
-    }
-
-    let parser = match MCPDiscoveryProvider::new(MCPServerConfig::default()) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("[ccos-mcp] Error initializing RTFS parser: {}", e);
-            return;
-        }
-    };
-
-    let mut loaded_count = 0;
-    for file in rtfs_files {
-        if let Some(path_str) = file.to_str() {
-            match parser.load_rtfs_capabilities(path_str) {
-                Ok(module) => {
-                    for cap_def in module.capabilities {
-                        match parser.rtfs_to_capability_manifest(&cap_def) {
-                            Ok(manifest) => {
-                                if let Err(e) =
-                                    marketplace.register_capability_manifest(manifest).await
-                                {
-                                    if verbose {
-                                        eprintln!(
-                                            "[ccos-mcp] Error registering capability from {:?}: {}",
-                                            file, e
-                                        );
-                                    }
-                                } else {
-                                    loaded_count += 1;
-                                }
-                            }
-                            Err(e) => {
-                                if verbose {
-                                    eprintln!(
-                                        "[ccos-mcp] Error converting RTFS to manifest in {:?}: {}",
-                                        file, e
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    if verbose {
-                        eprintln!("[ccos-mcp] Error loading RTFS file {:?}: {}", file, e);
-                    }
-                }
-            }
-        }
-    }
-
-    if verbose {
-        eprintln!(
-            "[ccos-mcp] Successfully loaded {} capabilities into marketplace",
-            loaded_count
-        );
     }
 }
