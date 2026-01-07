@@ -33,6 +33,7 @@ use crate::approval::{
     types::{ApprovalCategory, ApprovalRequest},
     UnifiedApprovalQueue,
 };
+use crate::capability_marketplace::CapabilityMarketplace;
 use crate::secrets::SecretStore;
 use crate::utils::fs::get_workspace_root;
 
@@ -54,6 +55,7 @@ pub struct HttpTransportState {
     pub broadcasters: RwLock<HashMap<String, broadcast::Sender<Value>>>,
     /// Approval queue for secrets and other approvals
     pub approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
+    pub marketplace: Option<Arc<CapabilityMarketplace>>,
 }
 
 impl HttpTransportState {
@@ -63,11 +65,17 @@ impl HttpTransportState {
             sessions: RwLock::new(HashMap::new()),
             broadcasters: RwLock::new(HashMap::new()),
             approval_queue: None,
+            marketplace: None,
         }
     }
 
     pub fn with_approval_queue(mut self, queue: UnifiedApprovalQueue<FileApprovalStorage>) -> Self {
         self.approval_queue = Some(queue);
+        self
+    }
+
+    pub fn with_marketplace(mut self, marketplace: Arc<CapabilityMarketplace>) -> Self {
+        self.marketplace = Some(marketplace);
         self
     }
 
@@ -144,7 +152,7 @@ pub async fn run_http_transport(
     server: MCPServer,
     config: HttpTransportConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    run_http_transport_with_approvals(server, config, None).await
+    run_http_transport_with_approvals(server, config, None, None).await
 }
 
 /// Run the MCP server with Streamable HTTP transport and optional approval queue
@@ -152,10 +160,14 @@ pub async fn run_http_transport_with_approvals(
     server: MCPServer,
     config: HttpTransportConfig,
     approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
+    marketplace: Option<Arc<CapabilityMarketplace>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut state = HttpTransportState::new(server);
     if let Some(queue) = approval_queue {
         state = state.with_approval_queue(queue);
+    }
+    if let Some(mp) = marketplace {
+        state = state.with_marketplace(mp);
     }
     let state = Arc::new(state);
 
@@ -638,7 +650,52 @@ async fn handle_api_approval_approve(
             .approve(&id, ApprovalAuthority::User("web".to_string()), body.reason)
             .await
         {
-            Ok(()) => (StatusCode::OK, Json(json!({ "success": true, "id": id }))),
+            Ok(()) => {
+                // NEW: If this was a server discovery approval, automatically register the server
+                if let (Some(req), Some(mp)) =
+                    (queue.get(&id).await.ok().flatten(), &state.marketplace)
+                {
+                    if let crate::approval::types::ApprovalCategory::ServerDiscovery {
+                        ref server_info,
+                        ..
+                    } = req.category
+                    {
+                        let server_name = server_info.name.clone();
+                        let server_id = crate::utils::fs::sanitize_filename(&server_name);
+                        let workspace_root = crate::utils::fs::get_workspace_root();
+                        let approved_dir = workspace_root
+                            .join("capabilities/servers/approved")
+                            .join(&server_id);
+
+                        if approved_dir.exists() {
+                            let mp_clone = mp.clone();
+                            tokio::spawn(async move {
+                                match mp_clone
+                                    .import_capabilities_from_rtfs_dir_recursive(&approved_dir)
+                                    .await
+                                {
+                                    Ok(count) => {
+                                        log::info!(
+                                            "[http_transport] Automatically loaded {} capabilities for {}",
+                                            count,
+                                            server_name
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "[http_transport] Error auto-loading capabilities for {}: {}",
+                                            server_name,
+                                            e
+                                        );
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+
+                (StatusCode::OK, Json(json!({ "success": true, "id": id })))
+            }
             Err(e) => (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": e.to_string() })),

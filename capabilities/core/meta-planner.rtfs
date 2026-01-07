@@ -97,7 +97,7 @@
                     ;; Shouldn't need synthesis but not resolved - error
                     {:resolved false 
                      :error "Could not resolve intent"
-                     :intent intent})))))
+                     :intent intent})))))))
       
       ;; Main entry: create root intent and resolve
       (let [root-intent {:description goal :id "root"}
