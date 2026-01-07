@@ -77,12 +77,6 @@ impl MCPDiscoveryService {
             workspace_root.clone()
         };
 
-        ccos_eprintln!(
-            "🔍 MCPDiscoveryService: workspace_root={:?}, approval_base={:?}",
-            workspace_root,
-            approval_base
-        );
-
         let storage_path =
             approval_base.join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
         let storage = Arc::new(
@@ -127,12 +121,6 @@ impl MCPDiscoveryService {
         } else {
             workspace_root.clone()
         };
-
-        ccos_eprintln!(
-            "🔍 MCPDiscoveryService: workspace_root={:?}, approval_base={:?}",
-            workspace_root,
-            approval_base
-        );
 
         let storage_path =
             approval_base.join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
