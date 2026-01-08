@@ -154,6 +154,19 @@ impl IrRuntime {
             IT::Symbol => TypeExpr::Primitive(PrimitiveType::Symbol),
             IT::Any => TypeExpr::Any,
             IT::Never => TypeExpr::Never,
+            IT::TypeVar(name) => {
+                // Type variables are not representable in AST TypeExpr
+                // For runtime validation, treat as Any to avoid errors
+                TypeExpr::Any
+            }
+            IT::ParametricMap { key_type, value_type } => {
+                // Parametric maps are representable in AST TypeExpr now.
+                // We preserve them so runtime validation can enforce key/value types.
+                TypeExpr::ParametricMap {
+                    key_type: Box::new(Self::ir_to_type_expr(key_type)),
+                    value_type: Box::new(Self::ir_to_type_expr(value_type)),
+                }
+            }
             IT::Vector(elem) => TypeExpr::Vector(Box::new(Self::ir_to_type_expr(elem))),
             IT::List(elem) => {
                 // Map IR List to Vector type for validation purposes

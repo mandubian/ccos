@@ -615,6 +615,38 @@ impl TypeValidator {
                 Ok(())
             }
 
+            // Parametric maps - value must be a map; all keys/values must match their types
+            (
+                Value::Map(map),
+                TypeExpr::ParametricMap {
+                    key_type,
+                    value_type,
+                },
+            ) => {
+                for (k, v) in map.iter() {
+                    let key_ok = match key_type.as_ref() {
+                        TypeExpr::Any => true,
+                        TypeExpr::Union(types) => types.iter().any(|t| {
+                            // recurse through union members
+                            Self::matches_key_type(k, t)
+                        }),
+                        other => Self::matches_key_type(k, other),
+                    };
+
+                    if !key_ok {
+                        return Err(ValidationError::TypeMismatch {
+                            expected: rtfs_type.clone(),
+                            actual: format!("map key {}", k),
+                            path: path.to_string(),
+                        });
+                    }
+
+                    let value_path = format!("{}[{}]", path, k);
+                    self.validate_value_at_path(v, value_type, &value_path)?;
+                }
+                Ok(())
+            }
+
             // Literal types
             (val, TypeExpr::Literal(expected_literal)) => {
                 let val_as_literal = value_to_literal(val)?;
@@ -635,6 +667,18 @@ impl TypeValidator {
                 actual: value.type_name().to_string(),
                 path: path.to_string(),
             }),
+        }
+    }
+
+    // Helper: does a MapKey match a key type expression?
+    fn matches_key_type(key: &MapKey, t: &TypeExpr) -> bool {
+        match t {
+            TypeExpr::Any => true,
+            TypeExpr::Primitive(PrimitiveType::String) => matches!(key, MapKey::String(_)),
+            TypeExpr::Primitive(PrimitiveType::Keyword) => matches!(key, MapKey::Keyword(_)),
+            TypeExpr::Primitive(PrimitiveType::Int) => matches!(key, MapKey::Integer(_)),
+            TypeExpr::Union(types) => types.iter().any(|tt| Self::matches_key_type(key, tt)),
+            _ => false,
         }
     }
 
@@ -1143,6 +1187,7 @@ fn value_to_literal(value: &Value) -> ValidationResult<Literal> {
 mod tests {
     use super::*;
     use crate::ast::Keyword;
+    use std::collections::HashMap;
 
     #[test]
     fn test_primitive_type_validation() {
@@ -1270,6 +1315,57 @@ mod tests {
             .is_ok());
         assert!(validator
             .validate_value(&Value::Integer(42), &optional_string)
+            .is_err());
+    }
+
+    #[test]
+    fn test_parametric_map_key_types_string_keyword_union() {
+        let validator = TypeValidator::new();
+
+        // {"a" 1}
+        let mut string_keyed = HashMap::new();
+        string_keyed.insert(MapKey::String("a".to_string()), Value::Integer(1));
+
+        let map_string_int = TypeExpr::ParametricMap {
+            key_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+        };
+        assert!(validator
+            .validate_value(&Value::Map(string_keyed.clone()), &map_string_int)
+            .is_ok());
+
+        // {:a 1}
+        let mut keyword_keyed = HashMap::new();
+        keyword_keyed.insert(MapKey::Keyword(Keyword::new("a")), Value::Integer(1));
+
+        let map_keyword_int = TypeExpr::ParametricMap {
+            key_type: Box::new(TypeExpr::Primitive(PrimitiveType::Keyword)),
+            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+        };
+        assert!(validator
+            .validate_value(&Value::Map(keyword_keyed.clone()), &map_keyword_int)
+            .is_ok());
+
+        // Union key type accepts both
+        let map_string_or_keyword_int = TypeExpr::ParametricMap {
+            key_type: Box::new(TypeExpr::Union(vec![
+                TypeExpr::Primitive(PrimitiveType::String),
+                TypeExpr::Primitive(PrimitiveType::Keyword),
+            ])),
+            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+        };
+        assert!(validator
+            .validate_value(&Value::Map(string_keyed), &map_string_or_keyword_int)
+            .is_ok());
+        assert!(validator
+            .validate_value(&Value::Map(keyword_keyed), &map_string_or_keyword_int)
+            .is_ok());
+
+        // Rejection: integer key should fail for (String|Keyword)
+        let mut int_keyed = HashMap::new();
+        int_keyed.insert(MapKey::Integer(1), Value::Integer(1));
+        assert!(validator
+            .validate_value(&Value::Map(int_keyed), &map_string_or_keyword_int)
             .is_err());
     }
 }
