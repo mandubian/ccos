@@ -115,6 +115,29 @@ Maps `{}` associate keys with values, supporting any RTFS value as keys:
 (vals {:a 1 :b 2})             ; => (1 2)
 ```
 
+### Type Annotations: Record vs Dict (Schema vs Homogeneous Map)
+
+RTFS runtime maps (`{}`) are flexible and can contain mixed key types. When you *type* a map in RTFS, there are two distinct type constructors:
+
+- **Record / object schema**: `[:map ...]` (alias: `[:record ...]`)
+  - Declares named fields (keyword keys) with required/optional types
+  - Best for structured payloads and capability inputs/outputs
+
+- **Dictionary**: `[:map-of K V]` (alias: `[:dict K V]`)
+  - Declares a homogeneous map where every key has type `K` and every value has type `V`
+  - `K` is restricted to `:string`, `:keyword`, a union of those, or `:any` (to match common scripting + JSON boundary usage)
+
+Examples:
+
+```rtfs
+;; Record schema (named fields)
+[:record {:name :string :age :int}]
+
+;; Dictionary schema (homogeneous)
+[:dict :string :any]
+[:dict [:union :string :keyword] :int]
+```
+
 ### Lists: Sequential Access
 
 Lists `()` are linked sequences optimized for sequential access and functional operations:
