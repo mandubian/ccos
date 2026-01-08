@@ -3028,6 +3028,36 @@ impl<'a> IrConverter<'a> {
                 // TODO: Implement proper array type support in IR
                 Ok(IrType::Any)
             }
+            TypeExpr::ParametricMap { key_type, value_type } => {
+                // Convert parametric map to IR parametric map
+                let ir_key_type = self.convert_type_annotation(*key_type)?;
+                
+                // Enforce: parametric map keys must be String/Keyword (or a union of them)
+                fn is_valid_parametric_key_type(t: &IrType) -> bool {
+                    match t {
+                        IrType::String | IrType::Keyword => true,
+                        IrType::Any => true,
+                        IrType::Union(types) => types.iter().all(is_valid_parametric_key_type),
+                        _ => false,
+                    }
+                }
+
+                if !is_valid_parametric_key_type(&ir_key_type) {
+                    return Err(IrConversionError::InvalidTypeAnnotation {
+                        message: format!(
+                            "[:map-of K V] key type must be :string or :keyword (or a union/Any), got: {:?}",
+                            ir_key_type
+                        ),
+                        location: None,
+                    });
+                }
+                
+                let ir_value_type = self.convert_type_annotation(*value_type)?;
+                Ok(IrType::ParametricMap {
+                    key_type: Box::new(ir_key_type),
+                    value_type: Box::new(ir_value_type),
+                })
+            }
             TypeExpr::Refined {
                 base_type,
                 predicates: _,

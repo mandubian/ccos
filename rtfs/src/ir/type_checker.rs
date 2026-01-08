@@ -395,6 +395,21 @@ fn is_subtype_cached(sub: &IrType, sup: &IrType, visited: &mut HashSet<(String, 
         return true;
     }
 
+    // ParametricMap subtyping (covariant in key and value for immutable maps)
+    if let (
+        IrType::ParametricMap {
+            key_type: sub_k,
+            value_type: sub_v,
+        },
+        IrType::ParametricMap {
+            key_type: sup_k,
+            value_type: sup_v,
+        },
+    ) = (sub, sup)
+    {
+        return is_subtype_cached(sub_k, sup_k, visited) && is_subtype_cached(sub_v, sup_v, visited);
+    }
+
     // No other subtyping relationships
     false
 }
@@ -1702,6 +1717,33 @@ mod tests {
             wildcard: None,
         };
         assert!(!is_subtype(&sub_optional_a, &sup));
+    }
+
+    #[test]
+    fn test_parametric_map_subtyping_keys_string_keyword_union() {
+        let sub = IrType::ParametricMap {
+            key_type: Box::new(IrType::String),
+            value_type: Box::new(IrType::Int),
+        };
+
+        let sup = IrType::ParametricMap {
+            key_type: Box::new(IrType::Union(vec![IrType::String, IrType::Keyword])),
+            value_type: Box::new(IrType::Any),
+        };
+
+        // String ≤ (String | Keyword) and Int ≤ Any
+        assert!(is_subtype(&sub, &sup));
+
+        // But Keyword-keyed maps are not subtypes of String-keyed maps
+        let kw_map = IrType::ParametricMap {
+            key_type: Box::new(IrType::Keyword),
+            value_type: Box::new(IrType::Int),
+        };
+        let string_map = IrType::ParametricMap {
+            key_type: Box::new(IrType::String),
+            value_type: Box::new(IrType::Any),
+        };
+        assert!(!is_subtype(&kw_map, &string_map));
     }
 
     #[test]
