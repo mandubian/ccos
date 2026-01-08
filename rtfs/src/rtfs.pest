@@ -130,8 +130,11 @@ map_type_entry_braced = { "{" ~ (WHITESPACE* ~ keyword ~ WHITESPACE* ~ type_expr
 // [Key Type Optional?]
 map_type_wildcard = { "[" ~ ":*" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
 // [:* WildcardType]
-map_type            = { "[" ~ ":map" ~ (WHITESPACE* ~ (map_type_wildcard | map_type_entry | map_type_entry_braced))* ~ WHITESPACE* ~ "]" }
-map_of_type         = { "[" ~ ":map-of" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
+// Option B aliases:
+// - [:record ...] is an alias for [:map ...] (record/object schema)
+// - [:dict K V] is an alias for [:map-of K V] (homogeneous dictionary)
+map_type            = { "[" ~ (":map" | ":record") ~ (WHITESPACE* ~ (map_type_wildcard | map_type_entry | map_type_entry_braced))* ~ WHITESPACE* ~ "]" }
+map_of_type         = { "[" ~ (":map-of" | ":dict") ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
 tuple_type          = { "[" ~ ":tuple" ~ (WHITESPACE* ~ type_expr)+ ~ WHITESPACE* ~ "]" }
 param_type          = { type_expr }
 variadic_param_type = { "&" ~ WHITESPACE* ~ type_expr }
