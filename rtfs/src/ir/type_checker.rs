@@ -22,8 +22,9 @@
 //! (S-Union-L) T ≤ T1 ∨ T ≤ T2  ⊢  T ≤ (T1 | T2)
 //! (S-Union-R) T1 ≤ T ∧ T2 ≤ T  ⊢  (T1 | T2) ≤ T
 //!
-//! (S-Intersection-L) T1 ≤ T ∧ T2 ≤ T  ⊢  (T1 & T2) ≤ T
-//! (S-Intersection-R) T ≤ T1 ∧ T ≤ T2  ⊢  T ≤ (T1 & T2)
+//! (S-Intersection-L1) (T1 & T2) ≤ T1
+//! (S-Intersection-L2) (T1 & T2) ≤ T2
+//! (S-Intersection-R)  T ≤ T1 ∧ T ≤ T2  ⊢  T ≤ (T1 & T2)
 //!
 //! (S-Num)     Int ≤ Number, Float ≤ Number  where Number = Int | Float
 //!
@@ -62,12 +63,13 @@
 //! The type checker implements two key subtyping rules for intersections:
 //! 
 //! ```text
-//! (S-Intersection-L) T1 ≤ T ∧ T2 ≤ T  ⊢  (T1 & T2) ≤ T
-//! (S-Intersection-R) T ≤ T1 ∧ T ≤ T2  ⊢  T ≤ (T1 & T2)
+//! (S-Intersection-L1) (T1 & T2) ≤ T1
+//! (S-Intersection-L2) (T1 & T2) ≤ T2
+//! (S-Intersection-R)  T ≤ T1 ∧ T ≤ T2  ⊢  T ≤ (T1 & T2)
 //! ```
 //! 
-//! - **(S-Intersection-L)**: An intersection is a subtype of T if all its components are subtypes of T
-//! - **(S-Intersection-R)**: T is a subtype of an intersection if T is a subtype of all intersection components
+//! - **(S-Intersection-L1/L2)**: An intersection can be used wherever either component is expected
+//! - **(S-Intersection-R)**: T is a subtype of an intersection if it is a subtype of all intersection components
 //! 
 //! ### Type Operations
 //! 
@@ -256,46 +258,37 @@ fn is_subtype_cached(sub: &IrType, sup: &IrType, visited: &mut HashSet<(String, 
         return true;
     }
 
-    // Cycle detection for recursive types (future-proofing)
+    // Cycle detection for (future) recursive types.
+    //
+    // IMPORTANT: `visited` must behave like an *active recursion stack*, not a memo table.
+    // Using it as a global memo (never removing) is unsound (e.g., duplicate union members).
     let key = (format!("{:?}", sub), format!("{:?}", sup));
     if visited.contains(&key) {
-        return true; // Assume holds for recursive case
+        return true; // assume holds for the recursive case
     }
-    visited.insert(key);
+    visited.insert(key.clone());
 
-    // (S-Intersection-L): (T1 & T2) ≤ T  iff  T1 ≤ T ∧ T2 ≤ T
-    // An intersection type is a subtype of T if all its components are subtypes of T
-    if let IrType::Intersection(sub_components) = sub {
-        return sub_components
+    let result = if let IrType::Intersection(sup_components) = sup {
+        // (S-Intersection-R): T ≤ (T1 & T2)  iff  T ≤ T1 ∧ T ≤ T2
+        sup_components
             .iter()
-            .all(|component| is_subtype_cached(component, sup, visited));
-    }
-
-    // (S-Intersection-R): T ≤ (T1 & T2)  iff  T ≤ T1 ∧ T ≤ T2
-    // T is a subtype of an intersection if T is a subtype of all intersection components
-    if let IrType::Intersection(sup_components) = sup {
-        return sup_components
+            .all(|component| is_subtype_cached(sub, component, visited))
+    } else if let IrType::Union(sup_variants) = sup {
+        // (S-Union-R): T ≤ (S1 | S2)  iff  T ≤ S1 ∨ T ≤ S2
+        sup_variants
             .iter()
-            .all(|component| is_subtype_cached(sub, component, visited));
-    }
-
-    // (S-Union-L) If sub is a union: (T1 | T2) ≤ S  iff  T1 ≤ S ∧ T2 ≤ S
-    if let IrType::Union(sub_variants) = sub {
-        return sub_variants
+            .any(|variant| is_subtype_cached(sub, variant, visited))
+    } else if let IrType::Union(sub_variants) = sub {
+        // (S-Union-L): (T1 | T2) ≤ S  iff  T1 ≤ S ∧ T2 ≤ S
+        sub_variants
             .iter()
-            .all(|variant| is_subtype_cached(variant, sup, visited));
-    }
-
-    // (S-Union-R) If sup is a union: T ≤ (S1 | S2)  iff  T ≤ S1 ∨ T ≤ S2
-    if let IrType::Union(sup_variants) = sup {
-        return sup_variants
+            .all(|variant| is_subtype_cached(variant, sup, visited))
+    } else if let IrType::Intersection(sub_components) = sub {
+        // Intersection elimination (meet semantics): (T1 & T2) ≤ T if any component is ≤ T.
+        sub_components
             .iter()
-            .any(|variant| is_subtype_cached(sub, variant, visited));
-    }
-
-    // (S-Fun) Function subtyping (contravariant in args, covariant in return)
-    // (T1' → T2) ≤ (T1 → T2')  iff  T1 ≤ T1' ∧ T2 ≤ T2'
-    if let (
+            .any(|component| is_subtype_cached(component, sup, visited))
+    } else if let (
         IrType::Function {
             param_types: sub_params,
             return_type: sub_ret,
@@ -308,61 +301,41 @@ fn is_subtype_cached(sub: &IrType, sup: &IrType, visited: &mut HashSet<(String, 
         },
     ) = (sub, sup)
     {
-        // Check parameter types (contravariant)
+        // (S-Fun): contravariant in args, covariant in return
         if sub_params.len() != sup_params.len() {
-            return false;
-        }
-        for (sub_param, sup_param) in sub_params.iter().zip(sup_params.iter()) {
-            // Note: contravariant - flip the order!
-            if !is_subtype_cached(sup_param, sub_param, visited) {
-                return false;
+            false
+        } else {
+            let params_ok = sub_params
+                .iter()
+                .zip(sup_params.iter())
+                .all(|(sub_param, sup_param)| is_subtype_cached(sup_param, sub_param, visited));
+
+            if !params_ok {
+                false
+            } else {
+                let variadic_ok = match (sub_var, sup_var) {
+                    (Some(sub_v), Some(sup_v)) => is_subtype_cached(sup_v, sub_v, visited),
+                    (None, None) => true,
+                    _ => false,
+                };
+
+                variadic_ok && is_subtype_cached(sub_ret, sup_ret, visited)
             }
         }
-
-        // Check variadic params
-        match (sub_var, sup_var) {
-            (Some(sub_v), Some(sup_v)) => {
-                if !is_subtype_cached(sup_v, sub_v, visited) {
-                    return false;
-                }
-            }
-            (None, None) => {}
-            _ => return false,
-        }
-
-        // Check return type (covariant)
-        return is_subtype_cached(sub_ret, sup_ret, visited);
-    }
-
-    // (S-Vec) Vector subtyping (covariant)
-    // Vector<T1> ≤ Vector<T2>  iff  T1 ≤ T2
-    if let (IrType::Vector(sub_elem), IrType::Vector(sup_elem)) = (sub, sup) {
-        return is_subtype_cached(sub_elem, sup_elem, visited);
-    }
-
-    // List subtyping (covariant)
-    if let (IrType::List(sub_elem), IrType::List(sup_elem)) = (sub, sup) {
-        return is_subtype_cached(sub_elem, sup_elem, visited);
-    }
-
-    // Tuple subtyping (covariant in all positions, same length)
-    if let (IrType::Tuple(sub_elems), IrType::Tuple(sup_elems)) = (sub, sup) {
+    } else if let (IrType::Vector(sub_elem), IrType::Vector(sup_elem)) = (sub, sup) {
+        is_subtype_cached(sub_elem, sup_elem, visited)
+    } else if let (IrType::List(sub_elem), IrType::List(sup_elem)) = (sub, sup) {
+        is_subtype_cached(sub_elem, sup_elem, visited)
+    } else if let (IrType::Tuple(sub_elems), IrType::Tuple(sup_elems)) = (sub, sup) {
         if sub_elems.len() != sup_elems.len() {
-            return false;
+            false
+        } else {
+            sub_elems
+                .iter()
+                .zip(sup_elems.iter())
+                .all(|(sub_e, sup_e)| is_subtype_cached(sub_e, sup_e, visited))
         }
-        return sub_elems
-            .iter()
-            .zip(sup_elems.iter())
-            .all(|(sub_e, sup_e)| is_subtype_cached(sub_e, sup_e, visited));
-    }
-
-    // Map subtyping (structural, by-key, covariant in value types)
-    //
-    // This matches the current runtime validator behavior for `TypeExpr::Map`, which:
-    // - requires all non-optional keys to exist
-    // - validates the value type for keys that exist
-    // - does not restrict extra keys (open map)
-    if let (
+    } else if let (
         IrType::Map {
             entries: sub_entries,
             wildcard: _sub_wildcard,
@@ -373,30 +346,20 @@ fn is_subtype_cached(sub: &IrType, sup: &IrType, visited: &mut HashSet<(String, 
         },
     ) = (sub, sup)
     {
-        for sup_entry in sup_entries {
+        // Structural record map subtyping (required/optional fields; open map by default)
+        sup_entries.iter().all(|sup_entry| {
             let sub_entry = sub_entries.iter().find(|e| e.key == sup_entry.key);
             match sub_entry {
                 Some(se) => {
-                    // A map that may omit a key is NOT a subtype of one that requires it.
                     if !sup_entry.optional && se.optional {
                         return false;
                     }
-                    if !is_subtype_cached(&se.value_type, &sup_entry.value_type, visited) {
-                        return false;
-                    }
+                    is_subtype_cached(&se.value_type, &sup_entry.value_type, visited)
                 }
-                None => {
-                    if !sup_entry.optional {
-                        return false;
-                    }
-                }
+                None => sup_entry.optional,
             }
-        }
-        return true;
-    }
-
-    // ParametricMap subtyping (covariant in key and value for immutable maps)
-    if let (
+        })
+    } else if let (
         IrType::ParametricMap {
             key_type: sub_k,
             value_type: sub_v,
@@ -407,11 +370,14 @@ fn is_subtype_cached(sub: &IrType, sup: &IrType, visited: &mut HashSet<(String, 
         },
     ) = (sub, sup)
     {
-        return is_subtype_cached(sub_k, sup_k, visited) && is_subtype_cached(sub_v, sup_v, visited);
-    }
+        // Dictionary map subtyping (covariant in key and value)
+        is_subtype_cached(sub_k, sup_k, visited) && is_subtype_cached(sub_v, sup_v, visited)
+    } else {
+        false
+    };
 
-    // No other subtyping relationships
-    false
+    visited.remove(&key);
+    result
 }
 
 /// Type compatibility check (for backward compatibility)
@@ -464,33 +430,10 @@ pub fn type_join(t1: &IrType, t2: &IrType) -> IrType {
         // If one type is Never, return the other type
         (IrType::Never, t) => t.clone(),
         (t, IrType::Never) => t.clone(),
-        
-        // For intersection types, the join is the intersection of the joins
-        // This ensures we get the most specific type that satisfies both
-        (IrType::Intersection(components1), IrType::Intersection(components2)) => {
-            if components1.is_empty() {
-                return t2.clone();
-            }
-            if components2.is_empty() {
-                return t1.clone();
-            }
-            
-            // Compute pairwise joins and then intersect them
-            let mut joined_components = Vec::new();
-            for c1 in components1 {
-                for c2 in components2 {
-                    joined_components.push(type_join(c1, c2));
-                }
-            }
-            IrType::Intersection(joined_components)
-        }
-        (IrType::Intersection(components), t) | (t, IrType::Intersection(components)) => {
-            let mut joined_components = Vec::new();
-            for c in components {
-                joined_components.push(type_join(c, t));
-            }
-            IrType::Intersection(joined_components)
-        }
+
+        // If one is already a subtype of the other, the supertype is the join (LUB)
+        (a, b) if is_subtype(a, b) => b.clone(),
+        (a, b) if is_subtype(b, a) => a.clone(),
         
         // For other types, create a union (which is the standard join)
         (t1, t2) => IrType::Union(vec![t1.clone(), t2.clone()]),
@@ -1444,13 +1387,13 @@ mod tests {
 
     #[test]
     fn test_s_intersection_l_basic() {
-        // (S-Intersection-L): (T1 & T2) ≤ T  iff  T1 ≤ T ∧ T2 ≤ T
+        // (S-Intersection-L1/L2): (T1 & T2) ≤ T1 and (T1 & T2) ≤ T2
         
         // Basic case: (Int & Float) ≤ Number where Number = Int | Float
         let number = IrType::Union(vec![IrType::Int, IrType::Float]);
         let int_float_intersection = IrType::Intersection(vec![IrType::Int, IrType::Float]);
         
-        // Int ≤ Number and Float ≤ Number, so (Int & Float) ≤ Number
+        // (Int & Float) ≤ Int and Int ≤ Number, so (Int & Float) ≤ Number
         assert!(is_subtype(&int_float_intersection, &number));
     }
 

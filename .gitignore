@@ -10,6 +10,7 @@
 *.swp
 *.tmp
 *.log
+*.proptest-regressions
 
 # OS-specific files
 .DS_Store
