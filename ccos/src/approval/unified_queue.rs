@@ -3,7 +3,7 @@
 //! A generic approval queue that works with the `ApprovalStorage` trait
 //! for backend-agnostic storage. Replaces the legacy file-based ApprovalQueue.
 
-use super::queue::{ApprovalAuthority, DiscoverySource, RiskAssessment, ServerInfo};
+use super::queue::{ApprovalAuthority, DiscoverySource, RiskAssessment, RiskLevel, ServerInfo};
 use super::types::{
     ApprovalCategory, ApprovalFilter, ApprovalRequest, ApprovalStatus, ApprovalStorage,
     ServerHealthTracking,
@@ -81,13 +81,19 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
         by: ApprovalAuthority,
         reason: Option<String>,
     ) -> RuntimeResult<()> {
-        let mut request =
+        let request =
             self.storage.get(id).await?.ok_or_else(|| {
                 RuntimeError::Generic(format!("Approval request not found: {}", id))
             })?;
 
-        request.approve(by, reason);
-        self.storage.update(&request).await
+        match request.category {
+            ApprovalCategory::ServerDiscovery { .. } => self.approve_server(id, by, reason).await,
+            _ => {
+                let mut request = request;
+                request.approve(by, reason);
+                self.storage.update(&request).await
+            }
+        }
     }
 
     /// Reject a request
@@ -174,6 +180,7 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
     }
 
     /// Approve a server with optional health initialization
+    /// Also moves capability files from pending/ to approved/
     pub async fn approve_server(
         &self,
         id: &str,
@@ -189,6 +196,79 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
         if let ApprovalCategory::ServerDiscovery { ref mut health, .. } = request.category {
             if health.is_none() {
                 *health = Some(ServerHealthTracking::default());
+            }
+        }
+
+        // Move capability files from pending to approved
+        if let ApprovalCategory::ServerDiscovery {
+            ref server_info,
+            ref mut capability_files,
+            ..
+        } = request.category
+        {
+            let server_id = crate::utils::fs::sanitize_filename(&server_info.name);
+
+            // Get workspace root for file paths
+            let workspace_root = crate::utils::fs::get_workspace_root();
+            let pending_dir = workspace_root
+                .join("capabilities/servers/pending")
+                .join(&server_id);
+            let approved_dir = workspace_root
+                .join("capabilities/servers/approved")
+                .join(&server_id);
+
+            if pending_dir.exists() {
+                // Create approved directory structure
+                if let Err(e) =
+                    std::fs::create_dir_all(approved_dir.parent().unwrap_or(&approved_dir))
+                {
+                    eprintln!("[CCOS] Warning: Failed to create approved directory: {}", e);
+                }
+
+                // Remove existing approved dir if it exists
+                if approved_dir.exists() {
+                    let _ = std::fs::remove_dir_all(&approved_dir);
+                }
+
+                // Move from pending to approved
+                if let Err(e) = std::fs::rename(&pending_dir, &approved_dir) {
+                    eprintln!(
+                        "[CCOS] Warning: Failed to move capabilities from pending to approved: {}",
+                        e
+                    );
+                } else {
+                    eprintln!(
+                        "[CCOS] Moved capabilities from {} to {}",
+                        pending_dir.display(),
+                        approved_dir.display()
+                    );
+
+                    // Collect all RTFS files from the approved directory
+                    let mut files = Vec::new();
+                    fn collect_rtfs_files(
+                        dir: &std::path::Path,
+                        files: &mut Vec<String>,
+                        base: &std::path::Path,
+                    ) {
+                        if let Ok(entries) = std::fs::read_dir(dir) {
+                            for entry in entries.flatten() {
+                                let path = entry.path();
+                                if path.is_dir() {
+                                    collect_rtfs_files(&path, files, base);
+                                } else if path.extension().map_or(false, |ext| ext == "rtfs") {
+                                    if let Ok(rel) = path.strip_prefix(base) {
+                                        files.push(rel.to_string_lossy().to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    collect_rtfs_files(&approved_dir, &mut files, &approved_dir);
+
+                    if !files.is_empty() {
+                        *capability_files = Some(files);
+                    }
+                }
             }
         }
 
@@ -366,6 +446,54 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
     /// List pending synthesis approvals
     pub async fn list_pending_syntheses(&self) -> RuntimeResult<Vec<ApprovalRequest>> {
         self.list_pending_by_category("SynthesisApproval").await
+    }
+
+    // ========================================================================
+    // Secret Approval Specific Operations
+    // ========================================================================
+
+    /// Add a secret approval request
+    pub async fn add_secret_approval(
+        &self,
+        capability_id: String,
+        secret_name: String,
+        description: String,
+        expires_in_hours: i64,
+    ) -> RuntimeResult<String> {
+        // Check if a pending request already exists for this secret/capability
+        let pending = self.list_pending_secrets().await?;
+        for req in pending {
+            if let ApprovalCategory::SecretRequired {
+                capability_id: cid,
+                secret_type,
+                ..
+            } = &req.category
+            {
+                if cid == &capability_id && secret_type == &secret_name {
+                    return Ok(req.id);
+                }
+            }
+        }
+
+        let request = ApprovalRequest::new(
+            ApprovalCategory::SecretRequired {
+                capability_id,
+                secret_type: secret_name,
+                description,
+            },
+            RiskAssessment {
+                level: RiskLevel::Medium,
+                reasons: vec!["Capability requires external service credentials".to_string()],
+            },
+            expires_in_hours,
+            None,
+        );
+        self.add(request).await
+    }
+
+    /// List pending secret approvals
+    pub async fn list_pending_secrets(&self) -> RuntimeResult<Vec<ApprovalRequest>> {
+        self.list_pending_by_category("SecretRequired").await
     }
 
     /// Update a pending server entry in place

@@ -76,6 +76,17 @@ fn to_approval_item(request: &ApprovalRequest) -> ApprovalItem {
             "planner".to_string(),
             None,
         ),
+        ApprovalCategory::SecretRequired {
+            capability_id,
+            secret_type,
+            description,
+        } => (
+            ApprovalType::Effect, // Reuse Effect type for secret requests
+            format!("Secret Required: {}", capability_id),
+            format!("{}: {}", secret_type, description),
+            "capability".to_string(),
+            None,
+        ),
     };
 
     ApprovalItem {

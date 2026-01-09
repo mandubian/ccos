@@ -221,6 +221,10 @@ impl CausalChain {
             .with_name(action.function_name.as_deref().unwrap_or("<unknown>"))
             .with_result(result.clone());
 
+            if let Some(sid) = &action.session_id {
+                result_action = result_action.with_session(sid);
+            }
+
             // Attach metadata from result
             for (key, value) in result.metadata {
                 result_action.metadata.insert(key, value);
@@ -657,6 +661,7 @@ impl CausalChain {
     /// Record a capability call in the causal chain.
     pub fn log_capability_call(
         &mut self,
+        session_id: Option<&str>,
         plan_id: &PlanId,
         intent_id: &IntentId,
         _capability_id: &CapabilityId,
@@ -664,13 +669,17 @@ impl CausalChain {
         args: Vec<Value>,
     ) -> Result<Action, RuntimeError> {
         // Build action
-        let action = Action::new(
+        let mut action = Action::new(
             ActionType::CapabilityCall,
             plan_id.clone(),
             intent_id.clone(),
         )
         .with_name(function_name)
         .with_args(args);
+
+        if let Some(sid) = session_id {
+            action = action.with_session(sid);
+        }
 
         // Sign
         let signature = self.signing.sign_action(&action);
@@ -726,6 +735,7 @@ impl CausalChain {
     /// Record a delegation lifecycle event (helper for M4)
     pub fn record_delegation_event(
         &mut self,
+        session_id: Option<&str>,
         intent_id: &IntentId,
         event_kind: &str,
         metadata: std::collections::HashMap<String, Value>,
@@ -733,7 +743,7 @@ impl CausalChain {
         let mut action = Action {
             action_id: uuid::Uuid::new_v4().to_string(),
             parent_action_id: None,
-            session_id: None,
+            session_id: session_id.map(|s| s.to_string()),
             plan_id: "delegation".to_string(),
             intent_id: intent_id.clone(),
             action_type: ActionType::InternalStep,

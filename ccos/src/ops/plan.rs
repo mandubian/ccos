@@ -236,6 +236,7 @@ pub async fn create_plan_with_options(
     // Ensure native CLI capabilities plus approved MCP capabilities are registered.
     println!("🔍 Registering native capabilities...");
     crate::ops::native::register_native_capabilities(&marketplace).await?;
+    crate::mcp::capabilities::register_mcp_capabilities(&marketplace).await?;
     println!("🔍 LOAD_APPROVED START");
     load_approved_capabilities(&marketplace).await?;
     println!("🔍 LOAD_GENERATED START");
@@ -451,8 +452,30 @@ pub async fn execute_plan_with_options(
     let mut content = resolved.content.clone();
 
     // 2. Initialize CCOS runtime
+    let config_path = if std::path::Path::new("config/agent_config.toml").exists() {
+        "config/agent_config.toml"
+    } else if std::path::Path::new("../config/agent_config.toml").exists() {
+        "../config/agent_config.toml"
+    } else {
+        "config/agent_config.toml" // default fallback
+    };
+
+    maybe_set_capability_storage_from_config(config_path);
+    let agent_config = match load_agent_config(config_path) {
+        Ok(cfg) => Some(cfg),
+        Err(_) => None,
+    };
+
     println!("🚀 Initializing CCOS runtime...");
-    let ccos = CCOS::new().await?;
+    let ccos = Arc::new(
+        CCOS::new_with_agent_config_and_configs_and_debug_callback(
+            Default::default(),
+            None,
+            agent_config.clone(),
+            None,
+        )
+        .await?,
+    );
 
     // 3. Create execution context
     let context = RuntimeContext::full();
@@ -460,6 +483,9 @@ pub async fn execute_plan_with_options(
     // Register native capabilities (ccos.cli.*) so they can be used in the plan
     let marketplace = ccos.get_capability_marketplace();
     crate::ops::native::register_native_capabilities(&marketplace).await?;
+    crate::mcp::capabilities::register_mcp_capabilities(&marketplace).await?;
+    load_approved_capabilities(&marketplace).await?;
+    load_generated_capabilities(&marketplace).await?;
 
     // 4. Execute with repair loop
     let mut attempts = 0;
@@ -470,20 +496,72 @@ pub async fn execute_plan_with_options(
         attempts += 1;
 
         // Create Plan object
-        let plan = if let Some(base) = resolved.plan.as_ref() {
+        let mut plan = if let Some(base) = resolved.plan.as_ref() {
             let mut plan = base.clone();
             plan.body = PlanBody::Rtfs(content.clone());
             plan
         } else {
-            Plan::new_rtfs(content.clone(), vec![])
+            // Try to parse as (plan ...) expression to extract metadata
+            if let Ok(expr) = rtfs::parser::parse_expression(content.trim()) {
+                println!("[PlanOps] Successfully parsed RTFS expression");
+                match crate::rtfs_bridge::extractors::extract_plan_from_rtfs(&expr) {
+                    Ok(extracted) => {
+                        println!("[PlanOps] Successfully extracted plan metadata");
+                        extracted
+                    }
+                    Err(e) => {
+                        println!("[PlanOps] Failed to extract plan from RTFS: {:?}", e);
+                        Plan::new_rtfs(content.clone(), vec![])
+                    }
+                }
+            } else {
+                println!("[PlanOps] Failed to parse RTFS expression");
+                // Print parse error if we could capture it, but parse_expression returns Result
+                if let Err(e) = rtfs::parser::parse_expression(content.trim()) {
+                    println!("[PlanOps] Parse error: {:?}", e);
+                }
+                Plan::new_rtfs(content.clone(), vec![])
+            }
         };
+
+        // If plan has a goal in metadata/annotations but no intent, create a transient intent
+        if plan.intent_ids.is_empty() {
+            if let Some(goal_val) = plan.annotations.get("goal") {
+                if let rtfs::runtime::values::Value::String(goal) = goal_val {
+                    let mut intent = crate::types::StorableIntent::new(goal.clone());
+                    intent.name = Some(
+                        plan.name
+                            .clone()
+                            .unwrap_or_else(|| "Transient Plan Intent".to_string()),
+                    );
+                    let intent_id = intent.intent_id.clone();
+
+                    if let Ok(mut graph) = ccos.get_intent_graph().lock() {
+                        if let Err(e) = graph.store_intent(intent.clone()) {
+                            eprintln!("⚠️ Failed to store transient intent: {}", e);
+                        } else {
+                            println!(
+                                "🎯 Created transient intent '{}' for goal: {}",
+                                intent_id, goal
+                            );
+                            plan.intent_ids.push(intent_id);
+                        }
+                    }
+                }
+            }
+        }
 
         // Execute
         if attempts == 1 {
             println!("▶️  Executing plan...");
         } else {
-            println!("🔄 Retry attempt {} of {}...", attempts, max_attempts);
+            println!("▶️  Executing plan (attempt {}/{})", attempts, max_attempts);
         }
+
+        println!(
+            "[PlanOps] Executing plan with intent_ids: {:?}",
+            plan.intent_ids
+        );
 
         let result = ccos.validate_and_execute_plan(plan, &context).await;
 
@@ -590,9 +668,31 @@ pub async fn validate_plan_full(plan_input: String) -> RuntimeResult<bool> {
     }
 
     // Initialize CCOS to check capabilities
-    let ccos = CCOS::new().await?;
+    let config_path = if std::path::Path::new("config/agent_config.toml").exists() {
+        "config/agent_config.toml"
+    } else if std::path::Path::new("../config/agent_config.toml").exists() {
+        "../config/agent_config.toml"
+    } else {
+        "config/agent_config.toml" // default fallback
+    };
+
+    maybe_set_capability_storage_from_config(config_path);
+    let agent_config = match load_agent_config(config_path) {
+        Ok(cfg) => Some(cfg),
+        Err(_) => None,
+    };
+
+    let ccos = CCOS::new_with_agent_config_and_configs_and_debug_callback(
+        Default::default(),
+        None,
+        agent_config.clone(),
+        None,
+    )
+    .await?;
     let marketplace = ccos.get_capability_marketplace();
     crate::ops::native::register_native_capabilities(&marketplace).await?;
+    load_approved_capabilities(&marketplace).await?;
+    load_generated_capabilities(&marketplace).await?;
 
     let mut all_valid = true;
     for cap_id in &capabilities {

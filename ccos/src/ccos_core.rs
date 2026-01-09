@@ -22,8 +22,8 @@ use crate::arbiter::prompt::{FilePromptStore, PromptStore};
 use crate::arbiter::DelegatingArbiter;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::CatalogService;
-use crate::host::RuntimeHost;
 use crate::config::types::AgentConfig;
+use crate::host::RuntimeHost;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
@@ -1117,7 +1117,12 @@ impl CCOS {
                             Value::String(agent_id.clone()),
                         );
                         meta.insert("success".to_string(), Value::Boolean(result.success));
-                        let _ = chain.record_delegation_event(&stored.intent_id, "completed", meta);
+                        let _ = chain.record_delegation_event(
+                            None,
+                            &stored.intent_id,
+                            "completed",
+                            meta,
+                        );
                     }
                     // Feedback update (rolling average) via registry
                     // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
@@ -1256,7 +1261,12 @@ impl CCOS {
                             Value::String(agent_id.clone()),
                         );
                         meta.insert("success".to_string(), Value::Boolean(result.success));
-                        let _ = chain.record_delegation_event(&stored.intent_id, "completed", meta);
+                        let _ = chain.record_delegation_event(
+                            None,
+                            &stored.intent_id,
+                            "completed",
+                            meta,
+                        );
                     }
                     // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities
                     // AgentRegistry migration: Use marketplace.update_capability_metrics() or similar
@@ -1396,7 +1406,12 @@ impl CCOS {
                             Value::String(agent_id.clone()),
                         );
                         meta.insert("success".to_string(), Value::Boolean(result.success));
-                        let _ = chain.record_delegation_event(&stored.intent_id, "completed", meta);
+                        let _ = chain.record_delegation_event(
+                            None,
+                            &stored.intent_id,
+                            "completed",
+                            meta,
+                        );
                     }
                     // Feedback update (rolling average) via registry
                     // TODO: Migrate feedback tracking to CapabilityMarketplace with :kind :agent capabilities

@@ -107,7 +107,7 @@ impl RuntimeHost {
     ) -> RuntimeResult<()> {
         let mut chain = self.get_causal_chain()?;
         chain
-            .record_delegation_event(&intent_id.to_string(), event_kind, metadata)
+            .record_delegation_event(None, &intent_id.to_string(), event_kind, metadata)
             .map_err(|e| RuntimeError::Generic(format!("record_delegation_event error: {:?}", e)))
     }
 

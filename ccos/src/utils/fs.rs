@@ -62,7 +62,25 @@ pub fn get_workspace_root() -> PathBuf {
                 }
             }
 
-            // 2. Fallback to current directory
+            // 2. Search upwards for a Cargo.toml with [workspace]
+            if let Ok(mut current) = std::env::current_dir() {
+                loop {
+                    let cargo_toml = current.join("Cargo.toml");
+                    if cargo_toml.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
+                            if content.contains("[workspace]") {
+                                return current;
+                            }
+                        }
+                    }
+
+                    if !current.pop() {
+                        break;
+                    }
+                }
+            }
+
+            // 3. Fallback to current directory
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         })
         .clone()
@@ -84,14 +102,18 @@ pub fn set_workspace_root(root: PathBuf) -> bool {
 /// Resolve a path relative to the workspace root.
 ///
 /// If the path is already absolute, returns it as-is.
-/// If relative, joins it with the workspace root.
+/// If relative, joins it with the workspace root and canonicalizes to resolve `..`.
 pub fn resolve_workspace_path(path: &str) -> PathBuf {
     let p = PathBuf::from(path);
-    if p.is_absolute() {
+    let resolved = if p.is_absolute() {
         p
     } else {
         get_workspace_root().join(p)
-    }
+    };
+
+    // Canonicalize to resolve any .. or . in the path
+    // Fall back to the resolved path if canonicalize fails (e.g., path doesn't exist yet)
+    resolved.canonicalize().unwrap_or(resolved)
 }
 
 /// Resolve the default plan archive path with environment overrides.
@@ -190,6 +212,25 @@ pub fn get_configured_generated_path() -> PathBuf {
         return base.join(&config.storage.generated_subdir);
     }
     get_configured_capabilities_path().join("generated")
+}
+
+/// Get the configured sessions path (capabilities_dir/sessions_subdir).
+pub fn get_configured_sessions_path() -> PathBuf {
+    // Check environment variable first
+    if let Ok(path) = std::env::var("CCOS_SESSIONS_STORAGE") {
+        let p = PathBuf::from(&path);
+        return if p.is_absolute() {
+            p
+        } else {
+            resolve_workspace_path(&path)
+        };
+    }
+
+    if let Some(config) = load_agent_config() {
+        let base = resolve_workspace_path(&config.storage.capabilities_dir);
+        return base.join(&config.storage.sessions_subdir);
+    }
+    get_configured_capabilities_path().join("sessions")
 }
 
 /// Legacy alias for backward compatibility. Prefer `get_workspace_root()`.

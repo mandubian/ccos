@@ -158,7 +158,7 @@ impl APIIntrospector {
         let rate_limits = self.extract_rate_limits(&spec)?;
 
         Ok(APIIntrospectionResult {
-            base_url: self.extract_base_url(&spec)?,
+            base_url: self.extract_base_url(&spec, Some(spec_url))?,
             api_title: api_info.title,
             api_version: api_info.version,
             endpoints,
@@ -290,9 +290,14 @@ impl APIIntrospector {
 
         // Parse JSON or YAML
         if spec_url.ends_with(".yaml") || spec_url.ends_with(".yml") {
-            // For now, assume JSON - in production you'd use a YAML parser
-            serde_json::from_str(&spec_text)
-                .map_err(|e| RuntimeError::Generic(format!("Failed to parse OpenAPI spec: {}", e)))
+            // Parse as YAML first, then convert to serde_json::Value for uniform handling
+            let yaml_value: serde_yaml::Value = serde_yaml::from_str(&spec_text).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to parse YAML OpenAPI spec: {}", e))
+            })?;
+            // Convert YAML value to JSON value
+            serde_json::to_value(yaml_value).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to convert YAML to JSON: {}", e))
+            })
         } else {
             serde_json::from_str(&spec_text)
                 .map_err(|e| RuntimeError::Generic(format!("Failed to parse OpenAPI spec: {}", e)))
@@ -321,7 +326,11 @@ impl APIIntrospector {
     }
 
     /// Extract base URL from OpenAPI spec
-    fn extract_base_url(&self, spec: &serde_json::Value) -> RuntimeResult<String> {
+    fn extract_base_url(
+        &self,
+        spec: &serde_json::Value,
+        spec_url: Option<&str>,
+    ) -> RuntimeResult<String> {
         // Try servers section first
         if let Some(servers) = spec.get("servers").and_then(|s| s.as_array()) {
             if let Some(server) = servers.first() {
@@ -341,6 +350,20 @@ impl APIIntrospector {
                 .unwrap_or("https");
             let base_path = spec.get("basePath").and_then(|p| p.as_str()).unwrap_or("");
             return Ok(format!("{}://{}{}", scheme, host, base_path));
+        }
+
+        // Fallback: use the origin of the spec URL (e.g., https://catfact.ninja from https://catfact.ninja/docs?api-docs.json)
+        if let Some(url_str) = spec_url {
+            if let Ok(url) = url::Url::parse(url_str) {
+                if let Some(host) = url.host_str() {
+                    let fallback = format!("{}://{}", url.scheme(), host);
+                    eprintln!(
+                        "[APIIntrospector] No servers in spec, using spec origin as base_url: {}",
+                        fallback
+                    );
+                    return Ok(fallback);
+                }
+            }
         }
 
         Err(RuntimeError::Generic(
@@ -368,7 +391,7 @@ impl APIIntrospector {
                     }
 
                     if let Some(op) = operation.as_object() {
-                        let endpoint = self.parse_endpoint_with_schema(method, path, op)?;
+                        let endpoint = self.parse_endpoint_with_schema(method, path, op, spec)?;
                         endpoints.push(endpoint);
                     }
                 }
@@ -384,6 +407,7 @@ impl APIIntrospector {
         method: &str,
         path: &str,
         operation: &serde_json::Map<String, serde_json::Value>,
+        spec: &serde_json::Value,
     ) -> RuntimeResult<DiscoveredEndpoint> {
         let operation_id = operation
             .get("operationId")
@@ -402,10 +426,10 @@ impl APIIntrospector {
             .unwrap_or(summary);
 
         // Extract parameters and build input schema
-        let (parameters, input_schema) = self.extract_parameters_and_schema(operation)?;
+        let (parameters, input_schema) = self.extract_parameters_and_schema(operation, spec)?;
 
         // Extract response schema
-        let output_schema = self.extract_response_schema(operation)?;
+        let output_schema = self.extract_response_schema(operation, spec)?;
 
         // Check if auth is required
         let requires_auth = operation
@@ -431,6 +455,7 @@ impl APIIntrospector {
     fn extract_parameters_and_schema(
         &self,
         operation: &serde_json::Map<String, serde_json::Value>,
+        spec: &serde_json::Value,
     ) -> RuntimeResult<(Vec<EndpointParameter>, Option<TypeExpr>)> {
         let mut parameters = Vec::new();
         let mut map_entries = Vec::new();
@@ -438,8 +463,17 @@ impl APIIntrospector {
         // Extract parameters
         if let Some(params) = operation.get("parameters").and_then(|p| p.as_array()) {
             for param in params {
-                if let Some(param_obj) = param.as_object() {
-                    let param_info = self.parse_parameter(param_obj)?;
+                // Resolve $ref if present
+                let resolved_param =
+                    if let Some(ref_path) = param.get("$ref").and_then(|r| r.as_str()) {
+                        // Parse reference path like "#/components/parameters/PaginationLimit"
+                        self.resolve_ref(ref_path, spec)?
+                    } else {
+                        param.clone()
+                    };
+
+                if let Some(param_obj) = resolved_param.as_object() {
+                    let param_info = self.parse_parameter(param_obj, spec)?;
                     parameters.push(param_info.clone());
 
                     // Add to schema map
@@ -455,9 +489,26 @@ impl APIIntrospector {
         // Extract request body
         if let Some(request_body) = operation.get("requestBody") {
             if let Some(content) = request_body.get("content") {
-                if let Some(json_content) = content.get("application/json") {
-                    if let Some(schema) = json_content.get("schema") {
-                        let body_type = self.json_schema_to_rtfs_type(schema)?;
+                // Try application/json first, then application/x-www-form-urlencoded
+                let schema = content
+                    .get("application/json")
+                    .and_then(|c| c.get("schema"))
+                    .or_else(|| {
+                        content
+                            .get("application/x-www-form-urlencoded")
+                            .and_then(|c| c.get("schema"))
+                    });
+
+                if let Some(schema) = schema {
+                    let body_type = self.json_schema_to_rtfs_type(schema, spec)?;
+
+                    // For form-urlencoded, extract properties directly into map entries
+                    // instead of wrapping in a "body" key
+                    if let TypeExpr::Map { entries, .. } = body_type {
+                        for entry in entries {
+                            map_entries.push(entry);
+                        }
+                    } else {
                         map_entries.push(MapTypeEntry {
                             key: Keyword("body".to_string()),
                             value_type: Box::new(body_type),
@@ -487,14 +538,23 @@ impl APIIntrospector {
     fn extract_response_schema(
         &self,
         operation: &serde_json::Map<String, serde_json::Value>,
+        spec: &serde_json::Value,
     ) -> RuntimeResult<Option<TypeExpr>> {
         if let Some(responses) = operation.get("responses").and_then(|r| r.as_object()) {
             // Look for 200 response first
             if let Some(success_response) = responses.get("200") {
-                if let Some(content) = success_response.get("content") {
+                // Handle $ref for response
+                let resolved_response =
+                    if let Some(ref_path) = success_response.get("$ref").and_then(|r| r.as_str()) {
+                        self.resolve_ref(ref_path, spec)?
+                    } else {
+                        success_response.clone()
+                    };
+
+                if let Some(content) = resolved_response.get("content") {
                     if let Some(json_content) = content.get("application/json") {
                         if let Some(schema) = json_content.get("schema") {
-                            return Ok(Some(self.json_schema_to_rtfs_type(schema)?));
+                            return Ok(Some(self.json_schema_to_rtfs_type(schema, spec)?));
                         }
                     }
                 }
@@ -503,10 +563,18 @@ impl APIIntrospector {
             // Fallback to any successful response
             for (code, response) in responses {
                 if code.starts_with('2') {
-                    if let Some(content) = response.get("content") {
+                    // Handle $ref for response
+                    let resolved_response =
+                        if let Some(ref_path) = response.get("$ref").and_then(|r| r.as_str()) {
+                            self.resolve_ref(ref_path, spec)?
+                        } else {
+                            response.clone()
+                        };
+
+                    if let Some(content) = resolved_response.get("content") {
                         if let Some(json_content) = content.get("application/json") {
                             if let Some(schema) = json_content.get("schema") {
-                                return Ok(Some(self.json_schema_to_rtfs_type(schema)?));
+                                return Ok(Some(self.json_schema_to_rtfs_type(schema, spec)?));
                             }
                         }
                     }
@@ -521,6 +589,7 @@ impl APIIntrospector {
     fn parse_parameter(
         &self,
         param: &serde_json::Map<String, serde_json::Value>,
+        spec: &serde_json::Value,
     ) -> RuntimeResult<EndpointParameter> {
         let name = param
             .get("name")
@@ -549,7 +618,7 @@ impl APIIntrospector {
             .cloned()
             .unwrap_or_else(|| serde_json::json!({"type": "string"}));
 
-        let param_type = self.json_schema_to_rtfs_type(&schema)?;
+        let param_type = self.json_schema_to_rtfs_type(&schema, spec)?;
 
         Ok(EndpointParameter {
             name,
@@ -561,8 +630,20 @@ impl APIIntrospector {
     }
 
     /// Convert JSON schema to RTFS TypeExpr
-    fn json_schema_to_rtfs_type(&self, schema: &serde_json::Value) -> RuntimeResult<TypeExpr> {
-        if let Some(type_str) = schema.get("type").and_then(|t| t.as_str()) {
+    /// Accepts an optional spec for resolving $ref references
+    fn json_schema_to_rtfs_type(
+        &self,
+        schema: &serde_json::Value,
+        spec: &serde_json::Value,
+    ) -> RuntimeResult<TypeExpr> {
+        // First, resolve any $ref at this level
+        let resolved_schema = if let Some(ref_path) = schema.get("$ref").and_then(|r| r.as_str()) {
+            self.resolve_ref(ref_path, spec)?
+        } else {
+            schema.clone()
+        };
+
+        if let Some(type_str) = resolved_schema.get("type").and_then(|t| t.as_str()) {
             match type_str {
                 "string" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
                 "integer" | "long" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Int)),
@@ -571,8 +652,8 @@ impl APIIntrospector {
                 }
                 "boolean" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Bool)),
                 "array" => {
-                    let element_type = if let Some(items) = schema.get("items") {
-                        self.json_schema_to_rtfs_type(items)?
+                    let element_type = if let Some(items) = resolved_schema.get("items") {
+                        self.json_schema_to_rtfs_type(items, spec)?
                     } else {
                         TypeExpr::Any
                     };
@@ -580,8 +661,11 @@ impl APIIntrospector {
                 }
                 "object" => {
                     let mut entries = Vec::new();
-                    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-                        let required_fields: std::collections::HashSet<String> = schema
+                    if let Some(properties) = resolved_schema
+                        .get("properties")
+                        .and_then(|p| p.as_object())
+                    {
+                        let required_fields: std::collections::HashSet<String> = resolved_schema
                             .get("required")
                             .and_then(|r| r.as_array())
                             .map(|arr| {
@@ -593,7 +677,7 @@ impl APIIntrospector {
                             .unwrap_or_default();
 
                         for (key, prop_schema) in properties {
-                            let prop_type = self.json_schema_to_rtfs_type(prop_schema)?;
+                            let prop_type = self.json_schema_to_rtfs_type(prop_schema, spec)?;
                             entries.push(MapTypeEntry {
                                 key: Keyword(key.clone()),
                                 value_type: Box::new(prop_type),
@@ -697,6 +781,30 @@ impl APIIntrospector {
         } else {
             Ok(None)
         }
+    }
+
+    /// Resolve a JSON $ref pointer within the OpenAPI spec
+    /// Supports paths like "#/components/parameters/PaginationLimit"
+    fn resolve_ref(
+        &self,
+        ref_path: &str,
+        spec: &serde_json::Value,
+    ) -> RuntimeResult<serde_json::Value> {
+        // Strip the leading "#/" if present
+        let path = ref_path.trim_start_matches('#').trim_start_matches('/');
+
+        // Navigate through the spec following the path segments
+        let mut current = spec;
+        for segment in path.split('/') {
+            current = current.get(segment).ok_or_else(|| {
+                RuntimeError::Generic(format!(
+                    "Failed to resolve $ref '{}': segment '{}' not found",
+                    ref_path, segment
+                ))
+            })?;
+        }
+
+        Ok(current.clone())
     }
 
     /// Create capability from endpoint

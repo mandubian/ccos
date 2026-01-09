@@ -142,6 +142,7 @@ impl FileApprovalStorage {
                 ApprovalCategory::EffectApproval { .. } => "EffectApproval",
                 ApprovalCategory::SynthesisApproval { .. } => "SynthesisApproval",
                 ApprovalCategory::LlmPromptApproval { .. } => "LlmPromptApproval",
+                ApprovalCategory::SecretRequired { .. } => "SecretRequired",
             };
             if request_type != category_type {
                 return false;

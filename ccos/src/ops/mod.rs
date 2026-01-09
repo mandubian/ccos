@@ -5,10 +5,12 @@
 //! used both by CLI commands and as native capabilities.
 
 pub mod approval;
+pub mod browser_discovery;
 pub mod config;
 pub mod discover;
 pub mod fs;
 pub mod governance;
+pub mod introspection_service;
 pub mod llm;
 pub mod native;
 pub mod plan;

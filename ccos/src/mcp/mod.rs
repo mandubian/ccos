@@ -16,17 +16,20 @@
 //! - **Rate Limiter**: `rate_limiter.rs` - Rate limiting and retry policies
 
 pub mod cache;
+pub mod capabilities;
 pub mod core;
 pub mod discovery_session;
 pub mod http_transport;
 pub mod rate_limiter;
 pub mod registry;
 pub mod server;
+pub mod stdio_client;
 pub mod types;
 
 // Re-export main types with consistent naming (all caps for acronyms)
 pub use discovery_session::{MCPCapabilities, MCPServerInfo, MCPSession, MCPSessionManager};
 pub use registry::{MCPRegistryClient, McpServer};
+pub use stdio_client::StdioClient;
 pub use types::*;
 
 // Re-export rate limiter types
