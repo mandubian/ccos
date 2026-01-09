@@ -61,5 +61,9 @@ capabilities/generated/
 capabilities/discovered/
 capabilities/pending_synth/
 capabilities/servers/
+capabilities/sessions/
+
+capabilities/learned/
+capabilities/web/
 .ccos/
 storage/

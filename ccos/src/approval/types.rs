@@ -50,6 +50,12 @@ pub enum ApprovalCategory {
         prompt: String,
         risk_reasons: Vec<String>,
     },
+    /// Secret required approval (for capabilities needing secrets/credentials)
+    SecretRequired {
+        capability_id: String,
+        secret_type: String,
+        description: String,
+    },
 }
 
 /// Health tracking for approved servers
@@ -90,6 +96,9 @@ impl fmt::Display for ApprovalCategory {
             }
             ApprovalCategory::LlmPromptApproval { .. } => {
                 write!(f, "LlmPromptApproval")
+            }
+            ApprovalCategory::SecretRequired { capability_id, .. } => {
+                write!(f, "SecretRequired({})", capability_id)
             }
         }
     }

@@ -1,26 +1,6 @@
-//! MCP Discovery Session Management
-//!
-//! Implements proper MCP session management for discovery operations according to the MCP specification:
-//! https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#session-management
-//!
-//! This module provides ephemeral, async session management for discovery/introspection.
-//! For runtime execution sessions (with pooling), see `capabilities::mcp_session_handler`.
-//!
-//! ## Key Features
-//!
-//! 1. Initialize MCP session and obtain session ID
-//! 2. Include session ID in all subsequent requests via Mcp-Session-Id header
-//! 3. Handle session expiration (404) by re-initializing
-//! 4. Support graceful session termination via DELETE
-//!
-//! ## Usage
-//!
-//! Used by the unified discovery service to establish temporary sessions
-//! for querying MCP servers during capability discovery.
-
 use crate::ccos_println;
+use crate::mcp::stdio_client::StdioClient;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -32,15 +12,16 @@ pub struct MCPSession {
     pub protocol_version: String,
     pub server_info: MCPServerInfo,
     pub capabilities: MCPCapabilities,
+    pub stdio_client: Option<Arc<StdioClient>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, ::serde::Serialize, ::serde::Deserialize)]
 pub struct MCPServerInfo {
     pub name: String,
     pub version: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, ::serde::Serialize, ::serde::Deserialize, Default)]
 pub struct MCPCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<serde_json::Value>,
@@ -88,6 +69,23 @@ impl MCPSessionManager {
         client_info: &MCPServerInfo,
     ) -> RuntimeResult<MCPSession> {
         ccos_println!("🔄 Initializing MCP session with {}", server_url);
+
+        let trimmed = server_url.trim();
+        // Detect if this is a stdio transport (command line instead of URL)
+        let is_stdio = trimmed.starts_with("npx ")
+            || trimmed.starts_with("node ")
+            || trimmed.starts_with("python ")
+            || trimmed.starts_with("python3 ")
+            || trimmed.starts_with("/")
+            || trimmed.starts_with("./")
+            || trimmed.starts_with("sh ")
+            || trimmed.starts_with("bash ")
+            || (!trimmed.contains("://") && !trimmed.is_empty());
+
+        if is_stdio {
+            ccos_println!("🔍 Detected stdio transport for: {}", trimmed);
+            return self.initialize_stdio_session(trimmed, client_info).await;
+        }
 
         // Build initialize request according to MCP spec
         let init_request = serde_json::json!({
@@ -138,12 +136,6 @@ impl MCPSessionManager {
 
         // Check response status
         let status = response.status();
-        let content_type = response
-            .headers()
-            .get("content-type")
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("")
-            .to_string();
 
         if !status.is_success() {
             let error_text = response
@@ -235,6 +227,74 @@ impl MCPSessionManager {
             protocol_version,
             server_info,
             capabilities,
+            stdio_client: None,
+        })
+    }
+
+    /// Internal helper to initialize a stdio-based session
+    async fn initialize_stdio_session(
+        &self,
+        command: &str,
+        client_info: &MCPServerInfo,
+    ) -> RuntimeResult<MCPSession> {
+        ccos_println!("🚀 Spawning stdio MCP server: {}", command);
+
+        let client = StdioClient::spawn(command).await?;
+        let client = Arc::new(client);
+
+        let init_params = serde_json::json!({
+            "protocolVersion": "2024-11-05",
+            "clientInfo": {
+                "name": client_info.name,
+                "version": client_info.version
+            },
+            "capabilities": {}
+        });
+
+        let response = client.make_request("initialize", init_params).await?;
+
+        let result = response.get("result").ok_or_else(|| {
+            RuntimeError::Generic("Stdio Initialize response missing result".to_string())
+        })?;
+
+        let server_info = MCPServerInfo {
+            name: result
+                .get("serverInfo")
+                .and_then(|s| s.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            version: result
+                .get("serverInfo")
+                .and_then(|s| s.get("version"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+        };
+
+        let capabilities: MCPCapabilities = result
+            .get("capabilities")
+            .and_then(|c| serde_json::from_value(c.clone()).ok())
+            .unwrap_or_default();
+
+        let protocol_version = result
+            .get("protocolVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or("2024-11-05")
+            .to_string();
+
+        // Stdio is stateless in terms of headers, but we might still have a session ID
+        // (though usually not for stdio)
+        let session_id = None;
+
+        ccos_println!("✅ Stdio MCP session initialized");
+        Ok(MCPSession {
+            server_url: command.to_string(),
+            session_id,
+            protocol_version,
+            server_info,
+            capabilities,
+            stdio_client: Some(client),
         })
     }
 
@@ -247,6 +307,11 @@ impl MCPSessionManager {
         method: &str,
         params: serde_json::Value,
     ) -> RuntimeResult<serde_json::Value> {
+        // Dispatch to stdio client if available
+        if let Some(ref stdio) = session.stdio_client {
+            return stdio.make_request(method, params).await;
+        }
+
         let request_payload = serde_json::json!({
             "jsonrpc": "2.0",
             "id": format!("{}_{}", method, uuid::Uuid::new_v4()),
@@ -376,7 +441,7 @@ fn extract_sse_data(body: &str) -> Option<String> {
     let mut buf = String::new();
     for line in body.lines() {
         let line = line.trim_end_matches(['\r', '\n']);
-        
+
         // Handle "data: " or "data:" prefix
         let data_opt = if line.starts_with("data: ") {
             Some(&line[6..])
@@ -411,4 +476,54 @@ fn extract_sse_data(body: &str) -> Option<String> {
         .into_iter()
         .rev()
         .find(|s| s.trim_start().starts_with('{') || s.trim_start().starts_with('['))
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct McpToolCallResult {
+    pub content: Vec<McpContent>,
+    #[serde(default)]
+    pub isError: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct McpContent {
+    pub r#type: String,
+    pub text: Option<String>,
+}
+
+impl MCPSessionManager {
+    /// Call an MCP tool
+    pub async fn call_tool(
+        &self,
+        session: &MCPSession,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> RuntimeResult<McpToolCallResult> {
+        let params = serde_json::json!({
+            "name": tool_name,
+            "arguments": arguments
+        });
+
+        // This returns the full JSON-RPC response
+        let response = self.make_request(session, "tools/call", params).await?;
+
+        // Check for JSON-RPC error
+        if let Some(error) = response.get("error") {
+            let msg = error
+                .get("message")
+                .and_then(|s| s.as_str())
+                .unwrap_or("Unknown error");
+            return Err(RuntimeError::Generic(format!(
+                "Tool execution error: {}",
+                msg
+            )));
+        }
+
+        let result = response.get("result").ok_or_else(|| {
+            RuntimeError::Generic("Tool call response missing 'result' field".to_string())
+        })?;
+
+        serde_json::from_value(result.clone())
+            .map_err(|e| RuntimeError::Generic(format!("Failed to parse tool call result: {}", e)))
+    }
 }

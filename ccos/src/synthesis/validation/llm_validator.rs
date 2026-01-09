@@ -356,6 +356,9 @@ Respond with ONLY the JSON, no additional text."#,
 
 /// Try to auto-repair a plan based on validation errors.
 ///
+/// Uses the comprehensive prompt templates from `assets/prompts/arbiter/auto_repair/v1/`
+/// which include grammar hints, repair strategy, and anti-patterns for better LLM guidance.
+///
 /// # Arguments
 /// - `plan`: The original plan code
 /// - `errors`: Validation errors to fix
@@ -383,38 +386,47 @@ pub async fn auto_repair_plan(
         }
     };
 
-    let errors_str = errors
+    // Load prompt templates at compile time for comprehensive repair guidance
+    let grammar_hints = include_str!("../../../assets/prompts/arbiter/auto_repair/v1/grammar.md");
+    let strategy = include_str!("../../../assets/prompts/arbiter/auto_repair/v1/strategy.md");
+    let anti_patterns =
+        include_str!("../../../assets/prompts/arbiter/auto_repair/v1/anti_patterns.md");
+    let task_template = include_str!("../../../assets/prompts/arbiter/auto_repair/v1/task.md");
+
+    // Format diagnostics from validation errors
+    let diagnostics = errors
         .iter()
-        .map(|e| format!("- [{}] {}", format!("{:?}", e.error_type), e.message))
+        .map(|e| {
+            let location = e.location.as_deref().unwrap_or("unknown");
+            let fix_hint = e.suggested_fix.as_deref().unwrap_or("");
+            format!(
+                "- [{:?}] at {}: {}\n  Suggested fix: {}",
+                e.error_type, location, e.message, fix_hint
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
-    let prompt = format!(
-        r#"You are repairing an RTFS plan that has validation errors.
-
-Original plan:
-```rtfs
-{}
-```
-
-Validation errors:
-{}
-
-Repair attempt: {} of {}
-
-Fix the errors while preserving the plan's intent. Common fixes:
-- Schema mismatches: Adjust data transformations
-- Missing params: Add let bindings or extract from previous results
-- Dependency issues: Reorder steps or fix depends_on indices
-
-Respond with ONLY the corrected RTFS plan code, no explanations."#,
-        plan, errors_str, attempt, config.max_repair_attempts
-    );
+    // Build the full prompt from templates
+    let prompt = task_template
+        .replace(
+            "{fixture_name}",
+            &format!("auto_repair_attempt_{}", attempt),
+        )
+        .replace("{diagnostics}", &diagnostics)
+        .replace("{grammar_hint_block}", grammar_hints)
+        .replace(
+            "{fixture_guidance_block}",
+            &format!("{}\n\n{}", strategy, anti_patterns),
+        )
+        .replace("{broken_plan}", plan);
 
     match provider.generate_text(&prompt).await {
         Ok(response) => {
             let repaired = extract_rtfs_code(&response);
-            if repaired.contains("(capability")
+            // Validate the repaired code looks like valid RTFS
+            if repaired.contains("(plan")
+                || repaired.contains("(capability")
                 || repaired.contains("(do")
                 || repaired.contains("(let")
             {

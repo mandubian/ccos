@@ -69,6 +69,7 @@ impl ApprovalStorage for InMemoryApprovalStorage {
                         super::types::ApprovalCategory::LlmPromptApproval { .. } => {
                             "LlmPromptApproval"
                         }
+                        super::types::ApprovalCategory::SecretRequired { .. } => "SecretRequired",
                     };
                     if actual_type != cat_type {
                         return false;

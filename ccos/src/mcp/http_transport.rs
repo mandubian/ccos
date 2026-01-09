@@ -33,6 +33,7 @@ use crate::approval::{
     types::{ApprovalCategory, ApprovalRequest},
     UnifiedApprovalQueue,
 };
+use crate::capability_marketplace::CapabilityMarketplace;
 use crate::secrets::SecretStore;
 use crate::utils::fs::get_workspace_root;
 
@@ -54,6 +55,7 @@ pub struct HttpTransportState {
     pub broadcasters: RwLock<HashMap<String, broadcast::Sender<Value>>>,
     /// Approval queue for secrets and other approvals
     pub approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
+    pub marketplace: Option<Arc<CapabilityMarketplace>>,
 }
 
 impl HttpTransportState {
@@ -63,11 +65,17 @@ impl HttpTransportState {
             sessions: RwLock::new(HashMap::new()),
             broadcasters: RwLock::new(HashMap::new()),
             approval_queue: None,
+            marketplace: None,
         }
     }
 
     pub fn with_approval_queue(mut self, queue: UnifiedApprovalQueue<FileApprovalStorage>) -> Self {
         self.approval_queue = Some(queue);
+        self
+    }
+
+    pub fn with_marketplace(mut self, marketplace: Arc<CapabilityMarketplace>) -> Self {
+        self.marketplace = Some(marketplace);
         self
     }
 
@@ -144,7 +152,7 @@ pub async fn run_http_transport(
     server: MCPServer,
     config: HttpTransportConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    run_http_transport_with_approvals(server, config, None).await
+    run_http_transport_with_approvals(server, config, None, None).await
 }
 
 /// Run the MCP server with Streamable HTTP transport and optional approval queue
@@ -152,10 +160,14 @@ pub async fn run_http_transport_with_approvals(
     server: MCPServer,
     config: HttpTransportConfig,
     approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
+    marketplace: Option<Arc<CapabilityMarketplace>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut state = HttpTransportState::new(server);
     if let Some(queue) = approval_queue {
         state = state.with_approval_queue(queue);
+    }
+    if let Some(mp) = marketplace {
+        state = state.with_marketplace(mp);
     }
     let state = Arc::new(state);
 
@@ -176,6 +188,10 @@ pub async fn run_http_transport_with_approvals(
         .route(
             "/api/approvals/:id/reject",
             post(handle_api_approval_reject),
+        )
+        .route(
+            "/api/approvals/:id/reapprove",
+            post(handle_api_approval_reapprove),
         )
         .with_state(state);
 
@@ -526,17 +542,21 @@ async fn handle_approvals_html(State(state): State<Arc<HttpTransportState>>) -> 
     Html(html)
 }
 
-/// GET /api/approvals - JSON list of pending approvals
+/// GET /api/approvals - JSON list of all approvals (with status)
 async fn handle_api_approvals_list(
     State(state): State<Arc<HttpTransportState>>,
 ) -> impl IntoResponse {
-    let pending = if let Some(ref queue) = state.approval_queue {
-        queue.list_pending().await.unwrap_or_default()
+    // Get all approvals (not just pending)
+    let all_approvals = if let Some(ref queue) = state.approval_queue {
+        queue
+            .list(crate::approval::types::ApprovalFilter::default())
+            .await
+            .unwrap_or_default()
     } else {
         vec![]
     };
 
-    let approvals: Vec<Value> = pending
+    let approvals: Vec<Value> = all_approvals
         .iter()
         .map(|req| {
             let (category_type, details) = match &req.category {
@@ -587,9 +607,37 @@ async fn handle_api_approvals_list(
                         "risk_reasons": risk_reasons
                     }),
                 ),
+                ApprovalCategory::SecretRequired {
+                    capability_id,
+                    secret_type,
+                    description,
+                } => (
+                    "SecretRequired",
+                    json!({
+                        "capability_id": capability_id,
+                        "secret_type": secret_type,
+                        "description": description
+                    }),
+                ),
             };
+
+            // Determine status string for UI filtering
+            let status = if req.status.is_pending() {
+                "pending"
+            } else if req.status.is_rejected() {
+                "rejected"
+            } else if matches!(
+                req.status,
+                crate::approval::types::ApprovalStatus::Expired { .. }
+            ) {
+                "expired"
+            } else {
+                "approved"
+            };
+
             json!({
                 "id": req.id,
+                "status": status,
                 "category_type": category_type,
                 "details": details,
                 "requested_at": req.requested_at.to_rfc3339(),
@@ -626,7 +674,52 @@ async fn handle_api_approval_approve(
             .approve(&id, ApprovalAuthority::User("web".to_string()), body.reason)
             .await
         {
-            Ok(()) => (StatusCode::OK, Json(json!({ "success": true, "id": id }))),
+            Ok(()) => {
+                // NEW: If this was a server discovery approval, automatically register the server
+                if let (Some(req), Some(mp)) =
+                    (queue.get(&id).await.ok().flatten(), &state.marketplace)
+                {
+                    if let crate::approval::types::ApprovalCategory::ServerDiscovery {
+                        ref server_info,
+                        ..
+                    } = req.category
+                    {
+                        let server_name = server_info.name.clone();
+                        let server_id = crate::utils::fs::sanitize_filename(&server_name);
+                        let workspace_root = crate::utils::fs::get_workspace_root();
+                        let approved_dir = workspace_root
+                            .join("capabilities/servers/approved")
+                            .join(&server_id);
+
+                        if approved_dir.exists() {
+                            let mp_clone = mp.clone();
+                            tokio::spawn(async move {
+                                match mp_clone
+                                    .import_capabilities_from_rtfs_dir_recursive(&approved_dir)
+                                    .await
+                                {
+                                    Ok(count) => {
+                                        log::info!(
+                                            "[http_transport] Automatically loaded {} capabilities for {}",
+                                            count,
+                                            server_name
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "[http_transport] Error auto-loading capabilities for {}: {}",
+                                            server_name,
+                                            e
+                                        );
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+
+                (StatusCode::OK, Json(json!({ "success": true, "id": id })))
+            }
             Err(e) => (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": e.to_string() })),
@@ -658,6 +751,84 @@ async fn handle_api_approval_reject(
             .await
         {
             Ok(()) => (StatusCode::OK, Json(json!({ "success": true, "id": id }))),
+            Err(e) => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e.to_string() })),
+            ),
+        }
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "Approval queue not configured" })),
+        )
+    }
+}
+
+/// POST /api/approvals/:id/reapprove - Re-approve a rejected or expired request
+async fn handle_api_approval_reapprove(
+    State(state): State<Arc<HttpTransportState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Some(ref queue) = state.approval_queue {
+        // Re-approve by calling approve on the existing request
+        match queue
+            .approve(
+                &id,
+                ApprovalAuthority::User("web".to_string()),
+                Some("Re-approved via web UI".to_string()),
+            )
+            .await
+        {
+            Ok(()) => {
+                // Also try to load capabilities if this was a server discovery
+                if let (Some(req), Some(mp)) =
+                    (queue.get(&id).await.ok().flatten(), &state.marketplace)
+                {
+                    if let crate::approval::types::ApprovalCategory::ServerDiscovery {
+                        ref server_info,
+                        ..
+                    } = req.category
+                    {
+                        let server_name = server_info.name.clone();
+                        let server_id = crate::utils::fs::sanitize_filename(&server_name);
+                        let workspace_root = crate::utils::fs::get_workspace_root();
+                        let approved_dir = workspace_root
+                            .join("capabilities/servers/approved")
+                            .join(&server_id);
+
+                        if approved_dir.exists() {
+                            let mp_clone = mp.clone();
+                            tokio::spawn(async move {
+                                match mp_clone
+                                    .import_capabilities_from_rtfs_dir_recursive(&approved_dir)
+                                    .await
+                                {
+                                    Ok(count) => {
+                                        log::info!(
+                                            "[http_transport] Re-approved and loaded {} capabilities for {}",
+                                            count,
+                                            server_name
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "[http_transport] Error loading capabilities for {}: {}",
+                                            server_name,
+                                            e
+                                        );
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+                (
+                    StatusCode::OK,
+                    Json(
+                        json!({ "success": true, "id": id, "message": "Re-approved successfully" }),
+                    ),
+                )
+            }
             Err(e) => (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": e.to_string() })),
@@ -760,162 +931,223 @@ async fn handle_secrets_html() -> impl IntoResponse {
     ))
 }
 
-/// Generate simple HTML page for approvals
-fn generate_approvals_html(pending: &[ApprovalRequest]) -> String {
-    let approvals_html = if pending.is_empty() {
-        "<p class='empty'>No pending approvals</p>".to_string()
-    } else {
-        pending
-            .iter()
-            .map(|req| {
-                let (title, details, has_secret_input) = match &req.category {
-                    ApprovalCategory::ServerDiscovery { server_info, domain_match, .. } => {
-                        (format!("🌐 Server Discovery: {}", server_info.name),
-                         format!("<p><strong>Endpoint:</strong> {}</p><p><strong>Domains:</strong> {}</p>", server_info.endpoint, domain_match.join(", ")),
-                         false)
-                    }
-                    ApprovalCategory::EffectApproval { capability_id, effects, .. } => {
-                        (format!("⚡ Effect Approval: {}", capability_id),
-                         format!("<p><strong>Effects:</strong> {}</p>", effects.join(", ")),
-                         false)
-                    }
-                    ApprovalCategory::SynthesisApproval { capability_id, is_pure, .. } => {
-                        (format!("🛠️ Synthesis: {}", capability_id),
-                         format!("<p><strong>Is Pure:</strong> {}</p>", is_pure),
-                         false)
-                    }
-                    ApprovalCategory::LlmPromptApproval { prompt, risk_reasons } => {
-                        (format!("🤖 LLM Prompt Review"),
-                         format!("<p><strong>Preview:</strong> {}...</p><p><strong>Risks:</strong> {}</p>", 
-                                 prompt.chars().take(100).collect::<String>(), risk_reasons.join(", ")),
-                         false)
-                    }
-                };
-
-                let secret_input = if has_secret_input {
-                    format!(r#"<div class="secret-input">
-                        <label>Secret Value:</label>
-                        <input type="password" id="secret-{}" placeholder="Enter secret value (optional)...">
-                    </div>
-                    <div class="secret-input">
-                        <label>Alternative Environment Variable Name:</label>
-                        <input type="text" id="env-var-{}" placeholder="e.g. MY_CUSTOM_KEY (optional)...">
-                    </div>"#, req.id, req.id)
-                } else {
-                    String::new()
-                };
-
-                format!(r#"
-                    <div class="approval-card" data-id="{}">
-                        <h3>{}</h3>
-                        {}
-                        {}
-                        <div class="actions">
-                            <button class="approve" onclick="approve('{}')">✅ Approve</button>
-                            <button class="reject" onclick="reject('{}')">❌ Reject</button>
-                        </div>
-                    </div>
-                "#, req.id, title, details, secret_input, req.id, req.id)
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    format!(
-        r#"<!DOCTYPE html>
+/// Generate HTML page for approvals with tabs and auto-refresh
+fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
+    // Generate a fully client-side rendered page that uses the API
+    r#"<!DOCTYPE html>
 <html>
 <head>
     <title>CCOS Approvals</title>
     <style>
-        body {{ font-family: -apple-system, system-ui, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #0d1117; color: #c9d1d9; }}
-        h1 {{ color: #58a6ff; }}
-        .approval-card {{ background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px; margin-bottom: 16px; }}
-        .approval-card h3 {{ margin-top: 0; color: #f0f6fc; }}
-        .approval-card p {{ margin: 8px 0; color: #8b949e; }}
-        .secret-input {{ margin: 12px 0; }}
-        .secret-input label {{ display: block; margin-bottom: 4px; color: #8b949e; }}
-        .secret-input input {{ width: 100%; padding: 8px; border: 1px solid #30363d; border-radius: 4px; background: #0d1117; color: #c9d1d9; }}
-        .actions {{ margin-top: 12px; display: flex; gap: 8px; }}
-        .actions button {{ padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; }}
-        .approve {{ background: #238636; color: white; }}
-        .approve:hover {{ background: #2ea043; }}
-        .reject {{ background: #da3633; color: white; }}
-        .reject:hover {{ background: #f85149; }}
-        .empty {{ color: #8b949e; font-style: italic; }}
-        .success {{ color: #3fb950; }}
-        .error {{ color: #f85149; }}
+        body { font-family: -apple-system, system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #0d1117; color: #c9d1d9; }
+        h1 { color: #58a6ff; display: flex; justify-content: space-between; align-items: center; }
+        .tabs { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+        .tab { padding: 8px 16px; border: none; background: transparent; color: #8b949e; cursor: pointer; border-radius: 4px 4px 0 0; font-size: 14px; }
+        .tab:hover { background: #21262d; color: #c9d1d9; }
+        .tab.active { background: #238636; color: white; }
+        .tab .count { background: #30363d; padding: 2px 8px; border-radius: 10px; margin-left: 6px; font-size: 12px; }
+        .tab.active .count { background: #2ea043; }
+        .approval-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px; margin-bottom: 16px; }
+        .approval-card h3 { margin-top: 0; color: #f0f6fc; display: flex; align-items: center; gap: 8px; }
+        .approval-card p { margin: 8px 0; color: #8b949e; }
+        .approval-card .status-badge { font-size: 12px; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; }
+        .status-pending { background: #1f6feb; color: white; }
+        .status-rejected { background: #da3633; color: white; }
+        .status-expired { background: #6e7681; color: white; }
+        .status-approved { background: #238636; color: white; }
+        .secret-input { margin: 12px 0; }
+        .secret-input label { display: block; margin-bottom: 4px; color: #8b949e; }
+        .secret-input input { width: 100%; padding: 8px; border: 1px solid #30363d; border-radius: 4px; background: #0d1117; color: #c9d1d9; box-sizing: border-box; }
+        .actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .actions button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; }
+        .approve { background: #238636; color: white; }
+        .approve:hover { background: #2ea043; }
+        .reject { background: #da3633; color: white; }
+        .reject:hover { background: #f85149; }
+        .reapprove { background: #1f6feb; color: white; }
+        .reapprove:hover { background: #388bfd; }
+        .empty { color: #8b949e; font-style: italic; text-align: center; padding: 40px; }
+        .success { color: #3fb950; }
+        .error { color: #f85149; }
+        .refresh-indicator { font-size: 12px; color: #8b949e; display: flex; align-items: center; gap: 6px; }
+        .refresh-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: #238636; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .nav-link { color: #58a6ff; text-decoration: none; font-size: 14px; }
+        .nav-link:hover { text-decoration: underline; }
+        .header-actions { display: flex; gap: 16px; align-items: center; }
     </style>
 </head>
 <body>
-    <h1>🔐 CCOS Pending Approvals</h1>
-    <div id="approvals">
-        {}
+    <h1>
+        <span>🔐 CCOS Approvals</span>
+        <div class="header-actions">
+            <div class="refresh-indicator"><span class="dot"></span> Auto-refresh</div>
+            <a href="/secrets" class="nav-link">🔑 Secrets</a>
+        </div>
+    </h1>
+    <div class="tabs">
+        <button class="tab active" data-status="pending" onclick="switchTab('pending')">⏳ Pending <span class="count" id="count-pending">0</span></button>
+        <button class="tab" data-status="rejected" onclick="switchTab('rejected')">❌ Rejected <span class="count" id="count-rejected">0</span></button>
+        <button class="tab" data-status="expired" onclick="switchTab('expired')">⏰ Expired <span class="count" id="count-expired">0</span></button>
     </div>
+    <div id="approvals"></div>
     <script>
-        async function approve(id) {{
-            const card = document.querySelector(`[data-id="${{id}}"]`);
-            const secretInput = card?.querySelector(`#secret-${{id}}`);
-            const envVarInput = card?.querySelector(`#env-var-${{id}}`);
-            const body = {{ reason: "Approved via web UI" }};
-            if (secretInput?.value) {{
-                body.secret_value = secretInput.value;
-            }}
-            if (envVarInput?.value) {{
-                body.provided_env_var = envVarInput.value;
-            }}
-            try {{
-                const res = await fetch(`/api/approvals/${{id}}/approve`, {{
+        let currentTab = 'pending';
+        let allApprovals = [];
+        
+        function switchTab(status) {
+            currentTab = status;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`[data-status="${status}"]`).classList.add('active');
+            renderApprovals();
+        }
+        
+        function renderApprovals() {
+            const container = document.getElementById('approvals');
+            const filtered = allApprovals.filter(a => a.status === currentTab);
+            
+            if (filtered.length === 0) {
+                container.innerHTML = `<p class="empty">No ${currentTab} approvals</p>`;
+                return;
+            }
+            
+            container.innerHTML = filtered.map(a => {
+                const icon = a.category_type === 'ServerDiscovery' ? '🌐' :
+                             a.category_type === 'EffectApproval' ? '⚡' :
+                             a.category_type === 'SynthesisApproval' ? '🛠️' :
+                             a.category_type === 'LlmPromptApproval' ? '🤖' :
+                             a.category_type === 'SecretRequired' ? '🔑' : '📋';
+                
+                const title = a.details.server_name || a.details.capability_id || a.category_type;
+                const endpoint = a.details.endpoint ? `<p><strong>Endpoint:</strong> ${a.details.endpoint}</p>` : '';
+                const domains = a.details.domain_match ? `<p><strong>Domains:</strong> ${a.details.domain_match.join(', ')}</p>` : '';
+                const effects = a.details.effects ? `<p><strong>Effects:</strong> ${a.details.effects.join(', ')}</p>` : '';
+                const secretType = a.details.secret_type ? `<p><strong>Type:</strong> ${a.details.secret_type}</p>` : '';
+                const description = a.details.description ? `<p><strong>Description:</strong> ${a.details.description}</p>` : '';
+                
+                const secretInputs = a.category_type === 'SecretRequired' ? `
+                    <div class="secret-input">
+                        <label>Secret Value:</label>
+                        <input type="password" id="secret-${a.id}" placeholder="Enter secret value (optional)...">
+                    </div>
+                    <div class="secret-input">
+                        <label>Alternative Environment Variable Name:</label>
+                        <input type="text" id="env-var-${a.id}" placeholder="e.g. MY_CUSTOM_KEY (optional)...">
+                    </div>
+                ` : '';
+                
+                const actions = currentTab === 'pending' ? `
+                    <button class="approve" onclick="approve('${a.id}')">✅ Approve</button>
+                    <button class="reject" onclick="reject('${a.id}')">❌ Reject</button>
+                ` : `
+                    <button class="reapprove" onclick="reapprove('${a.id}')">🔄 Re-approve</button>
+                `;
+                
+                return `
+                    <div class="approval-card" data-id="${a.id}">
+                        <h3>${icon} ${title} <span class="status-badge status-${a.status}">${a.status}</span></h3>
+                        ${endpoint}${domains}${effects}${secretType}${description}
+                        <p style="font-size: 12px; color: #6e7681;">Requested: ${new Date(a.requested_at).toLocaleString()} | Expires: ${new Date(a.expires_at).toLocaleString()}</p>
+                        ${secretInputs}
+                        <div class="actions">${actions}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        async function loadApprovals() {
+            try {
+                const res = await fetch('/api/approvals');
+                const data = await res.json();
+                allApprovals = data.approvals || [];
+                
+                // Update counts
+                const pending = allApprovals.filter(a => a.status === 'pending').length;
+                const rejected = allApprovals.filter(a => a.status === 'rejected').length;
+                const expired = allApprovals.filter(a => a.status === 'expired').length;
+                document.getElementById('count-pending').textContent = pending;
+                document.getElementById('count-rejected').textContent = rejected;
+                document.getElementById('count-expired').textContent = expired;
+                
+                renderApprovals();
+            } catch (e) {
+                console.error('Failed to load approvals:', e);
+            }
+        }
+        
+        async function approve(id) {
+            const card = document.querySelector(`[data-id="${id}"]`);
+            const secretInput = card?.querySelector(`#secret-${id}`);
+            const envVarInput = card?.querySelector(`#env-var-${id}`);
+            const body = { reason: "Approved via web UI" };
+            if (secretInput?.value) body.secret_value = secretInput.value;
+            if (envVarInput?.value) body.provided_env_var = envVarInput.value;
+            
+            try {
+                const res = await fetch(`/api/approvals/${id}/approve`, {
                     method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
-                }});
-                if (res.ok) {{
+                });
+                if (res.ok) {
                     card.innerHTML = '<p class="success">✅ Approved successfully!</p>';
-                    setTimeout(() => card.remove(), 2000);
-                }} else {{
-                    let errorMsg = 'An unknown error occurred';
-                    try {{
-                        const err = await res.json();
-                        errorMsg = err.error || errorMsg;
-                    }} catch (e) {{
-                        errorMsg = `Server error (${{res.status}}): ${{res.statusText}}`;
-                    }}
-                    alert('Error: ' + errorMsg);
-                }}
-            }} catch(e) {{
+                    setTimeout(() => loadApprovals(), 1500);
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    alert('Error: ' + (err.error || 'Unknown error'));
+                }
+            } catch(e) {
                 alert('Request failed: ' + e);
-            }}
-        }}
-        async function reject(id) {{
+            }
+        }
+        
+        async function reject(id) {
             const reason = prompt('Enter rejection reason:');
             if (!reason) return;
-            const card = document.querySelector(`[data-id="${{id}}"]`);
-            try {{
-                const res = await fetch(`/api/approvals/${{id}}/reject`, {{
+            const card = document.querySelector(`[data-id="${id}"]`);
+            try {
+                const res = await fetch(`/api/approvals/${id}/reject`, {
                     method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ reason }})
-                }});
-                if (res.ok) {{
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason })
+                });
+                if (res.ok) {
                     card.innerHTML = '<p class="error">❌ Rejected</p>';
-                    setTimeout(() => card.remove(), 2000);
-                }} else {{
-                    let errorMsg = 'An unknown error occurred';
-                    try {{
-                        const err = await res.json();
-                        errorMsg = err.error || errorMsg;
-                    }} catch (e) {{
-                        errorMsg = `Server error (${{res.status}}): ${{res.statusText}}`;
-                    }}
-                    alert('Error: ' + errorMsg);
-                }}
-            }} catch(e) {{
+                    setTimeout(() => loadApprovals(), 1500);
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    alert('Error: ' + (err.error || 'Unknown error'));
+                }
+            } catch(e) {
                 alert('Request failed: ' + e);
-            }}
-        }}
+            }
+        }
+        
+        async function reapprove(id) {
+            const card = document.querySelector(`[data-id="${id}"]`);
+            try {
+                const res = await fetch(`/api/approvals/${id}/reapprove`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (res.ok) {
+                    card.innerHTML = '<p class="success">🔄 Re-approved successfully!</p>';
+                    setTimeout(() => loadApprovals(), 1500);
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    alert('Error: ' + (err.error || 'Unknown error'));
+                }
+            } catch(e) {
+                alert('Request failed: ' + e);
+            }
+        }
+        
+        // Initial load
+        loadApprovals();
+        
+        // Auto-refresh every 5 seconds
+        setInterval(loadApprovals, 5000);
     </script>
 </body>
-</html>"#,
-        approvals_html
-    )
+</html>"#.to_string()
 }

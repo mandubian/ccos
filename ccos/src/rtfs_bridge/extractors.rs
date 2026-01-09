@@ -422,6 +422,17 @@ fn extract_plan_from_function_call(
                             }
                         }
                     }
+                    ":goal" | "goal" => {
+                        // Store goal in annotations for now, so it can be extracted later
+                        annotations.insert("goal".to_string(), expression_to_value(value));
+                    }
+                    ":metadata" | "metadata" => {
+                        if let Expression::Map(meta_map) = value {
+                            // Extract to metadata if we had a metadata field, but we are using metadata from annotations?
+                            // Plan has metadata field too.
+                            // Let's just merge into metadata if found.
+                        }
+                    }
                     _ => {
                         // Ignore unknown fields
                     }
@@ -513,6 +524,28 @@ fn extract_plan_from_map(map: &HashMap<MapKey, Expression>) -> Result<Plan, Rtfs
     if let Some(Expression::Map(ann_map)) = map_get(map, ":annotations") {
         for (key, value) in ann_map {
             annotations.insert(map_key_to_string(key), Value::from(value.clone()));
+        }
+    }
+
+    if let Some(goal_expr) = map_get(map, ":goal") {
+        annotations.insert("goal".to_string(), expression_to_value(goal_expr));
+    }
+
+    let mut metadata = HashMap::new();
+    if let Some(Expression::Map(meta_map)) = map_get(map, ":metadata") {
+        for (key, value) in meta_map {
+            metadata.insert(map_key_to_string(key), expression_to_value(value));
+        }
+    }
+
+    if let Some(goal_expr) = map_get(map, ":goal") {
+        annotations.insert("goal".to_string(), expression_to_value(goal_expr));
+    }
+
+    let mut metadata = HashMap::new();
+    if let Some(Expression::Map(meta_map)) = map_get(map, ":metadata") {
+        for (key, value) in meta_map {
+            metadata.insert(map_key_to_string(key), expression_to_value(value));
         }
     }
 

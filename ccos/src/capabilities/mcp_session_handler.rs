@@ -4,6 +4,7 @@
 //! Manages MCP session lifecycle: initialize, execute tools/call, terminate.
 
 use super::session_pool::{SessionHandler, SessionId};
+use crate::mcp::stdio_client::StdioClient;
 use crate::utils::value_conversion;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
@@ -18,6 +19,7 @@ struct MCPSession {
     server_url: String,
     auth_token: Option<String>,
     created_at: std::time::Instant,
+    stdio_client: Option<Arc<StdioClient>>,
 }
 
 /// MCP Session Handler
@@ -120,7 +122,17 @@ impl MCPSessionHandler {
         &self,
         server_url: &str,
         auth_token: Option<&str>,
-    ) -> RuntimeResult<String> {
+    ) -> RuntimeResult<(String, Option<Arc<StdioClient>>)> {
+        // Detect if this is a stdio transport
+        if server_url.starts_with("npx ")
+            || server_url.starts_with("node ")
+            || server_url.starts_with("/")
+            || server_url.starts_with("./")
+        {
+            let client = self.initialize_stdio_session(server_url)?;
+            return Ok(("stdio".to_string(), Some(client)));
+        }
+
         eprintln!("🔌 Initializing MCP session with {}", server_url);
 
         // Build initialize request
@@ -193,7 +205,32 @@ impl MCPSessionHandler {
             .to_string();
 
         eprintln!("✅ MCP session initialized: {}", session_id);
-        Ok(session_id)
+        Ok((session_id, None))
+    }
+
+    /// Internal helper to initialize a stdio-based session
+    fn initialize_stdio_session(&self, command: &str) -> RuntimeResult<Arc<StdioClient>> {
+        eprintln!("🚀 Spawning stdio MCP server: {}", command);
+
+        tokio::task::block_in_place(|| {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                let client = StdioClient::spawn(command).await?;
+                let client = Arc::new(client);
+
+                let init_params = serde_json::json!({
+                    "protocolVersion": "2024-11-05",
+                    "clientInfo": {
+                        "name": "ccos-rtfs",
+                        "version": "0.1.0"
+                    },
+                    "capabilities": {}
+                });
+
+                let _ = client.make_request("initialize", init_params).await?;
+                Ok(client)
+            })
+        })
     }
 
     /// Execute MCP tool call with session
@@ -203,59 +240,33 @@ impl MCPSessionHandler {
         tool_name: &str,
         args: &[Value],
     ) -> RuntimeResult<Value> {
+        // Dispatch to stdio client if available
+        if let Some(ref stdio) = session.stdio_client {
+            return tokio::task::block_in_place(|| {
+                let handle = tokio::runtime::Handle::current();
+                handle.block_on(async {
+                    let mcp_args = self.prepare_mcp_args(args)?;
+                    let response = stdio
+                        .make_request(
+                            "tools/call",
+                            serde_json::json!({
+                                "name": tool_name,
+                                "arguments": mcp_args
+                            }),
+                        )
+                        .await?;
+
+                    self.parse_mcp_response(response)
+                })
+            });
+        }
+
         eprintln!(
             "🔧 Calling MCP tool: {} with session {}",
             tool_name, session.session_id
         );
 
-        // Convert args to MCP arguments (expect a single map)
-        let mcp_args = if args.is_empty() {
-            serde_json::json!({})
-        } else if args.len() == 1 {
-            match &args[0] {
-                Value::Map(m) => {
-                    // Convert RTFS map to JSON
-                    let mut json_map = serde_json::Map::new();
-                    for (key, value) in m.iter() {
-                        let key_str = match key {
-                            MapKey::Keyword(k) => {
-                                // Strip leading colon
-                                let s = &k.0;
-                                if s.starts_with(':') {
-                                    s[1..].to_string()
-                                } else {
-                                    s.clone()
-                                }
-                            }
-                            MapKey::String(s) => s.clone(),
-                            MapKey::Integer(i) => i.to_string(),
-                        };
-
-                        // Normalize parameter names for known variations
-                        // This handles cases where the LLM generates "repository" but the API expects "repo"
-                        let normalized_key = normalize_param_name(&key_str);
-
-                        // Convert value to JSON
-                        let json_val = value_conversion::rtfs_value_to_json(value)
-                            .unwrap_or_else(|_| serde_json::Value::Null);
-
-                        // Filter out null values for MCP arguments
-                        // This handles cases where optional parameters are passed as nil (null)
-                        // but the MCP server expects them to be omitted if not present.
-                        if !json_val.is_null() {
-                            json_map.insert(normalized_key, json_val);
-                        }
-                    }
-                    serde_json::Value::Object(json_map)
-                }
-                _ => value_conversion::rtfs_value_to_json(&args[0])
-                    .unwrap_or_else(|_| serde_json::Value::Null),
-            }
-        } else {
-            return Err(RuntimeError::Generic(
-                "MCP tool call expects a single map argument".to_string(),
-            ));
-        };
+        let mcp_args = self.prepare_mcp_args(args)?;
 
         eprintln!(
             "📝 MCP Arguments: {}",
@@ -328,7 +339,53 @@ impl MCPSessionHandler {
             })
         })?;
 
-        fn extract_sse_data(body: &str) -> Option<String> {
+        let json = self.extract_json_from_sse(&body_text)?;
+        self.parse_mcp_response(json)
+    }
+
+    /// Internal helper to prepare MCP arguments from RTFS values
+    fn prepare_mcp_args(&self, args: &[Value]) -> RuntimeResult<serde_json::Value> {
+        if args.is_empty() {
+            Ok(serde_json::json!({}))
+        } else if args.len() == 1 {
+            match &args[0] {
+                Value::Map(m) => {
+                    let mut json_map = serde_json::Map::new();
+                    for (key, value) in m.iter() {
+                        let key_str = match key {
+                            MapKey::Keyword(k) => {
+                                let s = &k.0;
+                                if s.starts_with(':') {
+                                    s[1..].to_string()
+                                } else {
+                                    s.clone()
+                                }
+                            }
+                            MapKey::String(s) => s.clone(),
+                            MapKey::Integer(i) => i.to_string(),
+                        };
+                        let normalized_key = normalize_param_name(&key_str);
+                        let json_val = value_conversion::rtfs_value_to_json(value)
+                            .unwrap_or_else(|_| serde_json::Value::Null);
+                        if !json_val.is_null() {
+                            json_map.insert(normalized_key, json_val);
+                        }
+                    }
+                    Ok(serde_json::Value::Object(json_map))
+                }
+                _ => Ok(value_conversion::rtfs_value_to_json(&args[0])
+                    .unwrap_or_else(|_| serde_json::Value::Null)),
+            }
+        } else {
+            Err(RuntimeError::Generic(
+                "MCP tool call expects a single map argument".to_string(),
+            ))
+        }
+    }
+
+    /// Internal helper to extract JSON from SSE or raw response
+    fn extract_json_from_sse(&self, body: &str) -> RuntimeResult<serde_json::Value> {
+        fn internal_extract_sse(body: &str) -> Option<String> {
             let mut candidates: Vec<String> = Vec::new();
             let mut current = String::new();
             let mut in_data = false;
@@ -367,64 +424,32 @@ impl MCPSessionHandler {
             None
         }
 
-        let json: serde_json::Value = match extract_sse_data(&body_text) {
+        match internal_extract_sse(body) {
             Some(data) => serde_json::from_str(&data).map_err(|e| {
                 RuntimeError::Generic(format!(
                     "Failed to parse MCP response: {} (data: {})",
                     e,
                     &data[..data.len().min(200)]
                 ))
-            })?,
-            None => serde_json::from_str(&body_text).map_err(|e| {
+            }),
+            None => serde_json::from_str(body).map_err(|e| {
                 RuntimeError::Generic(format!(
                     "Failed to parse MCP response: {} (body: {})",
                     e,
-                    &body_text[..body_text.len().min(200)]
+                    &body[..body.len().min(200)]
                 ))
-            })?,
-        };
+            }),
+        }
+    }
 
-        // Extract result from JSON-RPC response
+    /// Internal helper to parse MCP JSON-RPC response into RTFS Value
+    fn parse_mcp_response(&self, json: serde_json::Value) -> RuntimeResult<Value> {
         if let Some(result) = json.get("result") {
-            // Debug: Log the keys of the result for troubleshooting
-            if let Some(content) = result.get("content") {
-                if let Some(arr) = content.as_array() {
-                    for (i, item) in arr.iter().enumerate() {
-                        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                            let preview = if text.len() > 100 { &text[..100] } else { text };
-                            eprintln!(
-                                "📦 MCP result content[{}]: type={}, text (preview)='{}...'",
-                                i,
-                                item.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
-                                preview
-                            );
-                            // Try to parse JSON to see structure
-                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
-                                if let Some(obj) = parsed.as_object() {
-                                    eprintln!(
-                                        "   ↳ Parsed JSON keys: {:?}",
-                                        obj.keys().collect::<Vec<_>>()
-                                    );
-                                } else if parsed.is_array() {
-                                    eprintln!(
-                                        "   ↳ Parsed JSON is an Array of len {}",
-                                        parsed.as_array().unwrap().len()
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // MCP protocol returns results in a "content" array with text blocks.
-            // Auto-extract JSON from content[0].text for easier downstream processing.
-            // This is an adapter at the entry point rather than requiring explicit adapter calls.
+            // Auto-extract JSON from content[0].text if available
             if let Some(content_array) = result.get("content").and_then(|c| c.as_array()) {
                 if let Some(first_block) = content_array.first() {
                     if first_block.get("type").and_then(|t| t.as_str()) == Some("text") {
                         if let Some(text) = first_block.get("text").and_then(|t| t.as_str()) {
-                            // Try to parse the text as JSON and return that instead
                             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
                                 return value_conversion::json_to_rtfs_value(&parsed)
                                     .map(normalize_map_keys);
@@ -433,8 +458,6 @@ impl MCPSessionHandler {
                     }
                 }
             }
-
-            // Fallback: Return normalized raw structure if auto-extraction didn't work
             value_conversion::json_to_rtfs_value(result).map(normalize_map_keys)
         } else if let Some(error) = json.get("error") {
             Err(RuntimeError::Generic(format!("MCP error: {}", error)))
@@ -488,7 +511,8 @@ impl SessionHandler for MCPSessionHandler {
         let auth_token = self.get_auth_token(capability_id, metadata);
 
         // Initialize MCP session
-        let session_id = self.initialize_mcp_session(&server_url, auth_token.as_deref())?;
+        let (session_id, stdio_client) =
+            self.initialize_mcp_session(&server_url, auth_token.as_deref())?;
 
         // Store session in pool
         let session = MCPSession {
@@ -496,6 +520,7 @@ impl SessionHandler for MCPSessionHandler {
             server_url,
             auth_token,
             created_at: std::time::Instant::now(),
+            stdio_client,
         };
 
         let mut sessions = self.sessions.lock().unwrap();

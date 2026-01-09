@@ -77,12 +77,6 @@ impl MCPDiscoveryService {
             workspace_root.clone()
         };
 
-        ccos_eprintln!(
-            "🔍 MCPDiscoveryService: workspace_root={:?}, approval_base={:?}",
-            workspace_root,
-            approval_base
-        );
-
         let storage_path =
             approval_base.join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
         let storage = Arc::new(
@@ -127,12 +121,6 @@ impl MCPDiscoveryService {
         } else {
             workspace_root.clone()
         };
-
-        ccos_eprintln!(
-            "🔍 MCPDiscoveryService: workspace_root={:?}, approval_base={:?}",
-            workspace_root,
-            approval_base
-        );
 
         let storage_path =
             approval_base.join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
@@ -1348,7 +1336,7 @@ impl MCPDiscoveryService {
             // Generate implementation code for MCP capabilities
             let implementation_code = match &manifest.provider {
                 ProviderType::MCP(mcp) => format!(
-                    "(fn [input] (call :ccos.capabilities.mcp.call :server-url \"{}\" :tool-name \"{}\" :input input))",
+                    "(fn [input] (call :ccos.capabilities.mcp.call {{:server-url \"{}\" :tool-name \"{}\" :input input}}))",
                     mcp.server_url, mcp.tool_name
                 ),
                 _ => "(fn [input] (error \"Implementation not available\"))".to_string(),

@@ -1,0 +1,12 @@
+(plan "puppeteer-test"
+  {
+    :goal "Navigate to example.com and take a screenshot"
+    :body
+    (do
+        :steps [
+            (call "mcp.puppeteer-test.puppeteer_navigate" {"url" "https://example.com" "launchOptions" {"headless" true}})
+            (call "mcp.puppeteer-test.puppeteer_screenshot" {"name" "/home/mandubian/workspaces/mandubian/ccos/screenshot"})
+        ]
+    )
+  }
+)
