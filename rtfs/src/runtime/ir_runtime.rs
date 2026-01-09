@@ -154,7 +154,7 @@ impl IrRuntime {
             IT::Symbol => TypeExpr::Primitive(PrimitiveType::Symbol),
             IT::Any => TypeExpr::Any,
             IT::Never => TypeExpr::Never,
-            IT::TypeVar(name) => {
+            IT::TypeVar(_name) => {
                 // Type variables are not representable in AST TypeExpr
                 // For runtime validation, treat as Any to avoid errors
                 TypeExpr::Any
