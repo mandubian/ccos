@@ -61,14 +61,14 @@ This guide provides detailed implementation status for all RTFS 2.0 features. Us
 |---------|--------|----------------------|
 | **Primitive Types** | ✅ **Implemented** | Int, Float, String, Bool, Nil, Keyword, Symbol |
 | **Collection Types** | ✅ **Implemented** | Vector, Map, Tuple, Array |
-| **Union Types** | ⚠️ **Partial** | Basic union support; lacks formal subtyping |
-| **Intersection Types** | ❌ **Not Implemented** | Formal specification only |
+| **Union Types** | ✅ **Implemented** | Full support with subtyping |
+| **Intersection Types** | ✅ **Implemented** | Full support with subtyping |
 | **Refinement Types** | ⚠️ **Partial** | Predicates supported: `is-url`, `is-email` |
-| **Function Types** | ✅ **Implemented** | Basic function validation |
+| **Function Types** | ✅ **Implemented** | Full function type validation |
 | **Type Annotations** | ✅ **Implemented** | Optional type annotations on variables and parameters |
-| **Type Inference** | ⚠️ **Basic** | Simple cases only; complex inference not implemented |
-| **Formal Subtyping** | ❌ **Not Implemented** | Specification describes subtyping; not implemented |
-| **Bidirectional Checking** | ⚠️ **Basic** | Partially implemented for validation contexts |
+| **Type Inference** | ⚠️ **Basic** | Local inference; global inference conservative |
+| **Formal Subtyping** | ✅ **Implemented (IR)** | Full 12-axiom system implemented for IR |
+| **Bidirectional Checking** | ✅ **Implemented** | Synthesis (`=>`) and Checking (`<=`) modes implemented |
 | **Runtime Validation** | ✅ **Implemented** | `TypeValidator` with configurable levels |
 
 ### Standard Library
@@ -340,10 +340,11 @@ You can use the following features confidently in current RTFS 2.0:
   ...)
 
 ;; Complex type system features
-(:intersection TypeA TypeB)  ;; Not implemented
+[:and TypeA TypeB]           ;; Intersection types (Implemented)
+[:union TypeA TypeB]         ;; Union types (Implemented)
 
 ;; Formal subtyping
-;; Not implemented in practice
+;; Now fully implemented in IR type checker
 ```
 
 ### Workarounds for Missing Features
