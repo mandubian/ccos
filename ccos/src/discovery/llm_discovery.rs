@@ -372,7 +372,18 @@ Respond with ONLY the JSON array, no markdown formatting."#,
     ) -> RuntimeResult<Vec<ExternalApiResult>> {
         // If URL hint provided, try to parse it directly
         if let Some(url) = url_hint {
-            return self.discover_api_from_url(url, query).await;
+            let trimmed = url.trim();
+            // Don't try to fetch commands as URLs
+            if trimmed.starts_with("npx ")
+                || trimmed.starts_with("node ")
+                || trimmed.starts_with("python")
+                || trimmed.starts_with("/")
+                || trimmed.starts_with("./")
+                || !trimmed.contains("://")
+            {
+                return Ok(Vec::new());
+            }
+            return self.discover_api_from_url(trimmed, query).await;
         }
 
         // Otherwise, use LLM to suggest APIs

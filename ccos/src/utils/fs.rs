@@ -62,7 +62,25 @@ pub fn get_workspace_root() -> PathBuf {
                 }
             }
 
-            // 2. Fallback to current directory
+            // 2. Search upwards for a Cargo.toml with [workspace]
+            if let Ok(mut current) = std::env::current_dir() {
+                loop {
+                    let cargo_toml = current.join("Cargo.toml");
+                    if cargo_toml.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
+                            if content.contains("[workspace]") {
+                                return current;
+                            }
+                        }
+                    }
+
+                    if !current.pop() {
+                        break;
+                    }
+                }
+            }
+
+            // 3. Fallback to current directory
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         })
         .clone()

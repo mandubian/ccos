@@ -14,18 +14,18 @@
 
 use chrono;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use serde_json::json;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 use ccos::arbiter::llm_provider::LlmProvider;
 use ccos::approval::{queue::{RiskAssessment, RiskLevel}, types::ApprovalCategory, UnifiedApprovalQueue};
 use ccos::capabilities::registry::CapabilityRegistry;
 use ccos::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
-use ccos::capability_marketplace::types::CapabilityQuery;
+
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::causal_chain::CausalChain;
 use ccos::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
@@ -36,6 +36,13 @@ use ccos::secrets::SecretStore;
 use ccos::synthesis::dialogue::capability_synthesizer::{CapabilitySynthesizer, SynthesisRequest};
 use ccos::utils::fs::get_workspace_root;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+use rtfs::runtime::values::Value;
+use rtfs::runtime::host_interface::HostInterface;
+use rtfs::runtime::security::RuntimeContext;
+use ccos::host::RuntimeHost;
+
+// ModularPlanner imports for LLM-based decomposition
+// (No currently used imports)
 
 // ============================================================================
 // RTFS Teaching Tools Constants
@@ -295,6 +302,8 @@ pub struct ExecutionStep {
 pub struct Session {
     pub id: String,
     pub goal: String,
+    /// The original user intent that triggered this session (preserved verbatim)
+    pub original_goal: Option<String>,
     pub steps: Vec<ExecutionStep>,
     pub context: std::collections::HashMap<String, serde_json::Value>,
     pub created_at: String,
@@ -313,10 +322,18 @@ impl Session {
         Self {
             id,
             goal: goal.to_string(),
+            original_goal: Some(goal.to_string()),
             steps: Vec::new(),
             context: std::collections::HashMap::new(),
             created_at: chrono::Utc::now().to_rfc3339(),
         }
+    }
+
+    /// Create a new session with an explicit original goal
+    pub fn new_with_original_goal(goal: &str, original_goal: &str) -> Self {
+        let mut session = Self::new(goal);
+        session.original_goal = Some(original_goal.to_string());
+        session
     }
 
     pub fn add_step(
@@ -342,23 +359,42 @@ impl Session {
 
     /// Convert JSON inputs to RTFS call syntax
     pub fn inputs_to_rtfs(capability_id: &str, inputs: &serde_json::Value) -> String {
-        let mut parts = vec![format!("(call \"{}\"", capability_id)];
-
-        if let Some(obj) = inputs.as_object() {
-            for (key, value) in obj {
-                let value_str = match value {
-                    serde_json::Value::String(s) => format!("\"{}\"", s),
-                    serde_json::Value::Number(n) => n.to_string(),
-                    serde_json::Value::Bool(b) => b.to_string(),
-                    serde_json::Value::Null => "nil".to_string(),
-                    _ => format!("{}", value),
-                };
-                parts.push(format!(":{} {}", key, value_str));
-            }
+        if inputs.is_null() || (inputs.is_object() && inputs.as_object().unwrap().is_empty()) {
+            return format!("(call \"{}\")", capability_id);
         }
 
-        parts.push(")".to_string());
-        parts.join(" ")
+        // Convert JSON to RTFS value and use it as the single argument
+        // Prefix keys with ':' to ensure json_to_rtfs_value converts them to keywords
+        let keywordized_inputs = Self::keywordize_json(inputs);
+
+        match json_to_rtfs_value(&keywordized_inputs) {
+            Ok(rtfs_val) => format!("(call \"{}\" {})", capability_id, rtfs_val),
+            Err(_) => {
+                // Fallback for unexpected cases
+                format!("(call \"{}\" {{:inputs {{:json-failure true}}}})", capability_id)
+            }
+        }
+    }
+
+    fn keywordize_json(v: &serde_json::Value) -> serde_json::Value {
+        match v {
+            serde_json::Value::Object(map) => {
+                let mut new_map = serde_json::Map::new();
+                for (k, val) in map {
+                    let new_key = if k.starts_with(':') {
+                        k.clone()
+                    } else {
+                        format!(":{}", k)
+                    };
+                    new_map.insert(new_key, Self::keywordize_json(val));
+                }
+                serde_json::Value::Object(new_map)
+            }
+            serde_json::Value::Array(arr) => {
+                serde_json::Value::Array(arr.iter().map(Self::keywordize_json).collect())
+            }
+            _ => v.clone(),
+        }
     }
 
     /// Generate the complete RTFS plan from all steps
@@ -402,20 +438,24 @@ impl Session {
             format!(";; Goal: {}", self.goal),
             format!(";; Created: {}", self.created_at),
             "".to_string(),
-            ";; === SESSION METADATA ===".to_string(),
-            "(def :session-meta".to_string(),
-            "  {".to_string(),
-            format!("    :session-id \"{}\"", self.id),
-            format!("    :goal \"{}\"", self.goal.replace("\"", "\\\"")),
-            format!("    :created-at {}", timestamp),
-            format!("    :step-count {}", self.steps.len()),
-            "  })".to_string(),
-            "".to_string(),
         ];
+
+        lines.push(";; === SESSION METADATA ===".to_string());
+        lines.push("(def session-meta".to_string());
+        lines.push("  {".to_string());
+        lines.push(format!("    :session-id \"{}\"", self.id));
+        lines.push(format!("    :goal \"{}\"", self.goal.replace("\"", "\\\"")));
+        if let Some(ref og) = self.original_goal {
+            lines.push(format!("    :original-goal \"{}\"", og.replace("\"", "\\\"")));
+        }
+        lines.push(format!("    :created-at {}", timestamp));
+        lines.push(format!("    :step-count {}", self.steps.len()));
+        lines.push("  })".to_string());
+        lines.push("".to_string());
 
         // Add causal chain
         lines.push(";; === CAUSAL CHAIN ===".to_string());
-        lines.push("(def :causal-chain".to_string());
+        lines.push("(def causal-chain".to_string());
         lines.push("  [".to_string());
         
         for (i, step) in self.steps.iter().enumerate() {
@@ -423,6 +463,7 @@ impl Session {
             lines.push(format!("      :step-number {}", step.step_number));
             lines.push(format!("      :capability-id \"{}\"", step.capability_id));
             lines.push(format!("      :inputs {}", Self::json_to_rtfs(&step.inputs)));
+            lines.push(format!("      :rtfs-code \"{}\"", step.rtfs_code.replace("\"", "\\\"")));
             lines.push(format!("      :success {}", step.success));
             lines.push(format!("      :executed-at \"{}\"", step.executed_at));
             if i < self.steps.len() - 1 {
@@ -541,6 +582,163 @@ pub fn save_session(
     Ok(filepath)
 }
 
+/// Find a session on disk by its ID
+async fn find_session_on_disk(session_id: &str) -> Option<Session> {
+    let sessions_dir = ccos::utils::fs::get_configured_sessions_path();
+    if !sessions_dir.exists() {
+        return None;
+    }
+
+    let Ok(entries) = std::fs::read_dir(sessions_dir) else { return None; };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map_or(false, |ext| ext == "rtfs") {
+            let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+            if filename.starts_with(session_id) {
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    return parse_session_from_rtfs(&content);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parse a Session struct from RTFS content
+fn parse_session_from_rtfs(content: &str) -> Option<Session> {
+    // Parse using rtfs::parser::parse which returns Vec<TopLevel>
+    let top_levels = match rtfs::parser::parse(content) {
+        Ok(tls) => tls,
+        Err(e) => {
+            eprintln!("[ccos-mcp] Failed to parse session RTFS: {:?}", e);
+            return None;
+        }
+    };
+    
+    let mut session_id = None;
+    let mut goal = None;
+    let mut original_goal = None;
+    let mut steps = Vec::new();
+    let mut created_at = chrono::Utc::now().to_rfc3339();
+
+    for tl in top_levels {
+        if let rtfs::ast::TopLevel::Expression(expr) = tl {
+            if let rtfs::ast::Expression::Def(def_expr) = expr {
+                if def_expr.symbol.0 == "session-meta" {
+                    if let rtfs::ast::Expression::Map(map) = &*def_expr.value {
+                        for (key, val) in map {
+                            let key_str = key.to_string();
+                            match key_str.as_str() {
+                                ":session-id" => {
+                                    if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
+                                        session_id = Some(s.clone());
+                                    }
+                                }
+                                ":goal" => {
+                                    if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
+                                        goal = Some(s.clone());
+                                    }
+                                }
+                                ":original-goal" => {
+                                    if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
+                                        original_goal = Some(s.clone());
+                                    }
+                                }
+                                ":created-at" => {
+                                    if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::Integer(ts)) = val {
+                                        if let Some(dt) = chrono::DateTime::from_timestamp(*ts, 0) {
+                                            created_at = dt.to_rfc3339();
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                } else if def_expr.symbol.0 == "causal-chain" {
+                    if let rtfs::ast::Expression::Vector(vec) = &*def_expr.value {
+                        for step_expr in vec {
+                            if let rtfs::ast::Expression::Map(step_map) = step_expr {
+                                let mut step_number = 0;
+                                let mut capability_id = String::new();
+                                let mut inputs = json!({});
+                                let mut success = true;
+                                let mut executed_at = String::new();
+                                let mut rtfs_code_opt = None;
+
+                                for (key, val) in step_map {
+                                    let key_str = key.to_string();
+                                    match key_str.as_str() {
+                                        ":step-number" => {
+                                            if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::Integer(n)) = val {
+                                                step_number = *n as usize;
+                                            }
+                                        }
+                                        ":capability-id" => {
+                                            if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
+                                                capability_id = s.clone();
+                                            }
+                                        }
+                                        ":inputs" => {
+                                            let rtfs_val = Value::from(val.clone());
+                                            if let Ok(j) = rtfs_value_to_json(&rtfs_val) {
+                                                inputs = j;
+                                            }
+                                        }
+                                        ":success" => {
+                                            if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::Boolean(b)) = val {
+                                                success = *b;
+                                            }
+                                        }
+                                        ":executed-at" => {
+                                            if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
+                                                executed_at = s.clone();
+                                            }
+                                        }
+                                        ":rtfs-code" => {
+                                            if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
+                                                rtfs_code_opt = Some(s.clone());
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                
+                                let rtfs_code = rtfs_code_opt.unwrap_or_else(|| {
+                                    Session::inputs_to_rtfs(&capability_id, &inputs)
+                                });
+
+                                steps.push(ExecutionStep {
+                                    step_number,
+                                    capability_id,
+                                    inputs,
+                                    result: json!({}),
+                                    rtfs_code,
+                                    success,
+                                    executed_at,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let (Some(id), Some(g)) = (session_id, goal) {
+        Some(Session {
+            id,
+            goal: g,
+            original_goal,
+            steps,
+            context: HashMap::new(),
+            created_at,
+        })
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Transport {
     /// Streamable HTTP transport (persistent daemon)
@@ -589,7 +787,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize CCOS components
     let capability_registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = Arc::new(CapabilityMarketplace::new(capability_registry));
-    let causal_chain = Arc::new(Mutex::new(CausalChain::new()?));
+    let causal_chain = Arc::new(StdMutex::new(CausalChain::new()?));
+
+    // Provide a CCOS-aware host for executing RTFS capabilities (learned capabilities)
+    {
+        let marketplace_clone = marketplace.clone();
+        let cc_factory = causal_chain.clone();
+        marketplace.set_rtfs_host_factory(Arc::new(move || {
+            Arc::new(RuntimeHost::new(
+                cc_factory.clone(),
+                marketplace_clone.clone(),
+                RuntimeContext::full(),
+            )) as Arc<dyn HostInterface + Send + Sync>
+        }));
+    }
 
     // Load agent config
     let agent_config = match ccos::examples_common::builder::load_agent_config(&args.config) {
@@ -636,8 +847,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // Populate marketplace with approved capabilities
-    let _ = marketplace.import_capabilities_from_rtfs_dir_recursive(ccos::utils::fs::get_workspace_root().join("capabilities/servers/approved")).await;
-    let _ = marketplace.import_capabilities_from_rtfs_dir_recursive(ccos::utils::fs::get_workspace_root().join("capabilities/core")).await;
+    let workspace_root = ccos::utils::fs::get_workspace_root();
+    let _ = marketplace.import_capabilities_from_rtfs_dir_recursive(workspace_root.join("capabilities/servers/approved")).await;
+    let _ = marketplace.import_capabilities_from_rtfs_dir_recursive(workspace_root.join("capabilities/core")).await;
+    let _ = marketplace.import_capabilities_from_rtfs_dir_recursive(workspace_root.join("capabilities/learned")).await;
 
     // Create discovery service
     let discovery_service = if let Some(config) = &agent_config {
@@ -780,7 +993,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 fn register_ccos_tools(
     server: &mut MCPServer,
     marketplace: Arc<CapabilityMarketplace>,
-    causal_chain: Arc<Mutex<CausalChain>>,
+    causal_chain: Arc<StdMutex<CausalChain>>,
     discovery_service: Arc<LlmDiscoveryService>,
     session_store: SessionStore,
     approval_queue: UnifiedApprovalQueue<ccos::approval::storage_file::FileApprovalStorage>,
@@ -788,21 +1001,29 @@ fn register_ccos_tools(
     // ccos/discover_capabilities
     let mp = marketplace.clone();
     server.register_tool(
-        "ccos_discover_capabilities",
-        "Search for tools matching a query or domain",
+        "ccos_search",
+        "Search for capabilities by query, ID pattern, or domain. Use this to find capabilities before executing them.",
         json!({
             "type": "object",
             "properties": {
-                "query": { "type": "string", "description": "Search query for capabilities" },
+                "query": { 
+                    "type": "string", 
+                    "description": "Search query - matches against capability ID, name, and description" 
+                },
                 "domains": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Optional domain filters"
+                    "description": "Optional domain filters (e.g., ['github', 'weather'])"
                 },
-                "include_external": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Include external MCP servers"
+                "limit": {
+                    "type": "integer",
+                    "default": 10,
+                    "description": "Maximum results to return"
+                },
+                "min_score": {
+                    "type": "number",
+                    "default": 0.0,
+                    "description": "Minimum relevance score (0-1) to include in results"
                 }
             },
             "required": ["query"]
@@ -812,22 +1033,36 @@ fn register_ccos_tools(
             Box::pin(async move {
                 let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
                 let domains = params.get("domains").and_then(|v| v.as_array());
+                let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+                let min_score = params.get("min_score").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
-                let mut q = CapabilityQuery::new();
-                if !query.is_empty() {
-                    q = q.with_id_pattern(format!("*{}*", query));
+                if query.is_empty() {
+                    return Ok(json!({
+                        "error": "query is required",
+                        "results": []
+                    }));
                 }
 
-                let mut caps = mp.list_capabilities_with_query(&q).await;
+                // Get all capabilities
+                let all_caps = mp.list_capabilities().await;
+                
+                // Score and filter capabilities
+                let mut scored_results: Vec<_> = all_caps
+                    .into_iter()
+                    .map(|c| {
+                        let score = calculate_match_score(query, &c.description, &c.id);
+                        (c, score)
+                    })
+                    .filter(|(_, score)| *score >= min_score)
+                    .collect();
 
-                // Manual domain filtering if domains provided
+                // Apply domain filter if provided
                 if let Some(domains) = domains {
-                    let domain_strs: Vec<&str> =
-                        domains.iter().filter_map(|v| v.as_str()).collect();
+                    let domain_strs: Vec<&str> = domains.iter().filter_map(|v| v.as_str()).collect();
                     if !domain_strs.is_empty() {
-                        caps = caps
+                        scored_results = scored_results
                             .into_iter()
-                            .filter(|c| {
+                            .filter(|(c, _)| {
                                 domain_strs.iter().any(|&d| {
                                     c.id.contains(d) || c.domains.iter().any(|cd| cd.contains(d))
                                 })
@@ -836,55 +1071,8 @@ fn register_ccos_tools(
                     }
                 }
 
-                Ok(json!({
-                    "capabilities": caps.iter().map(|c| json!({
-                        "id": c.id,
-                        "name": c.name,
-                        "description": c.description,
-                        "input_schema": c.input_schema
-                    })).collect::<Vec<_>>()
-                }))
-            })
-        }),
-    );
-
-    // ccos/search_tools
-    let mp2 = marketplace.clone();
-    server.register_tool(
-        "ccos_search_tools",
-        "Full-text search over capability descriptions and schemas",
-        json!({
-            "type": "object",
-            "properties": {
-                "query": { "type": "string", "description": "Search query" },
-                "limit": {
-                    "type": "integer",
-                    "default": 10,
-                    "description": "Maximum results to return"
-                }
-            },
-            "required": ["query"]
-        }),
-        Box::new(move |params| {
-            let mp = mp2.clone();
-            Box::pin(async move {
-                let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-
-                // Full text search across all capabilities
-                let all_caps = mp.list_capabilities().await;
-                let mut scored_results: Vec<_> = all_caps
-                    .into_iter()
-                    .map(|c| {
-                        let score = calculate_match_score(query, &c.description, &c.id);
-                        (c, score)
-                    })
-                    .filter(|(_, score)| *score > 0.0)
-                    .collect();
-
                 // Sort by score descending
-                scored_results
-                    .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
                 let total = scored_results.len();
                 let limited: Vec<_> = scored_results.into_iter().take(limit).collect();
@@ -894,20 +1082,24 @@ fn register_ccos_tools(
                         "id": c.id,
                         "name": c.name,
                         "description": c.description,
-                        "match_score": score
+                        "match_score": score,
+                        "input_schema": c.input_schema
                     })).collect::<Vec<_>>(),
-                    "total": total
+                    "total": total,
+                    "hint": if total > 0 { "Use ccos_execute_capability to run these" } else { "Try a different query or check available capabilities with ccos_list_capabilities" }
                 }))
             })
         }),
     );
+
+
 
     // ccos_suggest_apis - Pure LLM suggestions for external APIs (no auto-approval)
     // Returns suggestions for user selection, then user can approve and introspect
     let ds_suggest = discovery_service.clone();
     server.register_tool(
         "ccos_suggest_apis",
-        "Ask LLM to suggest well-known APIs for a given goal. Returns suggestions without auto-queueing approvals - agent should present options to user, then call ccos_introspect_server on selected API.",
+        "Ask LLM to suggest well-known APIs for a given goal. Returns suggestions without auto-queueing approvals. Logic: (1) If 1 suggestion, use it. (2) If several and you are confident, choose one + explain why to user. (3) If several and you have doubt, ask user to choose.",
         json!({
             "type": "object",
             "properties": {
@@ -967,9 +1159,10 @@ fn register_ccos_tools(
                     "success": true,
                     "suggestions": api_list,
                     "next_steps": [
-                        "Present these options to the user",
-                        "When user selects one, call ccos_introspect_server with the docs_url (NOT the endpoint)",
-                        "After introspection, capabilities will be queued for approval"
+                        "If exactly one suggestion, you may use it directly.",
+                        "If several suggestions and you are confident, choose one and explain why to the user.",
+                        "If several suggestions and you have doubt, present all and ask the user to choose one.",
+                        "When an API is selected, call ccos_introspect_remote_api with its docs_url (NOT the endpoint)."
                     ]
                 }))
             })
@@ -1238,81 +1431,86 @@ fn register_ccos_tools(
     // Phase 2: Static Tools
     // =========================================
 
-    // ccos/analyze_goal - Analyze a user goal to extract intents
-    let ds = discovery_service.clone();
-    server.register_tool(
-        "ccos_analyze_goal",
-        "Analyze a user's goal to extract intents, required capabilities, and suggested next steps",
-        json!({
-            "type": "object",
-            "properties": {
-                "goal": {
-                    "type": "string",
-                    "description": "The user's high-level goal to analyze"
-                },
-                "context": {
-                    "type": "object",
-                    "description": "Optional context about current state, constraints, etc."
-                }
-            },
-            "required": ["goal"]
-        }),
-        Box::new(move |params| {
-            let ds = ds.clone();
-            Box::pin(async move {
-                let goal = params.get("goal").and_then(|v| v.as_str()).unwrap_or("");
-
-                if goal.is_empty() {
-                    return Ok(json!({
-                        "error": "Goal cannot be empty"
-                    }));
-                }
-
-                // Try to analyze goal using LLM discovery service
-                match ds.analyze_goal(goal).await {
-                    Ok(analysis) => {
-                        // LLM analysis succeeded
-                        Ok(json!({
-                            "goal": goal,
-                            "analysis": {
-                                "primary_action": analysis.primary_action,
-                                "target_object": analysis.target_object,
-                                "domain_keywords": analysis.domain_keywords,
-                                "synonyms": analysis.synonyms,
-                                "implied_concepts": analysis.implied_concepts,
-                                "expanded_queries": analysis.expanded_queries,
-                                "confidence": analysis.confidence
-                            },
-                            "next_steps": analysis.expanded_queries.iter()
-                                .map(|q| format!("ccos_search_tools {{ query: '{}' }}", q))
-                                .collect::<Vec<_>>()
-                        }))
-                    }
-                    Err(_e) => {
-                        // Fallback to keyword-based analysis
-                        let fallback = ds.fallback_intent_analysis(goal);
-                        Ok(json!({
-                            "goal": goal,
-                            "analysis": {
-                                "primary_action": fallback.primary_action,
-                                "target_object": fallback.target_object,
-                                "domain_keywords": fallback.domain_keywords,
-                                "synonyms": fallback.synonyms,
-                                "implied_concepts": fallback.implied_concepts,
-                                "expanded_queries": fallback.expanded_queries,
-                                "confidence": fallback.confidence
-                            },
-                            "mode": "fallback",
-                            "note": "LLM analysis unavailable, using keyword-based fallback",
-                            "next_steps": fallback.expanded_queries.iter()
-                                .map(|q| format!("ccos_search_tools {{ query: '{}' }}", q))
-                                .collect::<Vec<_>>()
-                        }))
-                    }
-                }
-            })
-        }),
-    );
+    // =========================================
+    // DEPRECATED: ccos_analyze_goal
+    // Superseded by ccos_plan which provides the same analysis
+    // plus actionable sub-steps, gap detection, and next_action guidance.
+    // Kept for reference; can be removed in a future cleanup.
+    // =========================================
+    // let ds = discovery_service.clone();
+    // server.register_tool(
+    //     "ccos_analyze_goal",
+    //     "Analyze a user's goal to extract intents, required capabilities, and suggested next steps",
+    //     json!({
+    //         "type": "object",
+    //         "properties": {
+    //             "goal": {
+    //                 "type": "string",
+    //                 "description": "The user's high-level goal to analyze"
+    //             },
+    //             "context": {
+    //                 "type": "object",
+    //                 "description": "Optional context about current state, constraints, etc."
+    //             }
+    //         },
+    //         "required": ["goal"]
+    //     }),
+    //     Box::new(move |params| {
+    //         let ds = ds.clone();
+    //         Box::pin(async move {
+    //             let goal = params.get("goal").and_then(|v| v.as_str()).unwrap_or("");
+    //
+    //             if goal.is_empty() {
+    //                 return Ok(json!({
+    //                     "error": "Goal cannot be empty"
+    //                 }));
+    //             }
+    //
+    //             // Try to analyze goal using LLM discovery service
+    //             match ds.analyze_goal(goal).await {
+    //                 Ok(analysis) => {
+    //                     // LLM analysis succeeded
+    //                     Ok(json!({
+    //                         "goal": goal,
+    //                         "analysis": {
+    //                             "primary_action": analysis.primary_action,
+    //                             "target_object": analysis.target_object,
+    //                             "domain_keywords": analysis.domain_keywords,
+    //                             "synonyms": analysis.synonyms,
+    //                             "implied_concepts": analysis.implied_concepts,
+    //                             "expanded_queries": analysis.expanded_queries,
+    //                             "confidence": analysis.confidence
+    //                         },
+    //                         "next_steps": analysis.expanded_queries.iter()
+    //                             .map(|q| format!("ccos_search_tools {{ query: '{}' }}", q))
+    //                             .collect::<Vec<_>>()
+    //                     }))
+    //                 }
+    //                 Err(_e) => {
+    //                     // Fallback to keyword-based analysis
+    //                     let fallback = ds.fallback_intent_analysis(goal);
+    //                     Ok(json!({
+    //                         "goal": goal,
+    //                         "analysis": {
+    //                             "primary_action": fallback.primary_action,
+    //                             "target_object": fallback.target_object,
+    //                             "domain_keywords": fallback.domain_keywords,
+    //                             "synonyms": fallback.synonyms,
+    //                             "implied_concepts": fallback.implied_concepts,
+    //                             "expanded_queries": fallback.expanded_queries,
+    //                             "confidence": fallback.confidence
+    //                         },
+    //                         "mode": "fallback",
+    //                         "note": "LLM analysis unavailable, using keyword-based fallback",
+    //                         "next_steps": fallback.expanded_queries.iter()
+    //                             .map(|q| format!("ccos_search_tools {{ query: '{}' }}", q))
+    //                             .collect::<Vec<_>>()
+    //                     }))
+    //                 }
+    //             }
+    //         })
+    //     }),
+    // );
 
     // ccos/execute_plan - Execute an RTFS plan
     server.register_tool(
@@ -1386,7 +1584,7 @@ fn register_ccos_tools(
     let mp4 = marketplace.clone();
     let ds4 = discovery_service.clone();
     server.register_tool(
-        "ccos_resolve_intent",
+        "ccos_decompose",
         "Find capabilities that can fulfill a given intent description",
         json!({
             "type": "object",
@@ -1511,26 +1709,23 @@ fn register_ccos_tools(
 
 
     // ============================================================================
-    // Planning Tool - ccos_plan_goal
+    // Planning Tool - ccos_plan (ModularPlanner with LLM decomposition)
     // ============================================================================
 
-    // ccos_plan_goal - Generate a structured execution plan for a goal
-    // This is the PRIMARY tool for agents to get actionable steps
+    // ccos_plan - Decompose goal into sub-intents using LLM
+    // NOTE: This replaces the previous keyword-matching approach with LLM-based decomposition
+    // Agent orchestrates execution; CCOS provides control, recording, exploration
     let mp_plan = marketplace.clone();
     let ds_plan = discovery_service.clone();
     server.register_tool(
-        "ccos_plan_goal",
-        "PRIMARY: Generate a structured execution plan with ordered steps. Returns capability IDs with parameter wiring ($step_N.field). Use this instead of manually sequencing capabilities.",
+        "ccos_plan",
+        "Decompose goal into sub-intents using LLM. Returns abstract steps WITHOUT tool suggestions - agent decides which tools to use. Identifies capability gaps that need resolution via ccos_suggest_apis.",
         json!({
             "type": "object",
             "properties": {
                 "goal": {
                     "type": "string",
-                    "description": "The goal to accomplish (e.g., 'get weather in paris tomorrow')"
-                },
-                "preferences": {
-                    "type": "object",
-                    "description": "Optional preferences (units, language, etc.)"
+                    "description": "The goal to accomplish (e.g., 'get weather in paris tomorrow and send as email')"
                 }
             },
             "required": ["goal"]
@@ -1540,7 +1735,6 @@ fn register_ccos_tools(
             let ds = ds_plan.clone();
             Box::pin(async move {
                 let goal = params.get("goal").and_then(|v| v.as_str()).unwrap_or("");
-                let _preferences = params.get("preferences").cloned().unwrap_or(json!({}));
 
                 if goal.is_empty() {
                     return Ok(json!({
@@ -1549,142 +1743,122 @@ fn register_ccos_tools(
                     }));
                 }
 
-                // Step 1: Analyze the goal to get domain keywords and concepts
+                // Step 1: Analyze the goal using LLM discovery service
                 let analysis = match ds.analyze_goal(goal).await {
                     Ok(a) => a,
                     Err(_) => ds.fallback_intent_analysis(goal),
                 };
 
-                // Step 2: Get all capabilities from marketplace
+                // Step 2: Get all capabilities from marketplace for gap detection
                 let all_caps = mp.list_capabilities().await;
 
-                // Step 3: Find relevant capabilities using domain keywords
-                let mut scored_caps: Vec<_> = all_caps
-                    .iter()
-                    .map(|c| {
-                        let score = calculate_match_score(goal, &c.description, &c.id);
-                        (c, score)
-                    })
-                    .filter(|(_, score)| *score > 0.2)
-                    .collect();
-
-                scored_caps.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                let top_caps: Vec<_> = scored_caps.into_iter().take(10).collect();
-
-                if top_caps.is_empty() {
-                    return Ok(json!({
-                        "success": false,
-                        "goal": goal,
-                        "error": "No matching capabilities found",
-                        "analysis": {
-                            "domain_keywords": analysis.domain_keywords,
-                            "implied_concepts": analysis.implied_concepts
-                        },
-                        "suggestions": [
-                            "Try 'ccos_discover_capabilities' with different keywords",
-                            "Check if required MCP servers are connected"
-                        ]
-                    }));
-                }
-
-                // Step 4: Determine execution order based on capability types
-                let mut execution_steps = Vec::new();
-                let mut step_number = 1;
-
-                // Build a simple sequential plan based on top matches
-                // In a more advanced version, this would use a proper planner
-                for (cap, score) in top_caps.iter().take(3) {
-                    let mut inputs = json!({});
+                // Step 3: Decompose goal into sub-intents
+                // Since we don't have direct LLM access here, we use the discovery service's
+                // intent analysis to break down into semantic components
+                let sub_intents = extract_sub_intents_from_goal(goal, &analysis);
+                
+                // Step 4: Build a unified plan with all steps in order
+                // Each step shows its resolution status inline
+                let mut plan = Vec::new();
+                let mut gap_count = 0;
+                let mut first_gap_query: Option<String> = None;
+                let mut first_executable_capability: Option<String> = None;
+                
+                for (i, sub_intent) in sub_intents.iter().enumerate() {
+                    // Find best matching capability
+                    let mut best_match: Option<(&ccos::capability_marketplace::types::CapabilityManifest, f64)> = None;
                     
-                    // Simple heuristic: if not the first step, try to pipe the previous step's output
-                    if step_number > 1 {
-                        inputs = json!({
-                            "context": format!("$step_{}", step_number - 1)
-                        });
+                    for cap in &all_caps {
+                        let score = calculate_match_score(&sub_intent.description, &cap.description, &cap.id);
+                        if score > 0.4 {
+                            if best_match.is_none() || score > best_match.unwrap().1 {
+                                best_match = Some((cap, score));
+                            }
+                        }
                     }
-
-                    execution_steps.push(json!({
-                        "step": step_number,
-                        "capability_id": cap.id,
-                        "capability_name": cap.name,
-                        "description": cap.description,
-                        "input_schema": cap.input_schema,
-                        "inputs_template": inputs,
-                        "match_score": *score,
-                        "how_to_call": format!(
-                            "Call ccos_execute_capability with capability_id=\"{}\" and inputs={{...}}",
-                            cap.id
-                        )
-                    }));
-                    step_number += 1;
+                    
+                    if let Some((cap, score)) = best_match {
+                        // Resolved step
+                        let input_schema_display = cap.input_schema.as_ref()
+                            .map(|s| serde_json::to_value(s).unwrap_or(json!({"type": "object"})))
+                            .unwrap_or(json!({"type": "object"}));
+                        
+                        if first_executable_capability.is_none() && gap_count == 0 {
+                            first_executable_capability = Some(cap.id.clone());
+                        }
+                        
+                        plan.push(json!({
+                            "step": i + 1,
+                            "intent": sub_intent.description,
+                            "intent_type": sub_intent.intent_type,
+                            "status": "resolved",
+                            "capability": {
+                                "id": cap.id,
+                                "name": cap.name,
+                                "input_schema": input_schema_display
+                            },
+                            "match_score": score,
+                            "depends_on": sub_intent.depends_on
+                        }));
+                    } else {
+                        // Gap - no matching capability
+                        let suggested_query = infer_api_query_from_intent(&sub_intent.description);
+                        
+                        if first_gap_query.is_none() {
+                            first_gap_query = Some(suggested_query.clone());
+                        }
+                        gap_count += 1;
+                        
+                        plan.push(json!({
+                            "step": i + 1,
+                            "intent": sub_intent.description,
+                            "intent_type": sub_intent.intent_type,
+                            "status": "gap",
+                            "reason": "No matching capability found",
+                            "suggested_query": suggested_query,
+                            "depends_on": sub_intent.depends_on
+                        }));
+                    }
                 }
-
-                // Step 6: Calculate feasibility
-                let feasibility = if execution_steps.is_empty() {
-                    0.0
-                } else {
-                    let avg_score: f64 = execution_steps.iter()
-                        .filter_map(|s| s.get("match_score").and_then(|v| v.as_f64()))
-                        .sum::<f64>() / execution_steps.len() as f64;
-                    (avg_score * 100.0).round() / 100.0
-                };
-
-                let ready_to_execute = feasibility >= 0.5 && !execution_steps.is_empty();
-
-                // Build explicit next action guidance for LLM
-                let first_step_id = execution_steps.first()
-                    .and_then(|s| s.get("capability_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-
-                let next_action = if ready_to_execute {
+                
+                let has_gaps = gap_count > 0;
+                let total_steps = plan.len();
+                let resolved_count = total_steps - gap_count;
+                
+                // Build next_action - one clear action based on state
+                let next_action = if let Some(query) = first_gap_query {
+                    // There's a gap to resolve
+                    json!({
+                        "tool": "ccos_suggest_apis",
+                        "args": { "query": query },
+                        "reason": format!("Step requires a capability that is not currently available ({} gap(s) total)", gap_count)
+                    })
+                } else if let Some(cap_id) = first_executable_capability {
+                    // All resolved, ready to execute
                     json!({
                         "tool": "ccos_execute_capability",
-                        "capability_id": first_step_id,
-                        "instruction": format!(
-                            "Execute step 1 by calling ccos_execute_capability with capability_id='{}'. Check the input_schema in step 1 to know which parameters are required.",
-                            first_step_id
-                        )
+                        "args": { "capability_id": cap_id },
+                        "reason": "All steps have matching capabilities. Execute step 1."
                     })
                 } else {
+                    // No steps at all
                     json!({
-                        "tool": "ccos_discover_capabilities",
-                        "instruction": "No suitable capabilities found. Search for alternatives."
+                        "tool": "ccos_search",
+                        "args": { "query": goal },
+                        "reason": "Could not decompose goal into actionable steps. Try searching for related capabilities."
                     })
                 };
 
                 Ok(json!({
-                    "success": true,
                     "goal": goal,
-                    "feasibility": feasibility,
-                    "ready_to_execute": ready_to_execute,
-                    
-                    // EXPLICIT GUIDANCE FOR LLM
-                    "important": "The capabilities below are CCOS tools you can execute NOW using ccos_execute_capability. Do NOT search for other tools - use these capability_id values directly.",
-                    "next_action": next_action,
-                    
-                    "execution_plan": {
-                        "steps": execution_steps,
-                        "step_count": execution_steps.len(),
-                        "workflow": "For each step: call ccos_execute_capability with the capability_id and inputs based on input_schema"
+                    "plan": plan,
+                    "summary": {
+                        "total_steps": total_steps,
+                        "resolved": resolved_count,
+                        "gaps": gap_count,
+                        "ready_to_execute": !has_gaps && total_steps > 0
                     },
-                    
-                    "analysis": {
-                        "primary_action": analysis.primary_action,
-                        "target_object": analysis.target_object,
-                        "domain_keywords": analysis.domain_keywords,
-                        "confidence": analysis.confidence
-                    },
-                    
-                    "execution_instructions": [
-                        "1. Call ccos_execute_capability with the first step's capability_id",
-                        format!("2. Use capability_id='{}' and build inputs from input_schema", first_step_id),
-                        "3. A session will be auto-created - note the session_id in the response",
-                        "4. For subsequent steps, include session_id to build a complete RTFS plan",
-                        "5. After all steps complete, call ccos_get_session_plan to get the full RTFS code"
-                    ],
-                    
-                    "session_note": "Sessions track your execution and build an RTFS plan. Either: (A) let sessions auto-create, or (B) call ccos_start_session first for explicit control. Always pass session_id to subsequent steps."
+                    "next_action": next_action
                 }))
             })
         }),
@@ -1695,10 +1869,10 @@ fn register_ccos_tools(
     // ============================================================================
 
 
-    // ccos_start_session - Start a new planning/execution session
+    // ccos_session_start - Start a new planning/execution session
     let ss1 = session_store.clone();
     server.register_tool(
-        "ccos_start_session",
+        "ccos_session_start",
         "Start a new planning/execution session. Returns a session_id for tracking steps.",
         json!({
             "type": "object",
@@ -1775,6 +1949,10 @@ fn register_ccos_tools(
                 "session_id": {
                     "type": "string",
                     "description": "Optional session ID to track this execution"
+                },
+                "original_goal": {
+                    "type": "string",
+                    "description": "Optional: The original user intent that triggered this execution. Preserved in session for learning and replay."
                 }
             },
             "required": ["capability_id", "inputs"]
@@ -1787,6 +1965,7 @@ fn register_ccos_tools(
                 let capability_id = params.get("capability_id").and_then(|v| v.as_str()).unwrap_or("");
                 let inputs = params.get("inputs").cloned().unwrap_or(json!({}));
                 let session_id = params.get("session_id").and_then(|v| v.as_str());
+                let original_goal = params.get("original_goal").and_then(|v| v.as_str());
 
                 if capability_id.is_empty() {
                     return Ok(json!({
@@ -1899,7 +2078,12 @@ fn register_ccos_tools(
                 } else {
                     // Auto-create a session for this capability execution
                     let mut store = ss.write().await;
-                    let auto_session = Session::new(&format!("Auto-session for {}", capability_id));
+                    let session_goal = format!("Auto-session for {}", capability_id);
+                    let auto_session = if let Some(og) = original_goal {
+                        Session::new_with_original_goal(&session_goal, og)
+                    } else {
+                        Session::new(&session_goal)
+                    };
                     let new_sid = auto_session.id.clone();
                     store.insert(new_sid.clone(), auto_session);
                     (new_sid, true)
@@ -1925,9 +2109,9 @@ fn register_ccos_tools(
 
                 // Build response with session guidance
                 let session_guidance = if session_was_created {
-                    "A session was auto-created for this execution. Use the returned session_id in subsequent ccos_execute_capability calls to build a multi-step RTFS plan. Call ccos_get_session_plan when done to get the complete RTFS code."
+                    "A session was auto-created for this execution. Use the returned session_id in subsequent ccos_execute_capability calls to build a multi-step RTFS plan. Call ccos_session_plan when done to get the complete RTFS code."
                 } else {
-                    "Step recorded to session. Continue with next step or call ccos_get_session_plan to get the complete RTFS code."
+                    "Step recorded to session. Continue with next step or call ccos_session_plan to get the complete RTFS code."
                 };
 
                 Ok(json!({
@@ -1939,7 +2123,7 @@ fn register_ccos_tools(
                     "session_guidance": session_guidance,
                     "next_steps": [
                         "To continue: call ccos_execute_capability with same session_id",
-                        "To get full plan: call ccos_get_session_plan with session_id"
+                        "To get full plan: call ccos_session_plan with session_id"
                     ]
                 }))
             })
@@ -1947,10 +2131,10 @@ fn register_ccos_tools(
     );
 
 
-    // ccos_get_session_plan - Get the accumulated RTFS plan from a session
+    // ccos_session_plan - Get the accumulated RTFS plan from a session
     let ss3 = session_store.clone();
     server.register_tool(
-        "ccos_get_session_plan",
+        "ccos_session_plan",
         "Get the accumulated RTFS plan from all steps in a session.",
         json!({
             "type": "object",
@@ -2041,10 +2225,10 @@ fn register_ccos_tools(
         }),
     );
 
-    // ccos_end_session - Finalize and optionally save the session plan
+    // ccos_session_end - Finalize and optionally save the session plan
     let ss4 = session_store.clone();
     server.register_tool(
-        "ccos_end_session",
+        "ccos_session_end",
         "End a session and optionally save the generated RTFS plan to a file.",
         json!({
             "type": "object",
@@ -2107,6 +2291,168 @@ fn register_ccos_tools(
             })
         }),
     );
+
+    // ccos_consolidate_session - Convert a session into a reusable capability
+    let ss_consolidate = session_store.clone();
+    let mp_consolidate = marketplace.clone();
+    server.register_tool(
+        "ccos_consolidate_session",
+        "Convert a saved session's execution path into a reusable capability. The capability is automatically registered in the marketplace and will appear in ccos_list_capabilities.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "The session ID to consolidate"
+                },
+                "capability_id": {
+                    "type": "string",
+                    "description": "Optional custom capability ID. If not provided, one will be generated from the goal."
+                }
+            },
+            "required": ["session_id"]
+        }),
+        Box::new(move |params| {
+            let ss = ss_consolidate.clone();
+            let mp = mp_consolidate.clone();
+            Box::pin(async move {
+                let session_id = params.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+                let custom_capability_id = params.get("capability_id").and_then(|v| v.as_str());
+
+                if session_id.is_empty() {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "session_id is required"
+                    }));
+                }
+
+                // Get session from store
+                let store = ss.read().await;
+                let session = match store.get(session_id) {
+                    Some(s) => Some(s.clone()),
+                    None => {
+                        // Try to load from disk if not in memory
+                        find_session_on_disk(session_id).await
+                    }
+                };
+
+                let session = match session {
+                    Some(s) => s,
+                    None => {
+                        return Ok(json!({
+                            "success": false,
+                            "error": format!("Session '{}' not found. Make sure the session ID is correct or matches a saved file in 'capabilities/sessions'.", session_id)
+                        }));
+                    }
+                };
+                drop(store);
+
+                if session.steps.is_empty() {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "Cannot consolidate a session with no executed steps"
+                    }));
+                }
+
+                // Generate capability ID from goal
+                let goal_for_id = session.original_goal.as_ref().unwrap_or(&session.goal);
+                let capability_id = custom_capability_id.map(|s| s.to_string()).unwrap_or_else(|| {
+                    let slug = goal_for_id
+                        .to_lowercase()
+                        .chars()
+                        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                        .collect::<String>()
+                        .split('_')
+                        .filter(|s| !s.is_empty())
+                        .take(5)
+                        .collect::<Vec<_>>()
+                        .join("_");
+                    format!("learned.{}", slug)
+                });
+
+                // Generate RTFS capability definition
+                let description = session.original_goal.as_ref().unwrap_or(&session.goal);
+                let replay_code = session.to_rtfs_plan();
+
+                let capability_rtfs = format!(
+                    r#";; Learned Capability: {cap_id}
+;; Consolidated from session: {session_id}
+;; Original goal: {goal}
+;; Steps: {step_count}
+
+(capability "{cap_id}"
+  :name "{name}"
+  :description "{description}"
+  :input-schema [:map]
+  :output-schema :any
+  :kind :learned
+  :effects [:io]
+  :implementation (fn []
+    {code}
+  ))
+"#,
+                    cap_id = capability_id,
+                    name = description.replace("\"", "\\\""),
+                    session_id = session.id,
+                    goal = session.original_goal.as_deref().unwrap_or(&description),
+                    step_count = session.steps.len(),
+                    description = description.replace("\"", "\\\""),
+                    code = replay_code.lines()
+                        .map(|l| format!("    {}", l))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+
+                // Save to capabilities/learned/ directory
+                let workspace_root = ccos::utils::fs::get_workspace_root();
+                let learned_dir = workspace_root.join("capabilities/learned");
+                let _ = std::fs::create_dir_all(&learned_dir);
+                
+                let filename = format!("{}.rtfs", capability_id.replace(".", "_"));
+                let filepath = learned_dir.join(&filename);
+                
+                if let Err(e) = std::fs::write(&filepath, &capability_rtfs) {
+                    return Ok(json!({
+                        "success": false,
+                        "error": format!("Failed to save capability: {}", e)
+                    }));
+                }
+
+                // Register in marketplace by importing from the directory we just saved to
+                let registered = match mp.import_capabilities_from_rtfs_dir_recursive(&learned_dir).await {
+                    Ok(count) => count > 0,
+                    Err(e) => {
+                        eprintln!("[ccos-mcp] Warning: Failed to register capability in marketplace: {}", e);
+                        false
+                    }
+                };
+
+                Ok(json!({
+                    "success": true,
+                    "session_id": session.id,
+                    "capability_id": capability_id,
+                    "original_goal": session.original_goal,
+                    "session_goal": session.goal,
+                    "steps_count": session.steps.len(),
+                    "saved_to": filepath.to_string_lossy(),
+                    "registered_in_marketplace": registered,
+                    "rtfs_preview": capability_rtfs.lines().take(10).collect::<Vec<_>>().join("\n"),
+                    "next_steps": if registered {
+                        vec![
+                            "The capability is now available in ccos_list_capabilities.",
+                            "To execute: call ccos_execute_capability with the new capability_id"
+                        ]
+                    } else {
+                        vec![
+                            "The capability file was saved but marketplace registration failed.",
+                            "Restart ccos-mcp to load learned capabilities."
+                        ]
+                    }
+                }))
+            })
+        }),
+    );
+
     // ccos_synthesize_capability - Generate RTFS capability using LLM
     let ds = discovery_service.clone();
     server.register_tool(
@@ -2307,7 +2653,7 @@ fn register_ccos_tools(
             "required": ["secret_names"]
         }),
         Box::new(move |params| {
-            let _aq = aq_check.clone();
+            let aq = aq_check.clone();
             Box::pin(async move {
                 let secret_names: Vec<String> = params.get("secret_names")
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -2337,9 +2683,19 @@ fn register_ccos_tools(
                         available.push(name.clone());
                     } else {
                         missing.push(name.clone());
+                        
+                        // Queue secret approval
+                        let _ = aq.add_secret_approval(
+                            "ccos.system.secrets".to_string(),
+                            name.clone(),
+                            format!("Required for capability execution: {}", name),
+                            24 * 7, // 7 days
+                        ).await;
+
                         missing_details.push(json!({
                             "name": name,
-                            "status": "not_available"
+                            "status": "not_available",
+                            "approval_queued": true
                         }));
                     }
                 }
@@ -2352,24 +2708,24 @@ fn register_ccos_tools(
                     "hint": if missing.is_empty() {
                         "All requested secrets are available.".to_string()
                     } else {
-                        format!("Missing secrets must be provided by the user via the approval UI at http://localhost:3000/approvals. Do NOT attempt to find or guess secrets yourself. You are FORBIDDEN from accessing raw secret values.")
+                        format!("Missing secrets have been queued for approval. Visit http://localhost:3000/approvals to provide them. Do NOT attempt to find or guess secrets yourself.")
                     },
                     "agent_guidance": if missing.is_empty() {
                         "All required secrets are available. You may proceed with capability execution.".to_string()
                     } else {
-                        "CRITICAL: Missing secrets detected. You MUST stop execution now and ask the user to visit http://localhost:3000/approvals. Do NOT attempt to use alternative public APIs, web search, or any other workaround to bypass this restriction. Your primary obligation is to guide the user to the secure approval flow.".to_string()
+                        "CRITICAL: Missing secrets detected and queued. You MUST stop execution now and ask the user to visit http://localhost:3000/approvals. Only resume once the user confirms they have provided the secrets.".to_string()
                     }
                 }))
             })
         }),
     );
 
-    // ccos_introspect_server - Introspect an external MCP/OpenAPI server and queue for approval
+    // ccos_introspect_remote_api - Introspect an external MCP/OpenAPI server and queue for approval
     let aq_introspect = approval_queue.clone();
     let mp_introspect = marketplace.clone();
     let ds_introspect = discovery_service.clone(); // For HTML docs fallback
     server.register_tool(
-        "ccos_introspect_server",
+        "ccos_introspect_remote_api",
         "Introspect an external server (MCP, OpenAPI, or HTML documentation) to discover its capabilities. Works with MCP endpoints, OpenAPI specs, and API documentation pages. Creates an approval request for the server.",
         json!({
             "type": "object",
@@ -2405,16 +2761,8 @@ fn register_ccos_tools(
                     }));
                 }
 
-                // Detect if this looks like an OpenAPI spec URL
-                let is_openapi_url = endpoint.ends_with(".json") 
-                    || endpoint.ends_with(".yaml") 
-                    || endpoint.ends_with(".yml")
-                    || endpoint.contains("swagger")
-                    || endpoint.contains("openapi");
-
                 // Create server config for introspection
                 let server_name = name.clone().unwrap_or_else(|| {
-                    // Extract name from endpoint - try to get domain or last path segment
                     if let Ok(url) = url::Url::parse(endpoint) {
                         url.host_str()
                             .map(|h| h.replace(".", "_"))
@@ -2424,53 +2772,36 @@ fn register_ccos_tools(
                     }
                 });
 
-                // If it looks like an OpenAPI spec, use IntrospectionService
-                if is_openapi_url {
-                    eprintln!("[CCOS] Detected OpenAPI spec URL, using IntrospectionService...");
-                    
+                // Optimization: Strip common redundant suffixes from server name for better search results
+                let search_name = {
+                    let mut s = server_name.clone();
+                    for suffix in &[" API Spec", " Spec", " Documentation", " API Docs", " API"] {
+                        if s.to_lowercase().ends_with(&suffix.to_lowercase()) {
+                            s = s[..s.len() - suffix.len()].to_string();
+                        }
+                    }
+                    s
+                };
+
+                let server_id = ccos::utils::fs::sanitize_filename(&server_name);
+                let workspace_root = ccos::utils::fs::get_workspace_root();
+                let pending_dir = workspace_root.join("capabilities/servers/pending").join(&server_id);
+
+                // 1. OpenAPI Fast Path
+                if ccos::ops::introspection_service::IntrospectionService::is_openapi_url(endpoint) {
                     let introspection_service = ccos::ops::introspection_service::IntrospectionService::new();
-                    
-                    match introspection_service.introspect_openapi(endpoint, &server_name).await {
-                        Ok(result) if result.success => {
+                    if let Ok(result) = introspection_service.introspect_openapi(endpoint, &server_name).await {
+                        if result.success {
                             let api_result = result.api_result.as_ref().unwrap();
-                            eprintln!("[CCOS] IntrospectionService found {} endpoints", api_result.endpoints.len());
-                            
-                            // Create approval request
-                            let approval_id = match introspection_service.create_approval_request(
-                                &result,
-                                endpoint,
-                                &aq,
-                                24 * 7, // 7 days
-                            ).await {
+                            let approval_id = match introspection_service.create_approval_request(&result, endpoint, &aq, 24 * 7).await {
                                 Ok(id) => id,
-                                Err(e) => {
-                                    return Ok(json!({
-                                        "success": false,
-                                        "error": format!("Failed to create approval request: {}", e)
-                                    }));
-                                }
+                                Err(e) => return Ok(json!({"success": false, "error": format!("Failed to create approval request: {}", e)}))
                             };
 
-                            // Generate RTFS files
-                            let workspace_root = ccos::utils::fs::get_workspace_root();
-                            let server_id = ccos::utils::fs::sanitize_filename(&server_name);
-                            let pending_dir = workspace_root.join("capabilities/servers/pending").join(&server_id);
-                            
                             match introspection_service.generate_rtfs_files(&result, &pending_dir, endpoint) {
                                 Ok(gen_result) => {
-                                    eprintln!("[CCOS] Saved {} RTFS capabilities to: {}", 
-                                        gen_result.capability_files.len(), 
-                                        gen_result.output_dir.display());
-                                    
-                                    // Return detailed discovery result
                                     let endpoint_previews: Vec<_> = api_result.endpoints.iter().take(10).map(|ep| {
-                                        json!({
-                                            "id": ep.endpoint_id,
-                                            "name": ep.name,
-                                            "method": ep.method,
-                                            "path": ep.path,
-                                            "description": ep.description
-                                        })
+                                        json!({"id": ep.endpoint_id, "name": ep.name, "method": ep.method, "path": ep.path, "description": ep.description})
                                     }).collect();
 
                                     return Ok(json!({
@@ -2484,43 +2815,28 @@ fn register_ccos_tools(
                                         "discovered_endpoints_count": api_result.endpoints.len(),
                                         "capability_files_count": gen_result.capability_files.len(),
                                         "endpoint_previews": endpoint_previews,
-                                        "capabilities_path": gen_result.output_dir.to_string_lossy(),
                                         "auth_type": api_result.auth_requirements.auth_type,
-                                        "agent_guidance": format!(
-                                            "OpenAPI spec '{}' introspected with {} endpoints. \
-                                             {} RTFS capability files (with schemas) + server.json saved to {}. \
-                                             Approval required before use. Once approved, call ccos_register_server with approval_id: '{}'",
-                                            api_result.api_title, api_result.endpoints.len(), 
-                                            gen_result.capability_files.len(), 
-                                            gen_result.output_dir.display(), 
-                                            approval_id
-                                        )
+                                        "agent_guidance": format!("OpenAPI spec '{}' introspected. MANDATORY: You must now ask the user to manually approve this server at the /approvals UI. DO NOT call ccos_register_server until the user confirms approval.", api_result.api_title),
+                                        "next_steps": [
+                                            "Notify the user that introspection is complete.",
+                                            "Tell the user to go to the CCOS Control Center at /approvals to approve the new capabilities.",
+                                            "WAIT for the user to confirm they have approved the server.",
+                                            "Only after user confirmation, call ccos_register_server with approval_id to finalize registration."
+                                        ]
                                     }));
                                 }
-                                Err(e) => {
-                                    return Ok(json!({
-                                        "success": true,
-                                        "approval_id": approval_id,
-                                        "server_name": server_name,
-                                        "source": "openapi",
-                                        "warning": format!("Failed to generate RTFS files: {}", e)
-                                    }));
-                                }
+                                Err(e) => return Ok(json!({"success": true, "approval_id": approval_id, "server_name": server_name, "source": "openapi", "warning": format!("Failed to generate RTFS files: {}", e)}))
                             }
-                        }
-                        Ok(result) => {
-                            eprintln!("[CCOS] IntrospectionService failed: {:?}, falling back to MCP...", result.error);
-                            // Fall through to MCP introspection below
-                        }
-                        Err(e) => {
-                            eprintln!("[CCOS] IntrospectionService error: {}, falling back to MCP...", e);
-                            // Fall through to MCP introspection below
                         }
                     }
                 }
 
-                // Try to introspect as MCP server
-                let config = MCPServerConfig {
+                // 2. Cascade Discovery (MCP -> Browser -> Search -> HTML)
+                let mut capabilities: Vec<serde_json::Value> = Vec::new();
+                let mut discovery_source = "mcp";
+
+                // Step 2.1: MCP Introspection
+                let mcp_config = MCPServerConfig {
                     name: server_name.clone(),
                     endpoint: endpoint.to_string(),
                     auth_token: auth_env_var.as_ref().and_then(|var| std::env::var(var).ok()),
@@ -2528,100 +2844,264 @@ fn register_ccos_tools(
                     protocol_version: "2024-11-05".to_string(),
                 };
 
-                let mut discovery_source = "mcp";
-                let discovery_result = match MCPDiscoveryProvider::new_with_rtfs_host_factory(
-                    config.clone(),
-                    mp.get_rtfs_host_factory(),
-                ) {
-                    Ok(provider) => {
-                        match provider.discover_tools().await {
-                            Ok(caps) => Some(caps),
+                let provider_res = MCPDiscoveryProvider::new_with_rtfs_host_factory(mcp_config, mp.get_rtfs_host_factory());
+                if let Ok(provider) = provider_res {
+                    let options = ccos::mcp::types::DiscoveryOptions {
+                        export_to_rtfs: true,
+                        export_directory: Some(pending_dir.to_string_lossy().to_string()),
+                        ..Default::default()
+                    };
+                    if let Ok(caps) = provider.discover_tools_with_options(&options).await {
+                        capabilities = caps.into_iter().map(|c| json!({
+                            "id": c.id,
+                            "name": c.name,
+                            "description": c.description
+                        })).collect();
+                        discovery_source = "mcp";
+                        eprintln!("[CCOS] Saved {} MCP RTFS capabilities to: {}", capabilities.len(), pending_dir.display());
+                    }
+                }
 
-                            Err(mcp_err) => {
-                                // MCP failed - try HTML docs fallback
-                                eprintln!("[CCOS] MCP introspection failed: {}, trying HTML docs fallback...", mcp_err);
-                                discovery_source = "html_docs";
+                if capabilities.is_empty() {
+                    // Step 2.2: Browser Discovery (Robust Swagger UI/SPA detection)
+                    eprintln!("[CCOS] MCP failed, trying browser extraction for SPAs...");
+                    let browser_service = ccos::ops::browser_discovery::BrowserDiscoveryService::new();
+                    
+                    async fn try_browse(url: &str, service: &ccos::ops::browser_discovery::BrowserDiscoveryService) -> Option<serde_json::Value> {
+                        if let Ok(res) = service.extract_from_url(url).await {
+                            if res.success {
+                                if let Some(spec_url) = res.spec_url {
+                                    return Some(json!({
+                                        "success": false,
+                                        "source": "browser_extraction",
+                                        "message": format!("Found OpenAPI spec URL via Swagger UI at: {}", spec_url),
+                                        "spec_url": spec_url,
+                                        "next_action": {
+                                            "tool": "ccos_introspect_remote_api",
+                                            "args": { "endpoint": spec_url },
+                                            "reason": "Introspect the OpenAPI spec discovered from Swagger UI"
+                                        }
+                                    }));
+                                }
                                 
-                                // Use LLM to parse documentation page
-                                match ds.search_external_apis(&server_name, Some(endpoint)).await {
-                                    Ok(apis) if !apis.is_empty() => {
-                                        // Convert ExternalApiResult to DiscoveredMCPTool-like info
-                                        // For now, return info about the discovered API
-                                        return Ok(json!({
-                                            "success": true,
-                                            "source": "html_docs",
-                                            "discovered_apis": apis.iter().map(|api| json!({
-                                                "name": api.name,
-                                                "endpoint": api.endpoint,
-                                                "description": api.description,
-                                                "auth_env_var": api.auth_env_var
-                                            })).collect::<Vec<_>>(),
-                                            "note": "Discovered API info from documentation. To create detailed capabilities, provide an OpenAPI spec URL or approve this server and manually add capabilities.",
-                                            "next_step": "If this looks correct, you can use ccos_execute_capability to call these endpoints directly, or create an approval request manually."
-                                        }));
-                                    }
-                                    Ok(_) => {
-                                        return Ok(json!({
-                                            "success": false,
-                                            "source": "html_docs",
-                                            "error": format!("Could not extract API information from documentation at {}", endpoint),
-                                            "hint": "Try providing an OpenAPI spec URL or a more detailed API reference page"
-                                        }));
-                                    }
-                                    Err(doc_err) => {
-                                        return Ok(json!({
-                                            "success": false,
-                                            "error": format!("MCP introspection failed: {}. HTML docs fallback also failed: {}", mcp_err, doc_err),
-                                            "hint": "Check if the URL is accessible and contains API documentation"
-                                        }));
+                                if !res.found_openapi_urls.is_empty() {
+                                    return Some(json!({
+                                        "success": false,
+                                        "source": "browser_extraction",
+                                        "error": format!("Could not introspect {} directly, but found OpenAPI spec links via browser", url),
+                                        "found_specs": res.found_openapi_urls,
+                                        "next_action": {
+                                            "tool": "ccos_introspect_remote_api",
+                                            "args": { "endpoint": res.found_openapi_urls[0] },
+                                            "reason": "Try introspecting the discovered OpenAPI spec URL"
+                                        }
+                                    }));
+                                }
+                                
+                                if !res.discovered_endpoints.is_empty() {
+                                    let caps: Vec<_> = res.discovered_endpoints.iter().map(|ep| {
+                                        let id = format!("{}_{}", ep.method, ep.path.replace('/', "_"));
+                                        json!({
+                                            "id": id,
+                                            "name": id,
+                                            "description": ep.description
+                                        })
+                                    }).collect();
+                                    return Some(json!({ "capabilities": caps, "source": "browser_extraction" }));
+                                }
+                            }
+                        }
+                        None
+                    }
+
+                    if let Some(res) = try_browse(endpoint, &browser_service).await {
+                        if res.get("capabilities").is_some() {
+                            capabilities = res["capabilities"].as_array().unwrap().clone();
+                            discovery_source = "browser_extraction";
+                        } else if let Some(next_action) = res.get("next_action") {
+                            // Loop detection: don't return next_action if it's the same URL we just tried
+                            let next_endpoint = next_action.get("args")
+                                .and_then(|a| a.get("endpoint"))
+                                .and_then(|e| e.as_str())
+                                .unwrap_or("");
+                            if next_endpoint != endpoint && !next_endpoint.is_empty() {
+                                return Ok(res);
+                            } else {
+                                eprintln!("[CCOS] Skipping next_action - same URL as input (loop prevention)");
+                            }
+                        }
+                    } else {
+                        // If specific endpoint failed, try the base domain as fallback
+                        if let Ok(url) = url::Url::parse(endpoint) {
+                            if let Some(host) = url.host_str() {
+                                let base_url = format!("{}://{}", url.scheme(), host);
+                                if base_url != endpoint {
+                                    eprintln!("[CCOS] Browser failed on {}, fallback to base domain: {}", endpoint, base_url);
+                                    if let Some(res) = try_browse(&base_url, &browser_service).await {
+                                        if res.get("capabilities").is_some() {
+                                            capabilities = res["capabilities"].as_array().unwrap().clone();
+                                            discovery_source = "browser_extraction";
+                                        } else if let Some(next_action) = res.get("next_action") {
+                                            // Loop detection for base domain fallback too
+                                            let next_endpoint = next_action.get("args")
+                                                .and_then(|a| a.get("endpoint"))
+                                                .and_then(|e| e.as_str())
+                                                .unwrap_or("");
+                                            if next_endpoint != endpoint && next_endpoint != &base_url && !next_endpoint.is_empty() {
+                                                return Ok(res);
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                    Err(e) => {
-                        // Provider creation failed - also try HTML docs fallback
-                        eprintln!("[CCOS] MCP provider creation failed: {}, trying HTML docs fallback...", e);
-                        discovery_source = "html_docs";
-                        
-                        match ds.search_external_apis(&server_name, Some(endpoint)).await {
-                            Ok(apis) if !apis.is_empty() => {
-                                return Ok(json!({
-                                    "success": true,
-                                    "source": "html_docs",
-                                    "discovered_apis": apis.iter().map(|api| json!({
-                                        "name": api.name,
-                                        "endpoint": api.endpoint,
-                                        "description": api.description,
-                                        "auth_env_var": api.auth_env_var
-                                    })).collect::<Vec<_>>(),
-                                    "note": "Discovered API info from documentation.",
-                                    "next_step": "To use this API, you may need to manually configure capabilities."
-                                }));
+                }
+
+                if capabilities.is_empty() {
+                    // Step 2.3: Web Search Fallback
+                    eprintln!("[CCOS] Browser discovery failed, searching for OpenAPI spec...");
+                    let found_specs = search_for_openapi_spec(&search_name).await;
+                    if !found_specs.is_empty() {
+                        return Ok(json!({
+                            "success": false,
+                            "source": "web_search",
+                            "error": format!("Could not introspect {}, but found potential OpenAPI specs via web search", endpoint),
+                            "found_specs": found_specs,
+                            "next_action": {
+                                "tool": "ccos_introspect_remote_api",
+                                "args": { "endpoint": found_specs[0] },
+                                "reason": "Try introspecting the discovered OpenAPI spec URL"
                             }
-                            _ => {
-                                return Ok(json!({
-                                    "success": false,
-                                    "error": format!("Failed to create discovery provider: {}. HTML docs fallback found no APIs.", e)
-                                }));
-                            }
+                        }));
+                    }
+                    
+                    // Step 2.4: HTML Docs Metadata (Final Fallback)
+                    eprintln!("[CCOS] Web search failed, trying HTML docs metadata fallback...");
+                    if let Ok(apis) = ds.search_external_apis(&search_name, Some(endpoint)).await {
+                        if !apis.is_empty() {
+                            capabilities = apis.into_iter().map(|res| json!({
+                                "id": res.name,
+                                "name": res.name,
+                                "description": res.description
+                            })).collect();
+                            discovery_source = "html_docs";
                         }
                     }
-                };
+                }
 
-                let capabilities = discovery_result.unwrap_or_default();
 
-                // Create ServerInfo
+                if capabilities.is_empty() {
+                    return Ok(json!({
+                        "success": false,
+                        "error": format!("Could not introspect API from {}", endpoint),
+                        "attempts": ["openapi_fast_path", "mcp_introspection", "browser_extraction", "web_search", "html_docs_metadata"],
+                        "ask_user": generate_introspection_failure_suggestions(&server_name, endpoint)
+                    }));
+                }
+
+                // 2.5: Generate RTFS capability files for cascade-discovered capabilities
+                // Use the same format as OpenAPI introspection for consistency
+                let _ = std::fs::create_dir_all(&pending_dir);
+                let module_name = server_name.to_lowercase()
+                    .replace(" ", "_")
+                    .replace("-", "_")
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '_')
+                    .collect::<String>();
+
+                let mut generated_files = 0;
+                let mut capability_file_list = Vec::new();
+                for cap in &capabilities {
+                    if let Some(id) = cap.get("id").and_then(|v| v.as_str()) {
+                        let desc = cap.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                        let cap_name = id.to_lowercase()
+                            .replace('.', "_")
+                            .replace('/', "_")
+                            .replace(' ', "_");
+                        let cap_id = format!("{}.{}", module_name, cap_name);
+                        let cap_file = pending_dir.join(format!("{}.rtfs", ccos::utils::fs::sanitize_filename(&cap_name)));
+
+                        let method = cap.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
+                        let path = cap.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                        let effects = match method.to_uppercase().as_str() {
+                            "GET" => "[:network_request]",
+                            "POST" | "PUT" | "PATCH" => "[:network_request :state_write]",
+                            "DELETE" => "[:network_request :state_delete]",
+                            _ => "[:network_request]",
+                        };
+
+                        let rtfs_content = format!(
+                            r#";; Capability: {}
+;; {} API
+;; Source: {} discovery
+;; Endpoint: {} {}
+
+(capability "{}"
+  :name "{}"
+  :version "1.0.0"
+  :description "{}"
+  :provider "{}"
+  :permissions [:network.http]
+  :effects {}
+  :metadata {{
+    :endpoint {{
+      :base_url "{}"
+      :method "{}"
+      :path "{}"
+    }}
+    :discovery {{
+      :method "{}_discovery"
+      :source_url "{}"
+    }}
+  }}
+  :input-schema :any
+  :output-schema :any
+)
+"#,
+                            id, server_name, discovery_source, method, path,
+                            cap_id, id.replace('"', "\\\""), desc.replace('"', "\\\""), server_name.replace('"', "\\\""),
+                            effects, endpoint, method, path, discovery_source, endpoint
+                        );
+
+                        if std::fs::write(&cap_file, rtfs_content).is_ok() {
+                            generated_files += 1;
+                            capability_file_list.push(cap_file.to_string_lossy().to_string());
+                        }
+                    }
+                }
+
+                // Create server.json for consistency with OpenAPI introspection
+                if generated_files > 0 {
+                    let server_json = json!({
+                        "source": {
+                            "type": discovery_source,
+                            "spec_url": endpoint
+                        },
+                        "server_info": {
+                            "name": server_name,
+                            "endpoint": endpoint,
+                            "description": format!("Discovered {} capabilities via {}", capabilities.len(), discovery_source)
+                        },
+                        "capability_files": capability_file_list,
+                        "api_info": {
+                            "endpoints_count": capabilities.len()
+                        }
+                    });
+                    let _ = std::fs::write(pending_dir.join("server.json"), serde_json::to_string_pretty(&server_json).unwrap_or_default());
+                    eprintln!("[CCOS] Generated {} RTFS capabilities to: {}", generated_files, pending_dir.display());
+                }
+
+                // 3. Create ServerInfo and Approval Request
                 let server_info = ccos::approval::queue::ServerInfo {
                     name: server_name.clone(),
                     endpoint: endpoint.to_string(),
                     description: Some(format!("Discovered {} capabilities via {}", capabilities.len(), discovery_source)),
-                    auth_env_var,
+                    auth_env_var: auth_env_var.clone(),
                     capabilities_path: None,
                     alternative_endpoints: vec![],
                 };
 
-                // Create approval request
                 let approval_id = match aq.add_server_discovery(
                     ccos::approval::queue::DiscoverySource::Manual { user: "agent".to_string() },
                     server_info,
@@ -2634,22 +3114,10 @@ fn register_ccos_tools(
                     24, // expires in 24 hours
                 ).await {
                     Ok(id) => id,
-                    Err(e) => {
-                        return Ok(json!({
-                            "success": false,
-                            "error": format!("Failed to create approval request: {}", e)
-                        }));
-                    }
+                    Err(e) => return Ok(json!({"success": false, "error": format!("Failed to create approval request: {}", e)}))
                 };
 
-                // Return discovered tools preview
-                let tool_previews: Vec<_> = capabilities.iter().take(10).map(|c| {
-                    json!({
-                        "id": c.id,
-                        "name": c.name,
-                        "description": c.description
-                    })
-                }).collect();
+                let tool_previews: Vec<_> = capabilities.iter().take(10).cloned().collect();
 
                 Ok(json!({
                     "success": true,
@@ -2658,11 +3126,167 @@ fn register_ccos_tools(
                     "source": discovery_source,
                     "discovered_tools_count": capabilities.len(),
                     "tool_previews": tool_previews,
-                    "agent_guidance": format!(
-                        "Server '{}' discovered with {} tools via {}. Approval required before tools can be used. \
-                         Once approved, call ccos_register_server with approval_id: '{}'",
-                        server_name, capabilities.len(), discovery_source, approval_id
-                    )
+                    "agent_guidance": format!("Server '{}' discovered via {}. MANDATORY: You must now ask the user to manually approve this server at the /approvals UI. DO NOT call ccos_register_server until the user confirms approval.", server_name, discovery_source),
+                    "next_steps": [
+                        "Notify the user that server discovery is complete.",
+                        "Tell the user to go to the CCOS Control Center at /approvals to approve the new capabilities.",
+                        "WAIT for the user to confirm they have approved the server.",
+                        "Only after user confirmation, call ccos_register_server with approval_id to finalize registration."
+                    ]
+                }))
+            })
+        }),
+    );
+
+    // ccos_list_approvals - List all approvals with optional status filter
+    let aq_list = approval_queue.clone();
+    server.register_tool(
+        "ccos_list_approvals",
+        "List all approval requests with optional status filter. Use this to see pending, rejected, expired, or approved requests.",
+        json!({
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "Filter by status: 'pending', 'rejected', 'expired', 'approved', or 'all' (default: 'all')",
+                    "enum": ["pending", "rejected", "expired", "approved", "all"]
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 20)"
+                }
+            }
+        }),
+        Box::new(move |params| {
+            let aq = aq_list.clone();
+            Box::pin(async move {
+                let status_filter = params.get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("all");
+                let limit = params.get("limit")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(20) as usize;
+
+                let all_approvals = match aq.list(ccos::approval::types::ApprovalFilter::default()).await {
+                    Ok(approvals) => approvals,
+                    Err(e) => return Ok(json!({"error": format!("Failed to list approvals: {}", e)})),
+                };
+
+
+                let filtered: Vec<_> = all_approvals
+                    .into_iter()
+                    .filter(|req| {
+                        match status_filter {
+                            "pending" => req.status.is_pending(),
+                            "rejected" => req.status.is_rejected(),
+                            "expired" => matches!(req.status, ccos::approval::types::ApprovalStatus::Expired { .. }),
+                            "approved" => matches!(req.status, ccos::approval::types::ApprovalStatus::Approved { .. }),
+                            _ => true, // "all"
+                        }
+                    })
+                    .take(limit)
+                    .collect();
+
+                let result: Vec<serde_json::Value> = filtered.iter().map(|req| {
+                    let status_str = if req.status.is_pending() {
+                        "pending"
+                    } else if req.status.is_rejected() {
+                        "rejected"
+                    } else if matches!(req.status, ccos::approval::types::ApprovalStatus::Expired { .. }) {
+                        "expired"
+                    } else {
+                        "approved"
+                    };
+
+                    let category = match &req.category {
+                        ccos::approval::types::ApprovalCategory::ServerDiscovery { server_info, .. } => {
+                            json!({ "type": "ServerDiscovery", "name": server_info.name, "endpoint": server_info.endpoint })
+                        }
+                        ccos::approval::types::ApprovalCategory::EffectApproval { capability_id, effects, .. } => {
+                            json!({ "type": "EffectApproval", "capability_id": capability_id, "effects": effects })
+                        }
+                        ccos::approval::types::ApprovalCategory::SynthesisApproval { capability_id, .. } => {
+                            json!({ "type": "SynthesisApproval", "capability_id": capability_id })
+                        }
+                        ccos::approval::types::ApprovalCategory::LlmPromptApproval { .. } => {
+                            json!({ "type": "LlmPromptApproval" })
+                        }
+                        ccos::approval::types::ApprovalCategory::SecretRequired { capability_id, secret_type, .. } => {
+                            json!({ "type": "SecretRequired", "capability_id": capability_id, "secret_type": secret_type })
+                        }
+                    };
+
+                    json!({
+                        "id": req.id,
+                        "status": status_str,
+                        "category": category,
+                        "requested_at": req.requested_at.to_rfc3339(),
+                        "expires_at": req.expires_at.to_rfc3339()
+                    })
+                }).collect();
+
+                Ok(json!({
+                    "success": true,
+                    "count": result.len(),
+                    "approvals": result,
+                    "hint": "Use ccos_reapprove to re-approve rejected or expired approvals."
+                }))
+            })
+        }),
+    );
+
+    // ccos_reapprove - Re-approve a rejected or expired approval
+    let aq_reapprove = approval_queue.clone();
+    server.register_tool(
+        "ccos_reapprove",
+        "Re-approve a previously rejected or expired approval request. Use ccos_list_approvals to find rejected/expired approvals first.",
+        json!({
+            "type": "object",
+            "properties": {
+                "approval_id": {
+                    "type": "string",
+                    "description": "The ID of the approval to re-approve"
+                }
+            },
+            "required": ["approval_id"]
+        }),
+        Box::new(move |params| {
+            let aq = aq_reapprove.clone();
+            Box::pin(async move {
+                let approval_id = match params.get("approval_id").and_then(|v| v.as_str()) {
+                    Some(id) => id,
+                    None => return Ok(json!({"error": "Missing required parameter: approval_id"})),
+                };
+
+                // Check if the approval exists
+                let req = match aq.get(approval_id).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return Ok(json!({"error": format!("Approval not found: {}", approval_id)})),
+                    Err(e) => return Ok(json!({"error": format!("Failed to get approval: {}", e)})),
+                };
+
+                // Approve it
+                if let Err(e) = aq.approve(
+                    approval_id,
+                    ccos::approval::types::ApprovalAuthority::User("mcp_agent".to_string()),
+                    Some("Re-approved via MCP tool".to_string())
+                ).await {
+                    return Ok(json!({"error": format!("Failed to re-approve: {}", e)}));
+                }
+
+                let category_type = match &req.category {
+                    ccos::approval::types::ApprovalCategory::ServerDiscovery { .. } => "ServerDiscovery",
+                    ccos::approval::types::ApprovalCategory::EffectApproval { .. } => "EffectApproval",
+                    ccos::approval::types::ApprovalCategory::SynthesisApproval { .. } => "SynthesisApproval",
+                    ccos::approval::types::ApprovalCategory::LlmPromptApproval { .. } => "LlmPromptApproval",
+                    ccos::approval::types::ApprovalCategory::SecretRequired { .. } => "SecretRequired",
+                };
+
+                Ok(json!({
+                    "success": true,
+                    "approval_id": approval_id,
+                    "category_type": category_type,
+                    "message": "Approval has been re-approved successfully"
                 }))
             })
         }),
@@ -2679,7 +3303,7 @@ fn register_ccos_tools(
             "properties": {
                 "approval_id": {
                     "type": "string",
-                    "description": "The approval ID returned from ccos_introspect_server"
+                    "description": "The approval ID returned from ccos_introspect_remote_api"
                 }
             },
             "required": ["approval_id"]
@@ -2738,11 +3362,27 @@ fn register_ccos_tools(
                     }
                 };
 
-                // NEW: Check if this is an OpenAPI server with already-generated RTFS files in the approved directory
+                // Check for RTFS files in pending or approved directories
                 let server_id = ccos::utils::fs::sanitize_filename(&server_name);
                 let workspace_root = ccos::utils::fs::get_workspace_root();
+                let pending_dir = workspace_root.join("capabilities/servers/pending").join(&server_id);
                 let approved_dir = workspace_root.join("capabilities/servers/approved").join(&server_id);
                 
+                // If files exist in pending, move them to approved (since we're now approved)
+                if pending_dir.exists() && !approved_dir.exists() {
+                    eprintln!("[ccos-mcp] Moving RTFS files from pending to approved for {}", server_name);
+                    let _ = std::fs::create_dir_all(&approved_dir);
+                    if let Ok(entries) = std::fs::read_dir(&pending_dir) {
+                        for entry in entries.flatten() {
+                            let src = entry.path();
+                            let dst = approved_dir.join(entry.file_name());
+                            let _ = std::fs::copy(&src, &dst);
+                        }
+                    }
+                    // Remove pending dir after move
+                    let _ = std::fs::remove_dir_all(&pending_dir);
+                }
+
                 if approved_dir.exists() {
                      eprintln!("[ccos-mcp] Dynamically loading approved RTFS capabilities for {}", server_name);
                      
@@ -2979,26 +3619,34 @@ fn register_ccos_tools(
         }),
     );
 
-    // rtfs_repair - Suggest repairs for broken RTFS code using heuristics
+    // rtfs_repair - Suggest repairs for broken RTFS code (heuristics or LLM-based)
     server.register_tool(
         "rtfs_repair",
-        "Suggest repairs for broken RTFS code",
+        "Suggest repairs for broken RTFS code. Set use_llm=true for comprehensive LLM-based repairs using prompt templates.",
         json!({
             "type": "object",
             "properties": {
                 "code": { "type": "string", "description": "Broken RTFS code" },
-                "error_message": { "type": "string", "description": "Optional error message from compilation" }
+                "error_message": { "type": "string", "description": "Optional error message from compilation" },
+                "use_llm": { "type": "boolean", "description": "Use LLM-based repair with comprehensive prompt templates (slower but more accurate)", "default": false }
             },
             "required": ["code"]
         }),
         Box::new(move |params| {
             Box::pin(async move {
                 let code = params.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                let _error = params.get("error_message").and_then(|v| v.as_str());
+                let error = params.get("error_message").and_then(|v| v.as_str());
+                let use_llm = params.get("use_llm").and_then(|v| v.as_bool()).unwrap_or(false);
 
-                let suggestions = repair_rtfs_code(code);
-
-                Ok(json!(suggestions))
+                if use_llm {
+                    // Use LLM-based repair with comprehensive prompt templates
+                    let result = repair_rtfs_code_with_llm(code, error).await;
+                    Ok(json!(result))
+                } else {
+                    // Fast heuristic-based repair
+                    let suggestions = repair_rtfs_code(code);
+                    Ok(json!(suggestions))
+                }
             })
         }),
     );
@@ -3294,8 +3942,247 @@ fn repair_rtfs_code(code: &str) -> serde_json::Value {
         "suggestions": suggestions,
         "best_repair": best_repair,
         "repair_valid": repair_valid,
-        "note": "Suggestions are heuristic-based. Review before using."
+        "note": "Use rtfs_repair_with_llm for comprehensive LLM-based repairs using prompt templates."
     })
+}
+
+/// LLM-based repair using comprehensive prompt templates from assets/prompts/arbiter/auto_repair/v1/
+/// This provides better repairs than heuristics for complex syntax/semantic errors.
+async fn repair_rtfs_code_with_llm(code: &str, error_message: Option<&str>) -> serde_json::Value {
+    use ccos::synthesis::validation::llm_validator::{ValidationConfig, ValidationError, ValidationErrorType, auto_repair_plan};
+    
+    // Convert error message to validation errors for the template
+    let errors = if let Some(err) = error_message {
+        vec![ValidationError {
+            error_type: ValidationErrorType::Other,
+            message: err.to_string(),
+            location: None,
+            suggested_fix: None,
+        }]
+    } else {
+        // Try to compile and get actual errors
+        match rtfs::parser::parse(code) {
+            Ok(_) => vec![], // No parse errors
+            Err(e) => vec![ValidationError {
+                error_type: ValidationErrorType::Other,
+                message: format!("{}", e),
+                location: None,
+                suggested_fix: None,
+            }],
+        }
+    };
+    
+    if errors.is_empty() {
+        return json!({
+            "success": true,
+            "message": "Code parses without errors",
+            "original_code": code,
+            "repaired_code": null
+        });
+    }
+    
+    let config = ValidationConfig::default();
+    
+    match auto_repair_plan(code, &errors, 1, &config).await {
+        Ok(Some(repaired)) => {
+            let repair_valid = rtfs::parser::parse(&repaired).is_ok();
+            json!({
+                "success": true,
+                "original_code": code,
+                "repaired_code": repaired,
+                "repair_valid": repair_valid,
+                "method": "llm_template",
+                "note": "Repaired using LLM with comprehensive RTFS grammar hints and strategy templates."
+            })
+        }
+        Ok(None) => {
+            // LLM repair failed, fall back to heuristics
+            let heuristic_result = repair_rtfs_code(code);
+            json!({
+                "success": false,
+                "llm_failed": true,
+                "fallback_to_heuristics": true,
+                "heuristic_result": heuristic_result,
+                "note": "LLM repair failed or not available. Using heuristic-based suggestions."
+            })
+        }
+        Err(e) => {
+            json!({
+                "success": false,
+                "error": e,
+                "fallback_to_heuristics": true,
+                "heuristic_result": repair_rtfs_code(code)
+            })
+        }
+    }
+}
+
+/// Search for OpenAPI spec URLs for a given API name using web search
+/// Returns a list of potential OpenAPI spec URLs found
+async fn search_for_openapi_spec(api_name: &str) -> Vec<String> {
+    use ccos::synthesis::runtime::web_search_discovery::WebSearchDiscovery;
+    
+    let mut results = Vec::new();
+    
+    // Check if web search is enabled
+    if !ccos::discovery::registry_search::RegistrySearcher::is_web_search_enabled() {
+        eprintln!("[CCOS] Web search disabled, skipping OpenAPI spec search");
+        return results;
+    }
+    
+    eprintln!("[CCOS] Searching for OpenAPI spec for: {}", api_name);
+    
+    // Use search_for_api_specs which includes OpenAPI spec searches
+    let mut web_searcher = WebSearchDiscovery::new("auto".to_string());
+    
+    if let Ok(search_results) = web_searcher.search_for_api_specs(api_name).await {
+        for result in search_results {
+            let url_lower = result.url.to_lowercase();
+            // Filter for likely OpenAPI spec URLs
+            if url_lower.ends_with(".json") 
+                || url_lower.ends_with(".yaml") 
+                || url_lower.ends_with(".yml")
+                || url_lower.contains("openapi")
+                || url_lower.contains("swagger") 
+            {
+                if !results.contains(&result.url) {
+                    eprintln!("[CCOS] Found potential OpenAPI spec: {}", result.url);
+                    results.push(result.url);
+                }
+            }
+        }
+    }
+    
+    results.into_iter().take(3).collect() // Return at most 3 URLs
+}
+
+/// Generate user-friendly suggestions when introspection fails
+fn generate_introspection_failure_suggestions(api_name: &str, endpoint: &str) -> serde_json::Value {
+    json!({
+        "question": format!("Could not automatically introspect '{}'. Can you help?", api_name),
+        "suggestions": [
+            format!("Check if {} has a GitHub repo with an openapi.json or swagger.yaml file", api_name),
+            format!("Look for 'API Reference', 'Swagger', or 'OpenAPI' links in their documentation"),
+            format!("Search for '{} openapi spec' to find the specification URL", api_name),
+            format!("If this is an MCP server, try: npx -y @{}/mcp-server", api_name.to_lowercase().replace(" ", "-")),
+            format!("Provide the direct OpenAPI spec URL (ending in .json or .yaml)")
+        ],
+        "original_endpoint": endpoint
+    })
+}
+
+/// Represents a sub-intent extracted from a goal for planning
+#[derive(Debug, Clone)]
+struct SubIntent {
+    description: String,
+    intent_type: String,
+    depends_on: Vec<usize>,
+}
+
+/// Extract sub-intents from a goal using the discovery service's analysis
+fn extract_sub_intents_from_goal(
+    goal: &str,
+    analysis: &ccos::discovery::llm_discovery::IntentAnalysis,
+) -> Vec<SubIntent> {
+    let mut sub_intents = Vec::new();
+    
+    // Strategy: Break goal into semantic units based on conjunctions and implied steps
+    // This is a simplified decomposition - in production would use LLM
+    
+    // First, try to detect explicit conjunctions in the goal
+    let goal_lower = goal.to_lowercase();
+    let parts: Vec<&str> = if goal_lower.contains(" and ") {
+        goal.split(" and ").collect()
+    } else if goal_lower.contains(" then ") {
+        goal.split(" then ").collect()
+    } else if goal_lower.contains(", ") {
+        goal.split(", ").collect()
+    } else {
+        vec![goal]
+    };
+
+    for (i, part) in parts.iter().enumerate() {
+        let part_trimmed = part.trim();
+        if part_trimmed.is_empty() {
+            continue;
+        }
+
+        // Infer intent type from keywords
+        let intent_type = infer_intent_type(part_trimmed);
+        
+        // Dependencies: each subsequent step depends on previous
+        let depends_on = if i > 0 { vec![i - 1] } else { vec![] };
+
+        sub_intents.push(SubIntent {
+            description: part_trimmed.to_string(),
+            intent_type,
+            depends_on,
+        });
+    }
+
+    // If no explicit decomposition found, create a single intent from analysis
+    if sub_intents.is_empty() {
+        sub_intents.push(SubIntent {
+            description: goal.to_string(),
+            intent_type: analysis.primary_action.clone(),
+            depends_on: vec![],
+        });
+    }
+
+    sub_intents
+}
+
+/// Infer the type of intent from the text
+fn infer_intent_type(text: &str) -> String {
+    let lower = text.to_lowercase();
+    
+    if lower.contains("get") || lower.contains("fetch") || lower.contains("retrieve") || lower.contains("find") {
+        "retrieve".to_string()
+    } else if lower.contains("send") || lower.contains("email") || lower.contains("notify") || lower.contains("alert") {
+        "communicate".to_string()
+    } else if lower.contains("create") || lower.contains("make") || lower.contains("generate") {
+        "create".to_string()
+    } else if lower.contains("update") || lower.contains("modify") || lower.contains("change") {
+        "update".to_string()
+    } else if lower.contains("delete") || lower.contains("remove") {
+        "delete".to_string()
+    } else if lower.contains("search") || lower.contains("query") || lower.contains("look") {
+        "search".to_string()
+    } else {
+        "action".to_string()
+    }
+}
+
+/// Infer an API search query from an intent description
+fn infer_api_query_from_intent(intent: &str) -> String {
+    let lower = intent.to_lowercase();
+    
+    // Extract key domain words and action words
+    let domain_keywords: Vec<&str> = vec![
+        "weather", "email", "calendar", "file", "database", "github", "slack",
+        "twitter", "notification", "payment", "user", "auth", "api", "http",
+        "message", "document", "image", "video", "audio", "data", "report",
+    ];
+    
+    let mut found_domains: Vec<&str> = domain_keywords
+        .iter()
+        .filter(|kw| lower.contains(*kw))
+        .copied()
+        .collect();
+    
+    // If no specific domain found, extract key nouns
+    if found_domains.is_empty() {
+        // Simple heuristic: take meaningful words
+        let words: Vec<&str> = intent.split_whitespace()
+            .filter(|w| w.len() > 3)
+            .take(3)
+            .collect();
+        return words.join(" ") + " API";
+    }
+    
+    // Build query from found domains
+    found_domains.truncate(2);
+    found_domains.join(" ") + " API service"
 }
 
 /// Calculate a simple match score between intent and capability

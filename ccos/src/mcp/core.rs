@@ -1336,7 +1336,7 @@ impl MCPDiscoveryService {
             // Generate implementation code for MCP capabilities
             let implementation_code = match &manifest.provider {
                 ProviderType::MCP(mcp) => format!(
-                    "(fn [input] (call :ccos.capabilities.mcp.call :server-url \"{}\" :tool-name \"{}\" :input input))",
+                    "(fn [input] (call :ccos.capabilities.mcp.call {{:server-url \"{}\" :tool-name \"{}\" :input input}}))",
                     mcp.server_url, mcp.tool_name
                 ),
                 _ => "(fn [input] (error \"Implementation not available\"))".to_string(),
