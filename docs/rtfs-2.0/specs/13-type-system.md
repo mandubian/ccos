@@ -1,33 +1,53 @@
 # RTFS Type System: Formal Specification
 
 **Version**: 1.0
-**Status**: ⚠️ **Formal Specification / Partial Implementation**
-**Location**: `rtfs/src/runtime/type_validator.rs` (runtime validation), `rtfs/src/ast.rs` (type expressions)
+**Status**: ⚠️ **Formal Specification / Partially Implemented**
+**Location**:
+- Runtime validation: `rtfs/src/runtime/type_validator.rs`
+- AST type expressions: `rtfs/src/ast.rs`
+- IR-level checking + subtyping: `rtfs/src/ir/type_checker.rs`
 
 ## Implementation Status
 
 **⚠️ Formal Specification vs. Current Implementation**
 
-This document presents the **formal specification** of the RTFS type system, which includes theoretical foundations and design goals. The **current implementation** provides a subset of these features:
+This document presents the **formal specification** of the RTFS type system. The implementation is split across:
+- **Runtime validation** (TypeExpr + TypeValidator) for safety at host/capability boundaries
+- **IR-level static checking** (IrType + IR type checker) for compile-time guarantees on compiled programs
 
 | Feature | Status | Implementation Details |
 |---------|--------|----------------------|
 | **Structural Type Checking** | ✅ **Implemented** | Runtime validation in `type_validator.rs` |
 | **Primitive Types** | ✅ **Implemented** | Int, Float, String, Bool, Nil, Keyword, Symbol |
-| **Collection Types** | ✅ **Implemented** | Vector, Map, Tuple, Array |
-| **Union Types** | ⚠️ **Partial** | Basic union support exists but lacks formal subtyping |
-| **Intersection Types** | ❌ **Not Implemented** | Formal specification only |
-| **Refinement Types** | ⚠️ **Partial** | Basic predicates supported (`is-url`, `is-email`) |
-| **Function Types** | ✅ **Implemented** | Basic function type validation |
-| **Formal Subtyping** | ❌ **Not Implemented** | Specification describes subtyping relation; implementation uses simple validation |
+| **Collection Types** | ✅ **Implemented** | Vector/List/Tuple + record maps + dict maps |
+| **Union Types** | ✅ **Implemented** | Runtime validation + IR subtyping rules |
+| **Intersection Types** | ✅ **Implemented** | Runtime validation + IR subtyping rules |
+| **Refinement Types** | ✅ **Implemented (runtime)** | Predicates in `TypeValidator` (RTFS is gradual: runtime-enforced) |
+| **Function Types** | ✅ **Implemented** | Runtime validation + IR function subtyping |
+| **Formal Subtyping** | ✅ **Implemented (IR)** | `rtfs/src/ir/type_checker.rs` |
 | **Soundness Proofs** | ❌ **Not Implemented** | Theoretical foundation only |
-| **Bidirectional Checking** | ⚠️ **Partial** | Basic type inference for simple cases |
+| **Bidirectional Checking** | ⚠️ **Partial** | IR checks core forms; full AST-level inference is not the goal for scripting |
+| **Record vs Dict Types** | ✅ **Implemented** | `[:map ...]` / `[:record ...]` vs `[:map-of K V]` / `[:dict K V]` |
 
-**Key Differences**:
-- **Formal specification**: Describes a complete type system with subtyping, union/intersection types, and formal proofs
-- **Current implementation**: Provides runtime type validation with structural checking and basic predicates
-- **Type inference**: Limited to simple cases; complex inference not implemented
-- **Subtyping**: Simple numeric coercion (Int → Float) implemented; formal subtyping system not implemented
+**Key Differences / Current Scope**:
+- RTFS is scripting-oriented: type checking is designed to be **predictable**, **decidable**, and **useful at boundaries**.
+- We implement **static checking at the IR layer** for compiled programs, and **runtime validation** for dynamic/untrusted inputs.
+- We intentionally avoid “deep polymorphism” and whole-program inference for now.
+
+---
+
+## Record vs Dict Types (Important)
+
+RTFS runtime values use `{}` maps with `MapKey` keys (keywords/strings/integers, etc.). The type system provides two different type constructors:
+
+- **Record / object schema**: `[:map ...]` (alias `[:record ...]`)
+  - Keys are named fields (keywords), with required/optional flags
+  - Extra keys may be allowed (open records) depending on wildcard/open policy
+  - Best for “structured payloads” (capability inputs/outputs, plans, intents)
+
+- **Dictionary**: `[:map-of K V]` (alias `[:dict K V]`)
+  - Homogeneous constraint: every key in the map must match `K`, every value must match `V`
+  - `K` is currently restricted to `:string`, `:keyword`, unions of those, or `:any` (matches the most common RTFS/JSON boundary use)
 
 **Practical Usage**: The type system is **optional** and used primarily for:
 1. **Capability input/output validation** at host boundaries
@@ -88,7 +108,8 @@ RTFS employs a **static, structural type system** with **subtyping** and **union
     | Vector⟨τ⟩                   homogeneous vector
     | List⟨τ⟩                     homogeneous list
     | Tuple⟨τ₁, ..., τₙ⟩          heterogeneous tuple
-    | Map{k₁:τ₁, ..., kₙ:τₙ}     record/map type
+    | Map{k₁:τ₁, ..., kₙ:τₙ}     record/object type (RTFS: `[:map ...]` / `[:record ...]`)
+    | Dict⟨K, V⟩                 dictionary type (RTFS: `[:map-of K V]` / `[:dict K V]`)
     | τ₁ → τ₂                     function type
     | τ₁ → ... → τₙ               variadic function
     | τ₁ | τ₂                     union type

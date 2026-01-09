@@ -586,6 +586,10 @@ fn extract_schema_fields(schema: Option<&TypeExpr>) -> Vec<String> {
                 }
                 walk(return_type, acc);
             }
+            TypeExpr::ParametricMap { key_type, value_type } => {
+                walk(key_type, acc);
+                walk(value_type, acc);
+            }
             TypeExpr::Resource(sym) => acc.push(format!("resource::{}", sym.0)),
             TypeExpr::Any | TypeExpr::Never => {}
         }

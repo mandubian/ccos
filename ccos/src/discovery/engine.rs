@@ -2533,9 +2533,11 @@ impl DiscoveryEngine {
 
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| crate::utils::fs::get_configured_discovered_path());
+            .unwrap_or_else(|_| {
+                crate::utils::fs::get_workspace_root().join("capabilities")
+            });
 
-        // Use hierarchical structure: capabilities/discovered/mcp/<namespace>/<tool>.rtfs
+        // Use hierarchical structure: capabilities/mcp/<namespace>/<tool>.rtfs
         // Parse capability ID: "mcp.namespace.tool_name" or "github.issues.list"
         let parts: Vec<&str> = manifest.id.split('.').collect();
         let capability_dir = if parts.len() >= 3 && parts[0] == "mcp" {

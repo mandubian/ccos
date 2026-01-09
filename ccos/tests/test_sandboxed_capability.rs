@@ -378,7 +378,6 @@ print(json.dumps(result))
 
     let provider = ProviderType::Sandboxed(sandboxed);
     let inputs = Value::Nil;
-
     let metadata = HashMap::new();
     let context = ExecutionContext::new("test.sandboxed", &metadata, None);
     match executor.execute(&provider, &inputs, &context).await {

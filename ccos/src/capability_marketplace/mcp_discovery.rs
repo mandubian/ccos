@@ -2122,9 +2122,23 @@ impl MCPDiscoveryProvider {
             })
         };
 
-        // Convert input/output schemas
-        let mut input_schema = rtfs_def.input_schema.clone();
-        let output_schema = rtfs_def.output_schema.clone();
+        // Convert input/output schemas - check capability map if struct fields are None
+        let mut input_schema = rtfs_def.input_schema.clone().or_else(|| {
+            cap_map
+                .get(&MapKey::Keyword(Keyword("input-schema".to_string())))
+                .and_then(|e| self.extract_type_expr(e))
+        });
+        let mut output_schema = rtfs_def.output_schema.clone().or_else(|| {
+            cap_map
+                .get(&MapKey::Keyword(Keyword("output-schema".to_string())))
+                .and_then(|e| self.extract_type_expr(e))
+        });
+
+        // Handle :any as default (should be None, not Some(:any))
+        // :any in the map means "no schema specified", so convert to None
+        if matches!(output_schema, Some(TypeExpr::Any)) {
+            output_schema = None;
+        }
 
         if name == "list_issues" {
             input_schema = self.patch_list_issues_schema(input_schema);
@@ -2903,9 +2917,16 @@ mod tests {
             _ => panic!("RTFS capability should be a map"),
         }
 
-        // Verify input schema conversion
-        assert!(rtfs_cap.input_schema.is_some());
-        assert!(rtfs_cap.output_schema.is_some());
+        // Verify input/output schemas are in the capability map (they're stored there to avoid duplication)
+        match &rtfs_cap.capability {
+            Expression::Map(map) => {
+                let has_input_schema = map.contains_key(&MapKey::Keyword(Keyword("input-schema".to_string())));
+                let has_output_schema = map.contains_key(&MapKey::Keyword(Keyword("output-schema".to_string())));
+                assert!(has_input_schema, "RTFS capability missing input-schema in map");
+                assert!(has_output_schema, "RTFS capability missing output-schema in map");
+            }
+            _ => panic!("RTFS capability should be a map"),
+        }
     }
 
     #[test]
@@ -2978,10 +2999,18 @@ mod tests {
 
         match rtfs_expr {
             Expression::Vector(vec) => {
-                assert_eq!(vec.len(), 1);
-                assert!(matches!(vec[0], Expression::Symbol(_)));
+                // Array schema converts to [:vector <element-type>], so len should be 2
+                assert_eq!(vec.len(), 2, "Array schema should convert to vector with 2 elements: [:vector <type>]");
+                // First element should be the "vector" keyword
+                if let Some(Expression::Literal(Literal::Keyword(kw))) = vec.first() {
+                    assert_eq!(kw.0, "vector", "First element should be 'vector' keyword");
+                } else {
+                    panic!("First element of array schema should be 'vector' keyword");
+                }
+                // Second element should be the element type (in this case, a string type)
+                assert!(matches!(vec.get(1), Some(Expression::Literal(Literal::Keyword(_))) | Some(Expression::Symbol(_))), "Second element should be the element type");
             }
-            _ => panic!("Array schema should convert to Vector expression"),
+            _ => panic!("Array schema should convert to Vector expression, got: {:?}", rtfs_expr),
         }
 
         // Test primitive type conversion
@@ -2989,7 +3018,8 @@ mod tests {
         let rtfs_expr = provider
             .convert_json_schema_to_rtfs(&string_schema)
             .unwrap();
-        assert!(matches!(rtfs_expr, Expression::Symbol(_)));
+        // String schema converts to :string keyword literal
+        assert!(matches!(rtfs_expr, Expression::Literal(Literal::Keyword(Keyword(ref s))) if s == "string"));
     }
 
     #[test]

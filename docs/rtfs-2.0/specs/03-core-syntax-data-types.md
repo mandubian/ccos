@@ -115,6 +115,29 @@ Maps `{}` associate keys with values, supporting any RTFS value as keys:
 (vals {:a 1 :b 2})             ; => (1 2)
 ```
 
+### Type Annotations: Record vs Dict (Schema vs Homogeneous Map)
+
+RTFS runtime maps (`{}`) are flexible and can contain mixed key types. When you *type* a map in RTFS, there are two distinct type constructors:
+
+- **Record / object schema**: `[:map ...]` (alias: `[:record ...]`)
+  - Declares named fields (keyword keys) with required/optional types
+  - Best for structured payloads and capability inputs/outputs
+
+- **Dictionary**: `[:map-of K V]` (alias: `[:dict K V]`)
+  - Declares a homogeneous map where every key has type `K` and every value has type `V`
+  - `K` is restricted to `:string`, `:keyword`, a union of those, or `:any` (to match common scripting + JSON boundary usage)
+
+Examples:
+
+```rtfs
+;; Record schema (named fields)
+[:record {:name :string :age :int}]
+
+;; Dictionary schema (homogeneous)
+[:dict :string :any]
+[:dict [:union :string :keyword] :int]
+```
+
 ### Lists: Sequential Access
 
 Lists `()` are linked sequences optimized for sequential access and functional operations:
@@ -280,15 +303,68 @@ Symbols are resolved through lexical scoping with the following precedence:
 
 ## 8. Type System Integration
 
-While RTFS has a dynamic type system, it supports optional type annotations. Type annotations in RTFS are **just symbols** - any symbol or keyword can be used as a type hint. The grammar accepts them all.
+While RTFS has a dynamic type system, it supports optional type annotations for runtime validation and documentation.
 
+### 8.1 Primitive Types
 **Runtime primitive types** (from `Value::get_type()`):
 - `integer`, `float`, `boolean`, `string`
 - `vector`, `list`, `map`
 - `symbol`, `keyword`, `nil`
 - `timestamp`, `uuid`, `resource-handle`, `function`, `error`
 
-**Type annotation examples**:
+### 8.2 Complex Types
+RTFS supports rich type expressions for validation:
+
+#### Union and Intersection
+```rtfs
+;; Union types (either/or)
+(fn process [x : (or :string :integer)] ...)
+
+;; Intersection types (both/and)
+(fn merge [a : (and :serializable :loggable)] ...)
+```
+
+#### Map Types
+RTFS supports two kinds of map types:
+
+1. **Structural Maps** (`:map` or `:record`):
+   Defines specific required/optional keys. Ideal for known data structures.
+   ```rtfs
+   ;; Definition
+   [:record [:name :string] [:age :integer]]
+   ;; or legacy syntax
+   [:map [:name :string] [:age :integer]]
+   
+   ;; Matches: {:name "Alice" :age 30 :extra "ignored"}
+   ```
+
+2. **Parametric Maps** (`:map-of` or `:dict`):
+   Defines homogeneous dictionaries with constrained key/value types.
+   ```rtfs
+   ;; Dictionary mapping Strings to Integers
+   [:dict :string :integer]
+   ;; or full syntax
+   [:map-of :string :integer]
+   
+   ;; Dictionary with specific keys allowed
+   [:dict (or :string :keyword) :any]
+   ```
+   *Note: Keys in parametric maps must be subtypes of `String` or `Keyword`.*
+
+### 8.3 Type Annotations as Checked Casts
+Type annotations on `let` bindings and function parameters act as **runtime checked casts**, especially valuable at the host boundary (e.g., when receiving untrusted data from capabilities).
+
+```rtfs
+(defn safe-process []
+  ;; 'call' returns an untrusted Value
+  (let [result : [:record [:status :string]] (call "some.capability" {})]
+    ;; 'result' is guaranteed to match the schema here
+    result))
+```
+
+If the runtime value does not match the annotation, a `TypeError` is raised immediately.
+
+### 8.4 Type Annotation Examples
 
 ```rtfs
 ;; With lowercase runtime types

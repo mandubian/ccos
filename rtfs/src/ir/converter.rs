@@ -1955,9 +1955,17 @@ impl<'a> IrConverter<'a> {
             let binding_id = self.next_id();
             let pattern_clone = binding.pattern.clone();
             let init_expr = self.convert_expression(*binding.value)?;
-            let binding_type = init_expr.ir_type().cloned().unwrap_or(IrType::Any);
-            let pattern_node =
-                self.convert_pattern(binding.pattern, binding_id, binding_type.clone())?;
+            // If a type annotation exists, treat it as the binding's type in the environment.
+            // This allows `(let [x :T (call ...)] ...)` to give `x` the static type `T`,
+            // while runtime performs the checked-cast when executing the binding.
+            let type_annotation_ir: Option<IrType> = binding
+                .type_annotation
+                .clone()
+                .map(|t| self.convert_type_annotation(t))
+                .transpose()?;
+            let inferred_type = init_expr.ir_type().cloned().unwrap_or(IrType::Any);
+            let binding_type = type_annotation_ir.clone().unwrap_or(inferred_type);
+            let pattern_node = self.convert_pattern(binding.pattern, binding_id, binding_type.clone())?;
 
             // Add all symbols from the pattern to scope after converting init expression
             let pattern_symbols = self.extract_pattern_symbols(&pattern_clone);
@@ -1974,10 +1982,7 @@ impl<'a> IrConverter<'a> {
 
             bindings.push(IrLetBinding {
                 pattern: pattern_node,
-                type_annotation: binding
-                    .type_annotation
-                    .map(|t| self.convert_type_annotation(t))
-                    .transpose()?,
+                type_annotation: type_annotation_ir,
                 init_expr,
             });
         }
@@ -3027,6 +3032,36 @@ impl<'a> IrConverter<'a> {
             } => {
                 // TODO: Implement proper array type support in IR
                 Ok(IrType::Any)
+            }
+            TypeExpr::ParametricMap { key_type, value_type } => {
+                // Convert parametric map to IR parametric map
+                let ir_key_type = self.convert_type_annotation(*key_type)?;
+                
+                // Enforce: parametric map keys must be String/Keyword (or a union of them)
+                fn is_valid_parametric_key_type(t: &IrType) -> bool {
+                    match t {
+                        IrType::String | IrType::Keyword => true,
+                        IrType::Any => true,
+                        IrType::Union(types) => types.iter().all(is_valid_parametric_key_type),
+                        _ => false,
+                    }
+                }
+
+                if !is_valid_parametric_key_type(&ir_key_type) {
+                    return Err(IrConversionError::InvalidTypeAnnotation {
+                        message: format!(
+                            "[:map-of K V] key type must be :string or :keyword (or a union/Any), got: {:?}",
+                            ir_key_type
+                        ),
+                        location: None,
+                    });
+                }
+                
+                let ir_value_type = self.convert_type_annotation(*value_type)?;
+                Ok(IrType::ParametricMap {
+                    key_type: Box::new(ir_key_type),
+                    value_type: Box::new(ir_value_type),
+                })
             }
             TypeExpr::Refined {
                 base_type,

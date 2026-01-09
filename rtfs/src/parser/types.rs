@@ -114,6 +114,7 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
             Ok(TypeExpr::Tuple(type_pairs?))
         }
         Rule::map_type => {
+            // Note: grammar accepts both [:map ...] and [:record ...] here; both map to TypeExpr::Map.
             let mut inner = actual_type_pair.into_inner();
             let mut entries = Vec::new();
             let mut wildcard = None;
@@ -231,6 +232,26 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                 }
             }
             Ok(TypeExpr::Map { entries, wildcard })
+        }
+        Rule::map_of_type => {
+            // Parse [:map-of KeyType ValueType] (alias: [:dict KeyType ValueType])
+            let mut inner = actual_type_pair.into_inner();
+            let key_type_pair = inner.next().ok_or_else(|| PestParseError::MissingToken {
+                token: "expected key type in [:map-of ...] type".to_string(),
+                span: None,
+            })?;
+            let value_type_pair = inner.next().ok_or_else(|| PestParseError::MissingToken {
+                token: "expected value type in [:map-of ...] type".to_string(),
+                span: None,
+            })?;
+            
+            let key_type = build_type_expr(key_type_pair)?;
+            let value_type = build_type_expr(value_type_pair)?;
+            
+            Ok(TypeExpr::ParametricMap {
+                key_type: Box::new(key_type),
+                value_type: Box::new(value_type),
+            })
         }
         Rule::function_type => {
             let mut inner = actual_type_pair.clone().into_inner();
