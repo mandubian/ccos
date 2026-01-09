@@ -4,6 +4,7 @@ use crate::capability_marketplace::types::{
     ProviderType,
 };
 use crate::mcp::types::DiscoveredMCPTool;
+use crate::mcp::types::DiscoveryOptions;
 use crate::synthesis::mcp_introspector::MCPIntrospector;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -339,29 +340,43 @@ impl MCPDiscoveryProvider {
     ///
     /// This method delegates to the unified `MCPDiscoveryService` for all discovery.
     pub async fn discover_tools(&self) -> RuntimeResult<Vec<CapabilityManifest>> {
-        let options = crate::mcp::types::DiscoveryOptions {
-            introspect_output_schemas: false, // Can be made configurable
+        self.discover_tools_with_options(&DiscoveryOptions {
+            introspect_output_schemas: false,
             use_cache: true,
-            register_in_marketplace: false,
-            export_to_rtfs: false,
-            export_directory: None,
-            auth_headers: self.build_auth_headers(),
             ..Default::default()
-        };
+        })
+        .await
+    }
 
-        let discovered_tools = self
-            .discovery_service
-            .discover_tools(&self.config, &options)
-            .await?;
+    /// Discover tools from the MCP server with custom options
+    pub async fn discover_tools_with_options(
+        &self,
+        options: &DiscoveryOptions,
+    ) -> RuntimeResult<Vec<CapabilityManifest>> {
+        let mut final_options = options.clone();
+        final_options.auth_headers = self.build_auth_headers();
 
-        // Convert to manifests
-        let mut capabilities = Vec::new();
-        for tool in discovered_tools {
-            let manifest = self.discovery_service.tool_to_manifest(&tool, &self.config);
-            capabilities.push(manifest);
+        if final_options.export_to_rtfs {
+            // Use discovery service's unified discover_and_export_tools
+            self.discovery_service
+                .discover_and_export_tools(&self.config, &final_options)
+                .await
+        } else {
+            // Normal discovery
+            let discovered_tools = self
+                .discovery_service
+                .discover_tools(&self.config, &final_options)
+                .await?;
+
+            // Convert to manifests
+            let mut capabilities = Vec::new();
+            for tool in discovered_tools {
+                let manifest = self.discovery_service.tool_to_manifest(&tool, &self.config);
+                capabilities.push(manifest);
+            }
+
+            Ok(capabilities)
         }
-
-        Ok(capabilities)
     }
 
     /// Discover resources from the MCP server

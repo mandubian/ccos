@@ -19,9 +19,9 @@ use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 
+use super::governance_judge::PlanJudge;
 use super::intent_graph::IntentGraph;
 use super::orchestrator::Orchestrator;
-use super::governance_judge::PlanJudge;
 use super::types::Intent; // for delegation validation
 use super::types::{ExecutionResult, Plan, PlanBody, StorableIntent};
 use rtfs::runtime::error::RuntimeError;
@@ -526,22 +526,33 @@ impl GovernanceKernel {
             Some(a) => a,
             None => {
                 if policy.fail_open {
-                    ccos_eprintln!("   ⚖️  [SemanticJudge] No arbiter available - failing open (allowed)");
+                    ccos_eprintln!(
+                        "   ⚖️  [SemanticJudge] No arbiter available - failing open (allowed)"
+                    );
                     return Ok(());
                 } else {
-                    ccos_eprintln!("   🛑 [SemanticJudge] No arbiter available - failing closed (blocked)");
-                    return Err(RuntimeError::Generic("Semantic judgment required but no arbiter available (fail-closed)".to_string()));
+                    ccos_eprintln!(
+                        "   🛑 [SemanticJudge] No arbiter available - failing closed (blocked)"
+                    );
+                    return Err(RuntimeError::Generic(
+                        "Semantic judgment required but no arbiter available (fail-closed)"
+                            .to_string(),
+                    ));
                 }
             }
         };
 
         let goal = intent.map(|i| i.goal.as_str()).unwrap_or("Unknown goal");
-        
+
         // For now, we don't have a full resolution map in the Plan struct,
         // but the PlanJudge can still evaluate the RTFS code against the goal.
-        let resolutions = HashMap::new(); 
+        let resolutions = HashMap::new();
 
-        match self.plan_judge.judge_plan(arbiter.llm_provider(), goal, plan, &resolutions).await {
+        match self
+            .plan_judge
+            .judge_plan(arbiter.llm_provider(), goal, plan, &resolutions)
+            .await
+        {
             Ok(judgment) => {
                 if judgment.allowed && judgment.risk_score <= policy.risk_threshold {
                     Ok(())
@@ -562,11 +573,20 @@ impl GovernanceKernel {
             }
             Err(e) => {
                 if policy.fail_open {
-                    ccos_eprintln!("   ⚠️  [SemanticJudge] LLM judgment failed: {}. Failing open.", e);
+                    ccos_eprintln!(
+                        "   ⚠️  [SemanticJudge] LLM judgment failed: {}. Failing open.",
+                        e
+                    );
                     Ok(())
                 } else {
-                    ccos_eprintln!("   🛑 [SemanticJudge] LLM judgment failed: {}. Failing closed.", e);
-                    Err(RuntimeError::Generic(format!("Semantic judgment failed: {}", e)))
+                    ccos_eprintln!(
+                        "   🛑 [SemanticJudge] LLM judgment failed: {}. Failing closed.",
+                        e
+                    );
+                    Err(RuntimeError::Generic(format!(
+                        "Semantic judgment failed: {}",
+                        e
+                    )))
                 }
             }
         }
@@ -599,7 +619,8 @@ impl GovernanceKernel {
         self.validate_against_constitution(&safe_plan, &execution_mode)?;
 
         // --- 5. Semantic Judgment (New Step) ---
-        self.judge_plan_semantically(&safe_plan, intent_opt.as_ref()).await?;
+        self.judge_plan_semantically(&safe_plan, intent_opt.as_ref())
+            .await?;
 
         // --- 6. Execution Mode Validation ---
         // Validate execution mode is compatible with plan security requirements
@@ -872,9 +893,17 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
     /// Retrieves the primary intent associated with the plan, if present.
     /// Returns None for capability-internal plans that don't have associated intents.
     fn get_intent(&self, plan: &Plan) -> RuntimeResult<Option<StorableIntent>> {
+        ccos_println!(
+            "[GovernanceKernel] get_intent for plan: {:?} with intent_ids: {:?}",
+            plan.plan_id,
+            plan.intent_ids
+        );
         let intent_id = match plan.intent_ids.first() {
             Some(id) => id,
-            None => return Ok(None), // No intent for capability-internal plans
+            None => {
+                ccos_println!("[GovernanceKernel] No intent IDs found in plan");
+                return Ok(None);
+            } // No intent for capability-internal plans
         };
 
         let graph = self
@@ -885,6 +914,12 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
         let intent = graph
             .get_intent(intent_id)
             .ok_or_else(|| RuntimeError::Generic(format!("Intent not found: {}", intent_id)))?;
+
+        ccos_println!(
+            "[GovernanceKernel] Found intent: {} goal: {}",
+            intent.intent_id,
+            intent.goal
+        );
 
         Ok(Some(intent))
     }

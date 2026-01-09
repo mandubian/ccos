@@ -4,14 +4,16 @@
 //! RTFS capability files. This module is used by MCP server, CLI, and TUI.
 
 use crate::approval::{
-    queue::{DiscoverySource, RiskAssessment, RiskLevel, ServerInfo},
+    queue::{ApprovalAuthority, DiscoverySource, RiskAssessment, RiskLevel, ServerInfo},
     storage_file::FileApprovalStorage,
     UnifiedApprovalQueue,
 };
+use crate::secrets::SecretStore;
 use crate::synthesis::core::schema_serializer::type_expr_to_rtfs_compact;
 use crate::synthesis::introspection::api_introspector::{
     APIIntrospectionResult, APIIntrospector, DiscoveredEndpoint,
 };
+use crate::utils::fs::get_workspace_root;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -38,6 +40,7 @@ pub struct IntrospectionResult {
 pub enum IntrospectionSource {
     OpenApi,
     Mcp,
+    McpStdio,
     HtmlDocs,
     Unknown,
 }
@@ -250,9 +253,11 @@ impl IntrospectionService {
         rtfs.push_str(&format!("      :endpoint_method \"{}\"\n", ep.method));
         rtfs.push_str(&format!("      :endpoint_path \"{}\"\n", ep.path));
 
-        // Auth info
-        if ep.requires_auth || !api_result.auth_requirements.auth_type.is_empty() {
-            let auth = &api_result.auth_requirements;
+        // Auth info - only include if auth is actually required (not "none")
+        let auth = &api_result.auth_requirements;
+        let needs_auth =
+            ep.requires_auth || (!auth.auth_type.is_empty() && auth.auth_type != "none");
+        if needs_auth {
             rtfs.push_str("      :auth {\n");
             rtfs.push_str(&format!(
                 "        :type \"{}\"\n",
@@ -324,7 +329,9 @@ impl IntrospectionService {
                 api_result.api_title,
                 api_result.endpoints.len()
             )),
-            auth_env_var: if api_result.auth_requirements.auth_type.is_empty() {
+            auth_env_var: if api_result.auth_requirements.auth_type.is_empty()
+                || api_result.auth_requirements.auth_type == "none"
+            {
                 None
             } else {
                 let module_name = api_result
@@ -343,7 +350,7 @@ impl IntrospectionService {
                 DiscoverySource::WebSearch {
                     url: spec_url.to_string(),
                 },
-                server_info,
+                server_info.clone(),
                 vec!["openapi".to_string()],
                 RiskAssessment {
                     level: RiskLevel::Low,
@@ -354,16 +361,65 @@ impl IntrospectionService {
             )
             .await?;
 
+        // If auth is required, check if secret exists and queue if missing
+        if let Some(auth_var) = &server_info.auth_env_var {
+            let store = SecretStore::new(Some(get_workspace_root())).unwrap_or_else(|_| {
+                SecretStore::new(None).unwrap_or_else(|_| panic!("Failed to create SecretStore"))
+            });
+
+            if !store.has(auth_var) {
+                let _ = approval_queue
+                    .add_secret_approval(
+                        format!("{}.introspect", result.server_name),
+                        auth_var.clone(),
+                        format!(
+                            "API Key for {} discovered during introspection",
+                            result.server_name
+                        ),
+                        expiry_hours,
+                    )
+                    .await;
+            }
+        }
+
         Ok(approval_id)
     }
 
     /// Check if URL looks like an OpenAPI spec
     pub fn is_openapi_url(url: &str) -> bool {
-        url.ends_with(".json")
-            || url.ends_with(".yaml")
-            || url.ends_with(".yml")
-            || url.contains("swagger")
-            || url.contains("openapi")
+        let trimmed = url.trim();
+        // Skip stdio commands
+        if trimmed.starts_with("npx ")
+            || trimmed.starts_with("node ")
+            || trimmed.starts_with("python")
+            || trimmed.starts_with("/")
+            || trimmed.starts_with("./")
+        {
+            return false;
+        }
+
+        let lower = trimmed.to_lowercase();
+
+        // Check for spec file extensions (including in query params like ?api-docs.json)
+        lower.ends_with(".json")
+            || lower.ends_with(".yaml")
+            || lower.ends_with(".yml")
+            || lower.contains("swagger")
+            || lower.contains("openapi")
+            || lower.contains("api-docs.json")
+            || lower.contains("api-docs.yaml")
+            || lower.contains("api-docs.yml")
+    }
+
+    /// Check if string looks like a stdio command
+    pub fn is_stdio_command(s: &str) -> bool {
+        let trimmed = s.trim();
+        trimmed.starts_with("npx ")
+            || trimmed.starts_with("node ")
+            || trimmed.starts_with("python")
+            || trimmed.starts_with("/")
+            || trimmed.starts_with("./")
+            || (!trimmed.contains("://") && !trimmed.is_empty())
     }
 }
 

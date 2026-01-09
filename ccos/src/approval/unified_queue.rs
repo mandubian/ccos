@@ -3,7 +3,7 @@
 //! A generic approval queue that works with the `ApprovalStorage` trait
 //! for backend-agnostic storage. Replaces the legacy file-based ApprovalQueue.
 
-use super::queue::{ApprovalAuthority, DiscoverySource, RiskAssessment, ServerInfo};
+use super::queue::{ApprovalAuthority, DiscoverySource, RiskAssessment, RiskLevel, ServerInfo};
 use super::types::{
     ApprovalCategory, ApprovalFilter, ApprovalRequest, ApprovalStatus, ApprovalStorage,
     ServerHealthTracking,
@@ -446,6 +446,54 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
     /// List pending synthesis approvals
     pub async fn list_pending_syntheses(&self) -> RuntimeResult<Vec<ApprovalRequest>> {
         self.list_pending_by_category("SynthesisApproval").await
+    }
+
+    // ========================================================================
+    // Secret Approval Specific Operations
+    // ========================================================================
+
+    /// Add a secret approval request
+    pub async fn add_secret_approval(
+        &self,
+        capability_id: String,
+        secret_name: String,
+        description: String,
+        expires_in_hours: i64,
+    ) -> RuntimeResult<String> {
+        // Check if a pending request already exists for this secret/capability
+        let pending = self.list_pending_secrets().await?;
+        for req in pending {
+            if let ApprovalCategory::SecretRequired {
+                capability_id: cid,
+                secret_type,
+                ..
+            } = &req.category
+            {
+                if cid == &capability_id && secret_type == &secret_name {
+                    return Ok(req.id);
+                }
+            }
+        }
+
+        let request = ApprovalRequest::new(
+            ApprovalCategory::SecretRequired {
+                capability_id,
+                secret_type: secret_name,
+                description,
+            },
+            RiskAssessment {
+                level: RiskLevel::Medium,
+                reasons: vec!["Capability requires external service credentials".to_string()],
+            },
+            expires_in_hours,
+            None,
+        );
+        self.add(request).await
+    }
+
+    /// List pending secret approvals
+    pub async fn list_pending_secrets(&self) -> RuntimeResult<Vec<ApprovalRequest>> {
+        self.list_pending_by_category("SecretRequired").await
     }
 
     /// Update a pending server entry in place
