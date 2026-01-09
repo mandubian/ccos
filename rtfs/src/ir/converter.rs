@@ -1955,9 +1955,17 @@ impl<'a> IrConverter<'a> {
             let binding_id = self.next_id();
             let pattern_clone = binding.pattern.clone();
             let init_expr = self.convert_expression(*binding.value)?;
-            let binding_type = init_expr.ir_type().cloned().unwrap_or(IrType::Any);
-            let pattern_node =
-                self.convert_pattern(binding.pattern, binding_id, binding_type.clone())?;
+            // If a type annotation exists, treat it as the binding's type in the environment.
+            // This allows `(let [x :T (call ...)] ...)` to give `x` the static type `T`,
+            // while runtime performs the checked-cast when executing the binding.
+            let type_annotation_ir: Option<IrType> = binding
+                .type_annotation
+                .clone()
+                .map(|t| self.convert_type_annotation(t))
+                .transpose()?;
+            let inferred_type = init_expr.ir_type().cloned().unwrap_or(IrType::Any);
+            let binding_type = type_annotation_ir.clone().unwrap_or(inferred_type);
+            let pattern_node = self.convert_pattern(binding.pattern, binding_id, binding_type.clone())?;
 
             // Add all symbols from the pattern to scope after converting init expression
             let pattern_symbols = self.extract_pattern_symbols(&pattern_clone);
@@ -1974,10 +1982,7 @@ impl<'a> IrConverter<'a> {
 
             bindings.push(IrLetBinding {
                 pattern: pattern_node,
-                type_annotation: binding
-                    .type_annotation
-                    .map(|t| self.convert_type_annotation(t))
-                    .transpose()?,
+                type_annotation: type_annotation_ir,
                 init_expr,
             });
         }
