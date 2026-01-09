@@ -591,7 +591,10 @@ pub fn type_check_ir(node: &IrNode) -> TypeCheckResult<()> {
                 // If there's a type annotation, check it matches
                 if let Some(annot_type) = &binding.type_annotation {
                     let init_type = infer_type(&binding.init_expr)?;
-                    if !is_subtype(&init_type, annot_type) {
+                    // If the initializer type is unknown (Any), treat the annotation as a
+                    // checked cast that must be validated at runtime (not rejected statically).
+                    // We still reject clear mismatches when the initializer has a concrete type.
+                    if init_type != IrType::Any && !is_subtype(&init_type, annot_type) {
                         return Err(TypeCheckError::TypeMismatch {
                             expected: annot_type.clone(),
                             actual: init_type,
