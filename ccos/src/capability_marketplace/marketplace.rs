@@ -1954,6 +1954,10 @@ impl CapabilityMarketplace {
         // MCP capabilities always need session management for proper auth token handling
         let is_mcp_provider = matches!(&manifest.provider, ProviderType::MCP(_));
 
+        // Prepare boundary verification context
+        let boundary_context = VerificationContext::capability_boundary(id);
+        let type_config = TypeCheckingConfig::default();
+
         if requires_session || is_mcp_provider {
             // Delegate to session pool for session-managed execution
             let pool_opt = {
@@ -1974,7 +1978,37 @@ impl CapabilityMarketplace {
                 // 3. Handler initializes/reuses session
                 // 4. Handler executes with session (auth, headers, etc.)
                 // 5. Returns result
-                return pool.execute_with_session(id, &manifest.metadata, &args);
+                // IMPORTANT: enforce schema validation for session-managed calls too.
+                // This is especially relevant for MCP where capabilities are often dynamic.
+                if let Some(input_schema) = &manifest.input_schema {
+                    self.type_validator
+                        .validate_with_config(
+                            inputs_ref,
+                            input_schema,
+                            &type_config,
+                            &boundary_context,
+                        )
+                        .map_err(|e| {
+                            RuntimeError::Generic(format!("Input validation failed: {}", e))
+                        })?;
+                }
+
+                let exec_result = pool.execute_with_session(id, &manifest.metadata, &args)?;
+
+                if let Some(output_schema) = &manifest.output_schema {
+                    self.type_validator
+                        .validate_with_config(
+                            &exec_result,
+                            output_schema,
+                            &type_config,
+                            &boundary_context,
+                        )
+                        .map_err(|e| {
+                            RuntimeError::Generic(format!("Output validation failed: {}", e))
+                        })?;
+                }
+
+                return Ok(exec_result);
             } else {
                 ccos_eprintln!("⚠️  Session management required but no session pool configured");
                 ccos_eprintln!(
@@ -1982,10 +2016,6 @@ impl CapabilityMarketplace {
                 );
             }
         }
-
-        // Prepare boundary verification context
-        let boundary_context = VerificationContext::capability_boundary(id);
-        let type_config = TypeCheckingConfig::default();
 
         // Validate inputs if a schema is provided
         if let Some(input_schema) = &manifest.input_schema {
@@ -2677,12 +2707,12 @@ impl CapabilityMarketplace {
         Ok(loaded)
     }
 
-    /// Load all discovered capabilities from the standard discovered capabilities directory.
-    /// This scans `capabilities/discovered/` recursively for `.rtfs` files and loads them.
+    /// Load all discovered capabilities from the standard capabilities directory.
+    /// This scans `capabilities/` (in workspace root) recursively for `.rtfs` files and loads them.
     ///
     /// The directory structure is expected to be:
     /// ```text
-    /// capabilities/discovered/
+    /// capabilities/
     /// ├── mcp/
     /// │   ├── github/
     /// │   │   └── capabilities.rtfs
@@ -2693,7 +2723,7 @@ impl CapabilityMarketplace {
     /// ```
     ///
     /// # Arguments
-    /// * `base_dir` - Optional base directory. Defaults to "capabilities/discovered" or
+    /// * `base_dir` - Optional base directory. Defaults to "capabilities" (in workspace root) or
     ///   the value of CCOS_CAPABILITY_STORAGE environment variable.
     ///
     /// # Returns
@@ -2708,7 +2738,7 @@ impl CapabilityMarketplace {
                 std::env::var("CCOS_CAPABILITY_STORAGE")
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|_| {
-                        crate::utils::fs::get_configured_capabilities_path().join("discovered")
+                        crate::utils::fs::get_workspace_root().join("capabilities")
                     })
             });
 

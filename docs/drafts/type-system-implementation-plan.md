@@ -267,13 +267,13 @@ rtfs/src/
 
 **Recommended**: **Option B** - Local inference for RTFS use cases (LLM-generated code often has explicit types)
 
-## 🎯 Parametric Map Design (New Section)
+## 🎯 Parametric Map Design (Implemented)
 
-### Current State: Structural Typing
+### Structural Maps (Existing)
 ```clojure
 ; Structural maps (explicit keys)
 [:map [:name :string] [:age :integer]]
-[:map {:name :string :age :integer}]
+[:record [:name :string] [:age :integer]] ; alias for :map
 ```
 
 **Strengths**:
@@ -282,23 +282,20 @@ rtfs/src/
 - ✅ Handles both keyword and string keys
 - ✅ Runtime validation works well
 
-### Proposed: Hybrid Approach
+### Parametric Maps (Hybrid Approach)
 ```clojure
-; Structural maps (keep as default)
-[:map [:name :string] [:age :integer]]
-
-; Parametric maps (new, string-keyed dictionaries)
+; Parametric maps (homogeneous dictionaries)
 [:map-of :string :any]    ; Concrete: Map<String, Any>
+[:dict :string :any]      ; Alias for :map-of
 [:map-of :keyword :any]   ; Concrete: Map<Keyword, Any>
 [:map-of K V]             ; Generic: Map<K, V> where K ≤ (String | Keyword)
 ```
 
 **Design Decisions**:
-- ✅ **Syntax**: `[:map-of K V]` (clear and distinct)
-- ✅ **Key Type**: String or Keyword (or union) (matches RTFS MapKey and JSON boundary use-cases)
-- ✅ **Constraints**: Equality + upper bounds only (tractable)
-- ✅ **Inference**: Explicit arguments + local inference (conservative)
-- ✅ **Keyword Support**: First-class (`[:map-of :keyword V]` supported)
+- ✅ **Syntax**: `[:map-of K V]` (and `[:dict K V]`)
+- ✅ **Key Type**: String, Keyword, or Union (e.g. `(or :string :keyword)`)
+- ✅ **Constraints**: Equality + upper bounds only
+- ✅ **Validation**: Runtime validation enforces homogeneity
 
 **Rationale**:
 - Keeps structural typing for scripting (excellent for ad-hoc data)
@@ -306,50 +303,12 @@ rtfs/src/
 - Avoids complexity (no complex constraint solving)
 - Matches RTFS philosophy (deterministic, good errors)
 
-### Implementation Plan
-
-**Phase 1: Foundation**
-```rust
-// Add type variables to IrType
-enum IrType {
-    TypeVar(String),
-    ParametricMap {
-        key_type: Box<IrType>,   // Must be ≤ String
-        value_type: Box<IrType>,
-    },
-    // ... existing variants
-}
-```
-
-**Phase 2: Unification**
-```rust
-// Simple unification algorithm
-fn unify(t1: &IrType, t2: &IrType) -> Result<Substitution> {
-    match (t1, t2) {
-        (TypeVar(_), _) => /* bind variable */,
-        (_, TypeVar(_)) => /* bind variable */,
-        // Simple cases only
-    }
-}
-```
-
-**Phase 3: Parser Integration**
-```rust
-// Add to grammar
-map_of_type = { "[" ~ ":map-of" ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ type_expr ~ WHITESPACE* ~ "]" }
-```
-
-**Phase 4: Type Checking**
-```rust
-// Add to subtyping
-match (sub, sup) {
-    (ParametricMap(k1, v1), ParametricMap(k2, v2)) => {
-        // Check k1 ≤ String and k2 ≤ String
-        // Check k1 ≤ k2 (contravariant for keys?)
-        // Check v1 ≤ v2 (covariant for values)
-    }
-}
-```
+### Implementation Status
+- ✅ IR type added (`IrType::ParametricMap`)
+- ✅ AST type added (`TypeExpr::ParametricMap`)
+- ✅ Parser rules added (`map_of_type`, `dict_type`)
+- ✅ Subtyping rules implemented (covariant in K and V)
+- ✅ Runtime validation implemented
 
 ## 📅 Estimated Timeline
 
@@ -443,23 +402,24 @@ A **production-ready type system** that:
 
 ---
 
-**Last Updated**: 2024-02-20
-**Status**: ✅ **Phase 1 & 2 Partially Complete**
+**Last Updated**: 2026-01-09
+**Status**: ✅ **Phase 1 & 2 Mostly Complete**
 **Completed**:
 - ✅ All 12 subtyping axioms implemented and tested
 - ✅ Complete intersection type implementation with documentation
+- ✅ Parametric Map types (`[:map-of K V]`) implemented
+- ✅ Host-boundary validation (annotations as checked casts)
 - ✅ Bidirectional type checking (synthesis + checking)
 - ✅ Type meet/join operations for intersection types
-- ✅ Fixed all failing intersection type tests
-- ✅ Comprehensive documentation and examples
+- ✅ Comprehensive proptests for subtyping laws
 
-**Next Step**: Begin Phase 2 implementation (generic type variables)
+**Next Step**: Complete Generic type variables and unification
 
 **Key Clarifications After Analysis**:
-- ✅ Type annotations already fully supported in grammar (not missing)
-- ✅ IR type checker already exists and works (not missing)
-- ✅ Compile-time integration already working via IR checking (not missing)
-- ⚠️ Real gaps: Generic type variables, type classes, parametric polymorphism
+- ✅ Type annotations act as runtime checked casts at host boundaries
+- ✅ Host-side `input_schema` and `output_schema` validation is active
+- ✅ Parametric maps support `String | Keyword` keys
+- ⚠️ Real gaps: Generic type variables, type classes
 
 **Revised Understanding**:
 - Current system is stronger than initially assessed

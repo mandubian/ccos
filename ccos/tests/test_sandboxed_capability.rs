@@ -2,8 +2,8 @@
 //!
 //! Tests the sandboxed execution path using the MicroVM process provider.
 
-use ccos::capability_marketplace::executors::{CapabilityExecutor, SandboxedExecutor};
-use ccos::capability_marketplace::types::{ProviderType, SandboxedCapability};
+use ccos::capability_marketplace::executors::{CapabilityExecutor, ExecutionContext, SandboxedExecutor};
+use ccos::capability_marketplace::types::{EffectType, ProviderType, SandboxedCapability};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 
@@ -69,7 +69,9 @@ else:
     );
     let inputs = Value::Map(input_map);
 
-    let result = executor.execute(&provider, &inputs).await;
+    let empty_meta: HashMap<String, String> = HashMap::new();
+    let ctx = ExecutionContext::new("test.sandboxed.python_echo", &empty_meta, None);
+    let result = executor.execute(&provider, &inputs, &ctx).await;
 
     match result {
         Ok(value) => {
@@ -140,7 +142,9 @@ else:
     );
     let inputs = Value::Map(input_map);
 
-    let result = executor.execute(&provider, &inputs).await;
+    let empty_meta: HashMap<String, String> = HashMap::new();
+    let ctx = ExecutionContext::new("test.sandboxed.python_calc", &empty_meta, None);
+    let result = executor.execute(&provider, &inputs, &ctx).await;
 
     match result {
         Ok(value) => {
@@ -177,7 +181,9 @@ async fn test_sandboxed_invalid_provider() {
     let provider = ProviderType::Sandboxed(sandboxed);
     let inputs = Value::Nil;
 
-    let result = executor.execute(&provider, &inputs).await;
+    let empty_meta: HashMap<String, String> = HashMap::new();
+    let ctx = ExecutionContext::new("test.sandboxed.invalid_provider", &empty_meta, None);
+    let result = executor.execute(&provider, &inputs, &ctx).await;
 
     // Should fail because the provider doesn't exist
     assert!(result.is_err());
@@ -198,7 +204,9 @@ async fn test_sandboxed_wrong_provider_type() {
     });
 
     let inputs = Value::Nil;
-    let result = executor.execute(&http_provider, &inputs).await;
+    let empty_meta: HashMap<String, String> = HashMap::new();
+    let ctx = ExecutionContext::new("test.sandboxed.wrong_provider_type", &empty_meta, None);
+    let result = executor.execute(&http_provider, &inputs, &ctx).await;
 
     // Should fail with "Invalid provider type"
     assert!(result.is_err());
@@ -254,6 +262,7 @@ print(json.dumps({"result": "sandbox works!"}))
         agent_metadata: None,
         domains: vec!["test".to_string()],
         categories: vec!["sandbox".to_string()],
+        effect_type: EffectType::Effectful,
     };
 
     // Register the capability
@@ -351,7 +360,9 @@ print(json.dumps(result))
     let provider = ProviderType::Sandboxed(sandboxed);
     let inputs = Value::Nil;
     
-    match executor.execute(&provider, &inputs).await {
+    let empty_meta: HashMap<String, String> = HashMap::new();
+    let ctx = ExecutionContext::new("test.sandboxed.firecracker", &empty_meta, None);
+    match executor.execute(&provider, &inputs, &ctx).await {
         Ok(value) => {
             println!("Firecracker execution result: {:?}", value);
             // Verify we got valid output

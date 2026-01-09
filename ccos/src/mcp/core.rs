@@ -1026,7 +1026,7 @@ impl MCPDiscoveryService {
                                 get_workspace_root().join(&path)
                             }
                         })
-                        .unwrap_or_else(|| get_workspace_root().join("capabilities/discovered"))
+                        .unwrap_or_else(|| get_workspace_root().join("capabilities"))
                 });
             let server_dir = export_dir.join("mcp").join(&server_config.name);
             let module_file = server_dir.join("capabilities.rtfs");
@@ -1218,7 +1218,7 @@ impl MCPDiscoveryService {
                                 get_workspace_root().join(&path)
                             }
                         })
-                        .unwrap_or_else(|| get_workspace_root().join("capabilities/discovered"))
+                        .unwrap_or_else(|| get_workspace_root().join("capabilities"))
                 });
             let server_dir = export_dir.join("mcp").join(&server_config.name);
             let module_file = server_dir.join("capabilities.rtfs");
@@ -1309,7 +1309,7 @@ impl MCPDiscoveryService {
                 }
             })
             .unwrap_or_else(|| {
-                // Default: use environment variable or fallback to capabilities/discovered in current dir
+                // Default: use environment variable or fallback to capabilities in workspace root
                 std::env::var("CCOS_CAPABILITY_STORAGE")
                     .map(|s| {
                         let path = PathBuf::from(s);
@@ -1320,18 +1320,18 @@ impl MCPDiscoveryService {
                         }
                     })
                     .unwrap_or_else(|_| {
-                        // Default to configured discovered capabilities path
-                        crate::utils::fs::get_configured_discovered_path()
+                        // Default to workspace_root/capabilities
+                        get_workspace_root().join("capabilities")
                     })
             });
 
-        // Create directory structure: capabilities/discovered/mcp/<server_name>/
+        // Create directory structure: capabilities/mcp/<server_name>/
         let server_dir = export_dir.join("mcp").join(&server_config.name);
         fs::create_dir_all(&server_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create export directory: {}", e))
         })?;
 
-        // Export to single module file: capabilities/discovered/mcp/<server_name>/capabilities.rtfs
+        // Export to single module file: capabilities/mcp/<server_name>/capabilities.rtfs
         let module_file = server_dir.join("capabilities.rtfs");
 
         // Create RTFS module with only the discovered capabilities from this server

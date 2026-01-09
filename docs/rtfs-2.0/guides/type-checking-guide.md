@@ -2,44 +2,43 @@
 
 ## Implementation Status
 
-**⚠️ Partial - Runtime validation + IR-level static checking implemented**
+**✅ Production-Ready - Hybrid Validation System**
 
-This guide describes the RTFS type system as documented in the formal specification. However, the **actual implementation status differs**:
+This guide describes the RTFS type system, which employs a robust hybrid validation strategy:
 
 | Feature | Specification Status | Implementation Status | Notes |
 |---------|---------------------|----------------------|-------|
 | **Type Annotations** | ✅ **Full** | ✅ **Implemented** | `:type` annotations on functions and `let` bindings |
 | **Runtime Validation** | ✅ **Full** | ✅ **Implemented** | `TypeValidator` with configurable strictness levels |
+| **Boundary Validation** | ✅ **Full** | ✅ **Implemented** | Annotations act as checked casts for host calls |
 | **Primitive Types** | ✅ **Full** | ✅ **Implemented** | `:int`, `:float`, `:string`, `:bool`, `:nil`, etc. |
-| **Collection Types** | ✅ **Full** | ✅ **Implemented** | `[:vector :int]`, record maps `[:map {...}]`/`[:record {...}]`, dict maps `[:map-of K V]`/`[:dict K V]` |
+| **Collection Types** | ✅ **Full** | ✅ **Implemented** | `[:vector :int]`, `[:record {...}]` (structs), `[:dict K V]` (maps) |
 | **Function Types** | ✅ **Full** | ✅ **Implemented** | `[:fn [:int :int] :int]` syntax |
 | **Union Types** | ✅ **Full** | ✅ **Implemented** | Supported in runtime validation + IR checking |
 | **Intersection Types** | ✅ **Full** | ✅ **Implemented** | Supported in runtime validation + IR checking |
 | **Subtyping System** | ✅ **Formal** | ✅ **Implemented (IR)** | Subtyping used during IR type checking |
 | **Refinement Types** | ✅ **Full** | ✅ **Implemented (runtime)** | Enforced by `TypeValidator` (gradual typing) |
-| **Type Inference** | ✅ **Bidirectional** | ⚠️ **Limited** | Scripting-first: inference is conservative; prefer annotations when unclear |
 
 ### Key Differences from Formal Specification
-- **Two layers**: runtime validation for boundary safety; IR-level checking for compiled programs
-- **No formal proofs**: we don’t mechanically prove soundness (yet)
-- **Conservative inference**: scripting-first, predictable behavior over whole-program inference
+- **Two layers**: runtime validation for boundary safety (primary) + IR-level checking (secondary)
+- **Checked Casts**: Type annotations on `let` bindings (`let [x :Int (call...)]`) act as runtime assertions
+- **Host Validation**: Host validates capabilities against `input_schema` and `output_schema`
+- **Conservative inference**: Scripting-first, predictable behavior over whole-program inference
 
 ### What Actually Works Today
 - Type annotations on functions and variables: `(defn add [x :int y :int] :int ...)`
 - Runtime type validation with configurable strictness levels
-- Union + intersection types: `[:union :int :string]`, `[:and :string [:min-length 3]]`, etc.
+- Union + intersection types: `[:union :int :string]`, `[:and :string [:min-length 3]]`
 - Collection type schemas:
   - Vectors: `[:vector :int]`
-  - Records: `[:map {:name :string :age :int}]` (alias `[:record {...}]`)
-  - Dicts: `[:map-of :string :any]` (alias `[:dict :string :any]`)
+  - Records: `[:record {:name :string :age :int}]` (or `[:map ...]`)
+  - Dicts: `[:dict :string :any]` (or `[:map-of ...]`)
 - Function type signatures: `[:fn [:int :int] :int]`
 - Type predicates: `(int? x)`, `(string? x)`, etc.
 
 ### What's Different from the Spec
-- **No formal subtyping**: `Int ≤ Number` works but not via formal subtyping system
-- **No intersection types**: `[:intersection TypeA TypeB]` not supported
-- **Limited refinement types**: Only basic predicates, not full logical constraints
-- **Runtime errors vs. compile-time**: Type errors occur at runtime during validation
+- **Refinement types**: Runtime-only via validator predicates
+- **Constraint solving**: Not yet fully implemented for generic type variables
 
 **For the actual implementation**, see:
 - `rtfs/src/runtime/type_validator.rs` (runtime validation)
