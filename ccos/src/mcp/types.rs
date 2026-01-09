@@ -63,7 +63,7 @@ pub struct DiscoveryOptions {
     pub register_in_marketplace: bool,
     /// Whether to export discovered capabilities to RTFS files
     pub export_to_rtfs: bool,
-    /// Directory to export RTFS files to (default: "../capabilities/discovered")
+    /// Directory to export RTFS files to (default: workspace_root/capabilities)
     pub export_directory: Option<String>,
     /// Custom auth headers (overrides server config)
     pub auth_headers: Option<HashMap<String, String>>,

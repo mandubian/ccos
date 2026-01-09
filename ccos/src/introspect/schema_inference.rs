@@ -50,7 +50,7 @@ pub fn infer_output_schema(rtfs_src: &str) -> RuntimeResult<Option<TypeExpr>> {
 
 /// Minimal IR → TypeExpr mapper (mirrors runtime/ir_runtime).
 fn ir_to_type_expr(ir: &rtfs::ir::core::IrType) -> TypeExpr {
-    use rtfs::ast::{ParamType, PrimitiveType};
+    use rtfs::ast::{MapTypeEntry, ParamType, PrimitiveType};
     use rtfs::ir::core::IrType as IT;
     match ir {
         IT::Int => TypeExpr::Primitive(PrimitiveType::Int),
@@ -62,10 +62,25 @@ fn ir_to_type_expr(ir: &rtfs::ir::core::IrType) -> TypeExpr {
         IT::Symbol => TypeExpr::Primitive(PrimitiveType::Symbol),
         IT::Any => TypeExpr::Any,
         IT::Never => TypeExpr::Never,
+        IT::TypeVar(_name) => TypeExpr::Any,
         IT::Vector(elem) => TypeExpr::Vector(Box::new(ir_to_type_expr(elem))),
         IT::List(elem) => TypeExpr::Vector(Box::new(ir_to_type_expr(elem))),
         IT::Tuple(types) => TypeExpr::Tuple(types.iter().map(ir_to_type_expr).collect()),
-        IT::Map { .. } => TypeExpr::Any, // Extend as needed
+        IT::Map { entries, wildcard } => TypeExpr::Map {
+            entries: entries
+                .iter()
+                .map(|e| MapTypeEntry {
+                    key: e.key.clone(),
+                    value_type: Box::new(ir_to_type_expr(&e.value_type)),
+                    optional: e.optional,
+                })
+                .collect(),
+            wildcard: wildcard.as_ref().map(|w| Box::new(ir_to_type_expr(w))),
+        },
+        IT::ParametricMap { key_type, value_type } => TypeExpr::ParametricMap {
+            key_type: Box::new(ir_to_type_expr(key_type)),
+            value_type: Box::new(ir_to_type_expr(value_type)),
+        },
         IT::Function {
             param_types,
             variadic_param_type,

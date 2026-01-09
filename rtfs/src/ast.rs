@@ -257,6 +257,10 @@ pub enum TypeExpr {
     },
     Enum(Vec<Literal>),      // E.g., [:enum :red :green :blue]
     Optional(Box<TypeExpr>), // Sugar for [:union T :nil]
+    ParametricMap {
+        key_type: Box<TypeExpr>,
+        value_type: Box<TypeExpr>,
+    }, // [:map-of KeyType ValueType] - parametric map types
 }
 
 impl TypeExpr {
@@ -503,6 +507,9 @@ impl std::fmt::Display for TypeExpr {
                     })
                     .collect();
                 write!(f, "[:enum {}]", value_strs.join(" "))
+            }
+            TypeExpr::ParametricMap { key_type, value_type } => {
+                write!(f, "[:map-of {} {}]", key_type, value_type)
             }
             TypeExpr::Refined {
                 base_type,

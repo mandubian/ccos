@@ -26,6 +26,9 @@ The RTFS 2.0 host boundary and capability system is fully implemented and integr
 ### Key Implementation Details
 - **Strict Separation**: Pure RTFS computation yields to host for all effects via `ExecutionOutcome::RequiresHost`
 - **Mandatory Security**: Every host call includes `RuntimeContext` for governance and audit
+- **Boundary Validation**: 
+  - Host validates `input_schema`/`output_schema`
+  - RTFS treats type annotations on host results as checked casts
 - **Provider Plugability**: Multiple provider types (Local, Marketplace, Custom) with policy-based selection
 - **Capability Contracts**: Input/output schemas using `TypeExpr` for validation
 - **Causal Chain Integration**: All host calls recorded in immutable audit trail
@@ -66,6 +69,32 @@ enum ExecutionOutcome {
   RequiresHost(HostCall)     ; Host intervention needed
 }
 ```
+
+## Runtime Type Validation at the Boundary
+
+To ensure type safety when interacting with untrusted host capabilities, RTFS employs a two-layer validation strategy:
+
+### 1. Host-Side Schema Validation
+When a capability is registered in the CCOS Marketplace, it may declare an `input_schema` and `output_schema` (as RTFS `TypeExpr`).
+
+- **Input Validation**: Before executing a capability, the host validates the arguments against the `input_schema`. If validation fails, the call is rejected before reaching the provider.
+- **Output Validation**: When the provider returns a result, the host validates it against the `output_schema` (if present and not `:any`).
+  - This ensures that even if a capability provider (e.g., an external MCP server) behaves incorrectly, the RTFS runtime receives a valid value or a structured error.
+  - This validation is enforced for all providers, including session-managed ones (e.g., MCP tools).
+
+### 2. RTFS-Side Checked Casts
+Since host calls are fundamentally untrusted (they are side effects), type annotations in RTFS code act as **runtime checked casts** for values crossing the boundary.
+
+```clojure
+;; 'call' returns an untrusted Value
+(let [user-data : [:record [:id :string] [:name :string]] 
+      (call :db.get-user "user-123")]
+  ;; At runtime, 'user-data' is validated against the schema.
+  ;; If validation fails, a TypeError is raised immediately.
+  (log "Got user: " user-data))
+```
+
+This pattern is strictly enforced by the IR runtime for `let` bindings and function parameters. It provides a strong guarantee that variables holding host results satisfy their type contracts, simplifying downstream code.
 
 ## Host Calls
 

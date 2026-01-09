@@ -1777,9 +1777,9 @@ impl MissingCapabilityResolver {
             })?;
 
         let storage_root = std::env::var("CCOS_CAPABILITY_STORAGE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| crate::utils::fs::get_configured_capabilities_path());
-        let storage_root = storage_root.join("discovered").join("mcp");
+            .map(|s| PathBuf::from(s))
+            .unwrap_or_else(|_| crate::utils::fs::get_workspace_root().join("capabilities"));
+        let storage_root = storage_root.join("mcp");
         std::fs::create_dir_all(&storage_root).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create MCP discovery directory: {}", e))
         })?;
