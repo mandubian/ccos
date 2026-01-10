@@ -38,20 +38,21 @@ graph TD
         ExtAgents["External Capabilities (APIs, tools, agents)"]
     end
 
-    subgraph "CCOS: Governed Cognition"
-        subgraph "Cognitive Layer (low privilege)"
-            Arbiter["Arbiter (AI planner)"]
-        end
-        subgraph "Governance Layer (high privilege)"
-            Kernel["Governance Kernel (validates & authorizes)"]
-            Constitution["Constitution (rules & policies)"]
-        end
-        subgraph "Execution & Audit"
-            Orchestrator["Orchestrator (deterministic executor)"]
-            Marketplace["Capability Marketplace"]
-            IntentGraph["Intent Graph"]
-            CausalChain["Causal Chain (immutable)"]
-        end
+     subgraph "CCOS: Governed Cognition"
+         subgraph "Cognitive Layer (low privilege)"
+             Arbiter["Arbiter (AI planner)"]
+         end
+         subgraph "Governance Layer (high privilege)"
+             Kernel["Governance Kernel (validates & authorizes)"]
+             Constitution["Constitution (rules & policies)"]
+         end
+         subgraph "Execution & Audit"
+             Orchestrator["Orchestrator (deterministic executor)"]
+             Marketplace["Capability Marketplace"]
+             IntentGraph["Intent Graph"]
+             CausalChain["Causal Chain (immutable)"]
+             ContextHorizon["Context Horizon (ephemeral)"]
+         end
     end
 
     U -->|expresses goal| Arbiter
@@ -62,6 +63,11 @@ graph TD
     ExtAgents --> Marketplace
     Orchestrator -->|records| CausalChain
     Arbiter -->|learns from| CausalChain
+    Arbiter -->|requests context| ContextHorizon
+    ContextHorizon -->|provides context| Arbiter
+    ContextHorizon -->|queries| CausalChain
+    ContextHorizon -->|queries| IntentGraph
+    ContextHorizon -->|queries| WorkingMemory
 ```
 
 This design gives models room to think and plan, without giving them unchecked power.
@@ -113,7 +119,8 @@ Governance is built in, not bolted on.
 - Causal Chain: a tamper-proof record of plan steps and effects
 - Governance Kernel: validates plans, authorizes yields, enforces quotas/ACLs
 - Orchestrator: deterministic driver of the RTFS runtime and yield-resume loop
-- Working Memory and Horizon: queryable context built from the chain and graph
+- Working Memory: persistent, global knowledge store with ingestion pipeline
+- Context Horizon: ephemeral, task-specific context for LLM inputs
 
 ---
 
@@ -132,11 +139,15 @@ CCOS complements open protocols. External tools and agents appear as capabilitie
   - Intent Graph: ./docs/ccos/specs/001-intent-graph.md
   - Plans & Orchestration: ./docs/ccos/specs/002-plans-and-orchestration.md
   - Causal Chain: ./docs/ccos/specs/003-causal-chain.md
+  - Arbiter & Delegation: ./docs/ccos/specs/006-arbiter-and-cognitive-control.md
+  - Context Horizon: ./docs/ccos/specs/009-context-horizon.md
   - **Capability System**: ./docs/ccos/specs/030-capability-system-architecture.md
   - **MCP Discovery**: ./docs/ccos/specs/031-mcp-discovery-unified-service.md
+  - Working Memory: ./docs/ccos/specs/013-working-memory.md
   - **Missing Capability Resolution**: ./docs/ccos/specs/032-missing-capability-resolution.md
   - **Importers & Synthesis**: ./docs/ccos/specs/033-capability-importers-and-synthesis.md
   - **Two-Tier Governance**: ./docs/ccos/specs/035-two-tier-governance.md
+  - **Execution Modes**: ./docs/ccos/specs/execution-modes.md
   - **Semantic Plan Judge**: ./docs/ccos/specs/041-semantic-plan-judge.md
   - **Execution Hints**: ./docs/ccos/specs/040-execution-hints.md
 
@@ -152,17 +163,20 @@ CCOS complements open protocols. External tools and agents appear as capabilitie
 
 CCOS is active and evolving. The RTFS 2.0 migration and reentrance demo are merged. Core components exist with room to harden and extend.
 
-| Component                 | Status            | Notes                                                |
+ | Component                 | Status            | Notes                                                |
 | ------------------------- | ----------------- | ---------------------------------------------------- |
-| Core Specifications       | Complete          | RTFS 2.0 aligned                                     |
+| Core Specifications       | Enhanced          | RTFS 2.0 aligned; Context Horizon spec added      |
 | Intent Graph              | In Progress       | Persistence and relations                            |
-| Causal Chain              | Basic Complete    | Immutable ledger; replay hooks                       |
+| Causal Chain              | Enhanced          | Added 25+ governance/learning action types            |
+| Context Horizon            | Enhanced          | Added reduction strategies, boundaries, LLM integration    |
+| Working Memory            | Enhanced          | Backend abstraction, boundaries, reduction strategies       |
+| Plans & Orchestration    | Enhanced          | Added MicroVM integration, step profiling             |
+| Capability System         | Enhanced          | Added version comparison, breaking change detection       |
 | Orchestrator              | Basic Complete    | Yield-resume engine; deterministic execution         |
-| Capability System         | Complete          | CapabilityMarketplace, domains/categories, MCP       |
 | MCP Discovery             | Complete          | Unified service with domain inference, caching       |
 | Missing Cap Resolution    | Complete          | 4 strategies, backoff, risk assessment               |
 | Governance Kernel         | Basic Complete    | Plan/yield validation; quotas/ACLs                   |
-| Delegation Engine         | Basic Complete    | Policy selection; future agent delegation ready      |
+| Delegation Engine         | Complete          | StaticDelegationEngine, L1 cache, ModelProvider (simple DE deprecated)|
 | Arbiter (LLM Bridge)      | In Progress       | Constrained outputs; plan compilation pipeline       |
 | RTFS 2.0 Language         | In Progress       | Purity, yields, IR verification, reentrancy          |
 
