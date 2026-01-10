@@ -1,9 +1,9 @@
 # CCOS Specification 002: Plans and Orchestration (RTFS 2.0 Edition)
 
-**Status:** Draft for Review  
-**Version:** 1.0  
-**Date:** 2025-09-20  
-**Related:** [000: Architecture](./000-ccos-architecture-new.md), [001: Intent Graph](./001-intent-graph-new.md), [003: Causal Chain](./003-causal-chain-new.md)  
+**Status:** Draft for Review (Enhanced)
+**Version:** 1.1
+**Date:** 2025-01-10
+**Related:** [000: Architecture](./000-ccos-architecture-new.md), [001: Intent Graph](./001-intent-graph-new.md), [003: Causal Chain](./003-causal-chain-new.md), [035: Two-Tier Governance](./035-two-tier-governance.md)  
 
 ## Introduction: Declarative Execution in a Pure World
 
@@ -72,6 +72,191 @@ Steps provide semantic and operational boundaries inside a plan. They scope logg
 - `:metadata`: Free-form annotations; reflected in chain actions.
 
 Steps map to hierarchical actions in the Causal Chain (StepStarted/Completed/Failed). Each step boundary is a natural checkpoint location.
+
+### 1.e Step Profile Derivation (Security & Isolation)
+
+For security-sensitive operations, steps can have derived profiles that determine isolation level, MicroVM configuration, and resource limits:
+
+```rust
+pub struct StepProfile {
+    pub step_id: String,
+    pub intent_id: String,
+
+    // Security Profile
+    pub security_level: SecurityLevel,  // "low", "medium", "critical"
+    pub isolation_level: IsolationLevel,  // "inherit", "isolated", "sandboxed"
+
+    // MicroVM Configuration
+    pub microvm_config: Option<MicroVMConfig>,
+
+    // Security Flags
+    pub syscall_filter: Option<SyscallFilter>,
+    pub network_acl: Option<NetworkACL>,
+    pub fs_acl: Option<FilesystemACL>,
+    pub read_only_fs: bool,
+    pub cpu_monitoring: bool,
+
+    // Resource Limits
+    pub resource_limits: ResourceLimits,
+
+    // Determinism Detection
+    pub deterministic: bool,
+
+    // Metadata
+    pub metadata: HashMap<String, Value>,
+}
+
+pub struct MicroVMConfig {
+    pub runtime: String,              // "firecracker", "qemu", "wasmtime"
+    pub network_policy: NetworkPolicy,
+    pub filesystem_policy: FilesystemPolicy,
+    pub memory_mb: u64,
+    pub cpus: u32,
+}
+
+pub enum SecurityLevel {
+    Low,       // General operations, minimal isolation
+    Medium,    // Data processing, moderate isolation
+    Critical,   // High-value data, maximum isolation
+}
+
+pub enum IsolationLevel {
+    Inherit,    // Inherit parent step's isolation
+    Isolated,    // Isolated from siblings, read parent
+    Sandboxed,   // Completely isolated, no parent access
+}
+
+pub struct ResourceLimits {
+    pub max_time_ms: Option<u64>,
+    pub max_memory_mb: Option<u64>,
+    pub max_cpu_percent: Option<u32>,
+    pub max_iops: Option<u64>,
+    pub max_bandwidth_mbps: Option<u64>,
+}
+
+pub struct SyscallFilter {
+    pub allowlist: Vec<String>,      // Allowed syscalls (e.g., ["read", "write"])
+    pub blocklist: Vec<String>,      // Blocked syscalls (e.g., ["exec", "network"])
+    pub mode: FilterMode,           // "default-allow" or "default-deny"
+}
+
+pub struct NetworkACL {
+    pub allowed_hosts: Vec<String>,   // Allowed endpoints
+    pub blocked_hosts: Vec<String>,   // Blocked endpoints
+    pub allowed_ports: Vec<u16>,     // Allowed ports
+    pub blocked_ports: Vec<u16>,     // Blocked ports
+}
+
+pub struct FilesystemACL {
+    pub read_paths: Vec<String>,     // Readable paths
+    pub write_paths: Vec<String>,    // Writable paths
+    pub read_only: bool,             // Force read-only mode
+}
+
+pub enum NetworkPolicy {
+    AllowAll,                    // Full network access
+    BlockAll,                     // No network access
+    Whitelist(Vec<String>),        // Only allowed hosts
+    Blacklist(Vec<String>),        // Block specific hosts
+}
+
+pub enum FilesystemPolicy {
+    AllowAll,                     // Full FS access
+    ReadOnly,                     // Read-only access
+    Whitelist(Vec<String>),        // Only allowed paths
+    Blacklist(Vec<String>),        // Block specific paths
+}
+```
+
+#### StepProfileDeriver
+
+The `StepProfileDeriver` analyzes step content and intent constraints to derive security profiles:
+
+```rust
+pub struct StepProfileDeriver {
+    pub fn new() -> Self;
+    pub fn derive_profile(&self, step: &Step, intent: &Intent, constraints: &HashMap<String, Value>) -> StepProfile;
+    pub fn detect_determinism(&self, step: &Step) -> bool;
+}
+```
+
+**Derivation Rules**:
+
+1. **Security Level Detection**:
+   - Check intent constraints for `:max-sensitivity` or `:security-level`
+   - Analyze capability calls: network/FS access requires Medium+, data access requires Critical
+   - Check intent metadata for `:critical` flag
+
+2. **Isolation Level Selection**:
+   - Default: `Inherit` (use parent step's isolation)
+   - Parallel branches: `Isolated` (prevent sibling interference)
+   - Untrusted capabilities: `Sandboxed` (maximum isolation)
+
+3. **MicroVM Configuration**:
+   - High security level (Critical) → MicroVM with minimal privileges
+   - Network capabilities → NetworkPolicy with Whitelist
+   - FS capabilities → FilesystemPolicy with ReadOnly or Whitelist
+
+4. **Security Flags**:
+   - **Syscall Filter**: Block dangerous syscalls (exec, fork, mount) based on step operations
+   - **Network ACL**: Restrict to required endpoints (e.g., API URLs only)
+   - **FS ACL**: Restrict to required paths (e.g., /data/input only)
+   - **Read-only FS**: Force read-only for analysis-only steps
+   - **CPU Monitoring**: Enable CPU usage tracking for performance
+
+5. **Resource Limits**:
+   - Extract from intent constraints (`:timeout`, `:max-cost`)
+   - Apply step-level limits overrides
+   - Enforce via Orchestrator runtime
+
+6. **Determinism Detection**:
+   - Analyze step body for pure operations only (no `(call ...)`)
+   - Mark as `deterministic = true` if no side-effect calls
+   - Enable fast-path execution and caching
+
+**Example Derived Profile**:
+```rust
+let profile = StepProfileDeriver::new()
+    .derive_profile(&step, &intent, &constraints);
+
+// Output:
+StepProfile {
+    step_id: "analyze-logs",
+    security_level: Medium,
+    isolation_level: Isolated,
+    microvm_config: Some(MicroVMConfig {
+        runtime: "firecracker",
+        memory_mb: 512,
+        cpus: 1,
+        network_policy: Whitelist(vec!["api.example.com".to_string()]),
+        filesystem_policy: ReadOnly,
+    }),
+    syscall_filter: Some(SyscallFilter {
+        allowlist: vec!["read".to_string(), "write".to_string()],
+        blocklist: vec!["exec".to_string(), "fork".to_string()],
+        mode: DefaultDeny,
+    }),
+    network_acl: Some(NetworkACL {
+        allowed_hosts: vec!["api.example.com".to_string()],
+        blocked_hosts: vec![],
+        allowed_ports: vec![443],
+        blocked_ports: vec![],
+    }),
+    fs_acl: Some(FilesystemACL {
+        read_paths: vec!["/data/input".to_string(), "/var/log".to_string()],
+        write_paths: vec![],
+        read_only: true,
+    }),
+    resource_limits: ResourceLimits {
+        max_time_ms: Some(30000),
+        max_memory_mb: Some(512),
+        max_cpu_percent: Some(80),
+    },
+    deterministic: false,  // Contains network calls
+}
+```
+
+### 1.f Execution Contexts (Hierarchical)
 
 ### 1.b Execution Contexts (Hierarchical)
 Execution contexts carry immutable, hierarchical metadata/environment across steps.

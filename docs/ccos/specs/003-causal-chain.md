@@ -1,9 +1,9 @@
 # CCOS Specification 003: Causal Chain (RTFS 2.0 Edition)
 
 **Status:** Draft for Review  
-**Version:** 1.0  
-**Date:** 2025-09-20  
-**Related:** [000: Architecture](./000-ccos-architecture-new.md), [002: Plans](./002-plans-and-orchestration-new.md)  
+**Version:** 1.1  
+**Date:** 2025-01-10  
+**Related:** [000: Architecture](./000-ccos-architecture-new.md), [002: Plans](./002-plans-and-orchestration-new.md), [006: Arbiter](./006-arbiter-and-cognitive-control.md), [030: Capabilities](./030-capability-system-architecture.md), [035: Two-Tier Governance](./035-two-tier-governance.md)  
 
 ## Introduction: The Immutable Audit Backbone
 
@@ -157,6 +157,70 @@ graph TD
 Reentrant replay notes:
 - Delegation entries are effects (host boundary) and are idempotent via a `:request-id` stored in `:provenance` (omitted above for brevity). Replays won’t re-call an external agent if a completed record exists.
 - If a proposal was rejected or revoked between runs, replay halts before execution and surfaces the governance decision deterministically.
-- The returned `:rtfs.plan-source` is revalidated and compiled before execution; its compilation and subsequent yields are logged as normal under the same intent.
+ - The returned `:rtfs.plan-source` is revalidated and compiled before execution; its compilation and subsequent yields are logged as normal under the same intent.
+
+ ### 3.b ActionType Enumeration
+
+The Causal Chain supports a comprehensive set of action types for full system traceability. Action types are categorized by their domain and lifecycle stage.
+
+#### Plan Lifecycle Actions
+- `:PlanStarted` - Plan execution begins, records initial state and intent association
+- `:PlanCompleted` - Plan finishes successfully, records final outcome
+- `:PlanAborted` - Plan terminated before completion (error, cancellation)
+- `:PlanPaused` - Plan paused for later resumption
+- `:PlanResumed` - Previously paused plan resumes execution
+
+#### Step Lifecycle Actions
+- `:PlanStepStarted` - Step execution begins, records context and inputs
+- `:PlanStepCompleted` - Step finishes successfully
+- `:PlanStepFailed` - Step execution fails, records error details
+- `:PlanStepRetrying` - Step being retried per retry policy
+
+#### Execution Actions
+- `:CapabilityCall` - Capability invoked via `(call ...)` yield
+- `:CapabilityResult` - Result of capability call (appended after execution)
+- `:PureEval` - Pure RTFS evaluation (debug mode)
+- `:StepYield` - Explicit yield from step to host
+- `:ResumeFrom` - Resume execution from checkpoint
+
+#### Intent Lifecycle Actions (NEW)
+- `:IntentCreated` - New intent node added to Intent Graph
+- `:IntentStatusChanged` - Intent status modified (Active → Executing → Completed)
+- `:IntentRelationshipCreated` - New edge added between intents (DependsOn, IsSubgoalOf, etc.)
+- `:IntentRelationshipModified` - Existing relationship properties updated
+- `:IntentArchived` - Intent moved to archival storage
+- `:IntentReactivated` - Archived intent restored to active state
+
+#### Capability Lifecycle Actions (NEW)
+- `:CapabilityRegistered` - New capability discovered, synthesized, or manually registered
+- `:CapabilityRemoved` - Capability deregistered from marketplace
+- `:CapabilityUpdated` - Capability metadata, schema, or provider changed
+- `:CapabilityDiscoveryCompleted` - Discovery scan completes (MCP, OpenAPI, network)
+- `:CapabilityVersionCreated` - Version snapshot created before modification
+- `:CapabilityRollback` - Capability reverted to previous version
+- `:CapabilitySynthesisStarted` - AI synthesis process begins for missing capability
+- `:CapabilitySynthesisCompleted` - Synthesis finishes (success or failure)
+
+#### Governance & Self-Programming Actions (NEW)
+- `:GovernanceApprovalRequested` - Action requires human or automatic approval
+- `:GovernanceApprovalGranted` - Approval granted, execution proceeds
+- `:GovernanceApprovalDenied` - Approval denied, action blocked
+- `:BoundedExplorationLimitReached` - Synthesis or decomposition hit exploration limit
+
+#### Atomic Governance Checkpoints (NEW)
+- `:GovernanceCheckpointDecision` - Tier-2 governance decision before step execution
+- `:GovernanceCheckpointOutcome` - Recorded outcome after governed step execution
+- `:HintApplied` - Execution hint triggered (retry, fallback, timeout, cache, circuit-breaker, rate-limit)
+
+#### Catalog & Internal Actions (NEW)
+- `:CatalogReuse` - Plan reused from catalog (avoided synthesis)
+- `:InternalStep` - Control flow step without capability call
+- `:StepProfileDerived` - Security profile derived for step (syscall filter, ACLs, isolation level)
+
+**Governance Traceability**: All action types include `:provenance` field referencing governing rules, attestations, and checkpoints. This enables full audit trails for:
+- Capability synthesis and rollback chains
+- Two-tier governance decisions (global plan validation + per-step checkpoints)
+- Learning system interactions (bounded exploration, hint applications)
+- Human approval workflows
 
 Next: Capabilities in 004.

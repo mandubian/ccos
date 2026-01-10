@@ -1,8 +1,8 @@
 # CCOS Capability System Architecture
 
-**Status**: Authoritative  
-**Version**: 1.0  
-**Last Updated**: 2025-11-29  
+**Status**: Authoritative (Enhanced)
+**Version**:1.1
+**Last Updated**: 2025-01-10
 **Scope**: Complete capability system including types, discovery, resolution, and lifecycle management
 
 ---
@@ -285,6 +285,101 @@ pub struct UpdateResult {
     pub breaking_changes: Vec<String>,
 }
 ```
+
+#### 4.3.1 Version Comparison Algorithm
+
+The capability system uses semantic version comparison to detect breaking changes:
+
+**Algorithm**:
+1. Parse version strings (e.g., "1.2.3" → major=1, minor=2, patch=3)
+2. Compare components in order: major > minor > patch
+3. Determine version comparison variant:
+   - `Equal`: All components match
+   - `PatchUpdate`: Only patch increases (bug fixes, non-breaking)
+   - `MinorUpdate`: Minor increases, patch ≤ previous (new features, backward-compatible)
+   - `MajorUpdate`: Major increases (potential breaking changes)
+   - `Downgrade`: Version decreases
+
+**Example Comparison**:
+| Old Version | New Version | Comparison | Type |
+|-------------|---------------|-------------|--------|
+| 1.2.3 | 1.2.4 | 1.2.3 < 1.2.4 | PatchUpdate |
+| 1.2.3 | 1.3.0 | 1.2.3 < 1.3.0 | MinorUpdate |
+| 1.2.3 | 2.0.0 | 1.2.3 < 2.0.0 | MajorUpdate |
+| 1.2.3 | 1.2.2 | 1.2.3 > 1.2.2 | Downgrade |
+
+#### 4.3.2 Breaking Change Detection Rules
+
+Breaking changes are detected when:
+
+**Schema Incompatibility**:
+- Input schema adds required fields (old clients may fail)
+- Output schema removes or renames required fields
+- Type changes that are not compatible (e.g., String → Number)
+- Optional → Required field conversion
+
+**Security Changes**:
+- Effects vector broadens (e.g., adds new `:network` effect)
+- Permissions list expands beyond original scope
+- Trust tier decreases (security concern)
+
+**Structural Changes**:
+- Major version increase without backward-compatible migration path
+- Removed capabilities or domains without deprecation notice
+
+**Breaking Change Examples**:
+```
+Version 1.0 → 2.0:
+
+Input Schema Changes (Breaking):
+  OLD: {:reviews [Review]}  // Optional list
+  NEW: {:reviews [Review!] :filter Query}  // Required + new field
+
+Output Schema Changes (Breaking):
+  OLD: {:summary String}
+  NEW: {:data {:analysis AnalysisData}}  // Structured replacement
+
+Effects Changes (Breaking):
+  OLD: effects: ["llm", "network"]
+  NEW: effects: ["llm", "network", "filesystem.write"]  // Added FS write
+```
+
+**Non-Breaking Changes**:
+```
+Version 1.0 → 1.1 (Minor):
+
+Input Schema Changes (Compatible):
+  OLD: {:query String}
+  NEW: {:query String :limit (Option Int)}  // Added optional field
+
+Output Schema Changes (Compatible):
+  OLD: {:summary String :details (Option String)}
+  NEW: {:summary String :details String :metadata (Option Map)}  // Made optional
+
+Effects Changes (Compatible):
+  OLD: effects: ["llm"]
+  NEW: effects: ["llm", "memory.read"]  // Added read-only effect
+```
+
+#### 4.3.3 Schema Compatibility Matrix
+
+| Old Schema | New Schema | Compatible | Notes |
+|------------|-------------|-------------|--------|
+| `{:a A}` | `{:a A}` | ✅ | Identical |
+| `{:a A :b (Option B)}` | `{:a A :b (Option B)}` | ✅ | Identical |
+| `{:a A :b (Option B)}` | `{:a A :b B}` | ✅ | Optional → Required (always safe) |
+| `{:a A :b B}` | `{:a A :b (Option B)}` | ❌ | Required → Optional (may break old clients) |
+| `{:a A}` | `{:a A :b (Option B)}` | ✅ | Added optional field (safe) |
+| `{:a A}` | `{:a A :b B}` | ❌ | Added required field (breaking) |
+| `{:a String}` | `{:a Number}` | ❌ | Type change (breaking) |
+| `{:a [A]}` | `{:a (Option A)}` | ❌ | Required → Optional array (breaking) |
+| `{:a Map}` | `{:a (Map<String, A)}` | ❌ | Key type change (breaking) |
+
+**Version Evolution Policy**:
+- **Patch versions**: Auto-accepted without governance review
+- **Minor versions**: Governance review if capabilities/permissions change
+- **Major versions**: Mandatory governance review, rollback plan required
+- **Downgrades**: Require explicit approval, flagged in Causal Chain
 
 Breaking changes are detected when:
 - Major version increases
