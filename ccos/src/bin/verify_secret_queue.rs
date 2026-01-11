@@ -1,6 +1,6 @@
 use ccos::approval::{
     storage_memory::InMemoryApprovalStorage,
-    types::{ApprovalCategory, ApprovalStatus},
+    types::ApprovalCategory,
     unified_queue::UnifiedApprovalQueue,
 };
 use std::sync::Arc;

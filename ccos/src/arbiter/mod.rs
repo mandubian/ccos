@@ -14,10 +14,13 @@
 //!
 //! ## Usage
 //!
+//! Note: the primary CCOS runtime path uses [`DelegatingArbiter`]. Alternate/older
+//! engines are available under [`legacy`].
+//!
 //! ```rust,no_run
 //! use ccos::arbiter::{
 //!     ArbiterConfig,
-//!     ArbiterFactory,
+//!     legacy::ArbiterFactory,
 //!     ArbiterEngine,
 //! };
 //! use ccos::intent_graph::core::IntentGraph;
@@ -45,31 +48,22 @@
 
 pub mod arbiter_config;
 pub mod arbiter_engine;
-pub mod arbiter_factory;
 pub mod delegating_arbiter;
-pub mod dummy_arbiter;
-pub mod hybrid_arbiter;
+pub mod legacy;
 pub mod learning_augmenter;
-pub mod llm_arbiter;
 pub mod llm_provider;
 pub mod plan_generation;
 pub mod prompt;
-pub mod template_arbiter;
 
 // Re-export main types for easy access
 pub use arbiter_config::ArbiterConfig;
 pub use arbiter_engine::ArbiterEngine;
-pub use arbiter_factory::ArbiterFactory;
 pub use delegating_arbiter::DelegatingArbiter;
-pub use dummy_arbiter::DummyArbiter;
-pub use hybrid_arbiter::HybridArbiter;
-pub use llm_arbiter::LlmArbiter;
 pub use llm_provider::{LlmProvider, LlmProviderConfig, LlmProviderFactory, StubLlmProvider};
 pub use plan_generation::{
     PlanGenerationProvider, PlanGenerationResult, StubPlanGenerationProvider,
 };
 pub use prompt::{PromptConfig, PromptManager};
-pub use template_arbiter::TemplateArbiter;
 
 // Re-export configuration types
 pub use arbiter_config::{

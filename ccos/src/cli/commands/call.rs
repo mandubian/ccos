@@ -1,4 +1,3 @@
-use crate::capabilities::registry::CapabilityRegistry;
 use crate::cli::CliContext;
 use crate::cli::OutputFormat;
 use crate::cli::OutputFormatter;
@@ -7,7 +6,6 @@ use clap::Args;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 #[derive(Args)]
 pub struct CallArgs {

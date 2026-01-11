@@ -404,7 +404,7 @@ async fn build_cli_modular_planner(
     let mut planner =
         ModularPlanner::new(decomposition, Box::new(composite_resolution), intent_graph)
             .with_config(config)
-            .with_delegating_arbiter(ccos.arbiter.clone());
+            .with_delegating_arbiter(ccos.cognitive_engine.clone());
 
     if options.enable_safe_exec {
         planner = planner.with_safe_executor(ccos.get_capability_marketplace());
@@ -971,7 +971,7 @@ fn resolve_plan_content(input: &str) -> RuntimeResult<ResolvedPlan> {
 }
 
 fn get_llm_config_from_env() -> RuntimeResult<LlmProviderConfig> {
-    use crate::arbiter::arbiter_config::RetryConfig;
+    use crate::cognitive_engine::config::RetryConfig;
 
     // Check for API keys
     let (provider_type, api_key, model, base_url) =
@@ -1230,7 +1230,7 @@ pub mod step_testing {
 
     /// Test tool discovery for a goal
     pub async fn test_discover(goal: &str, _verbose: bool) -> RuntimeResult<ToolDiscoveryResult> {
-        let (decomposition, resolution, _config) = build_planner_components(false).await?;
+        let (_decomposition, resolution, _config) = build_planner_components(false).await?;
 
         crate::planner::modular_planner::steps::step_discover_tools(goal, resolution.as_ref())
             .await

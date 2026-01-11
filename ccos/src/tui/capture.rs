@@ -90,7 +90,7 @@ impl Write for CaptureWriter {
     }
 }
 
-/// Thread-local capture buffer for discovery output
+// Thread-local capture buffer for discovery output
 thread_local! {
     static CAPTURE_BUFFER: std::cell::RefCell<Option<OutputBuffer>> = const { std::cell::RefCell::new(None) };
 }

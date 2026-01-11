@@ -14,7 +14,7 @@ pub struct Judgment {
 }
 
 pub struct PlanJudge {
-    // We don't store the provider here because it's managed by the GovernanceKernel's DelegatingArbiter
+    // We don't store the provider here because it's managed by the GovernanceKernel's DelegatingCognitiveEngine
 }
 
 impl PlanJudge {

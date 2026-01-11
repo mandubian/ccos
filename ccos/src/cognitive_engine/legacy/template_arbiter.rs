@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use regex::Regex;
 use std::collections::HashMap;
 
-use crate::arbiter::arbiter_config::{IntentPattern, PlanTemplate, TemplateConfig};
-use crate::arbiter::arbiter_engine::ArbiterEngine;
+use crate::cognitive_engine::config::{IntentPattern, PlanTemplate, TemplateConfig};
+use crate::cognitive_engine::engine::CognitiveEngine;
 use crate::types::{
     Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
 };
@@ -21,14 +21,14 @@ pub struct TemplateArbiter {
     config: TemplateConfig,
     intent_patterns: Vec<IntentPattern>,
     plan_templates: Vec<PlanTemplate>,
-    intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
+    intent_graph: std::sync::Arc<std::sync::Mutex<crate::types::IntentGraph>>,
 }
 
 impl TemplateArbiter {
     /// Create a new template arbiter with the given configuration
     pub fn new(
         config: TemplateConfig,
-        intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
+        intent_graph: std::sync::Arc<std::sync::Mutex<crate::types::IntentGraph>>,
     ) -> Result<Self, RuntimeError> {
         // Load intent patterns and plan templates from configuration
         let intent_patterns = config.intent_patterns.clone();
@@ -231,7 +231,7 @@ impl TemplateArbiter {
 }
 
 #[async_trait(?Send)]
-impl ArbiterEngine for TemplateArbiter {
+impl CognitiveEngine for TemplateArbiter {
     async fn natural_language_to_intent(
         &self,
         natural_language: &str,
@@ -296,7 +296,7 @@ impl ArbiterEngine for TemplateArbiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arbiter::arbiter_config::{
+    use crate::cognitive_engine::config::{
         FallbackBehavior, IntentPattern, PlanTemplate, TemplateConfig,
     };
 
@@ -356,7 +356,7 @@ mod tests {
     async fn test_template_arbiter_creation() {
         let config = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::intent_graph::IntentGraph::new().unwrap(),
+            crate::types::IntentGraph::new().unwrap(),
         ));
 
         let arbiter = TemplateArbiter::new(config, intent_graph);
@@ -367,7 +367,7 @@ mod tests {
     async fn test_intent_pattern_matching() {
         let config = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::intent_graph::IntentGraph::new().unwrap(),
+            crate::types::IntentGraph::new().unwrap(),
         ));
 
         let arbiter = TemplateArbiter::new(config, intent_graph).unwrap();
@@ -397,7 +397,7 @@ mod tests {
     async fn test_intent_generation() {
         let config = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::intent_graph::IntentGraph::new().unwrap(),
+            crate::types::IntentGraph::new().unwrap(),
         ));
 
         let arbiter = TemplateArbiter::new(config, intent_graph).unwrap();
@@ -419,7 +419,7 @@ mod tests {
     async fn test_plan_generation() {
         let config = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::intent_graph::IntentGraph::new().unwrap(),
+            crate::types::IntentGraph::new().unwrap(),
         ));
 
         let arbiter = TemplateArbiter::new(config, intent_graph).unwrap();

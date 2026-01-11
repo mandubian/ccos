@@ -29,11 +29,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use ccos::arbiter::DelegatingArbiter;
+use ccos::arbiter::DelegatingCognitiveEngine;
 use ccos::capabilities::{MCPSessionHandler, SessionPoolManager};
 use ccos::capability_marketplace::{CapabilityManifest, CapabilityMarketplace};
+use ccos::catalog::matcher::{compute_mcp_tool_score, keyword_overlap};
 use ccos::catalog::{CatalogEntryKind, CatalogFilter, CatalogService};
-use ccos::discovery::capability_matcher::{compute_mcp_tool_score, keyword_overlap};
+use ccos::config::types::AgentConfig;
 use ccos::discovery::embedding_service::EmbeddingService;
 use ccos::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 use ccos::mcp::registry::MCPRegistryClient;
@@ -41,11 +42,10 @@ use ccos::mcp::types::DiscoveredMCPTool;
 use ccos::synthesis::mcp_introspector::MCPIntrospector;
 use ccos::CCOS;
 use clap::Parser;
-use ccos::config::types::AgentConfig;
-use serde_json;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
+use serde_json;
 
 // Import Modular Planner components
 use ccos::planner::modular_planner::orchestrator::{PlanResult, TraceEvent as ModularTraceEvent};
@@ -165,7 +165,7 @@ enum TraceEvent {
 
 struct IterativePlanner {
     _ccos: Arc<CCOS>,
-    arbiter: Arc<DelegatingArbiter>,
+    arbiter: Arc<DelegatingCognitiveEngine>,
     marketplace: Arc<CapabilityMarketplace>,
     catalog: Arc<CatalogService>,
     trace: PlanningTrace,
@@ -181,7 +181,7 @@ impl IterativePlanner {
         allow_mock: bool,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let arbiter = ccos
-            .get_delegating_arbiter()
+            .get_delegating_engine()
             .ok_or::<Box<dyn Error + Send + Sync>>("Delegating arbiter not available".into())?;
         let marketplace = ccos.get_capability_marketplace();
         let catalog = ccos.get_catalog();
@@ -974,7 +974,7 @@ Extract parameter values from the goal. IMPORTANT:
         // A. Semantic Search (Local)
         let query = format!("{} {}", step.capability_hint, step.description);
         let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
-        let hits = self.catalog.search_semantic(&query, Some(&filter), 5);
+        let hits = self.catalog.search_semantic(&query, Some(&filter), 5).await;
 
         let mut local_candidates = Vec::new();
         for hit in hits {

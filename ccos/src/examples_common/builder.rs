@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::error::Error;
-use std::path::PathBuf;
+// use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::approval::UnifiedApprovalQueue;
@@ -17,6 +17,7 @@ use crate::arbiter::llm_provider::{
 };
 use crate::capabilities::{MCPSessionHandler, SessionPoolManager};
 use crate::ccos_core::CCOS;
+use crate::config::types::{AgentConfig, LlmProfile};
 use crate::discovery::embedding_service::EmbeddingService;
 use crate::intent_graph::IntentGraph;
 use crate::planner::modular_planner::decomposition::hybrid::HybridConfig;
@@ -35,7 +36,6 @@ use crate::planner::modular_planner::{
 };
 use crate::planner::CcosCatalogAdapter;
 use async_trait::async_trait;
-use crate::config::types::{AgentConfig, LlmProfile};
 use tokio::sync::Mutex as AsyncMutex;
 
 // ============================================================================
@@ -524,7 +524,7 @@ impl ModularPlannerBuilder {
             env.intent_graph.clone(),
         )
         .with_config(config)
-        .with_delegating_arbiter(env.ccos.arbiter.clone());
+        .with_delegating_arbiter(env.ccos.cognitive_engine.clone());
 
         let planner = if self.enable_safe_exec {
             if let Some(queue) = approval_queue {

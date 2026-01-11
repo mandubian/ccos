@@ -5,7 +5,9 @@
 //! - Compare against CapabilityMarketplace to identify missing capabilities
 //! - Attach metadata and emit audit events
 
-use crate::capability_marketplace::types::{CapabilityManifest, EffectType};
+use crate::capability_marketplace::types::CapabilityManifest;
+#[cfg(test)]
+use crate::capability_marketplace::types::EffectType;
 use regex::Regex;
 use rtfs::runtime::error::RuntimeResult;
 use std::collections::{HashMap, HashSet};

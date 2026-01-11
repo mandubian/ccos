@@ -1,6 +1,6 @@
 //! Discovery engine for finding capabilities (no synthesis - that's delegated to planner)
 
-use crate::arbiter::delegating_arbiter::DelegatingArbiter;
+use crate::cognitive_engine::delegating_engine::DelegatingCognitiveEngine;
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::discovery::config::DiscoveryConfig;
@@ -37,7 +37,7 @@ pub struct DiscoveryEngine {
     marketplace: Arc<CapabilityMarketplace>,
     intent_graph: Arc<Mutex<IntentGraph>>,
     /// Optional delegating arbiter for recursive synthesis
-    delegating_arbiter: Option<Arc<DelegatingArbiter>>,
+    delegating_arbiter: Option<Arc<DelegatingCognitiveEngine>>,
     /// Optional introspection cache for MCP/OpenAPI results
     introspection_cache: Option<Arc<IntrospectionCache>>,
     /// Configuration for discovery behavior
@@ -95,7 +95,7 @@ impl DiscoveryEngine {
     pub fn new_with_arbiter(
         marketplace: Arc<CapabilityMarketplace>,
         intent_graph: Arc<Mutex<IntentGraph>>,
-        delegating_arbiter: Option<Arc<DelegatingArbiter>>,
+        delegating_arbiter: Option<Arc<DelegatingCognitiveEngine>>,
     ) -> Self {
         let config = DiscoveryConfig::from_env();
         let discovery_agent = Some(Arc::new(DiscoveryAgent::new(
@@ -116,7 +116,7 @@ impl DiscoveryEngine {
     pub fn new_with_arbiter_and_agent_config(
         marketplace: Arc<CapabilityMarketplace>,
         intent_graph: Arc<Mutex<IntentGraph>>,
-        delegating_arbiter: Option<Arc<DelegatingArbiter>>,
+        delegating_arbiter: Option<Arc<DelegatingCognitiveEngine>>,
         agent_config: &crate::config::types::AgentConfig,
     ) -> Self {
         let config = DiscoveryConfig::from_agent_config(&agent_config.discovery);
@@ -337,15 +337,16 @@ impl DiscoveryEngine {
         for manifest in &all_capabilities {
             let desc_score = if let Some(ref mut emb_svc) = embedding_service {
                 // Use embedding-based matching (more accurate)
-                crate::discovery::capability_matcher::calculate_description_match_score_with_embedding_async(
+                crate::catalog::matcher::calculate_description_match_score_with_embedding_async(
                     &need.rationale,
                     &manifest.description,
                     &manifest.name,
                     Some(emb_svc),
-                ).await
+                )
+                .await
             } else {
                 // Use improved keyword-based matching with action verb awareness
-                crate::discovery::capability_matcher::calculate_description_match_score_improved(
+                crate::catalog::matcher::calculate_description_match_score_improved(
                     &need.rationale,
                     &manifest.description,
                     &manifest.name,
@@ -390,16 +391,17 @@ impl DiscoveryEngine {
             // but with lower weight since we're primarily matching on names
             let name_score = if let Some(ref mut emb_svc) = embedding_service {
                 // Use embedding-based matching if available
-                crate::discovery::capability_matcher::calculate_description_match_score_with_embedding_async(
+                crate::catalog::matcher::calculate_description_match_score_with_embedding_async(
                     &need.rationale,
                     &manifest.description,
                     &manifest.name,
                     Some(emb_svc),
-                ).await
+                )
+                .await
             } else {
                 // Use improved keyword-based matching with action verb awareness
                 // This ensures "filter" doesn't match "assign" even if they share keywords
-                crate::discovery::capability_matcher::calculate_description_match_score_improved(
+                crate::catalog::matcher::calculate_description_match_score_improved(
                     &need.rationale,
                     &manifest.description,
                     &manifest.name,
@@ -410,24 +412,22 @@ impl DiscoveryEngine {
             };
 
             // Also calculate a name-only score for comparison
-            let name_only_score =
-                crate::discovery::capability_matcher::calculate_semantic_match_score(
-                    &need.capability_class,
-                    &manifest.id,
-                    &manifest.name,
-                );
+            let name_only_score = crate::catalog::matcher::calculate_semantic_match_score(
+                &need.capability_class,
+                &manifest.id,
+                &manifest.name,
+            );
 
             // Extract action verbs to check if they match
-            let need_action_verbs =
-                crate::discovery::capability_matcher::extract_action_verbs(&need.rationale);
-            let manifest_action_verbs = crate::discovery::capability_matcher::extract_action_verbs(
-                &format!("{} {}", manifest.description, manifest.name),
+            let need_action_verbs = crate::catalog::matcher::extract_action_verbs(&need.rationale);
+            let manifest_action_verbs = crate::catalog::matcher::extract_action_verbs(&format!(
+                "{} {}",
+                manifest.description, manifest.name
+            ));
+            let action_verb_score = crate::catalog::matcher::calculate_action_verb_match_score(
+                &need_action_verbs,
+                &manifest_action_verbs,
             );
-            let action_verb_score =
-                crate::discovery::capability_matcher::calculate_action_verb_match_score(
-                    &need_action_verbs,
-                    &manifest_action_verbs,
-                );
 
             // If action verbs don't match, don't trust name-only score
             // The improved matching (name_score) already validates action verbs
@@ -1084,7 +1084,7 @@ impl DiscoveryEngine {
                                         embedding_service
                                     {
                                         // Use embedding-based matching (more accurate)
-                                        crate::discovery::capability_matcher::calculate_description_match_score_with_embedding_async(
+                                        crate::catalog::matcher::calculate_description_match_score_with_embedding_async(
                                             &need.rationale,
                                             &manifest.description,
                                             &manifest.name,
@@ -1092,7 +1092,7 @@ impl DiscoveryEngine {
                                         ).await
                                     } else {
                                         // Use improved keyword-based matching with action verb awareness
-                                        crate::discovery::capability_matcher::calculate_description_match_score_improved(
+                                        crate::catalog::matcher::calculate_description_match_score_improved(
                                             &need.rationale,
                                             &manifest.description,
                                             &manifest.name,
@@ -1156,7 +1156,7 @@ impl DiscoveryEngine {
                                         embedding_service
                                     {
                                         // Use embedding-based matching if available
-                                        crate::discovery::capability_matcher::calculate_description_match_score_with_embedding_async(
+                                        crate::catalog::matcher::calculate_description_match_score_with_embedding_async(
                                             &need.rationale,
                                             &manifest.description,
                                             &manifest.name,
@@ -1164,7 +1164,7 @@ impl DiscoveryEngine {
                                         ).await
                                     } else {
                                         // Use improved keyword-based matching with action verb awareness
-                                        crate::discovery::capability_matcher::calculate_description_match_score_improved(
+                                        crate::catalog::matcher::calculate_description_match_score_improved(
                                             &need.rationale,
                                             &manifest.description,
                                             &manifest.name,
@@ -1175,22 +1175,28 @@ impl DiscoveryEngine {
                                     };
 
                                     // Also calculate a name-only score for comparison
-                                    let name_only_score = crate::discovery::capability_matcher::calculate_semantic_match_score(
-                                        &need.capability_class,
-                                        &manifest.id,
-                                        &manifest.name,
-                                    );
+                                    let name_only_score =
+                                        crate::catalog::matcher::calculate_semantic_match_score(
+                                            &need.capability_class,
+                                            &manifest.id,
+                                            &manifest.name,
+                                        );
 
                                     // Extract action verbs to check if they match
                                     let need_action_verbs =
-                                        crate::discovery::capability_matcher::extract_action_verbs(
+                                        crate::catalog::matcher::extract_action_verbs(
                                             &need.rationale,
                                         );
                                     let manifest_action_verbs =
-                                        crate::discovery::capability_matcher::extract_action_verbs(
-                                            &format!("{} {}", manifest.description, manifest.name),
+                                        crate::catalog::matcher::extract_action_verbs(&format!(
+                                            "{} {}",
+                                            manifest.description, manifest.name
+                                        ));
+                                    let action_verb_score =
+                                        crate::catalog::matcher::calculate_action_verb_match_score(
+                                            &need_action_verbs,
+                                            &manifest_action_verbs,
                                         );
-                                    let action_verb_score = crate::discovery::capability_matcher::calculate_action_verb_match_score(&need_action_verbs, &manifest_action_verbs);
 
                                     // If action verbs don't match, don't trust name-only score
                                     // The improved matching (name_score) already validates action verbs
@@ -1257,9 +1263,7 @@ impl DiscoveryEngine {
                                 let last_part = capability_name_parts.last().unwrap_or(&"");
 
                                 let fallback_action_verbs =
-                                    crate::discovery::capability_matcher::extract_action_verbs(
-                                        &need.rationale,
-                                    );
+                                    crate::catalog::matcher::extract_action_verbs(&need.rationale);
 
                                 for manifest in &capabilities {
                                     let manifest_id_lower = manifest.id.to_lowercase();
@@ -2380,7 +2384,7 @@ impl DiscoveryEngine {
         }
 
         // Extract keywords and generate a functional description
-        let keywords = crate::discovery::capability_matcher::extract_keywords(capability_class);
+        let keywords = crate::catalog::matcher::extract_keywords(capability_class);
         if !keywords.is_empty() {
             // Try to infer function from keywords
             let action = keywords.iter().find(|k| {
@@ -2533,9 +2537,7 @@ impl DiscoveryEngine {
 
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| {
-                crate::utils::fs::get_workspace_root().join("capabilities")
-            });
+            .unwrap_or_else(|_| crate::utils::fs::get_workspace_root().join("capabilities"));
 
         // Use hierarchical structure: capabilities/mcp/<namespace>/<tool>.rtfs
         // Parse capability ID: "mcp.namespace.tool_name" or "github.issues.list"

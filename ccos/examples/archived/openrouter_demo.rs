@@ -3,7 +3,7 @@
 //! This example demonstrates how to use the LLM arbiter with OpenRouter,
 //! which provides access to multiple LLM models through a unified API.
 
-use ccos::arbiter::{ArbiterConfig, ArbiterFactory, LlmConfig, LlmProviderType};
+use ccos::arbiter::{legacy::ArbiterFactory, ArbiterConfig, LlmConfig, LlmProviderType};
 use ccos::intent_graph::IntentGraph;
 use std::sync::{Arc, Mutex};
 

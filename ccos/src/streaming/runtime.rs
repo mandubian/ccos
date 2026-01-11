@@ -1,6 +1,7 @@
 // streaming.rs
 // All stream-related types, traits, and aliases for CCOS/RTFS
 
+use crate::utils::value_conversion::json_to_rtfs_value;
 use chrono::Utc;
 use eventsource_stream::Event as SseMessage;
 use futures::StreamExt;
@@ -32,7 +33,7 @@ pub const ENV_MCP_STREAM_BEARER_TOKEN: &str = "CCOS_MCP_STREAM_BEARER_TOKEN";
 pub const ENV_MCP_STREAM_AUTO_CONNECT: &str = "CCOS_MCP_STREAM_AUTO_CONNECT";
 
 /// Streaming type for capabilities
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StreamType {
     Unidirectional,
     Bidirectional,
@@ -40,7 +41,7 @@ pub enum StreamType {
 }
 
 /// Bidirectional stream configuration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BidirectionalConfig {
     pub client_channel: String,
     pub server_channel: String,
@@ -48,7 +49,7 @@ pub struct BidirectionalConfig {
 }
 
 /// Duplex channel configuration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DuplexChannels {
     pub input_channel: String,
     pub output_channel: String,
@@ -88,8 +89,9 @@ impl std::fmt::Debug for StreamCallbacks {
 }
 
 /// Stream configuration
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StreamConfig {
+    #[serde(skip)]
     pub callbacks: Option<StreamCallbacks>,
     pub auto_reconnect: bool,
     pub max_retries: u32,
@@ -1395,43 +1397,14 @@ impl SseStreamTransport {
         }
     }
 
-    fn json_to_rtfs_value(json: JsonValue) -> Value {
-        match json {
-            JsonValue::Null => Value::Nil,
-            JsonValue::Bool(b) => Value::Boolean(b),
-            JsonValue::Number(num) => {
-                if let Some(i) = num.as_i64() {
-                    Value::Integer(i)
-                } else if let Some(f) = num.as_f64() {
-                    Value::Float(f)
-                } else {
-                    Value::String(num.to_string())
-                }
-            }
-            JsonValue::String(s) => Value::String(s),
-            JsonValue::Array(arr) => {
-                let mut vec = Vec::with_capacity(arr.len());
-                for v in arr {
-                    vec.push(Self::json_to_rtfs_value(v));
-                }
-                Value::Vector(vec)
-            }
-            JsonValue::Object(obj) => {
-                let mut map = HashMap::with_capacity(obj.len());
-                for (k, v) in obj {
-                    map.insert(rtfs::ast::MapKey::String(k), Self::json_to_rtfs_value(v));
-                }
-                Value::Map(map)
-            }
-        }
-    }
-
     fn convert_sse_message(message: &SseMessage, origin: &str) -> (Value, Value) {
         let chunk_value = if message.data.trim().is_empty() {
             Value::Nil
         } else {
             match serde_json::from_str::<JsonValue>(&message.data) {
-                Ok(json) => Self::json_to_rtfs_value(json),
+                Ok(json) => {
+                    json_to_rtfs_value(&json).unwrap_or(Value::String(message.data.clone()))
+                }
                 Err(_) => Value::String(message.data.clone()),
             }
         };
@@ -1515,7 +1488,7 @@ impl SseStreamTransport {
         let chunk_value = if text.trim().is_empty() {
             Value::Nil
         } else if let Ok(json) = serde_json::from_str::<JsonValue>(&text) {
-            Self::json_to_rtfs_value(json)
+            json_to_rtfs_value(&json)?
         } else {
             Value::String(text)
         };

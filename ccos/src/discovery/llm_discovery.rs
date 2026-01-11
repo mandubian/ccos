@@ -68,6 +68,11 @@ impl LlmDiscoveryService {
         Self { provider }
     }
 
+    /// Get reference to the underlying provider
+    pub fn provider(&self) -> &(dyn LlmProvider + Send + Sync) {
+        &*self.provider
+    }
+
     /// Analyze a user's discovery goal to extract intent and generate expanded queries
     pub async fn analyze_goal(&self, goal: &str) -> RuntimeResult<IntentAnalysis> {
         let prompt = self.build_intent_analysis_prompt(goal);
@@ -677,9 +682,159 @@ fn extract_json(response: &str) -> &str {
     trimmed
 }
 
+/// Result of LLM-based ranking of a capability
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RankedCapability {
+    /// The capability manifest
+    pub capability: crate::capability_marketplace::types::CapabilityManifest,
+    /// LLM-assigned relevance score (0.0-1.0)
+    pub score: f64,
+    /// Reasoning for the score
+    pub reasoning: String,
+}
+
+impl LlmDiscoveryService {
+    /// Rank internal capabilities based on relevance to the goal
+    pub async fn rank_capabilities(
+        &self,
+        goal: &str,
+        intent: Option<&IntentAnalysis>,
+        capabilities: Vec<crate::capability_marketplace::types::CapabilityManifest>,
+    ) -> RuntimeResult<Vec<RankedCapability>> {
+        if capabilities.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Filter obviously irrelevant ones to save tokens (optional optimization)
+        // For now, take up to 20 candidates
+        let candidates: Vec<_> = capabilities.into_iter().take(20).collect();
+
+        let prompt = self.build_capability_ranking_prompt(goal, intent, &candidates);
+        let response = self.provider.generate_text(&prompt).await?;
+
+        self.parse_capability_ranking_response(&response, candidates)
+    }
+
+    fn build_capability_ranking_prompt(
+        &self,
+        goal: &str,
+        intent: Option<&IntentAnalysis>,
+        candidates: &[crate::capability_marketplace::types::CapabilityManifest],
+    ) -> String {
+        let intent_context = if let Some(i) = intent {
+            format!(
+                r#"
+Intent Analysis:
+- Action: {}
+- Target: {}
+- Keywords: {}
+"#,
+                i.primary_action,
+                i.target_object,
+                i.domain_keywords.join(", ")
+            )
+        } else {
+            String::new()
+        };
+
+        let candidates_json: Vec<serde_json::Value> = candidates
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                serde_json::json!({
+                    "index": i,
+                    "id": c.id,
+                    "name": c.name,
+                    "description": c.description,
+                })
+            })
+            .collect();
+
+        format!(
+            r#"You are an expert at selecting the right software capabilities for a user's goal.
+
+User Goal: "{goal}"
+{intent_context}
+
+Available Capabilities:
+{candidates}
+
+Rank these capabilities by relevance to the goal.
+Respond with ONLY a JSON array of objects:
+[
+  {{
+    "index": 0,
+    "score": 0.95,
+    "reasoning": "Brief explanation"
+  }}
+]
+
+Scoring:
+- 0.9-1.0: Perfect match (e.g. goal is "get bitcoin price" and capability is "get_bitcoin_price")
+- 0.7-0.8: Good match (relevant domain/action)
+- 0.1-0.4: Irrelevant
+
+Respond with ONLY the JSON array."#,
+            goal = goal,
+            intent_context = intent_context,
+            candidates = serde_json::to_string_pretty(&candidates_json).unwrap_or_default()
+        )
+    }
+
+    fn parse_capability_ranking_response(
+        &self,
+        response: &str,
+        candidates: Vec<crate::capability_marketplace::types::CapabilityManifest>,
+    ) -> RuntimeResult<Vec<RankedCapability>> {
+        let json_str = extract_json(response);
+
+        #[derive(serde::Deserialize)]
+        struct RankingEntry {
+            index: usize,
+            score: f64,
+            reasoning: String,
+        }
+
+        let rankings: Vec<RankingEntry> = serde_json::from_str(json_str)
+            .map_err(|e| {
+                log::warn!("Failed to parse capability ranking: {}", e);
+                RuntimeError::Generic(format!("LLM response parsing failed: {}", e))
+            })
+            .unwrap_or_default(); // Fallback to empty rankings if parsing fails entirely, or handle better
+
+        let mut ranked = Vec::new();
+        for (i, cap) in candidates.into_iter().enumerate() {
+            if let Some(r) = rankings.iter().find(|r| r.index == i) {
+                ranked.push(RankedCapability {
+                    capability: cap,
+                    score: r.score,
+                    reasoning: r.reasoning.clone(),
+                });
+            } else {
+                // If not ranked, assume low score
+                ranked.push(RankedCapability {
+                    capability: cap,
+                    score: 0.1,
+                    reasoning: "LLM did not rank this item".to_string(),
+                });
+            }
+        }
+
+        // Sort descending
+        ranked.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(ranked)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arbiter::llm_provider::LlmProvider;
+    use rtfs::runtime::RuntimeError;
 
     #[test]
     fn test_extract_json_simple() {

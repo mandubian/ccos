@@ -1,4 +1,4 @@
-use crate::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
+use crate::capability_marketplace::mcp_discovery::MCPServerConfig;
 use crate::capability_marketplace::types::{CapabilityDiscovery, CapabilityManifest};
 use async_trait::async_trait;
 use rtfs::runtime::error::RuntimeResult;

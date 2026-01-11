@@ -12,6 +12,7 @@
 //! - Responses are structured JSON extracted from documentation text
 
 use crate::arbiter::llm_provider::LlmProvider;
+use crate::synthesis::introspection::auth_injector::{AuthConfig, AuthType};
 use crate::synthesis::introspection::{
     APIIntrospectionResult, AuthRequirements, DiscoveredEndpoint, EndpointParameter,
 };
@@ -404,8 +405,8 @@ If no API links are found, return empty arrays. Only include links that are clea
         Ok(text.trim().to_string())
     }
 
-    /// Parse documentation using LLM
-    async fn parse_with_llm(
+    /// Parse documentation using LLM (public)
+    pub async fn parse_with_llm(
         &self,
         text_content: &str,
         api_domain: &str,
@@ -422,8 +423,8 @@ If no API links are found, return empty arrays. Only include links that are clea
         self.parse_llm_response(&llm_response, api_domain)
     }
 
-    /// Create a structured prompt for API endpoint extraction
-    fn create_extraction_prompt(&self, api_domain: &str, text_content: &str) -> String {
+    /// Create a structured prompt for API endpoint extraction (public)
+    pub fn create_extraction_prompt(&self, api_domain: &str, text_content: &str) -> String {
         format!(
             r#"You are an API documentation parser. Extract REST API endpoint information from the following documentation text.
 
@@ -464,7 +465,11 @@ Extract the following information in JSON format:
   }}
 }}
 
-Only include endpoints that are clearly documented. If authentication details are unclear, set auth to null.
+Guidelines:
+- auth_type values: bearer, api_key, basic, oauth2, custom
+- location values: header, query, cookie
+- Only include endpoints that are clearly documented.
+- If authentication details are unclear, set auth to null.
 Respond with ONLY the JSON object, no additional text."#,
             api_domain, text_content
         )
@@ -634,5 +639,54 @@ Respond with ONLY the JSON object, no additional text."#,
 impl Default for LlmDocParser {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl TryFrom<ExtractedAuth> for AuthConfig {
+    type Error = rtfs::runtime::error::RuntimeError;
+
+    fn try_from(auth: ExtractedAuth) -> Result<Self, Self::Error> {
+        let auth_type_str = auth.auth_type.to_lowercase();
+        let auth_type = match auth_type_str.as_str() {
+            "apikey" | "api_key" => AuthType::ApiKey,
+            "bearer" | "token" => AuthType::Bearer,
+            "oauth2" | "oauth" => AuthType::OAuth2,
+            "basic" => AuthType::Basic,
+            _ => AuthType::Custom,
+        };
+
+        // Determine if it's in header or query based on location string
+        let in_header = if auth.location.to_lowercase().contains("header") {
+            Some(true)
+        } else if auth.location.to_lowercase().contains("query") {
+            Some(false)
+        } else {
+            // Default to header for most auth types
+            Some(true)
+        };
+
+        let header_name = if in_header == Some(true) && !auth.param_name.is_empty() {
+            Some(auth.param_name.clone())
+        } else {
+            None
+        };
+
+        Ok(AuthConfig {
+            auth_type,
+            provider: "default".to_string(),
+            key_location: Some(auth.location),
+            in_header,
+            header_name,
+            header_prefix: None,
+            username_param: None,
+            password_param: None,
+            env_var: if !auth.env_var_suggestion.is_empty() {
+                Some(auth.env_var_suggestion)
+            } else {
+                None
+            },
+            required: true,
+            is_secret: true,
+        })
     }
 }

@@ -584,7 +584,7 @@ mod async_tests {
         assert!(result.is_ok());
 
         // Verify it's in the catalog
-        let results = catalog.search_keyword("test_tool", None, 10);
+        let results = catalog.search_keyword("test_tool", None, 10).await;
         assert!(
             !results.is_empty(),
             "Capability should be indexed in catalog"
@@ -704,7 +704,7 @@ mod integration_tests {
         assert!(caps.iter().any(|c| c.id == "mcp.test-server.test_tool"));
 
         // 6. Verify in catalog
-        let search_results = catalog.search_keyword("test_tool", None, 10);
+        let search_results = catalog.search_keyword("test_tool", None, 10).await;
         assert!(!search_results.is_empty());
     }
 

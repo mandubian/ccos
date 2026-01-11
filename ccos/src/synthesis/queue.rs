@@ -8,7 +8,7 @@ use chrono::Utc;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::utils::fs::get_workspace_root;
 
@@ -255,6 +255,3 @@ impl PendingPlanQueue {
         Ok(items)
     }
 }
-
-
-

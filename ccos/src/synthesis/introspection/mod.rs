@@ -23,7 +23,7 @@ pub use api_introspector::{
     EndpointParameter, RateLimitInfo,
 };
 pub use apis_guru::{ApisGuruClient, ApisGuruSearchResult};
-pub use auth_injector::{AuthInjector, AuthType};
+pub use auth_injector::{AuthConfig, AuthInjector, AuthType};
 pub use known_apis::KnownApisRegistry;
 pub use llm_doc_parser::{DiscoveredApiLink, LlmDocParser, LlmLinkDiscoveryResponse};
 pub use mcp_introspector::MCPIntrospector;

@@ -1,7 +1,6 @@
 // Core types for DialoguePlanner
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::time::Instant;
 
 /// Unique identifier for a dialogue session

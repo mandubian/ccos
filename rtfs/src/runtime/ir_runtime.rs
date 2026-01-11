@@ -154,19 +154,6 @@ impl IrRuntime {
             IT::Symbol => TypeExpr::Primitive(PrimitiveType::Symbol),
             IT::Any => TypeExpr::Any,
             IT::Never => TypeExpr::Never,
-            IT::TypeVar(_name) => {
-                // Type variables are not representable in AST TypeExpr
-                // For runtime validation, treat as Any to avoid errors
-                TypeExpr::Any
-            }
-            IT::ParametricMap { key_type, value_type } => {
-                // Parametric maps are representable in AST TypeExpr now.
-                // We preserve them so runtime validation can enforce key/value types.
-                TypeExpr::ParametricMap {
-                    key_type: Box::new(Self::ir_to_type_expr(key_type)),
-                    value_type: Box::new(Self::ir_to_type_expr(value_type)),
-                }
-            }
             IT::Vector(elem) => TypeExpr::Vector(Box::new(Self::ir_to_type_expr(elem))),
             IT::List(elem) => {
                 // Map IR List to Vector type for validation purposes
@@ -175,17 +162,10 @@ impl IrRuntime {
             IT::Tuple(types) => {
                 TypeExpr::Tuple(types.iter().map(|t| Self::ir_to_type_expr(t)).collect())
             }
-            IT::Map { entries, wildcard } => TypeExpr::Map {
-                entries: entries
-                    .iter()
-                    .map(|e| crate::ast::MapTypeEntry {
-                        key: e.key.clone(),
-                        value_type: Box::new(Self::ir_to_type_expr(&e.value_type)),
-                        optional: e.optional,
-                    })
-                    .collect(),
-                wildcard: wildcard.as_ref().map(|w| Box::new(Self::ir_to_type_expr(w))),
-            },
+            IT::Map { .. } => {
+                // Simplify: treat as Any for now; extend if needed
+                TypeExpr::Any
+            }
             IT::Function {
                 param_types,
                 variadic_param_type,
@@ -312,30 +292,9 @@ impl IrRuntime {
                 Ok(ExecutionOutcome::Complete(val))
             }
             IrNode::VariableDef {
-                name,
-                type_annotation,
-                init_expr,
-                ..
+                name, init_expr, ..
             } => match self.execute_node(init_expr, env, false, module_registry)? {
                 ExecutionOutcome::Complete(value_to_assign) => {
-                    if let Some(expected_ir_t) = type_annotation {
-                        let expected_texpr = Self::ir_to_type_expr(expected_ir_t);
-                        let ctx = VerificationContext::external_data(&format!("def:{}", name));
-                        self.type_validator
-                            .validate_with_config(
-                                &value_to_assign,
-                                &expected_texpr,
-                                &self.type_config,
-                                &ctx,
-                            )
-                            .map_err(|e| {
-                                RuntimeError::TypeValidationError(format!(
-                                    "def {}: {}",
-                                    name,
-                                    e
-                                ))
-                            })?;
-                    }
                     env.define(name.clone(), value_to_assign);
                     Ok(ExecutionOutcome::Complete(Value::Nil))
                 }
@@ -573,27 +532,6 @@ impl IrRuntime {
                                     module_registry,
                                 )? {
                                     ExecutionOutcome::Complete(value) => {
-                                        if let Some(expected_ir_t) = &binding.type_annotation {
-                                            let expected_texpr = Self::ir_to_type_expr(expected_ir_t);
-                                            let ctx = VerificationContext::external_data(&format!(
-                                                "let:{}",
-                                                name
-                                            ));
-                                            self.type_validator
-                                                .validate_with_config(
-                                                    &value,
-                                                    &expected_texpr,
-                                                    &self.type_config,
-                                                    &ctx,
-                                                )
-                                                .map_err(|e| {
-                                                    RuntimeError::TypeValidationError(format!(
-                                                        "let {}: {}",
-                                                        name,
-                                                        e
-                                                    ))
-                                                })?;
-                                        }
                                         env.define(name.clone(), value)
                                     }
                                     ExecutionOutcome::RequiresHost(host_call) => {
@@ -618,23 +556,6 @@ impl IrRuntime {
                                 module_registry,
                             )? {
                                 ExecutionOutcome::Complete(value) => {
-                                    if let Some(expected_ir_t) = &binding.type_annotation {
-                                        let expected_texpr = Self::ir_to_type_expr(expected_ir_t);
-                                        let ctx = VerificationContext::external_data("let:destructure");
-                                        self.type_validator
-                                            .validate_with_config(
-                                                &value,
-                                                &expected_texpr,
-                                                &self.type_config,
-                                                &ctx,
-                                            )
-                                            .map_err(|e| {
-                                                RuntimeError::TypeValidationError(format!(
-                                                    "let destructure: {}",
-                                                    e
-                                                ))
-                                            })?;
-                                    }
                                     self.execute_destructure(
                                         pattern,
                                         &value,
@@ -664,23 +585,6 @@ impl IrRuntime {
                                 module_registry,
                             )? {
                                 ExecutionOutcome::Complete(value) => {
-                                    if let Some(expected_ir_t) = &binding.type_annotation {
-                                        let expected_texpr = Self::ir_to_type_expr(expected_ir_t);
-                                        let ctx = VerificationContext::external_data("let:binding");
-                                        self.type_validator
-                                            .validate_with_config(
-                                                &value,
-                                                &expected_texpr,
-                                                &self.type_config,
-                                                &ctx,
-                                            )
-                                            .map_err(|e| {
-                                                RuntimeError::TypeValidationError(format!(
-                                                    "let binding: {}",
-                                                    e
-                                                ))
-                                            })?;
-                                    }
                                     // Could add more specific handling here if needed
                                     let _ = value;
                                 }

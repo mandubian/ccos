@@ -463,7 +463,7 @@ pub async fn register_learning_capabilities(
 pub async fn register_llm_learning_capabilities(
     marketplace: Arc<CapabilityMarketplace>,
     causal_chain: Arc<Mutex<crate::causal_chain::CausalChain>>,
-    arbiter: Arc<crate::arbiter::DelegatingArbiter>,
+    arbiter: Arc<crate::cognitive_engine::DelegatingCognitiveEngine>,
 ) -> Result<(), RuntimeError> {
     let chain_clone = causal_chain.clone();
     let arbiter_clone = arbiter.clone();
@@ -1025,7 +1025,7 @@ pub async fn register_apply_fix_capability(
                 let _mp = mp_clone.clone(); // Reserved for future: triggering synthesis
                 move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
                     let args_clone = args.clone();
-                    let chain = chain.clone();
+                    let _chain = chain.clone();
                     let wm = wm.clone();
                     let _mp = _mp.clone();
                     async move {

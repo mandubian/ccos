@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use crate::agents::identity::AgentConstraints;
+use crate::capability_marketplace::types::AgentConstraints;
 use crate::approval::types::{ApprovalCategory, RiskAssessment, RiskLevel};
 use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
 use crate::capability_marketplace::CapabilityManifest;

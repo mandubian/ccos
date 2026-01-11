@@ -4,7 +4,7 @@
 //! tool hints. The LLM focuses on WHAT needs to be done, not HOW.
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 
 use super::{DecompositionContext, DecompositionError, DecompositionResult, DecompositionStrategy};

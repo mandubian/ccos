@@ -56,17 +56,26 @@ pub struct HttpTransportState {
     /// Approval queue for secrets and other approvals
     pub approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
     pub marketplace: Option<Arc<CapabilityMarketplace>>,
+    /// Broadcast channel for shutdown notification
+    pub shutdown_tx: broadcast::Sender<()>,
 }
 
 impl HttpTransportState {
     pub fn new(server: MCPServer) -> Self {
+        let (shutdown_tx, _) = broadcast::channel(1);
         Self {
             server: Arc::new(server),
             sessions: RwLock::new(HashMap::new()),
             broadcasters: RwLock::new(HashMap::new()),
             approval_queue: None,
             marketplace: None,
+            shutdown_tx,
         }
+    }
+
+    /// Notify all listeners that the server is shutting down
+    pub fn shutdown(&self) {
+        let _ = self.shutdown_tx.send(());
     }
 
     pub fn with_approval_queue(mut self, queue: UnifiedApprovalQueue<FileApprovalStorage>) -> Self {
@@ -193,7 +202,7 @@ pub async fn run_http_transport_with_approvals(
             "/api/approvals/:id/reapprove",
             post(handle_api_approval_reapprove),
         )
-        .with_state(state);
+        .with_state(state.clone());
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     eprintln!("Starting CCOS MCP server on http://{}/mcp", addr);
@@ -204,8 +213,12 @@ pub async fn run_http_transport_with_approvals(
     eprintln!("  GET /api/approvals - List pending approvals (JSON)");
 
     let listener = TcpListener::bind(addr).await?;
+    let transport_state = state.clone();
     axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            transport_state.shutdown();
+        })
         .await?;
 
     eprintln!("CCOS MCP server stopped");
@@ -390,25 +403,39 @@ async fn handle_get(State(state): State<Arc<HttpTransportState>>, headers: Heade
 
     // Create SSE stream using futures::stream::unfold
     let rx = broadcaster.subscribe();
-    let stream = unfold(rx, |mut rx| async move {
-        loop {
-            match rx.recv().await {
-                Ok(msg) => {
-                    let data = serde_json::to_string(&msg).unwrap_or_default();
-                    let event = Event::default().event("message").data(data);
-                    return Some((Ok::<_, Infallible>(event), rx));
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    // Client is slow, skip missed messages
-                    continue;
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    // Channel closed, end stream
-                    return None;
+    let shutdown_rx = state.shutdown_tx.subscribe();
+
+    let stream = unfold(
+        (rx, shutdown_rx, session_id.clone()),
+        |(mut rx, mut shutdown_rx, sid)| async move {
+            loop {
+                let sid_clone = sid.clone();
+                tokio::select! {
+                    msg = rx.recv() => {
+                        match msg {
+                            Ok(msg) => {
+                                let data = serde_json::to_string(&msg).unwrap_or_default();
+                                let event = Event::default().event("message").data(data);
+                                return Some((Ok::<_, Infallible>(event), (rx, shutdown_rx, sid)));
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => {
+                                // Client is slow, skip missed messages
+                                continue;
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                // Channel closed, end stream
+                                return None;
+                            }
+                        }
+                    }
+                    _ = shutdown_rx.recv() => {
+                        eprintln!("[http_transport] Shutdown received, closing SSE stream for session {}", sid_clone);
+                        return None;
+                    }
                 }
             }
-        }
-    });
+        },
+    );
 
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
@@ -542,10 +569,33 @@ async fn handle_approvals_html(State(state): State<Arc<HttpTransportState>>) -> 
     Html(html)
 }
 
+/// Check for X-Admin-Token header if CCOS_ADMIN_TOKEN is set
+fn check_admin_token(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {
+    let expected_token = std::env::var("CCOS_ADMIN_TOKEN").unwrap_or_default();
+    if expected_token.is_empty() {
+        return Ok(()); // Security disabled if no token set
+    }
+
+    let token = headers
+        .get("X-Admin-Token")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim());
+
+    match token {
+        Some(t) if t == expected_token => Ok(()),
+        _ => Err((StatusCode::UNAUTHORIZED, "Invalid or missing X-Admin-Token")),
+    }
+}
+
 /// GET /api/approvals - JSON list of all approvals (with status)
 async fn handle_api_approvals_list(
     State(state): State<Arc<HttpTransportState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if let Err((status, msg)) = check_admin_token(&headers) {
+        return (status, Json(json!({ "error": msg }))).into_response();
+    }
+
     // Get all approvals (not just pending)
     let all_approvals = if let Some(ref queue) = state.approval_queue {
         queue
@@ -646,7 +696,7 @@ async fn handle_api_approvals_list(
         })
         .collect();
 
-    Json(json!({ "approvals": approvals }))
+    Json(json!({ "approvals": approvals })).into_response()
 }
 
 /// Request body for approval with secret
@@ -664,10 +714,47 @@ struct ApproveSecretRequest {
 async fn handle_api_approval_approve(
     State(state): State<Arc<HttpTransportState>>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<ApproveSecretRequest>,
 ) -> impl IntoResponse {
+    if let Err((status, msg)) = check_admin_token(&headers) {
+        return (status, Json(json!({ "error": msg }))).into_response();
+    }
+
     if let Some(ref queue) = state.approval_queue {
         // Note: SecretRequired handling was removed as the feature was deprecated
+
+        // NEW: Handle secret saving
+        if let (Some(req), Some(val)) = (
+            queue.get(&id).await.ok().flatten(),
+            body.secret_value.clone(),
+        ) {
+            if let crate::approval::types::ApprovalCategory::SecretRequired {
+                secret_type, ..
+            } = req.category
+            {
+                let workspace_root = crate::utils::fs::get_workspace_root();
+                // Use SecretStore to save
+                match crate::secrets::SecretStore::new(Some(workspace_root)) {
+                    Ok(mut store) => {
+                        if let Err(e) = store.set_local(&secret_type, val) {
+                            log::error!("Failed to save secret: {}", e);
+                            return Json(
+                                json!({ "error": format!("Failed to save secret: {}", e) }),
+                            )
+                            .into_response();
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load secret store: {}", e);
+                        return Json(
+                            json!({ "error": format!("Failed to load secret store: {}", e) }),
+                        )
+                        .into_response();
+                    }
+                }
+            }
+        }
 
         // Approve the request
         match queue
@@ -718,18 +805,20 @@ async fn handle_api_approval_approve(
                     }
                 }
 
-                (StatusCode::OK, Json(json!({ "success": true, "id": id })))
+                (StatusCode::OK, Json(json!({ "success": true, "id": id }))).into_response()
             }
             Err(e) => (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": e.to_string() })),
-            ),
+            )
+                .into_response(),
         }
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "Approval queue not configured" })),
         )
+            .into_response()
     }
 }
 
@@ -743,24 +832,31 @@ struct RejectRequest {
 async fn handle_api_approval_reject(
     State(state): State<Arc<HttpTransportState>>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<RejectRequest>,
 ) -> impl IntoResponse {
+    if let Err((status, msg)) = check_admin_token(&headers) {
+        return (status, Json(json!({ "error": msg }))).into_response();
+    }
+
     if let Some(ref queue) = state.approval_queue {
         match queue
             .reject(&id, ApprovalAuthority::User("web".to_string()), body.reason)
             .await
         {
-            Ok(()) => (StatusCode::OK, Json(json!({ "success": true, "id": id }))),
+            Ok(()) => (StatusCode::OK, Json(json!({ "success": true, "id": id }))).into_response(),
             Err(e) => (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": e.to_string() })),
-            ),
+            )
+                .into_response(),
         }
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "Approval queue not configured" })),
         )
+            .into_response()
     }
 }
 
@@ -768,7 +864,12 @@ async fn handle_api_approval_reject(
 async fn handle_api_approval_reapprove(
     State(state): State<Arc<HttpTransportState>>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if let Err((status, msg)) = check_admin_token(&headers) {
+        return (status, Json(json!({ "error": msg }))).into_response();
+    }
+
     if let Some(ref queue) = state.approval_queue {
         // Re-approve by calling approve on the existing request
         match queue
@@ -828,17 +929,20 @@ async fn handle_api_approval_reapprove(
                         json!({ "success": true, "id": id, "message": "Re-approved successfully" }),
                     ),
                 )
+                    .into_response()
             }
             Err(e) => (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": e.to_string() })),
-            ),
+            )
+                .into_response(),
         }
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "Approval queue not configured" })),
         )
+            .into_response()
     }
 }
 

@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::arbiter::DelegatingArbiter;
+use crate::cognitive_engine::DelegatingCognitiveEngine;
 
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
@@ -259,8 +259,8 @@ pub struct GovernanceKernel {
     orchestrator: Arc<Orchestrator>,
     intent_graph: Arc<Mutex<IntentGraph>>,
     constitution: Constitution,
-    /// Optional reference to the DelegatingArbiter for centralized LLM access
-    delegating_arbiter: RwLock<Option<Arc<DelegatingArbiter>>>,
+    /// Optional reference to the DelegatingCognitiveEngine for centralized LLM access
+    delegating_arbiter: RwLock<Option<Arc<DelegatingCognitiveEngine>>>,
     plan_judge: PlanJudge,
 }
 
@@ -276,8 +276,8 @@ impl GovernanceKernel {
         }
     }
 
-    /// Set the DelegatingArbiter for centralized LLM access (called after construction)
-    pub fn set_arbiter(&self, arbiter: Arc<DelegatingArbiter>) {
+    /// Set the DelegatingCognitiveEngine for centralized LLM access (called after construction)
+    pub fn set_arbiter(&self, arbiter: Arc<DelegatingCognitiveEngine>) {
         if let Ok(mut guard) = self.delegating_arbiter.write() {
             *guard = Some(arbiter);
         }
@@ -749,7 +749,7 @@ impl GovernanceKernel {
                 }
 
                 // --- LLM Dialog Repair Loop ---
-                // Uses DelegatingArbiter for centralized LLM access
+                // Uses DelegatingCognitiveEngine for centralized LLM access
                 let arbiter_opt = {
                     self.delegating_arbiter
                         .read()
@@ -1461,7 +1461,7 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
             .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
 
-        let root_intent = graph.get_intent(&intent_id).ok_or_else(|| {
+        let _root_intent = graph.get_intent(&intent_id).ok_or_else(|| {
             RuntimeError::Generic(format!("Intent not found: {}", root_intent_id))
         })?;
 
@@ -1568,7 +1568,7 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
         use rtfs::runtime::module_runtime::ModuleRegistry;
         use rtfs::runtime::pure_host::create_pure_host;
         use rtfs::runtime::security::RuntimeContext;
-        use rtfs::runtime::values::Value as RtfsValue;
+
         use serde_json::Value as JsonValue;
 
         // Helper function to parse RTFS or JSON strings

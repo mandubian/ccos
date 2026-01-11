@@ -8,16 +8,21 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::arbiter::arbiter_config::{
+use super::config::{
     AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig, RetryConfig,
 };
-use crate::arbiter::arbiter_engine::ArbiterEngine;
-use crate::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
-use crate::arbiter::plan_generation::{
+use super::delegation_analysis::{DelegationAnalysis, DelegationAnalyzer};
+use super::engine::CognitiveEngine;
+use super::intent_parsing::{
+    extract_intent, parse_json_intent_response, parse_llm_intent_response,
+};
+use super::llm_provider::{LlmProvider, LlmProviderFactory};
+use super::plan_generation::{
     LlmRtfsPlanGenerationProvider, PlanGenerationProvider, PlanGenerationResult,
 };
-use crate::arbiter::prompt::{FilePromptStore, PromptManager};
-use crate::capability_marketplace::types::{CapabilityKind, CapabilityQuery};
+use super::prompt::{FilePromptStore, PromptManager};
+
+use crate::capability_marketplace::types::{CapabilityKind, CapabilityQuery, CapabilityManifest};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::delegation_keys::{agent, generation};
 use crate::synthesis::artifact_generator::generate_planner_via_arbiter;
@@ -25,11 +30,10 @@ use crate::synthesis::{schema_builder::ParamSchema, InteractionTurn};
 use crate::types::{
     ExecutionResult, Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
 };
-use regex;
-use rtfs::runtime::error::RuntimeError;
-use rtfs::runtime::values::Value;
 
-use rtfs::ast::TopLevel;
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+
+use rtfs::runtime::values::Value;
 use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -47,288 +51,68 @@ CRITICAL OUTPUT RULES (RTFS PLANNING):
 7. AVOID parallel expressions containing (call :ccos.user.ask "...") - user interactions must be sequential.
 "#;
 
-/// Extract the first top-level `(intent …)` s-expression from the given text.
-/// Returns `None` if no well-formed intent block is found.
-fn extract_intent(text: &str) -> Option<String> {
-    // Locate the starting position of the "(intent" keyword
-    let start = text.find("(intent")?;
-
-    // Scan forward and track parenthesis depth to find the matching ')'
-    let mut depth = 0usize;
-    for (idx, ch) in text[start..].char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth = depth.saturating_sub(1);
-                // When we return to depth 0 we've closed the original "(intent"
-                if depth == 0 {
-                    let end = start + idx + 1; // inclusive of current ')'
-                    return Some(text[start..end].to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Replace #rx"pattern" literals with plain "pattern" string literals so the current
-/// grammar (which lacks regex literals) can parse the intent.
-fn sanitize_regex_literals(text: &str) -> String {
-    // Matches #rx"..." with minimal escaping (no nested quotes inside pattern)
-    let re = regex::Regex::new(r#"#rx\"([^\"]*)\""#).unwrap();
-    re.replace_all(text, |caps: &regex::Captures| format!("\"{}\"", &caps[1]))
-        .into_owned()
-}
-
-/// Convert parser Literal to runtime Value (basic subset)
-fn lit_to_val(lit: &rtfs::ast::Literal) -> Value {
-    use rtfs::ast::Literal as Lit;
-    match lit {
-        Lit::String(s) => Value::String(s.clone()),
-        Lit::Integer(i) => Value::Integer(*i),
-        Lit::Float(f) => Value::Float(*f),
-        Lit::Boolean(b) => Value::Boolean(*b),
-        _ => Value::Nil,
-    }
-}
-
-fn expr_to_value(expr: &rtfs::ast::Expression) -> Value {
-    use rtfs::ast::Expression as E;
-    match expr {
-        E::Literal(lit) => lit_to_val(lit),
-        E::Map(m) => {
-            let mut map = std::collections::HashMap::new();
-            for (k, v) in m {
-                map.insert(k.clone(), expr_to_value(v));
-            }
-            Value::Map(map)
-        }
-        E::Vector(vec) | E::List(vec) => {
-            let vals = vec.iter().map(expr_to_value).collect();
-            if matches!(expr, E::Vector(_)) {
-                Value::Vector(vals)
-            } else {
-                Value::List(vals)
-            }
-        }
-        E::Symbol(s) => Value::Symbol(rtfs::ast::Symbol(s.0.clone())),
-        E::FunctionCall { callee, arguments } => {
-            // Convert function calls to a list representation for storage
-            let mut func_list = vec![expr_to_value(callee)];
-            func_list.extend(arguments.iter().map(expr_to_value));
-            Value::List(func_list)
-        }
-        E::Fn(fn_expr) => {
-            // Convert fn expressions to a list representation: (fn params body...)
-            let mut fn_list = vec![Value::Symbol(rtfs::ast::Symbol("fn".to_string()))];
-
-            // Add parameters as a vector
-            let mut params = Vec::new();
-            for param in &fn_expr.params {
-                params.push(Value::Symbol(rtfs::ast::Symbol(format!(
-                    "{:?}",
-                    param.pattern
-                ))));
-            }
-            fn_list.push(Value::Vector(params));
-
-            // Add body expressions
-            for body_expr in &fn_expr.body {
-                fn_list.push(expr_to_value(body_expr));
-            }
-
-            Value::List(fn_list)
-        }
-        _ => Value::Nil,
-    }
-}
-
-fn map_expr_to_string_value(
-    expr: &rtfs::ast::Expression,
-) -> Option<std::collections::HashMap<String, Value>> {
-    use rtfs::ast::{Expression as E, MapKey};
-    if let E::Map(m) = expr {
-        let mut out = std::collections::HashMap::new();
-        for (k, v) in m {
-            let key_str = match k {
-                MapKey::Keyword(k) => k.0.clone(),
-                MapKey::String(s) => s.clone(),
-                MapKey::Integer(i) => i.to_string(),
-            };
-            out.insert(key_str, expr_to_value(v));
-        }
-        Some(out)
-    } else {
-        None
-    }
-}
-
-fn intent_from_function_call(expr: &rtfs::ast::Expression) -> Option<Intent> {
-    use rtfs::ast::{Expression as E, Literal, Symbol};
-
-    let E::FunctionCall { callee, arguments } = expr else {
-        return None;
-    };
-    let E::Symbol(Symbol(sym)) = &**callee else {
-        return None;
-    };
-    if sym != "intent" {
-        return None;
-    }
-    if arguments.is_empty() {
-        return None;
-    }
-
-    // The first argument is the intent name/type, can be either a symbol or string literal
-    let name = if let E::Symbol(Symbol(name_sym)) = &arguments[0] {
-        name_sym.clone()
-    } else if let E::Literal(Literal::String(name_str)) = &arguments[0] {
-        name_str.clone()
-    } else {
-        return None; // First argument must be a symbol or string
-    };
-
-    let mut properties = HashMap::new();
-    let mut args_iter = arguments[1..].chunks_exact(2);
-    while let Some([key_expr, val_expr]) = args_iter.next() {
-        if let E::Literal(Literal::Keyword(k)) = key_expr {
-            properties.insert(k.0.clone(), val_expr);
-        }
-    }
-
-    let original_request = properties
-        .get("original-request")
-        .and_then(|expr| {
-            if let E::Literal(Literal::String(s)) = expr {
-                Some(s.clone())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_default();
-
-    let goal = properties
-        .get("goal")
-        .and_then(|expr| {
-            if let E::Literal(Literal::String(s)) = expr {
-                Some(s.clone())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| original_request.clone());
-
-    let mut intent = Intent::new(goal).with_name(name);
-
-    if let Some(expr) = properties.get("constraints") {
-        if let Some(m) = map_expr_to_string_value(expr) {
-            intent.constraints = m;
-        }
-    }
-
-    if let Some(expr) = properties.get("preferences") {
-        if let Some(m) = map_expr_to_string_value(expr) {
-            intent.preferences = m;
-        }
-    }
-
-    if let Some(expr) = properties.get("success-criteria") {
-        let value = expr_to_value(expr);
-        intent.success_criteria = Some(value);
-    }
-
-    Some(intent)
-}
-
-/// Delegating arbiter that combines LLM reasoning with agent delegation
-pub struct DelegatingArbiter {
+/// Delegating Cognitive Engine that combines LLM reasoning with agent delegation
+pub struct DelegatingCognitiveEngine {
     llm_config: LlmConfig,
     delegation_config: DelegationConfig,
     llm_provider: Arc<dyn LlmProvider>,
     capability_marketplace: Arc<CapabilityMarketplace>,
-    intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
-    adaptive_threshold_calculator: Option<crate::adaptive_threshold::AdaptiveThresholdCalculator>,
+    intent_graph: std::sync::Arc<std::sync::Mutex<crate::types::IntentGraph>>,
+    delegation_analyzer: DelegationAnalyzer,
     prompt_manager: PromptManager<FilePromptStore>,
     /// Optional WorkingMemory for learning-driven plan augmentation
     working_memory: Option<Arc<std::sync::Mutex<crate::working_memory::WorkingMemory>>>,
 }
 
-/// Agent registry for managing available agents
-pub struct AgentRegistry {
-    config: AgentRegistryConfig,
-    agents: HashMap<String, AgentDefinition>,
-}
-
-impl AgentRegistry {
-    /// Create a new agent registry
-    pub fn new(config: AgentRegistryConfig) -> Self {
-        let mut agents = HashMap::new();
-
-        // Add agents from configuration
-        for agent in &config.agents {
-            agents.insert(agent.agent_id.clone(), agent.clone());
-        }
-
-        Self { config, agents }
-    }
-
-    /// Find agents that match the given capabilities
-    pub fn find_agents_for_capabilities(
-        &self,
-        required_capabilities: &[String],
-    ) -> Vec<&AgentDefinition> {
-        let mut candidates = Vec::new();
-
-        for agent in self.agents.values() {
-            let matching_capabilities = agent
-                .capabilities
-                .iter()
-                .filter(|cap| required_capabilities.contains(cap))
-                .count();
-
-            if matching_capabilities > 0 {
-                candidates.push(agent);
-            }
-        }
-
-        // Sort by trust score and cost
-        candidates.sort_by(|a, b| {
-            b.trust_score
-                .partial_cmp(&a.trust_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(
-                    a.cost
-                        .partial_cmp(&b.cost)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
-        });
-
-        candidates
-    }
-
-    /// Get agent by ID
-    pub fn get_agent(&self, agent_id: &str) -> Option<&AgentDefinition> {
-        self.agents.get(agent_id)
-    }
-
-    /// List all available agents
-    pub fn list_agents(&self) -> Vec<&AgentDefinition> {
-        self.agents.values().collect()
-    }
-}
-
-impl DelegatingArbiter {
+impl DelegatingCognitiveEngine {
     /// Get the LLM provider
     pub fn llm_provider(&self) -> &dyn LlmProvider {
         self.llm_provider.as_ref()
+    }
+
+    /// Get the LLM provider as Arc
+    pub fn get_llm_provider_arc(&self) -> Arc<dyn LlmProvider> {
+        self.llm_provider.clone()
+    }
+
+    /// Analyze whether delegation is needed for this intent
+    pub async fn analyze_delegation_need(
+        &self,
+        intent: &Intent,
+        context: Option<HashMap<String, Value>>,
+    ) -> RuntimeResult<DelegationAnalysis> {
+        // Fetch agents from the marketplace
+        let available_agents = self.list_agent_capabilities().await?;
+
+        self.delegation_analyzer
+            .analyze_need(intent, context, &available_agents)
+            .await
+    }
+
+    /// Parse LLM response into intent structure
+    pub fn parse_llm_intent_response(
+        &self,
+        response: &str,
+        _natural_language: &str,
+        _context: Option<HashMap<String, Value>>,
+    ) -> Result<Intent, RuntimeError> {
+        parse_llm_intent_response(response)
+    }
+
+    /// Parse JSON response as fallback
+    pub fn parse_json_intent_response(
+        &self,
+        response: &str,
+        natural_language: &str,
+    ) -> Result<Intent, RuntimeError> {
+        parse_json_intent_response(response, natural_language)
     }
 
     /// Create a new delegating arbiter for testing
     pub fn for_test(
         llm_provider: Box<dyn LlmProvider>,
         capability_marketplace: Arc<CapabilityMarketplace>,
-        intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
+        intent_graph: std::sync::Arc<std::sync::Mutex<crate::types::IntentGraph>>,
     ) -> Self {
         let prompt_path = if std::path::Path::new("../assets/prompts/arbiter").exists() {
             "../assets/prompts/arbiter"
@@ -355,20 +139,29 @@ impl DelegatingArbiter {
             threshold: 0.0,
             max_candidates: 0,
             min_skill_hits: None,
-            #[allow(deprecated)]
-            agent_registry: AgentRegistryConfig::default(),
+            agent_registry: None,
             adaptive_threshold: None,
             print_extracted_intent: None,
             print_extracted_plan: None,
         };
 
+        let adaptive_threshold_calculator = None; // Stub doesn't use it
+        let llm_provider: Arc<dyn LlmProvider> = Arc::from(llm_provider);
+        let delegation_analyzer = DelegationAnalyzer::new(
+            llm_provider.clone(),
+            // Ensure PromptManager is clonable or wrapped - assuming clone works if impl
+            prompt_manager.clone(),
+            delegation_config.clone(),
+            adaptive_threshold_calculator,
+        );
+
         Self {
             llm_config,
             delegation_config,
-            llm_provider: Arc::from(llm_provider),
+            llm_provider,
             capability_marketplace,
             intent_graph,
-            adaptive_threshold_calculator: None,
+            delegation_analyzer,
             prompt_manager,
             working_memory: None,
         }
@@ -379,10 +172,10 @@ impl DelegatingArbiter {
         llm_config: LlmConfig,
         delegation_config: DelegationConfig,
         capability_marketplace: Arc<CapabilityMarketplace>,
-        intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
+        intent_graph: std::sync::Arc<std::sync::Mutex<crate::types::IntentGraph>>,
     ) -> Result<Self, RuntimeError> {
         // Create LLM provider
-        let llm_provider =
+        let llm_provider: Arc<dyn LlmProvider> =
             Arc::from(LlmProviderFactory::create_provider(llm_config.to_provider_config()).await?);
 
         // Create adaptive threshold calculator if configured
@@ -401,13 +194,20 @@ impl DelegatingArbiter {
         let prompt_store = FilePromptStore::new(prompt_path);
         let prompt_manager = PromptManager::new(prompt_store);
 
+        let delegation_analyzer = DelegationAnalyzer::new(
+            llm_provider.clone(),
+            prompt_manager.clone(),
+            delegation_config.clone(),
+            adaptive_threshold_calculator,
+        );
+
         Ok(Self {
             llm_config,
             delegation_config,
             llm_provider,
             capability_marketplace,
             intent_graph,
-            adaptive_threshold_calculator,
+            delegation_analyzer,
             prompt_manager,
             working_memory: None,
         })
@@ -418,7 +218,7 @@ impl DelegatingArbiter {
         llm_config: LlmConfig,
         delegation_config: DelegationConfig,
         capability_marketplace: Arc<CapabilityMarketplace>,
-        intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
+        intent_graph: std::sync::Arc<std::sync::Mutex<crate::types::IntentGraph>>,
         working_memory: Arc<std::sync::Mutex<crate::working_memory::WorkingMemory>>,
     ) -> Result<Self, RuntimeError> {
         let mut arbiter = Self::new(
@@ -527,7 +327,7 @@ The tool name MUST be one of: {}"#,
         eprintln!("--- End Raw LLM Response ---");
 
         // Parse the RTFS intent from response
-        let intent = self.parse_llm_intent_response(&response, hint, None)?;
+        let intent = parse_llm_intent_response(&response)?;
 
         // Debug: Log the parsed intent
         eprintln!("✅ Parsed intent:");
@@ -547,7 +347,7 @@ The tool name MUST be one of: {}"#,
     async fn find_agents_for_capabilities(
         &self,
         required_capabilities: &[String],
-    ) -> Result<Vec<String>, RuntimeError> {
+    ) -> Result<Vec<CapabilityManifest>, RuntimeError> {
         // Query the marketplace for agent capabilities
         let query = CapabilityQuery::new()
             .with_kind(CapabilityKind::Agent)
@@ -569,7 +369,7 @@ The tool name MUST be one of: {}"#,
                         .to_lowercase()
                         .contains(&required_cap.to_lowercase())
                 {
-                    matching_agents.push(capability.id.clone());
+                    matching_agents.push(capability.clone());
                     break;
                 }
             }
@@ -579,7 +379,7 @@ The tool name MUST be one of: {}"#,
     }
 
     /// List all available agent capabilities
-    async fn list_agent_capabilities(&self) -> Result<Vec<String>, RuntimeError> {
+    async fn list_agent_capabilities(&self) -> Result<Vec<CapabilityManifest>, RuntimeError> {
         let query = CapabilityQuery::new()
             .with_kind(CapabilityKind::Agent)
             .with_limit(100);
@@ -589,7 +389,7 @@ The tool name MUST be one of: {}"#,
             .list_capabilities_with_query(&query)
             .await;
 
-        Ok(agent_capabilities.into_iter().map(|c| c.id).collect())
+        Ok(agent_capabilities)
     }
 
     /// Generate intent using LLM
@@ -685,7 +485,7 @@ The tool name MUST be one of: {}"#,
         // Parse according to mode (RTFS primary with JSON fallback; JSON-only mode skips RTFS attempt)
         let mut intent = if format_mode == "json" {
             // Direct JSON parse path
-            match self.parse_json_intent_response(&response, natural_language) {
+            match parse_json_intent_response(&response, natural_language) {
                 Ok(intent) => intent,
                 Err(e) => {
                     return Err(RuntimeError::Generic(format!(
@@ -696,7 +496,7 @@ The tool name MUST be one of: {}"#,
             }
         } else {
             // RTFS-first mode
-            match self.parse_llm_intent_response(&response, natural_language, context.clone()) {
+            match parse_llm_intent_response(&response) {
                 Ok(intent) => {
                     println!("✓ Successfully parsed intent from RTFS format");
                     intent
@@ -706,14 +506,14 @@ The tool name MUST be one of: {}"#,
                         "⚠ RTFS parsing failed, attempting JSON fallback: {}",
                         rtfs_err
                     );
-                    match self.parse_json_intent_response(&response, natural_language) {
+                    match parse_json_intent_response(&response, natural_language) {
                         Ok(intent) => {
                             println!("ℹ Fallback succeeded: parsed JSON intent");
                             intent
                         }
                         Err(json_err) => {
                             // Generate user-friendly error message with response preview
-                            let response_preview = if response.len() > 500 {
+                            let _response_preview = if response.len() > 500 {
                                 format!(
                                     "{}...\n[truncated, total length: {} chars]",
                                     &response[..500],
@@ -805,8 +605,8 @@ The tool name MUST be one of: {}"#,
                 .await?;
 
             println!("DEBUG: Found {} candidate agents", candidate_agents.len());
-            for agent_id in &candidate_agents {
-                println!("DEBUG: Agent: {}", agent_id);
+            for agent in &candidate_agents {
+                println!("DEBUG: Agent: {}", agent.id);
             }
 
             if !candidate_agents.is_empty() {
@@ -816,17 +616,23 @@ The tool name MUST be one of: {}"#,
                 // Set delegation metadata
                 intent.metadata.insert(
                     "delegation.selected_agent".to_string(),
-                    Value::String(selected_agent.clone()),
+                    Value::String(selected_agent.id.clone()),
                 );
                 intent.metadata.insert(
                     "delegation.candidates".to_string(),
-                    Value::String(candidate_agents.join(", ")),
+                    Value::String(
+                        candidate_agents
+                            .iter()
+                            .map(|c| c.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
                 );
 
                 // Set intent name to match the selected agent
-                intent.name = Some(selected_agent.clone());
+                intent.name = Some(selected_agent.id.clone());
 
-                println!("DEBUG: Selected agent: {}", selected_agent);
+                println!("DEBUG: Selected agent: {}", selected_agent.id);
             } else {
                 println!(
                     "DEBUG: No candidate agents found for capabilities: [{}]",
@@ -994,8 +800,10 @@ The tool name MUST be one of: {}"#,
         let pattern_mods = self.recall_patterns_for_intent(intent).await;
 
         // First, analyze if delegation is appropriate
+        let available_agents = self.list_agent_capabilities().await?;
         let delegation_analysis = self
-            .analyze_delegation_need(intent, context.clone())
+            .delegation_analyzer
+            .analyze_need(intent, context.clone(), &available_agents)
             .await?;
 
         let plan = if delegation_analysis.should_delegate {
@@ -1206,62 +1014,6 @@ The tool name MUST be one of: {}"#,
         })
     }
 
-    /// Analyze whether delegation is needed for this intent
-    async fn analyze_delegation_need(
-        &self,
-        intent: &Intent,
-        context: Option<HashMap<String, Value>>,
-    ) -> Result<DelegationAnalysis, RuntimeError> {
-        // Debug: Log the intent being analyzed
-        eprintln!(
-            "DEBUG: Analyzing delegation for intent: name={:?}, goal='{}'",
-            intent.name, intent.goal
-        );
-
-        let prompt = self
-            .create_delegation_analysis_prompt(intent, context)
-            .await?;
-
-        // Debug: Log the prompt being sent (first 500 chars)
-        let prompt_preview = if prompt.len() > 500 {
-            format!("{}...", &prompt[..500])
-        } else {
-            prompt.clone()
-        };
-        eprintln!(
-            "DEBUG: Delegation analysis prompt preview: {}",
-            prompt_preview
-        );
-
-        let response = self.llm_provider.generate_text(&prompt).await?;
-
-        // Parse delegation analysis
-        let mut analysis = self.parse_delegation_analysis(&response)?;
-
-        // Apply adaptive threshold if configured
-        if let Some(calculator) = &self.adaptive_threshold_calculator {
-            // Get base threshold from config
-            let base_threshold = self.delegation_config.threshold;
-
-            // For now, we'll use a default agent ID for threshold calculation
-            // In the future, this could be based on the specific agent being considered
-            let adaptive_threshold =
-                calculator.calculate_threshold("default_agent", base_threshold);
-
-            // Adjust delegation decision based on adaptive threshold
-            analysis.should_delegate =
-                analysis.should_delegate && analysis.delegation_confidence >= adaptive_threshold;
-
-            // Update reasoning to include adaptive threshold information
-            analysis.reasoning = format!(
-                "{} [Adaptive threshold: {:.3}, Confidence: {:.3}]",
-                analysis.reasoning, adaptive_threshold, analysis.delegation_confidence
-            );
-        }
-
-        Ok(analysis)
-    }
-
     /// Generate plan with agent delegation
     async fn generate_delegated_plan(
         &self,
@@ -1279,8 +1031,29 @@ The tool name MUST be one of: {}"#,
             return self.generate_direct_plan(intent, context).await;
         }
 
-        // Select the best agent
-        let selected_agent = &candidate_agents[0];
+        // Select the best agent (heuristic: highest trust_score, then lowest cost)
+        let selected_agent = candidate_agents
+            .iter()
+            .max_by(|a, b| {
+                let a_meta = a.agent_metadata.as_ref();
+                let b_meta = b.agent_metadata.as_ref();
+
+                let a_trust = a_meta.map(|m| m.trust_score).unwrap_or(1.0);
+                let b_trust = b_meta.map(|m| m.trust_score).unwrap_or(1.0);
+
+                match a_trust.partial_cmp(&b_trust) {
+                    Some(std::cmp::Ordering::Equal) => {
+                        let a_cost = a_meta.map(|m| m.cost).unwrap_or(0.0);
+                        let b_cost = b_meta.map(|m| m.cost).unwrap_or(0.0);
+                        b_cost
+                            .partial_cmp(&a_cost)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                    Some(ord) => ord,
+                    None => std::cmp::Ordering::Equal,
+                }
+            })
+            .unwrap_or(&candidate_agents[0]);
 
         // Generate delegation plan using the configured LLM provider.
         // Build a StorableIntent similar to the direct plan path but include
@@ -1312,7 +1085,7 @@ The tool name MUST be one of: {}"#,
                     let mut m = HashMap::new();
                     m.insert(
                         "delegation_target_agent".to_string(),
-                        selected_agent.clone(),
+                        selected_agent.id.clone(),
                     );
                     m
                 },
@@ -1330,11 +1103,15 @@ The tool name MUST be one of: {}"#,
                     .collect::<HashMap<String, String>>();
                 meta.insert(
                     "delegation.selected_agent".to_string(),
-                    selected_agent.clone(),
+                    selected_agent.id.clone(),
                 );
                 meta.insert(
-                    "delegation.agent_capabilities".to_string(),
-                    "[agent_capabilities_from_marketplace]".to_string(),
+                    "delegation.agent_name".to_string(),
+                    selected_agent.name.clone(),
+                );
+                meta.insert(
+                    "delegation.agent_description".to_string(),
+                    selected_agent.description.clone(),
                 );
                 meta
             },
@@ -1584,718 +1361,6 @@ The tool name MUST be one of: {}"#,
                 final_prompt
             }
         }
-    }
-
-    /// Create prompt for delegation analysis using file-based prompt store
-    async fn create_delegation_analysis_prompt(
-        &self,
-        intent: &Intent,
-        context: Option<HashMap<String, Value>>,
-    ) -> Result<String, RuntimeError> {
-        let available_agents = self.list_agent_capabilities().await?;
-        let agent_list = available_agents
-            .iter()
-            .map(|agent_id| format!("- {}: Agent capability from marketplace", agent_id))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let context_for_fallback = context.clone();
-
-        let intent_str = serde_json::to_string(intent).unwrap_or_else(|_| {
-            serde_json::to_string(&serde_json::json!({"name": intent.name, "goal": intent.goal}))
-                .unwrap_or_else(|_| {
-                    format!(
-                        "{{\"name\":{} , \"goal\":{} }}",
-                        intent
-                            .name
-                            .as_ref()
-                            .map(|s| format!("\"{}\"", s))
-                            .unwrap_or_else(|| "null".to_string()),
-                        format!("\"{}\"", intent.goal)
-                    )
-                })
-        });
-        let context_str = serde_json::to_string(&context.unwrap_or_default())
-            .unwrap_or_else(|_| "{}".to_string());
-        let mut vars = HashMap::new();
-        vars.insert("intent".to_string(), intent_str);
-        vars.insert("context".to_string(), context_str);
-        vars.insert("available_agents".to_string(), agent_list);
-
-        let agent_list_for_fallback = vars["available_agents"].clone();
-
-        Ok(self.prompt_manager
-            .render("delegation_analysis", "v1", &vars)
-            .unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to load delegation analysis prompt from assets: {}. Using fallback.", e);
-                self.create_fallback_delegation_prompt(intent, context_for_fallback, &agent_list_for_fallback)
-            }))
-    }
-
-    /// Fallback delegation analysis prompt (used when prompt assets fail to load)
-    fn create_fallback_delegation_prompt(
-        &self,
-        intent: &Intent,
-        context: Option<HashMap<String, Value>>,
-        agent_list: &str,
-    ) -> String {
-        format!(
-            r#"CRITICAL: You must respond with ONLY a JSON object. Do NOT generate RTFS code or any other format.
-
-You are analyzing whether to delegate a task to specialized agents. Your response must be a JSON object.
-
-## Required JSON Response Format:
-{{
-  "should_delegate": true,
-  "reasoning": "Clear explanation of the delegation decision",
-  "required_capabilities": ["capability1", "capability2"],
-  "delegation_confidence": 0.85
-}}
-
-## Rules:
-- ONLY output the JSON object, nothing else
-- Use double quotes for all strings
-- Include all 4 required fields
-- delegation_confidence must be between 0.0 and 1.0
-
-## Analysis Criteria:
-- Task complexity and specialization needs
-- Available agent capabilities
-- Cost vs. benefit analysis
-- Security requirements
-
-## Input for Analysis:
-            Intent: {}
-            Context: {}
-Available Agents:
-{agents}
-
-## Your JSON Response:"#,
-            serde_json::to_string(&intent).unwrap_or_else(|_| "{}".to_string()),
-            serde_json::to_string(&context.unwrap_or_default())
-                .unwrap_or_else(|_| "{}".to_string()),
-            agents = agent_list
-        )
-    }
-
-    /// Create prompt for delegation plan generation using file-based prompt store
-    fn create_delegation_plan_prompt(
-        &self,
-        intent: &Intent,
-        agent: &AgentDefinition,
-        context: Option<HashMap<String, Value>>,
-    ) -> String {
-        let available_capabilities = vec![
-            "ccos.echo".to_string(),
-            "ccos.validate".to_string(),
-            "ccos.delegate".to_string(),
-            "ccos.verify".to_string(),
-        ];
-
-        let intent_str = serde_json::to_string(intent).unwrap_or_else(|_| {
-            format!(
-                "{{\"name\":{} , \"goal\":{} }}",
-                intent
-                    .name
-                    .as_ref()
-                    .map(|s| format!("\"{}\"", s))
-                    .unwrap_or_else(|| "null".to_string()),
-                format!("\"{}\"", intent.goal)
-            )
-        });
-        let context_str = serde_json::to_string(&context.unwrap_or_default())
-            .unwrap_or_else(|_| "{}".to_string());
-        let available_caps_str = available_capabilities.join(", ");
-        let mut vars = HashMap::new();
-        vars.insert("intent".to_string(), intent_str);
-        vars.insert("context".to_string(), context_str);
-        vars.insert(
-            "available_capabilities".to_string(),
-            available_caps_str.clone(),
-        );
-        vars.insert("agent_name".to_string(), agent.name.clone());
-        vars.insert("agent_id".to_string(), agent.agent_id.clone());
-        vars.insert(
-            "agent_capabilities".to_string(),
-            serde_json::to_string(&agent.capabilities)
-                .unwrap_or_else(|_| "[unknown_capabilities]".to_string()),
-        );
-        vars.insert(
-            "agent_trust_score".to_string(),
-            format!("{:.2}", agent.trust_score),
-        );
-        vars.insert("agent_cost".to_string(), format!("{:.2}", agent.cost));
-        vars.insert("delegation_mode".to_string(), "true".to_string());
-
-        match self.prompt_manager.render("plan_generation", "v1", &vars) {
-            Ok(rendered) => rendered,
-            Err(e) => {
-                eprintln!(
-                    "Warning: Failed to load delegation plan prompt from assets: {}. Using fallback.",
-                    e
-                );
-                let intent_json =
-                    serde_json::to_string(intent).unwrap_or_else(|_| "{}".to_string());
-                let agent_caps_json =
-                    serde_json::to_string(&agent.capabilities).unwrap_or_else(|_| "[]".to_string());
-                let caps_display = available_caps_str.clone();
-                format!(
-                    r#"Generate an RTFS plan that delegates to agent {} ({}).
-Intent: {}
-Agent Capabilities: {}
-Available capabilities: {}
-Plan:"#,
-                    agent.name, agent.agent_id, intent_json, agent_caps_json, caps_display
-                )
-            }
-        }
-    }
-
-    /// Create prompt for direct plan generation using file-based prompt store
-    fn create_direct_plan_prompt(
-        &self,
-        intent: &Intent,
-        context: Option<HashMap<String, Value>>,
-    ) -> String {
-        let available_capabilities = vec![
-            "ccos.echo".to_string(),
-            "ccos.math.add".to_string(),
-            "ccos.user.ask".to_string(),
-        ];
-        let context_for_fallback = context.clone();
-
-        let intent_str = serde_json::to_string(intent).unwrap_or_else(|_| {
-            format!("{{\"name\":{:?}, \"goal\":{:?}}}", intent.name, intent.goal)
-        });
-        let context_str = serde_json::to_string(&context.as_ref().unwrap_or(&HashMap::new()))
-            .unwrap_or_else(|_| "{}".to_string());
-        let available_caps_str = available_capabilities.join(", ");
-        let mut vars = HashMap::new();
-        vars.insert("intent".to_string(), intent_str);
-        vars.insert("context".to_string(), context_str);
-        vars.insert(
-            "available_capabilities".to_string(),
-            available_caps_str.clone(),
-        );
-        vars.insert("delegation_mode".to_string(), "false".to_string());
-
-        let fallback_prompt = {
-            let intent_json = serde_json::to_string(intent).unwrap_or_else(|_| "{}".to_string());
-            let context_json = context_for_fallback
-                .as_ref()
-                .map(|ctx| serde_json::to_string(ctx).unwrap_or_else(|_| "{}".to_string()))
-                .unwrap_or_else(|| "{}".to_string());
-            let caps_display = available_caps_str;
-            format!(
-                r#"Generate an RTFS plan for: {}
-Context: {}
-Available capabilities: {}
-Plan:"#,
-                intent_json, context_json, caps_display,
-            )
-        };
-
-        match self.prompt_manager.render("plan_generation", "v1", &vars) {
-            Ok(mut rendered) => {
-                // Ensure guidance is appended to rendered prompt so model sees strict rules
-                if !rendered.contains("CRITICAL OUTPUT RULES") {
-                    rendered.push_str("\n");
-                    rendered.push_str(PLAN_FORMAT_GUIDANCE);
-                }
-                rendered
-            }
-            Err(e) => {
-                eprintln!(
-                    "Warning: Failed to load plan generation prompt from assets: {}. Using fallback.",
-                    e
-                );
-                fallback_prompt
-            }
-        }
-    }
-
-    /// Parse LLM response into intent structure using RTFS parser
-    fn parse_llm_intent_response(
-        &self,
-        response: &str,
-        _natural_language: &str,
-        _context: Option<HashMap<String, Value>>,
-    ) -> Result<Intent, RuntimeError> {
-        // Extract the first top-level `(intent …)` s-expression from the response
-        let intent_block = extract_intent(response).ok_or_else(|| {
-            let response_preview = if response.len() > 400 {
-                format!("{}...", &response[..400])
-            } else {
-                response.to_string()
-            };
-            RuntimeError::Generic(format!(
-                "Could not locate a complete (intent …) block in LLM response.\n\n\
-                📥 Response preview:\n\
-                ┌─────────────────────────────────────────────────────────\n\
-                {}\n\
-                └─────────────────────────────────────────────────────────\n\n\
-                💡 The response should start with (intent \"name\" :goal \"...\" ...)\n\
-                Common issues: response is truncated, contains prose before the intent, or missing opening parenthesis.",
-                response_preview
-            ))
-        })?;
-
-        // Sanitize regex literals for parsing
-        let sanitized = sanitize_regex_literals(&intent_block);
-
-        // Parse using RTFS parser
-        let ast_items = rtfs::parser::parse(&sanitized)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to parse RTFS intent: {:?}", e)))?;
-
-        // Find the first expression and convert to Intent
-        if let Some(TopLevel::Expression(expr)) = ast_items.get(0) {
-            intent_from_function_call(&expr).ok_or_else(|| {
-                RuntimeError::Generic(
-                    "Parsed AST expression was not a valid intent definition".to_string(),
-                )
-            })
-        } else {
-            Err(RuntimeError::Generic(
-                "Parsed AST did not contain a top-level expression for the intent".to_string(),
-            ))
-        }
-    }
-
-    /// Parse JSON response as fallback when RTFS parsing fails
-    fn parse_json_intent_response(
-        &self,
-        response: &str,
-        natural_language: &str,
-    ) -> Result<Intent, RuntimeError> {
-        println!("🔄 Attempting to parse response as JSON...");
-
-        // Extract JSON from response (handles markdown code blocks, etc.)
-        let json_str = self.extract_json_from_response(response);
-
-        // Parse the JSON
-        let json_value: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
-            let json_preview = if json_str.len() > 400 {
-                format!(
-                    "{}...\n[truncated, total length: {} chars]",
-                    &json_str[..400],
-                    json_str.len()
-                )
-            } else {
-                json_str.clone()
-            };
-            RuntimeError::Generic(format!(
-                "Failed to parse JSON intent: {}\n\n\
-                📥 JSON response preview:\n\
-                ┌─────────────────────────────────────────────────────────\n\
-                {}\n\
-                └─────────────────────────────────────────────────────────\n\n\
-                💡 Common JSON issues:\n\
-                • Invalid JSON syntax (missing quotes, commas, brackets)\n\
-                • Truncated response (incomplete JSON object)\n\
-                • Missing required fields (\"goal\" is required)\n\
-                • Response contains non-JSON text before/after the JSON",
-                e, json_preview
-            ))
-        })?;
-
-        // Extract intent fields from JSON
-        let goal = json_value["goal"]
-            .as_str()
-            .or_else(|| json_value["Goal"].as_str())
-            .or_else(|| json_value["GOAL"].as_str())
-            .unwrap_or(natural_language)
-            .to_string();
-
-        let name = json_value["name"]
-            .as_str()
-            .or_else(|| json_value["Name"].as_str())
-            .or_else(|| json_value["intent_name"].as_str())
-            .map(|s| s.to_string());
-
-        let mut intent = Intent::new(goal)
-            .with_name(name.unwrap_or_else(|| format!("intent_{}", uuid::Uuid::new_v4())));
-
-        intent.original_request = natural_language.to_string();
-
-        // Extract constraints if present
-        if let Some(constraints_obj) = json_value
-            .get("constraints")
-            .or_else(|| json_value.get("Constraints"))
-        {
-            if let Some(obj) = constraints_obj.as_object() {
-                for (k, v) in obj {
-                    let value = match v {
-                        serde_json::Value::String(s) => Value::String(s.clone()),
-                        serde_json::Value::Number(n) => {
-                            if let Some(i) = n.as_i64() {
-                                Value::Integer(i)
-                            } else if let Some(f) = n.as_f64() {
-                                Value::Float(f)
-                            } else {
-                                Value::String(v.to_string())
-                            }
-                        }
-                        serde_json::Value::Bool(b) => Value::Boolean(*b),
-                        _ => Value::String(v.to_string()),
-                    };
-                    intent.constraints.insert(k.clone(), value);
-                }
-            }
-        }
-
-        // Extract preferences if present
-        if let Some(preferences_obj) = json_value
-            .get("preferences")
-            .or_else(|| json_value.get("Preferences"))
-        {
-            if let Some(obj) = preferences_obj.as_object() {
-                for (k, v) in obj {
-                    let value = match v {
-                        serde_json::Value::String(s) => Value::String(s.clone()),
-                        serde_json::Value::Number(n) => {
-                            if let Some(i) = n.as_i64() {
-                                Value::Integer(i)
-                            } else if let Some(f) = n.as_f64() {
-                                Value::Float(f)
-                            } else {
-                                Value::String(v.to_string())
-                            }
-                        }
-                        serde_json::Value::Bool(b) => Value::Boolean(*b),
-                        _ => Value::String(v.to_string()),
-                    };
-                    intent.preferences.insert(k.clone(), value);
-                }
-            }
-        }
-
-        // Mark that this was parsed from JSON
-        intent.metadata.insert(
-            "parse_format".to_string(),
-            Value::String("json_fallback".to_string()),
-        );
-
-        println!("✓ Successfully parsed intent from JSON format");
-
-        Ok(intent)
-    }
-
-    /// Parse delegation analysis response with robust error handling
-    fn parse_delegation_analysis(
-        &self,
-        response: &str,
-    ) -> Result<DelegationAnalysis, RuntimeError> {
-        // Log the raw response
-        println!("Raw delegation analysis response: {}", response);
-        // Clean the response - remove any leading/trailing whitespace and extract JSON
-        let json_blobs = self.extract_all_json_from_response(response);
-
-        if json_blobs.is_empty() {
-            return Err(RuntimeError::Generic(
-                "No JSON found in delegation analysis response".to_string(),
-            ));
-        }
-
-        // Try to parse the last JSON blob
-        let last_blob = json_blobs.last().unwrap();
-        let json_response: serde_json::Value = serde_json::from_str(last_blob).map_err(|e| {
-            // Generate user-friendly error message with full response preview
-            let response_preview = if response.len() > 500 {
-                format!(
-                    "{}...\n[truncated, total length: {} chars]",
-                    &response[..500],
-                    response.len()
-                )
-            } else {
-                response.to_string()
-            };
-
-            let response_lines: Vec<&str> = response.lines().collect();
-            let line_preview = if response_lines.len() > 10 {
-                format!(
-                    "{}\n... [{} more lines]",
-                    response_lines[..10].join("\n"),
-                    response_lines.len() - 10
-                )
-            } else {
-                response.to_string()
-            };
-
-            let cleaned_preview = if last_blob.len() > 400 {
-                format!(
-                    "{}...\n[truncated, total length: {} chars]",
-                    &last_blob[..400],
-                    last_blob.len()
-                )
-            } else {
-                last_blob.clone()
-            };
-
-            RuntimeError::Generic(format!(
-                "❌ Failed to parse delegation analysis JSON\n\n\
-                    📋 Expected format: A JSON object with fields:\n\
-                    {{\n\
-                      \"should_delegate\": true/false,\n\
-                      \"reasoning\": \"explanation text\",\n\
-                      \"required_capabilities\": [\"cap1\", \"cap2\"],\n\
-                      \"delegation_confidence\": 0.0-1.0\n\
-                    }}\n\n\
-                    📥 Original LLM response:\n\
-                    ┌─────────────────────────────────────────────────────────\n\
-                    {}\n\
-                    └─────────────────────────────────────────────────────────\n\n\
-                    🔧 Extracted JSON (after cleaning):\n\
-                    ┌─────────────────────────────────────────────────────────\n\
-                    {}\n\
-                    └─────────────────────────────────────────────────────────\n\n\
-                    🔍 JSON parsing error: {}\n\n\
-                    💡 Common issues:\n\
-                    • LLM responded with prose instead of JSON\n\
-                    • Response is truncated or incomplete\n\
-                    • Missing required fields (should_delegate, reasoning, etc.)\n\
-                    • Invalid JSON syntax (unclosed brackets, missing quotes, etc.)\n\
-                    • Response is empty or contains only whitespace\n\n\
-                    🔧 Tip: The LLM should respond ONLY with valid JSON, no explanatory text.",
-                line_preview, cleaned_preview, e
-            ))
-        })?;
-
-        // Validate required fields
-        if !json_response.is_object() {
-            return Err(RuntimeError::Generic(
-                "Delegation analysis response is not a JSON object".to_string(),
-            ));
-        }
-
-        let should_delegate = json_response["should_delegate"].as_bool().ok_or_else(|| {
-            RuntimeError::Generic("Missing or invalid 'should_delegate' field".to_string())
-        })?;
-
-        let reasoning = json_response["reasoning"]
-            .as_str()
-            .ok_or_else(|| {
-                RuntimeError::Generic("Missing or invalid 'reasoning' field".to_string())
-            })?
-            .to_string();
-
-        let required_capabilities = json_response["required_capabilities"]
-            .as_array()
-            .ok_or_else(|| {
-                RuntimeError::Generic(
-                    "Missing or invalid 'required_capabilities' field".to_string(),
-                )
-            })?
-            .iter()
-            .filter_map(|v| v.as_str())
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-
-        let delegation_confidence =
-            json_response["delegation_confidence"]
-                .as_f64()
-                .ok_or_else(|| {
-                    RuntimeError::Generic(
-                        "Missing or invalid 'delegation_confidence' field".to_string(),
-                    )
-                })?;
-
-        // Validate confidence range
-        if delegation_confidence < 0.0 || delegation_confidence > 1.0 {
-            return Err(RuntimeError::Generic(format!(
-                "Delegation confidence must be between 0.0 and 1.0, got: {}",
-                delegation_confidence
-            )));
-        }
-
-        Ok(DelegationAnalysis {
-            should_delegate,
-            reasoning,
-            required_capabilities,
-            delegation_confidence,
-        })
-    }
-
-    /// Extract JSON from LLM response, handling common formatting issues
-    fn extract_json_from_response(&self, response: &str) -> String {
-        // First, try to find a JSON block enclosed in ```json ... ```
-        if let Some(captures) = regex::Regex::new(r"```json\s*([\s\S]*?)\s*```")
-            .unwrap()
-            .captures(response)
-        {
-            if let Some(json_block) = captures.get(1) {
-                return json_block.as_str().to_string();
-            }
-        }
-
-        // Fallback to finding the first '{' and last '}'
-        if let (Some(start), Some(end)) = (response.find('{'), response.rfind('}')) {
-            if start < end {
-                return response[start..=end].to_string();
-            }
-        }
-
-        // If no JSON block is found, return the original response
-        response.trim().to_string()
-    }
-
-    /// A more aggressive implementation that finds all JSON blobs in the response.
-    fn extract_all_json_from_response(&self, response: &str) -> Vec<String> {
-        let mut blobs = Vec::new();
-        let re = regex::Regex::new(r"\{[\s\S]*?\}").unwrap();
-        for cap in re.captures_iter(response) {
-            blobs.push(cap[0].to_string());
-        }
-        blobs
-    }
-
-    /// Record feedback for delegation performance
-    pub fn record_delegation_feedback(&mut self, agent_id: &str, success: bool) {
-        if let Some(calculator) = &mut self.adaptive_threshold_calculator {
-            calculator.update_performance(agent_id, success);
-        }
-    }
-
-    /// Get adaptive threshold for a specific agent
-    pub fn get_adaptive_threshold(&self, agent_id: &str) -> Option<f64> {
-        if let Some(calculator) = &self.adaptive_threshold_calculator {
-            let base_threshold = self.delegation_config.threshold;
-            Some(calculator.calculate_threshold(agent_id, base_threshold))
-        } else {
-            None
-        }
-    }
-
-    /// Get performance data for a specific agent
-    pub fn get_agent_performance(
-        &self,
-        agent_id: &str,
-    ) -> Option<&crate::adaptive_threshold::AgentPerformance> {
-        if let Some(calculator) = &self.adaptive_threshold_calculator {
-            calculator.get_performance(agent_id)
-        } else {
-            None
-        }
-    }
-
-    /// Parse delegation plan response
-    fn parse_delegation_plan(
-        &self,
-        response: &str,
-        intent: &Intent,
-        agent: &AgentDefinition,
-    ) -> Result<Plan, RuntimeError> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Extract RTFS content from response
-        let rtfs_content = self.extract_rtfs_from_response(response)?;
-        // Optionally print extracted RTFS plan for diagnostics (env or config)
-        let print_flag = std::env::var("CCOS_PRINT_EXTRACTED_PLAN")
-            .map(|s| s == "1")
-            .unwrap_or(false)
-            || self.delegation_config.print_extracted_plan.unwrap_or(false);
-
-        if print_flag {
-            println!(
-                "[DELEGATING-ARBITER] Extracted RTFS plan:\n{}",
-                rtfs_content
-            );
-        }
-
-        Ok(Plan {
-            plan_id: format!("delegating_plan_{}", uuid::Uuid::new_v4()),
-            name: Some(format!(
-                "delegated_plan_{}",
-                intent.name.as_ref().unwrap_or(&"unknown".to_string())
-            )),
-            intent_ids: vec![intent.intent_id.clone()],
-            language: PlanLanguage::Rtfs20,
-            body: PlanBody::Rtfs(rtfs_content),
-            status: PlanStatus::Draft,
-            created_at: now,
-            metadata: {
-                let mut meta = HashMap::new();
-                meta.insert(
-                    generation::GENERATION_METHOD.to_string(),
-                    Value::String(generation::methods::DELEGATION.to_string()),
-                );
-                meta.insert(
-                    agent::DELEGATED_AGENT.to_string(),
-                    Value::String(agent.agent_id.clone()),
-                );
-                meta.insert(
-                    agent::AGENT_TRUST_SCORE.to_string(),
-                    Value::Float(agent.trust_score),
-                );
-                meta.insert(
-                    agent::AGENT_COST.to_string(),
-                    Value::Float(agent.cost as f64),
-                );
-                meta
-            },
-            input_schema: None,
-            output_schema: None,
-            policies: HashMap::new(),
-            capabilities_required: vec![],
-            annotations: HashMap::new(),
-        })
-    }
-
-    /// Parse direct plan response
-    fn parse_direct_plan(&self, response: &str, intent: &Intent) -> Result<Plan, RuntimeError> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Extract RTFS content from response
-        let rtfs_content = self.extract_rtfs_from_response(response)?;
-        // Optionally print extracted RTFS plan for diagnostics (env or config)
-        let print_flag = std::env::var("CCOS_PRINT_EXTRACTED_PLAN")
-            .map(|s| s == "1")
-            .unwrap_or(false)
-            || self.delegation_config.print_extracted_plan.unwrap_or(false);
-        if print_flag {
-            println!(
-                "[DELEGATING-ARBITER] Extracted RTFS plan:\n{}",
-                rtfs_content
-            );
-        }
-
-        Ok(Plan {
-            plan_id: format!("direct_plan_{}", uuid::Uuid::new_v4()),
-            name: Some(format!(
-                "direct_plan_{}",
-                intent.name.as_ref().unwrap_or(&"unknown".to_string())
-            )),
-            intent_ids: vec![intent.intent_id.clone()],
-            language: PlanLanguage::Rtfs20,
-            body: PlanBody::Rtfs(rtfs_content),
-            status: PlanStatus::Draft,
-            created_at: now,
-            metadata: {
-                let mut meta = HashMap::new();
-                meta.insert(
-                    generation::GENERATION_METHOD.to_string(),
-                    Value::String(generation::methods::DIRECT.to_string()),
-                );
-                meta.insert(
-                    "llm_provider".to_string(),
-                    Value::String(
-                        serde_json::to_string(&self.llm_config.provider_type)
-                            .unwrap_or_else(|_| format!("{:?}", self.llm_config.provider_type)),
-                    ),
-                );
-                meta
-            },
-            input_schema: None,
-            output_schema: None,
-            policies: HashMap::new(),
-            capabilities_required: vec![],
-            annotations: HashMap::new(),
-        })
     }
 
     // Note: This helper returns a Plan constructed from the RTFS body; we log the RTFS body for debugging.
@@ -2624,17 +1689,8 @@ Plan:"#,
     }
 }
 
-/// Analysis result for delegation decision
-#[derive(Debug, Clone)]
-struct DelegationAnalysis {
-    should_delegate: bool,
-    reasoning: String,
-    required_capabilities: Vec<String>,
-    delegation_confidence: f64,
-}
-
 #[async_trait(?Send)]
-impl ArbiterEngine for DelegatingArbiter {
+impl CognitiveEngine for DelegatingCognitiveEngine {
     async fn natural_language_to_intent(
         &self,
         natural_language: &str,
@@ -2862,11 +1918,11 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arbiter::arbiter_config::{
+
+    use crate::cognitive_engine::config::{
         AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig, LlmProviderType,
         RegistryType,
     };
-    use crate::capabilities::registry::CapabilityRegistry;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -2888,31 +1944,7 @@ mod tests {
             threshold: 0.65,
             max_candidates: 3,
             min_skill_hits: Some(1),
-            agent_registry: AgentRegistryConfig {
-                registry_type: RegistryType::InMemory,
-                database_url: None,
-                agents: vec![
-                    AgentDefinition {
-                        agent_id: "sentiment_agent".to_string(),
-                        name: "Sentiment Analysis Agent".to_string(),
-                        capabilities: vec![
-                            "sentiment_analysis".to_string(),
-                            "text_processing".to_string(),
-                        ],
-                        cost: 0.1,
-                        trust_score: 0.9,
-                        metadata: HashMap::new(),
-                    },
-                    AgentDefinition {
-                        agent_id: "backup_agent".to_string(),
-                        name: "Backup Agent".to_string(),
-                        capabilities: vec!["backup".to_string(), "encryption".to_string()],
-                        cost: 0.2,
-                        trust_score: 0.8,
-                        metadata: HashMap::new(),
-                    },
-                ],
-            },
+            agent_registry: None,
             adaptive_threshold: None,
             print_extracted_intent: None,
             print_extracted_plan: None,
@@ -2925,7 +1957,7 @@ mod tests {
     async fn test_delegating_arbiter_creation() {
         let (llm_config, delegation_config) = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::intent_graph::IntentGraph::new().unwrap(),
+            crate::types::IntentGraph::new().unwrap(),
         ));
 
         // Create a minimal capability marketplace for testing
@@ -2934,8 +1966,13 @@ mod tests {
         ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
-        let arbiter =
-            DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph).await;
+        let arbiter = DelegatingCognitiveEngine::new(
+            llm_config,
+            delegation_config,
+            marketplace,
+            intent_graph,
+        )
+        .await;
         assert!(arbiter.is_ok());
     }
 
@@ -2950,7 +1987,7 @@ mod tests {
     async fn test_intent_generation() {
         let (llm_config, delegation_config) = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::intent_graph::IntentGraph::new().unwrap(),
+            crate::types::IntentGraph::new().unwrap(),
         ));
 
         // Create a minimal capability marketplace for testing
@@ -2959,10 +1996,14 @@ mod tests {
         ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
-        let arbiter =
-            DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph)
-                .await
-                .unwrap();
+        let arbiter = DelegatingCognitiveEngine::new(
+            llm_config,
+            delegation_config,
+            marketplace,
+            intent_graph,
+        )
+        .await
+        .unwrap();
 
         let intent = arbiter
             .natural_language_to_intent("analyze sentiment from user feedback", None)
@@ -2987,7 +2028,7 @@ mod tests {
     async fn test_json_fallback_parsing() {
         let (llm_config, delegation_config) = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::intent_graph::IntentGraph::new().unwrap(),
+            crate::types::IntentGraph::new().unwrap(),
         ));
 
         // Create a minimal capability marketplace for testing
@@ -2996,10 +2037,14 @@ mod tests {
         ));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
-        let arbiter =
-            DelegatingArbiter::new(llm_config, delegation_config, marketplace, intent_graph)
-                .await
-                .unwrap();
+        let arbiter = DelegatingCognitiveEngine::new(
+            llm_config,
+            delegation_config,
+            marketplace,
+            intent_graph,
+        )
+        .await
+        .unwrap();
 
         // Test parsing a JSON response
         let json_response = r#"

@@ -37,6 +37,7 @@ impl NativeCapabilityProvider {
         let mut capabilities = HashMap::new();
 
         // Register all CLI capabilities
+        /* 
         capabilities.insert(
             "ccos.cli.server.list".to_string(),
             create_server_list_capability(),
@@ -126,6 +127,7 @@ impl NativeCapabilityProvider {
             "ccos.cli.plan.validate".to_string(),
             create_plan_validate_capability(),
         );
+        */
 
         // LLM capabilities
         capabilities.insert(

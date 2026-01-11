@@ -11,8 +11,8 @@ use clap::Parser;
 use std::error::Error;
 use std::sync::Arc;
 
-use ccos::CCOS;
 use ccos::config::types::AgentConfig;
+use ccos::CCOS;
 
 use crate::single_mcp_discovery_impl::{run_discovery, Args};
 
@@ -742,13 +742,13 @@ mod single_mcp_discovery_impl {
             }
         }
 
-        if let Some(arbiter_arc) = ccos.get_delegating_arbiter() {
+        if let Some(arbiter_arc) = ccos.get_delegating_engine() {
             // Use the specialized tool selection method that bypasses delegation analysis
-            // Note: This method is defined in impl DelegatingArbiter block
-            // Use as_ref() to get &DelegatingArbiter from Arc
+            // Note: This method is defined in impl DelegatingCognitiveEngine block
+            // Use as_ref() to get &DelegatingCognitiveEngine from Arc
             // Call using fully qualified path to ensure method is found
             // Pass tool schemas so the LLM can use exact parameter names
-            match ccos::arbiter::DelegatingArbiter::select_mcp_tool(
+            match ccos::arbiter::DelegatingCognitiveEngine::select_mcp_tool(
                 arbiter_arc.as_ref(),
                 hint,
                 &tool_names,

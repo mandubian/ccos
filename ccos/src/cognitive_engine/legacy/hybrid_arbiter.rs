@@ -9,10 +9,10 @@ use async_trait::async_trait;
 use regex::Regex;
 use std::collections::HashMap;
 
-use crate::arbiter::arbiter_config::{
+use crate::cognitive_engine::config::{
     FallbackBehavior, IntentPattern, LlmConfig, PlanTemplate, TemplateConfig,
 };
-use crate::arbiter::arbiter_engine::ArbiterEngine;
+use crate::cognitive_engine::engine::CognitiveEngine;
 use crate::arbiter::llm_provider::{LlmProvider, LlmProviderFactory};
 use crate::arbiter::prompt::{FilePromptStore, PromptConfig, PromptManager};
 use crate::delegation_keys::generation;
@@ -224,7 +224,7 @@ pub struct HybridArbiter {
     intent_patterns: Vec<IntentPattern>,
     plan_templates: Vec<PlanTemplate>,
     llm_provider: Box<dyn LlmProvider>,
-    intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
+    intent_graph: std::sync::Arc<std::sync::Mutex<crate::types::IntentGraph>>,
     fallback_behavior: FallbackBehavior,
 }
 
@@ -233,7 +233,7 @@ impl HybridArbiter {
     pub async fn new(
         template_config: TemplateConfig,
         llm_config: LlmConfig,
-        intent_graph: std::sync::Arc<std::sync::Mutex<crate::intent_graph::IntentGraph>>,
+        intent_graph: std::sync::Arc<std::sync::Mutex<crate::types::IntentGraph>>,
     ) -> Result<Self, RuntimeError> {
         // Create LLM provider
         let llm_provider =
@@ -706,7 +706,7 @@ Plan:"#,
 }
 
 #[async_trait(?Send)]
-impl ArbiterEngine for HybridArbiter {
+impl CognitiveEngine for HybridArbiter {
     async fn natural_language_to_intent(
         &self,
         natural_language: &str,
@@ -826,7 +826,7 @@ impl ArbiterEngine for HybridArbiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arbiter::arbiter_config::{
+    use crate::cognitive_engine::config::{
         IntentPattern, LlmConfig, LlmProviderType, PlanTemplate, TemplateConfig,
     };
 
@@ -889,7 +889,7 @@ mod tests {
             max_tokens: Some(1000),
             temperature: Some(0.7),
             timeout_seconds: Some(30),
-            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+            retry_config: crate::cognitive_engine::config::RetryConfig::default(),
             prompts: None,
         };
 
@@ -900,7 +900,7 @@ mod tests {
     async fn test_hybrid_arbiter_creation() {
         let (template_config, llm_config) = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::intent_graph::IntentGraph::new().unwrap(),
+            crate::types::IntentGraph::new().unwrap(),
         ));
 
         let arbiter = HybridArbiter::new(template_config, llm_config, intent_graph).await;
@@ -911,7 +911,7 @@ mod tests {
     async fn test_template_fallback() {
         let (template_config, llm_config) = create_test_config();
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::intent_graph::IntentGraph::new().unwrap(),
+            crate::types::IntentGraph::new().unwrap(),
         ));
 
         let arbiter = HybridArbiter::new(template_config, llm_config, intent_graph)
@@ -942,7 +942,7 @@ mod tests {
         template_config.fallback = FallbackBehavior::Llm;
 
         let intent_graph = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::intent_graph::IntentGraph::new().unwrap(),
+            crate::types::IntentGraph::new().unwrap(),
         ));
 
         let arbiter = HybridArbiter::new(template_config, llm_config, intent_graph)

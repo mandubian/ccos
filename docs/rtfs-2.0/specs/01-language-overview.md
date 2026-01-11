@@ -2,7 +2,7 @@
 
 **Implementation Status**: ⚠️ **Mostly Implemented** (see notes for exceptions)
 
-This document provides a comprehensive overview of all RTFS 2.0 language features, organized by category. RTFS is a pure functional, homoiconic language designed for safe, verifiable computation within the CCOS (Cognitive-Causal Orchestration System) framework.
+This document provides a comprehensive overview of all RTFS 2.0 language features, organized by category. RTFS is a pure functional, homoiconic language designed for safe, verifiable computation within the CCOS (Cognitive Computing Operating System) framework.
 
 ## Feature Implementation Status
 

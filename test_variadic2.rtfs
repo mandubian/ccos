@@ -1,1 +1,0 @@
-(defmacro test-variadic [x & rest] `(do ~x ~@rest)) (test-variadic (println "first") (println "second"))

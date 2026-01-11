@@ -3,7 +3,7 @@
 //! Provides LLM-based text generation with governance controls.
 //! All prompts are sanitized through GovernanceKernel before execution.
 
-use crate::arbiter::DelegatingArbiter;
+use crate::cognitive_engine::DelegatingCognitiveEngine;
 use once_cell::sync::OnceCell;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -11,16 +11,16 @@ use std::sync::Arc;
 
 /// Global arbiter reference for LLM operations
 /// Set during CCOS initialization via set_global_arbiter()
-static GLOBAL_ARBITER: OnceCell<Arc<DelegatingArbiter>> = OnceCell::new();
+static GLOBAL_ARBITER: OnceCell<Arc<DelegatingCognitiveEngine>> = OnceCell::new();
 
 /// Set the global arbiter for LLM operations.
 /// Called during CCOS initialization.
-pub fn set_global_arbiter(arbiter: Arc<DelegatingArbiter>) {
+pub fn set_global_arbiter(arbiter: Arc<DelegatingCognitiveEngine>) {
     let _ = GLOBAL_ARBITER.set(arbiter);
 }
 
 /// Get the global arbiter for LLM operations.
-pub fn get_global_arbiter() -> Option<Arc<DelegatingArbiter>> {
+pub fn get_global_arbiter() -> Option<Arc<DelegatingCognitiveEngine>> {
     GLOBAL_ARBITER.get().cloned()
 }
 

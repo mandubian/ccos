@@ -112,7 +112,7 @@ async fn test_discovery_with_config(
         lazy_output_schemas: true,
         ignore_approved_files: false,
         force_refresh: false,
-            non_interactive: true,
+        non_interactive: true,
     };
 
     println!("    🔍 Discovering tools...");
@@ -224,7 +224,7 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
                 );
 
                 // Verify in catalog
-                let catalog_results = catalog.search_keyword(&server_config.name, None, 10);
+                let catalog_results = catalog.search_keyword(&server_config.name, None, 10).await;
                 println!(
                     "  📚 Catalog search for '{}' returned {} results",
                     server_config.name,

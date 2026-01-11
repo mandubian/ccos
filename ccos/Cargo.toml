@@ -86,6 +86,8 @@ tui = ["dep:ratatui", "dep:crossterm", "dep:dialoguer"]
 server = ["dep:axum", "dep:tokio-tungstenite", "dep:tower-http"]
 llm = ["dep:llama_cpp"]
 minimal = []
+ccos-integration = []
+cuda = []
 
 [[bin]]
 name = "ccos"

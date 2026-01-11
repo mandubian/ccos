@@ -1,10 +1,4 @@
 // RTFS Evaluator - Executes parsed AST nodes
-//
-// NOTE: This AST-walking evaluator is primarily for development, testing, and debugging.
-// The **production runtime** is `IrRuntime` (see `ir_runtime.rs`), which uses a trampoline-based
-// execution model that avoids Rust stack recursion and supports proper tail-call optimization.
-// Deep recursion in this evaluator may cause stack overflow on small stacks; prefer IrRuntime
-// for recursive workloads.
 
 use crate::ast::{
     CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr, ForExpr, IfExpr,

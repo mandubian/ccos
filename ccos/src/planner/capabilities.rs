@@ -30,18 +30,33 @@ pub async fn register_planner_capabilities(
             max_results,
         } = payload;
 
-        let mut signals = match intent {
-            Some(intent) => GoalSignals::from_goal_and_intent(&goal, &intent),
-            None => GoalSignals::new(goal.clone()),
-        };
+        let catalog = Arc::clone(&catalog_for_handler);
+        let rt_handle = tokio::runtime::Handle::current();
 
-        if apply_catalog_search.unwrap_or(true) {
-            signals.apply_catalog_search(
-                &catalog_for_handler,
-                min_score.unwrap_or(0.5),
-                max_results.unwrap_or(10),
-            );
-        }
+        let signals = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                let mut signals = match intent {
+                    Some(intent) => GoalSignals::from_goal_and_intent(&goal, &intent),
+                    None => GoalSignals::new(goal.clone()),
+                };
+
+                if apply_catalog_search.unwrap_or(true) {
+                    signals
+                        .apply_catalog_search(
+                            &catalog,
+                            min_score.unwrap_or(0.5),
+                            max_results.unwrap_or(10),
+                        )
+                        .await;
+                }
+
+                Ok::<GoalSignals, RuntimeError>(signals)
+            })
+        })
+        .join()
+        .map_err(|_| {
+            RuntimeError::Generic("Thread join error in planner.extract_goal_signals".to_string())
+        })??;
 
         produce_value(
             "planner.extract_goal_signals",

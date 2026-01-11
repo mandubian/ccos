@@ -4,7 +4,7 @@
 //! RTFS capability files. This module is used by MCP server, CLI, and TUI.
 
 use crate::approval::{
-    queue::{ApprovalAuthority, DiscoverySource, RiskAssessment, RiskLevel, ServerInfo},
+    queue::{DiscoverySource, RiskAssessment, RiskLevel, ServerInfo},
     storage_file::FileApprovalStorage,
     UnifiedApprovalQueue,
 };

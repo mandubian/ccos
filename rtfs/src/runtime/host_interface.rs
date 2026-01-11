@@ -8,7 +8,7 @@ use crate::runtime::stubs::ExecutionResultStruct;
 use crate::runtime::values::Value;
 
 /// The HostInterface provides the contract between the RTFS runtime and the CCOS host.
-pub trait HostInterface: std::fmt::Debug {
+pub trait HostInterface: std::fmt::Debug + Send + Sync {
     /// Executes a capability through the CCOS infrastructure.
     /// This is the primary entry point for the runtime to perform external actions.
     fn execute_capability(&self, name: &str, args: &[Value]) -> RuntimeResult<Value>;

@@ -5,7 +5,7 @@
 //! where missing capabilities trigger their own refinement cycles.
 
 pub mod apis_guru;
-pub mod capability_matcher;
+
 pub mod config;
 pub mod cycle_detector;
 pub mod discovery_agent;
@@ -22,7 +22,7 @@ pub mod need_extractor;
 pub mod registry_search;
 
 pub use apis_guru::*;
-pub use capability_matcher::*;
+
 pub use config::*;
 pub use cycle_detector::*;
 pub use discovery_agent::*;
@@ -31,7 +31,9 @@ pub use engine::*;
 pub use goal_discovery::*;
 pub use intent_transformer::*;
 pub use introspection_cache::*;
-pub use llm_discovery::*;
+pub use llm_discovery::{
+    IntentAnalysis, LlmDiscoveryService, RankedCapability as LlmRankedCapability,
+};
 // pub use local_synthesizer::*; // Removed
 pub use need_extractor::*;
 // pub use recursive_synthesizer::*; // Removed

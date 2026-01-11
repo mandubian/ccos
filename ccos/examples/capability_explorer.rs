@@ -735,7 +735,7 @@ impl CapabilityExplorer {
     }
 
     async fn search_rtfs(&self, hint: &str) -> Value {
-        let results = self.catalog.search_keyword(hint, None, 100);
+        let results = self.catalog.search_keyword(hint, None, 100).await;
         let values: Vec<Value> = results
             .iter()
             .map(|r| {
@@ -1384,7 +1384,7 @@ impl CapabilityExplorer {
         }
 
         // First search in catalog
-        let catalog_results = self.catalog.search_keyword(&hint, None, 20);
+        let catalog_results = self.catalog.search_keyword(&hint, None, 20).await;
 
         if !catalog_results.is_empty() {
             println!();
@@ -1998,13 +1998,13 @@ impl CapabilityExplorer {
         }
     }
 
-    fn show_stats(&self) {
+    async fn show_stats(&self) {
         println!();
         println!("{}", "📊 Catalog Statistics".white().bold().underline());
         println!();
 
         // Get basic stats from catalog
-        let capability_search = self.catalog.search_keyword("", None, 1000);
+        let capability_search = self.catalog.search_keyword("", None, 1000).await;
         let total_capabilities = capability_search.len();
 
         println!(
@@ -2083,7 +2083,7 @@ impl CapabilityExplorer {
                 "4" | "list" | "l" => self.list_discovered(),
                 "5" | "inspect" | "i" => self.inspect_capability().await,
                 "6" | "call" | "c" => self.call_capability().await,
-                "7" | "stats" => self.show_stats(),
+                "7" | "stats" => self.show_stats().await,
                 "h" | "help" | "?" => self.print_menu(),
                 "q" | "quit" | "exit" => {
                     println!();

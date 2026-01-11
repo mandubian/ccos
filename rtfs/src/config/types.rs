@@ -989,7 +989,7 @@ impl DelegationConfig {
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
-struct DelegationConfigStub {
+pub struct DelegationConfigStub {
     enabled: bool,
     threshold: f64,
     max_candidates: usize,

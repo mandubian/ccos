@@ -35,6 +35,7 @@ pub trait PromptStore: Send + Sync {
     fn get_template(&self, id: &str, version: &str) -> Result<PromptTemplate, RuntimeError>;
 }
 
+#[derive(Clone)]
 pub struct FilePromptStore {
     base_dir: PathBuf,
 }
@@ -87,6 +88,7 @@ impl PromptStore for FilePromptStore {
     }
 }
 
+#[derive(Clone)]
 pub struct PromptManager<S: PromptStore> {
     store: S,
 }

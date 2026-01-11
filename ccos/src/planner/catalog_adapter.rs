@@ -42,19 +42,19 @@ impl CcosCatalogAdapter {
 impl CapabilityCatalog for CcosCatalogAdapter {
     async fn list_capabilities(&self, _domain: Option<&str>) -> Vec<CapabilityInfo> {
         // Limit to keep the prompt manageable; catalog search already prioritizes relevance.
-        let hits = self.catalog.search_keyword("", None, 100);
+        let hits = self.catalog.search_keyword("", None, 100).await;
         hits.into_iter().map(Self::catalog_hit_to_info).collect()
     }
 
     async fn get_capability(&self, id: &str) -> Option<CapabilityInfo> {
-        let hits = self.catalog.search_keyword(id, None, 10);
+        let hits = self.catalog.search_keyword(id, None, 10).await;
         hits.into_iter()
             .find(|h| h.entry.id == id)
             .map(Self::catalog_hit_to_info)
     }
 
     async fn search(&self, query: &str, limit: usize) -> Vec<CapabilityInfo> {
-        let hits = self.catalog.search_keyword(query, None, limit);
+        let hits = self.catalog.search_keyword(query, None, limit).await;
         hits.into_iter().map(Self::catalog_hit_to_info).collect()
     }
 }

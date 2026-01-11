@@ -607,7 +607,12 @@ impl Orchestrator {
         capability_marketplace: Arc<CapabilityMarketplace>,
         plan_archive: Arc<PlanArchive>,
     ) -> Self {
-        Self::new(causal_chain, intent_graph, capability_marketplace, plan_archive)
+        Self::new(
+            causal_chain,
+            intent_graph,
+            capability_marketplace,
+            plan_archive,
+        )
     }
 
     /// Creates a new Orchestrator.
@@ -661,7 +666,7 @@ impl Orchestrator {
         expr: &Expression,
     ) -> RuntimeResult<ExecutionOutcome> {
         let current_expr = expr.clone();
-        let mut max_iterations = 1000; // Prevent infinite loops
+        let max_iterations = 1000; // Prevent infinite loops
 
         loop {
             if max_iterations == 0 {
@@ -669,7 +674,6 @@ impl Orchestrator {
                     "Maximum execution iterations reached".to_string(),
                 ));
             }
-            max_iterations -= 1;
 
             // Execute the current expression
             let result = evaluator.evaluate(&current_expr)?;
@@ -1042,7 +1046,7 @@ impl Orchestrator {
             ))),
         };
 
-        let mut evaluator = Evaluator::new(
+        let evaluator = Evaluator::new(
             module_registry.clone(),
             context.clone(),
             host_iface.clone(),
@@ -1834,7 +1838,7 @@ impl Orchestrator {
             Ok(ExecutionOutcome::RequiresHost(host_call)) => {
                 // Create a new checkpoint and emit PlanPaused
                 let missing_capabilities = vec![host_call.capability_id.clone()];
-                let (checkpoint_id, _serialized) = self.checkpoint_plan(
+                let (_checkpoint_id, _serialized) = self.checkpoint_plan(
                     &plan_id,
                     &primary_intent_id,
                     &evaluator,

@@ -449,7 +449,7 @@ pub fn prepare_plan_as_capability(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Plan, PlanBody, PlanLanguage, PlanStatus};
+    use crate::types::{Plan, PlanBody, PlanLanguage};
 
     fn create_test_plan() -> Plan {
         Plan::new_named(

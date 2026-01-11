@@ -12,23 +12,22 @@
 // Previous version (without recursive synthesis) is saved as smart_assistant_demo_v1.rs
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
+use ccos::arbiter::DelegatingCognitiveEngine;
 use ccos::capabilities::{MCPSessionHandler, SessionPoolManager};
-use ccos::capability_marketplace::types::{CapabilityManifest, MCPCapability, ProviderType};
+use ccos::capability_marketplace::types::CapabilityManifest;
+use ccos::config::types::{AgentConfig, LlmProfile};
 use ccos::discovery::{
     CapabilityNeed, DiscoveryEngine, DiscoveryHints, DiscoveryResult, FoundCapability,
 };
-use ccos::environment::CCOSBuilder;
 use ccos::examples_common::capability_helpers::{
-    count_token_matches, minimum_token_matches, parse_simple_mcp_rtfs,
-    preload_discovered_capabilities, score_manifest_against_tokens, tokenize_identifier,
+    count_token_matches, minimum_token_matches, preload_discovered_capabilities,
+    score_manifest_against_tokens, tokenize_identifier,
 };
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::synthesis::missing_capability_resolver::{
@@ -43,7 +42,6 @@ use crossterm::style::Stylize;
 use once_cell::sync::Lazy;
 use rtfs::ast::{Expression, Keyword, Literal, MapKey, MapTypeEntry, PrimitiveType, TypeExpr};
 use rtfs::config::profile_selection::expand_profiles;
-use ccos::config::types::{AgentConfig, LlmProfile};
 use rtfs::parser::parse_expression;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
@@ -372,7 +370,7 @@ struct StubCapabilitySpec {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> DemoResult<()> {
     let args = Args::parse();
 
     if let Err(error) = run_demo(args).await {
@@ -382,7 +380,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
-async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
+async fn run_demo(args: Args) -> DemoResult<()> {
     let agent_config = load_agent_config(&args.config)?;
     apply_llm_profile(&agent_config, args.profile.as_deref())?;
 
@@ -572,7 +570,7 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     }
 
     let delegating = ccos
-        .get_delegating_arbiter()
+        .get_delegating_engine()
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Delegating arbiter unavailable"))?;
 
     // Print LLM provider details after initialization
@@ -644,17 +642,19 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         Ok(_) => {
             return Err(Box::new(RuntimeError::Generic(format!(
                 "❌ Arbiter returned no plan steps. Cannot proceed without a valid plan."
-            ))) as Box<dyn Error>);
+            )))
+            .into());
         }
         Err(err) => {
             return Err(Box::new(RuntimeError::Generic(format!(
                 "❌ Failed to synthesize steps:\n\n{}",
                 err
-            ))) as Box<dyn Error>);
+            )))
+            .into());
         }
     };
 
-    let mut matches = match_proposed_steps(&ccos, &plan_steps).await?;
+    let matches = match_proposed_steps(&ccos, &plan_steps).await?;
     annotate_steps_with_matches(&mut plan_steps, &matches);
 
     // Check for missing capabilities and trigger re-planning if needed
@@ -662,7 +662,7 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         .iter()
         .filter(|m| m.status == MatchStatus::Missing)
         .count();
-    if missing_count > 0 && ccos.get_delegating_arbiter().is_some() {
+    if missing_count > 0 && ccos.get_delegating_engine().is_some() {
         println!(
             "\n{} {} {}",
             "🔄".yellow().bold(),
@@ -680,14 +680,14 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
         let discovery_engine = DiscoveryEngine::new_with_arbiter(
             Arc::clone(&ccos.get_capability_marketplace()),
             Arc::clone(&ccos.get_intent_graph()),
-            ccos.get_delegating_arbiter(),
+            ccos.get_delegating_engine(),
         );
 
         let hints = discovery_engine
             .collect_discovery_hints_with_descriptions(&capability_info)
             .await
             .map_err(|e| {
-                Box::new(std::io::Error::new(
+                Box::<dyn std::error::Error + Send + Sync>::from(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     format!("Failed to collect discovery hints: {}", e),
                 ))
@@ -807,7 +807,7 @@ async fn run_demo(args: Args) -> Result<(), Box<dyn Error>> {
     .await
 }
 
-type DemoResult<T> = Result<T, Box<dyn Error>>;
+type DemoResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 async fn configure_session_pool(ccos: &Arc<CCOS>) -> DemoResult<()> {
     let mut session_pool = SessionPoolManager::new();
@@ -819,7 +819,7 @@ async fn configure_session_pool(ccos: &Arc<CCOS>) -> DemoResult<()> {
     Ok(())
 }
 
-fn runtime_error(err: RuntimeError) -> Box<dyn Error> {
+fn runtime_error(err: RuntimeError) -> Box<dyn std::error::Error + Send + Sync> {
     Box::new(err)
 }
 
@@ -834,7 +834,7 @@ fn print_architecture_summary(config: &AgentConfig, profile_name: Option<&str>) 
     );
     println!("{}", "═".repeat(80).bold());
 
-    println!("\n{}", "📋 Architecture Overview".bold());
+    println!("\n  {} Architecture Overview", "📋".bold());
     println!("  ┌─────────────────────────────────────────────────────────────┐");
     println!("  │ User Goal → Intent Extraction → Plan Generation → Execution │");
     println!("  └─────────────────────────────────────────────────────────────┘");
@@ -850,7 +850,7 @@ fn print_architecture_summary(config: &AgentConfig, profile_name: Option<&str>) 
     println!("\n  {} Key Components:", "2.".bold());
     println!(
         "     • {}: Governs intent extraction, plan generation, execution",
-        "DelegatingArbiter".cyan()
+        "DelegatingCognitiveEngine".cyan()
     );
     println!(
         "     • {}: Finds/synthesizes missing capabilities",
@@ -939,7 +939,7 @@ fn print_architecture_summary(config: &AgentConfig, profile_name: Option<&str>) 
 }
 
 /// Print detailed LLM provider information after initialization
-fn print_llm_provider_info(delegating: &DelegatingArbiter) {
+fn print_llm_provider_info(delegating: &DelegatingCognitiveEngine) {
     let _llm_config = delegating.get_llm_config(); // Available for future use
     println!("\n{}", "🤖 Active LLM Provider".bold());
     let provider = std::env::var("CCOS_LLM_PROVIDER").unwrap_or_else(|_| "unknown".to_string());
@@ -975,7 +975,9 @@ fn determine_goal(args: &Args) -> DemoResult<String> {
     io::stdin().read_line(&mut buffer)?;
     let goal = buffer.trim();
     if goal.is_empty() {
-        Err(io::Error::new(io::ErrorKind::InvalidInput, "Goal cannot be empty").into())
+        Err(Box::<dyn std::error::Error + Send + Sync>::from(
+            io::Error::new(io::ErrorKind::InvalidInput, "Goal cannot be empty"),
+        ))
     } else {
         Ok(goal.to_string())
     }
@@ -1104,7 +1106,7 @@ fn print_intent_summary(intent: &Intent) {
     }
 }
 async fn generate_clarifying_questions(
-    delegating: &DelegatingArbiter,
+    delegating: &DelegatingCognitiveEngine,
     goal: &str,
     intent: &Intent,
     _debug: bool,
@@ -1250,7 +1252,9 @@ async fn generate_clarifying_questions(
             💡 If no questions are needed, the LLM should return an empty vector: []",
             response
         );
-        Err(RuntimeError::Generic(error_msg).into())
+        Err(Box::<dyn std::error::Error + Send + Sync>::from(
+            RuntimeError::Generic(error_msg),
+        ))
     } else {
         Ok(questions)
     }
@@ -1720,7 +1724,7 @@ fn seed_answers_from_intent(intent: &Intent) -> HashMap<String, AnswerRecord> {
 }
 
 async fn auto_answer_with_llm(
-    delegating: &DelegatingArbiter,
+    delegating: &DelegatingCognitiveEngine,
     goal: &str,
     intent: &Intent,
     collected_answers: &[AnswerRecord],
@@ -1817,7 +1821,7 @@ async fn auto_answer_with_llm(
 }
 async fn conduct_interview(
     _ccos: &Arc<CCOS>,
-    delegating: &DelegatingArbiter,
+    delegating: &DelegatingCognitiveEngine,
     goal: &str,
     intent: &Intent,
     questions: &[ClarifyingQuestion],
@@ -1912,7 +1916,7 @@ async fn conduct_interview(
 }
 
 async fn propose_plan_steps(
-    delegating: &DelegatingArbiter,
+    delegating: &DelegatingCognitiveEngine,
     goal: &str,
     intent: &Intent,
     answers: &[AnswerRecord],
@@ -2035,7 +2039,7 @@ async fn propose_plan_steps(
     reset_plan_normalization_telemetry();
     let mut parsed_value = parse_plan_steps_response(&response).map_err(|e| {
         // The error from parse_plan_steps_response already includes a user-friendly message
-        // with the full response, so we just need to convert it to Box<dyn Error>
+        // with the full response, so we just need to convert it to Box<dyn std::error::Error + Send + Sync>
         runtime_error(e)
     })?;
     if let Value::Map(map) = &parsed_value {
@@ -2078,11 +2082,12 @@ async fn propose_plan_steps(
             }
 
             if steps.is_empty() {
-                Err(RuntimeError::Generic(format!(
+                Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                    RuntimeError::Generic(format!(
                     "No steps parsed from arbiter response ({} items total, all failed to parse)",
                     total_items
+                )),
                 ))
-                .into())
             } else {
                 if !debug {
                     if skipped_items.is_empty() {
@@ -2111,11 +2116,12 @@ async fn propose_plan_steps(
                 Ok(steps)
             }
         }
-        other => Err(RuntimeError::Generic(format!(
-            "Plan step response was not a vector: {}",
-            format_value(&other)
-        ))
-        .into()),
+        other => Err(Box::<dyn std::error::Error + Send + Sync>::from(
+            RuntimeError::Generic(format!(
+                "Plan step response was not a vector: {}",
+                format_value(&other)
+            )),
+        )),
     }
 }
 
@@ -2811,7 +2817,7 @@ fn build_needs_capabilities(steps: &[ProposedStep]) -> Value {
             let rationale = step.description.clone().unwrap_or_else(|| {
                 step_name_to_functional_description(&step.name, &step.capability_class)
             });
-            let inferred_need = CapabilityNeed::new(
+            let _inferred_need = CapabilityNeed::new(
                 step.capability_class.clone(),
                 step.required_inputs.clone(),
                 step.expected_outputs.clone(),
@@ -2989,7 +2995,7 @@ async fn resolve_and_stub_capabilities(
     let mut resolved = Vec::with_capacity(steps.len());
     let marketplace = ccos.get_capability_marketplace();
     let intent_graph = ccos.get_intent_graph();
-    let delegating_arbiter = ccos.get_delegating_arbiter();
+    let delegating_arbiter = ccos.get_delegating_engine();
     let resolver_ref = missing_capability_resolver.as_ref();
     let manifests = marketplace.list_capabilities().await;
 
@@ -3183,7 +3189,7 @@ async fn resolve_and_stub_capabilities(
             let discovery_engine = DiscoveryEngine::new_with_arbiter(
                 Arc::clone(&marketplace),
                 Arc::clone(&intent_graph),
-                delegating_arbiter.clone(),
+                ccos.get_delegating_engine(),
             );
 
             match discovery_engine.discover_capability(&need).await {
@@ -3269,23 +3275,27 @@ async fn resolve_and_stub_capabilities(
                     continue;
                 }
                 Ok(DiscoveryResult::NotFound) => {
-                    return Err(Box::new(RuntimeError::Generic(format!(
-                        "❌ Capability '{}' not found and synthesis failed.",
-                        step.capability_class
-                    ))) as Box<dyn Error>);
+                    return Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                        RuntimeError::Generic(format!(
+                            "❌ Capability '{}' not found and synthesis failed.",
+                            step.capability_class
+                        )),
+                    ));
                 }
                 Err(e) => {
-                    return Err(Box::new(RuntimeError::Generic(format!(
-                        "❌ Failed to synthesize capability '{}':\n\n{}",
-                        step.capability_class, e
-                    ))) as Box<dyn Error>);
+                    return Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                        RuntimeError::Generic(format!(
+                            "❌ Failed to synthesize capability '{}':\n\n{}",
+                            step.capability_class, e
+                        )),
+                    ));
                 }
             }
         } else {
-            return Err(Box::new(RuntimeError::Generic(format!(
+            return Err(Box::<dyn std::error::Error + Send + Sync>::from(RuntimeError::Generic(format!(
                 "❌ No delegating arbiter available for synthesis. Cannot synthesize capability '{}'.",
                 step.capability_class
-            ))) as Box<dyn Error>);
+            ))));
         }
     }
 
@@ -3319,14 +3329,17 @@ async fn fetch_manifest_for_step(
         .filter(|part| !part.is_empty())
         .collect();
 
-    manifests.into_iter().find(|manifest| {
-        tokens.iter().all(|token| {
-            manifest
-                .id
-                .to_ascii_lowercase()
-                .contains(&token.to_ascii_lowercase())
+    manifests
+        .iter()
+        .find(|manifest| {
+            tokens.iter().all(|token| {
+                manifest
+                    .id
+                    .to_ascii_lowercase()
+                    .contains(&token.to_ascii_lowercase())
+            })
         })
-    })
+        .cloned()
 }
 
 fn compute_input_bindings_for_step(
@@ -3902,7 +3915,7 @@ async fn register_orchestrator_in_marketplace(
     // Persist the orchestrator RTFS code to disk so it can be executed later by id
     {
         let dir = Path::new("capabilities/generated");
-        let persist_result: Result<(), Box<dyn std::error::Error>> = (|| {
+        let persist_result: DemoResult<()> = (|| {
             fs::create_dir_all(dir)?;
             let file_path = dir.join(format!("{}.rtfs", capability_id));
             if !file_path.exists() {
@@ -3925,7 +3938,7 @@ async fn register_orchestrator_in_marketplace(
 
     // Also convert the plan into a first-class Capability and persist under capabilities/generated/<id>/capability.rtfs
     {
-        let persist_cap_result: Result<(), Box<dyn std::error::Error>> = (|| {
+        let persist_cap_result: DemoResult<()> = (|| {
             let capability_rtfs =
                 convert_plan_to_capability_rtfs(capability_id, orchestrator_rtfs)?;
             let cap_dir = Path::new("capabilities/generated").join(capability_id);
@@ -3963,7 +3976,7 @@ fn convert_plan_to_capability_rtfs(capability_id: &str, plan_rtfs: &str) -> Demo
     let body_do = extract_s_expr_after_key(plan_rtfs, ":body")
         .or_else(|| extract_do_block(plan_rtfs))
         .ok_or_else(|| {
-            runtime_error(RuntimeError::Generic(
+            Box::<dyn std::error::Error + Send + Sync>::from(RuntimeError::Generic(
                 "Could not extract :body from plan".to_string(),
             ))
         })?;
@@ -4413,14 +4426,6 @@ async fn build_register_and_execute_plan(
 
     let mut context = rtfs::runtime::security::RuntimeContext::full();
     extract_and_bind_plan_inputs(&mut context, intent, answers);
-
-    if let Err(e) = sample_mcp_outputs(ccos, &resolved_steps, &context).await {
-        eprintln!(
-            "  {} Failed to sample MCP capability outputs: {}",
-            "⚠️".yellow(),
-            e
-        );
-    }
 
     let mut repair_options = PlanAutoRepairOptions::default();
     let mut context_lines = vec![format!("Goal: {}", goal)];
@@ -5620,7 +5625,7 @@ async fn match_proposed_steps(
 
     // Create discovery engine for enhanced capability search
     // Pass delegating arbiter if available for recursive synthesis
-    let delegating_arbiter = ccos.get_delegating_arbiter();
+    let delegating_arbiter = ccos.get_delegating_engine();
     let discovery_engine = DiscoveryEngine::new_with_arbiter(
         Arc::clone(&marketplace),
         Arc::clone(&intent_graph),
@@ -6053,7 +6058,7 @@ async fn run_learning_phase(
     goal: &str,
     persist: bool,
     debug_prompts: bool,
-) -> Result<LearningMetrics, Box<dyn std::error::Error>> {
+) -> DemoResult<LearningMetrics> {
     let mut state = DemoRunState {
         goal: goal.to_string(),
         answers: BTreeMap::new(),
@@ -6120,7 +6125,7 @@ async fn execute_plan(
     scenario: &DemoScenario,
     state: &mut DemoRunState,
     debug_prompts: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> DemoResult<()> {
     let marketplace = ccos.get_capability_marketplace();
 
     for step in &scenario.steps {
@@ -7122,7 +7127,7 @@ fn sanitize_id(goal: &str) -> String {
     }
 }
 
-fn persist_capability(id: &str, spec: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn persist_capability(id: &str, spec: &str) -> DemoResult<()> {
     let dir = Path::new("capabilities/generated");
     fs::create_dir_all(dir)?;
     let file_path = dir.join(format!("{}.rtfs", id));
@@ -7130,7 +7135,7 @@ fn persist_capability(id: &str, spec: &str) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-fn persist_plan(id: &str, plan_code: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn persist_plan(id: &str, plan_code: &str) -> DemoResult<()> {
     let dir = Path::new("capabilities/generated");
     fs::create_dir_all(dir)?;
     let file_path = dir.join(format!("{}-plan.rtfs", id));
@@ -7142,7 +7147,7 @@ async fn run_application_phase(
     scenario: &DemoScenario,
     previous_goal: &str,
     debug_prompts: bool,
-) -> Result<ApplicationMetrics, Box<dyn std::error::Error>> {
+) -> DemoResult<ApplicationMetrics> {
     let start = std::time::Instant::now();
     let new_goal = std::env::var("SMART_ASSISTANT_SECOND_GOAL")
         .unwrap_or_else(|_| format!("{} – refreshed", previous_goal));
@@ -7270,7 +7275,7 @@ fn print_application_summary(learn: &LearningMetrics, apply: &ApplicationMetrics
 // Configuration helpers
 // -----------------------------------------------------------------------------
 
-fn load_agent_config(path: &str) -> Result<AgentConfig, Box<dyn std::error::Error>> {
+fn load_agent_config(path: &str) -> DemoResult<AgentConfig> {
     let raw = fs::read_to_string(path)?;
     let ext = Path::new(path)
         .extension()
@@ -7287,7 +7292,7 @@ fn load_agent_config(path: &str) -> Result<AgentConfig, Box<dyn std::error::Erro
 fn apply_llm_profile(
     config: &AgentConfig,
     profile_name: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> DemoResult<()> {
     std::env::set_var("CCOS_ENABLE_DELEGATION", "1");
 
     if let Some(_) = &config.llm_profiles {
@@ -7364,7 +7369,7 @@ fn set_api_key(provider: &str, key: &str) {
 /// Test a synthesized capability with dummy data and correct it if it fails
 async fn test_and_correct_capability(
     _ccos: &Arc<CCOS>,
-    delegating_arbiter: &Arc<DelegatingArbiter>,
+    delegating_arbiter: &Arc<DelegatingCognitiveEngine>,
     manifest: &CapabilityManifest,
     step: &ProposedStep,
 ) -> DemoResult<()> {
@@ -7482,7 +7487,7 @@ fn format_test_input_for_rtfs(test_input: &HashMap<String, String>) -> String {
 
 /// Correct a capability using the arbiter with LLM and grammar hints
 async fn correct_capability_with_arbiter(
-    delegating_arbiter: &Arc<DelegatingArbiter>,
+    delegating_arbiter: &Arc<DelegatingCognitiveEngine>,
     manifest: &CapabilityManifest,
     step: &ProposedStep,
     capability_file: &Path,

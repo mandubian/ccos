@@ -1,20 +1,20 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use tokio::sync::RwLock;
-use ccos::governance_kernel::{GovernanceKernel, SemanticJudgePolicy};
-use ccos::orchestrator::Orchestrator;
-use ccos::intent_graph::IntentGraph;
-use ccos::arbiter::DelegatingArbiter;
+use async_trait::async_trait;
 use ccos::arbiter::llm_provider::{LlmProvider, LlmProviderInfo, ValidationResult};
+use ccos::arbiter::DelegatingCognitiveEngine;
+use ccos::capabilities::registry::CapabilityRegistry;
+use ccos::capability_marketplace::CapabilityMarketplace;
+use ccos::causal_chain::CausalChain;
+use ccos::governance_judge::Judgment;
+use ccos::governance_kernel::{GovernanceKernel, SemanticJudgePolicy};
+use ccos::intent_graph::IntentGraph;
+use ccos::orchestrator::Orchestrator;
+use ccos::plan_archive::PlanArchive;
 use ccos::types::{Plan, StorableIntent};
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
-use async_trait::async_trait;
-use ccos::causal_chain::CausalChain;
-use ccos::capability_marketplace::CapabilityMarketplace;
-use ccos::plan_archive::PlanArchive;
-use ccos::governance_judge::Judgment;
-use ccos::capabilities::registry::CapabilityRegistry;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tokio::sync::RwLock;
 
 struct MockLlmProvider {
     judgment: Judgment,
@@ -28,14 +28,28 @@ impl MockLlmProvider {
 
 #[async_trait]
 impl LlmProvider for MockLlmProvider {
-    async fn generate_intent(&self, _: &str, _: Option<HashMap<String, String>>) -> RuntimeResult<StorableIntent> {
-        Err(rtfs::runtime::RuntimeError::Generic("Not implemented".to_string()))
+    async fn generate_intent(
+        &self,
+        _: &str,
+        _: Option<HashMap<String, String>>,
+    ) -> RuntimeResult<StorableIntent> {
+        Err(rtfs::runtime::RuntimeError::Generic(
+            "Not implemented".to_string(),
+        ))
     }
-    async fn generate_plan(&self, _: &StorableIntent, _: Option<HashMap<String, String>>) -> RuntimeResult<Plan> {
-        Err(rtfs::runtime::RuntimeError::Generic("Not implemented".to_string()))
+    async fn generate_plan(
+        &self,
+        _: &StorableIntent,
+        _: Option<HashMap<String, String>>,
+    ) -> RuntimeResult<Plan> {
+        Err(rtfs::runtime::RuntimeError::Generic(
+            "Not implemented".to_string(),
+        ))
     }
     async fn validate_plan(&self, _: &str) -> RuntimeResult<ValidationResult> {
-        Err(rtfs::runtime::RuntimeError::Generic("Not implemented".to_string()))
+        Err(rtfs::runtime::RuntimeError::Generic(
+            "Not implemented".to_string(),
+        ))
     }
     async fn generate_text(&self, _: &str) -> RuntimeResult<String> {
         Ok(serde_json::to_string(&self.judgment).unwrap())
@@ -66,7 +80,7 @@ async fn test_semantic_judge_blocks_bad_plan() {
     ));
 
     let mut kernel = GovernanceKernel::new(orchestrator, intent_graph.clone());
-    
+
     // Add policy to block unsafe plans
     kernel.set_semantic_judge_policy(SemanticJudgePolicy {
         enabled: true,
@@ -80,7 +94,7 @@ async fn test_semantic_judge_blocks_bad_plan() {
         risk_score: 0.9,
     }));
 
-    let arbiter = Arc::new(DelegatingArbiter::for_test(
+    let arbiter = Arc::new(DelegatingCognitiveEngine::for_test(
         mock_llm,
         marketplace,
         intent_graph.clone(),
@@ -88,8 +102,11 @@ async fn test_semantic_judge_blocks_bad_plan() {
 
     kernel.set_arbiter(arbiter);
 
-    let mut plan = Plan::new_rtfs("call :system.read_file { path: \"/etc/passwd\" }".to_string(), vec![]);
-    
+    let mut plan = Plan::new_rtfs(
+        "call :system.read_file { path: \"/etc/passwd\" }".to_string(),
+        vec![],
+    );
+
     let intent = StorableIntent::new("Delete all user files".to_string());
     let intent_id = intent.intent_id.clone();
     plan.intent_ids = vec![intent_id.clone()];
@@ -100,10 +117,10 @@ async fn test_semantic_judge_blocks_bad_plan() {
     }
 
     let context = RuntimeContext::full();
-    
+
     // Test through validate_and_execute which calls judge_plan_semantically
     let result = kernel.validate_and_execute(plan, &context).await;
-    
+
     assert!(result.is_err());
     let err_msg = format!("{:?}", result.err().unwrap());
     assert!(err_msg.contains("Plan rejected by semantic judge"));
@@ -126,7 +143,7 @@ async fn test_judge_plan_allowed() {
     ));
 
     let mut kernel = GovernanceKernel::new(orchestrator, intent_graph.clone());
-    
+
     kernel.set_semantic_judge_policy(SemanticJudgePolicy {
         enabled: true,
         fail_open: false,
@@ -139,7 +156,7 @@ async fn test_judge_plan_allowed() {
         risk_score: 0.1,
     }));
 
-    let arbiter = Arc::new(DelegatingArbiter::for_test(
+    let arbiter = Arc::new(DelegatingCognitiveEngine::for_test(
         mock_llm,
         marketplace,
         intent_graph.clone(),
@@ -147,8 +164,11 @@ async fn test_judge_plan_allowed() {
 
     kernel.set_arbiter(arbiter);
 
-    let mut plan = Plan::new_rtfs("call :system.print { message: \"Hello\" }".to_string(), vec![]);
-    
+    let mut plan = Plan::new_rtfs(
+        "call :system.print { message: \"Hello\" }".to_string(),
+        vec![],
+    );
+
     let intent = StorableIntent::new("Say hello to the user".to_string());
     let intent_id = intent.intent_id.clone();
     plan.intent_ids = vec![intent_id.clone()];
@@ -159,9 +179,9 @@ async fn test_judge_plan_allowed() {
     }
 
     let context = RuntimeContext::full();
-    
+
     let result = kernel.validate_and_execute(plan, &context).await;
-    
+
     // It might fail later because :system.print is not registered, but it should pass the semantic judge
     if let Err(e) = result {
         let err_msg = format!("{:?}", e);

@@ -352,7 +352,7 @@ impl GoalSignals {
 
     /// Apply catalog search to extract capability requirements from goal signals.
     /// This replaces the old descriptor-based matching with catalog search.
-    pub fn apply_catalog_search(
+    pub async fn apply_catalog_search(
         &mut self,
         catalog: &CatalogService,
         min_score: f32,
@@ -375,11 +375,15 @@ impl GoalSignals {
 
         // Search catalog for capabilities matching the goal signals
         let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
-        let hits = catalog.search_keyword(&query, Some(&filter), max_results * 2);
+        let hits = catalog
+            .search_keyword(&query, Some(&filter), max_results * 2)
+            .await;
 
         // Also try semantic search if keyword search returns few results
         let final_hits = if hits.len() < max_results / 2 {
-            let semantic_hits = catalog.search_semantic(&query, Some(&filter), max_results);
+            let semantic_hits = catalog
+                .search_semantic(&query, Some(&filter), max_results)
+                .await;
             // Merge and deduplicate (prefer higher scores)
             let mut combined: HashMap<String, _> = HashMap::new();
             for hit in hits {

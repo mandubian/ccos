@@ -1,7 +1,7 @@
 //! Recursive synthesizer for generating missing capabilities
 
-use crate::arbiter::arbiter_engine::ArbiterEngine;
-use crate::arbiter::delegating_arbiter::DelegatingArbiter;
+use crate::cognitive_engine::engine::CognitiveEngine;
+use crate::cognitive_engine::delegating_engine::DelegatingCognitiveEngine;
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::discovery::cycle_detector::CycleDetector;
 use crate::discovery::engine::{DiscoveryContext, DiscoveryEngine};
@@ -25,7 +25,7 @@ pub struct SynthesizedCapability {
 /// Recursive synthesizer that treats missing capabilities as new intents
 pub struct RecursiveSynthesizer {
     discovery_engine: DiscoveryEngine,
-    delegating_arbiter: Option<Arc<DelegatingArbiter>>,
+    delegating_arbiter: Option<Arc<DelegatingCognitiveEngine>>,
     cycle_detector: CycleDetector,
     default_max_depth: usize,
 }
@@ -34,7 +34,7 @@ impl RecursiveSynthesizer {
     /// Create a new recursive synthesizer
     pub fn new(
         discovery_engine: DiscoveryEngine,
-        delegating_arbiter: Option<Arc<DelegatingArbiter>>,
+        delegating_arbiter: Option<Arc<DelegatingCognitiveEngine>>,
         max_depth: usize,
     ) -> Self {
         Self {

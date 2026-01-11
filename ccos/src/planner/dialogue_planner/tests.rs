@@ -2,7 +2,6 @@
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::planner::dialogue_planner::entity::{DialogueEntity, EntityError, HumanEntity};
     use crate::planner::dialogue_planner::types::*;
     use async_trait::async_trait;

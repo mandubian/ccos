@@ -9,7 +9,9 @@ use super::{ResolutionContext, ResolutionError, ResolutionStrategy, ResolvedCapa
 use crate::planner::modular_planner::decomposition::grounded_llm::{
     cosine_similarity, EmbeddingProvider,
 };
-use crate::planner::modular_planner::types::{ApiAction, IntentType, SubIntent};
+#[cfg(test)]
+use crate::planner::modular_planner::types::ApiAction;
+use crate::planner::modular_planner::types::{IntentType, SubIntent};
 
 /// Capability info for matching
 #[derive(Debug, Clone)]
