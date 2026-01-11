@@ -10,7 +10,7 @@ macro_rules! ccos_println {
             .map(|v| { let v = v.to_lowercase(); v == "1" || v == "true" || v == "on" })
             .unwrap_or(false);
         if !quiet {
-            println!($($arg)*);
+            eprintln!($($arg)*);
         }
     }};
 }
@@ -29,15 +29,15 @@ macro_rules! ccos_eprintln {
 
 // Include the CCOS module structure
 // AgentRegistry migration: agent module removed (deprecated, use CapabilityMarketplace with :kind :agent)
-pub mod agents;
 pub mod approval;
-pub mod arbiter;
+pub mod cognitive_engine;
+pub use cognitive_engine as arbiter; // Backward compatibility alias
 pub mod archivable_types;
 pub mod catalog;
 pub mod causal_chain;
-pub mod config;
 pub mod checkpoint_archive;
 pub mod cli;
+pub mod config;
 pub mod discovery;
 pub mod event_sink;
 pub mod execution_context;
@@ -105,8 +105,8 @@ pub mod utils;
 pub mod planner_viz_common;
 
 // Re-export some arbiter sub-modules for historic import paths
-pub use crate::arbiter::arbiter_engine;
-pub use crate::arbiter::delegating_arbiter;
+pub use crate::cognitive_engine::engine;
+pub use crate::cognitive_engine::delegating_engine;
 
 // CCOS core implementation (formerly mod.rs)
 pub mod ccos_core;

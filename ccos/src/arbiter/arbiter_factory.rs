@@ -2,13 +2,13 @@ use std::sync::{Arc, Mutex};
 
 use rtfs::runtime::error::RuntimeError;
 
-use super::arbiter_config::{ArbiterConfig, ArbiterEngineType};
-use super::arbiter_engine::ArbiterEngine;
-use super::delegating_arbiter::DelegatingArbiter;
-use super::dummy_arbiter::DummyArbiter;
-use super::hybrid_arbiter::HybridArbiter;
-use super::llm_arbiter::LlmArbiter;
-use super::template_arbiter::TemplateArbiter;
+use crate::arbiter::arbiter_config::{ArbiterConfig, ArbiterEngineType};
+use crate::arbiter::arbiter_engine::ArbiterEngine;
+use crate::arbiter::DelegatingArbiter;
+use crate::arbiter::legacy::dummy_arbiter::DummyArbiter;
+use crate::arbiter::legacy::hybrid_arbiter::HybridArbiter;
+use crate::arbiter::legacy::llm_arbiter::LlmArbiter;
+use crate::arbiter::legacy::template_arbiter::TemplateArbiter;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::intent_graph::IntentGraph;
 

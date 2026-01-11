@@ -6,10 +6,9 @@
 //! This is used by the unified discovery service to find which MCP servers
 //! are available before querying them for their tools.
 
-use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+use rtfs::runtime::error::RuntimeResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
 /// MCP Registry client for discovering and querying MCP servers
 ///
 /// Queries the official MCP Registry API to find servers that provide

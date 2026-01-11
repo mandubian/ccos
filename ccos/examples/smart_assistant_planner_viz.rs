@@ -8,19 +8,19 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use ccos::config::types::{AgentConfig, LlmProfile};
 use clap::{ArgAction, Parser};
 use crossterm::style::Stylize;
 use futures::FutureExt;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::config::profile_selection::expand_profiles;
-use ccos::config::types::{AgentConfig, LlmProfile};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
 
-use ccos::arbiter::arbiter_config::LlmProviderType;
+use ccos::arbiter::config::{self, LlmProviderType};
 use ccos::arbiter::prompt::{FilePromptStore, PromptManager};
-use ccos::arbiter::ArbiterEngine;
+use ccos::arbiter::{CognitiveEngine, DelegatingCognitiveEngine};
 use ccos::capabilities::{MCPSessionHandler, SessionPoolManager};
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::catalog::{CatalogEntryKind, CatalogFilter, CatalogService};
@@ -574,9 +574,13 @@ async fn build_capability_menu_from_catalog(
     let query = build_catalog_query(goal, intent);
     let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
 
-    let mut raw_hits = catalog.search_semantic(&query, Some(&filter), limit * 2);
+    let mut raw_hits = catalog
+        .search_semantic(&query, Some(&filter), limit * 2)
+        .await;
     if raw_hits.is_empty() {
-        raw_hits = catalog.search_keyword(&query, Some(&filter), limit * 2);
+        raw_hits = catalog
+            .search_keyword(&query, Some(&filter), limit * 2)
+            .await;
     }
 
     let mut menu = Vec::new();
@@ -835,7 +839,7 @@ async fn refresh_capability_menu(
 
     let mut gap_detected = false;
     // Check if the main query itself has poor coverage
-    let main_hits = catalog.search_semantic(&query, Some(&filter), 3);
+    let main_hits = catalog.search_semantic(&query, Some(&filter), 3).await;
     let best_main_score = main_hits
         .iter()
         .filter(|h| h.entry.id != "ccos.user.ask" && h.entry.id != "ccos.echo") // Ignore generic fallbacks
@@ -857,7 +861,7 @@ async fn refresh_capability_menu(
                 continue;
             }
 
-            let hits = catalog.search_semantic(hint, Some(&filter), 1);
+            let hits = catalog.search_semantic(hint, Some(&filter), 1).await;
             let best_score = hits
                 .iter()
                 .filter(|h| h.entry.id != "ccos.user.ask" && h.entry.id != "ccos.echo")
@@ -1465,7 +1469,7 @@ fn extract_notes_from_partial_json(response: &str) -> Option<String> {
 }
 
 async fn propose_plan_steps_with_menu_and_capture(
-    delegating: &ccos::arbiter::delegating_arbiter::DelegatingArbiter,
+    delegating: &DelegatingCognitiveEngine,
     goal: &str,
     intent: &Intent,
     known_inputs: &HashMap<String, Value>,
@@ -1614,7 +1618,7 @@ Output requirements:
         println!("{}", prompt);
     }
 
-    let response = match delegating.generate_raw_text(&prompt).await {
+    let response: String = match delegating.generate_raw_text(&prompt).await {
         Ok(r) => r,
         Err(e) => return Err((None, e)),
     };
@@ -2171,7 +2175,7 @@ async fn assemble_plan_from_steps(
     steps: &[PlanStep],
     intent: &Intent,
     plan_id_override: Option<&str>,
-    delegating: Option<&ccos::arbiter::delegating_arbiter::DelegatingArbiter>,
+    delegating: Option<&DelegatingCognitiveEngine>,
 ) -> RuntimeResult<Plan> {
     let mut step_index = HashMap::new();
     for (idx, step) in steps.iter().enumerate() {
@@ -2323,7 +2327,7 @@ async fn assemble_plan_from_steps(
 async fn render_plan_body_with_llm(
     steps: &[PlanStep],
     intent: &Intent,
-    delegating: &ccos::arbiter::delegating_arbiter::DelegatingArbiter,
+    delegating: &DelegatingCognitiveEngine,
 ) -> RuntimeResult<String> {
     // Serialize steps to JSON
     let mut step_json_vec = Vec::new();
@@ -2734,7 +2738,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     configure_session_pool(&ccos).await?;
 
-    let delegating_arc = ccos.get_delegating_arbiter().ok_or_else(|| {
+    let delegating_arc = ccos.get_delegating_engine().ok_or_else(|| {
         runtime_error(RuntimeError::Generic(
             "Delegating arbiter is not configured".to_string(),
         ))
@@ -2850,7 +2854,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let catalog = ccos.get_catalog();
     let mut signals = GoalSignals::from_goal_and_intent(&goal, &intent);
-    signals.apply_catalog_search(&catalog, 0.5, 10);
+    signals.apply_catalog_search(&catalog, 0.5, 10).await;
     if let Ok(signals_json) = serde_json::to_value(&signals) {
         planner_audit.log_json("signals_initialized", &signals_json);
     }
@@ -4218,10 +4222,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             let _repair_options = repair_options;
 
-            match ccos
-                .validate_and_execute_plan(plan.clone(), &context)
-                .await
-            {
+            match ccos.validate_and_execute_plan(plan.clone(), &context).await {
                 Ok(result) => {
                     println!(
                         "{} {}",
@@ -4506,7 +4507,10 @@ mod tests {
                 "owner".to_string(),
                 StepInputBinding::Literal("mandubian".to_string()),
             )],
-            outputs: vec!["issues".to_string()],
+            outputs: vec![StepOutput {
+                alias: "issues".to_string(),
+                source: "issues".to_string(),
+            }],
             notes: None,
         };
 

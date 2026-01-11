@@ -1,0 +1,1989 @@
+warning: unused import: `std::sync::Mutex`
+  --> rtfs/src/development_tooling.rs:15:5
+   |
+15 | use std::sync::Mutex;
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `ForExpr`
+  --> rtfs/src/parser/expressions.rs:10:30
+   |
+10 | use crate::ast::{Expression, ForExpr, Keyword, Literal, MapKey, Symbol}; // Symbol now used for task_context_access desugaring
+   |                              ^^^^^^^
+
+warning: unused import: `providers::*`
+  --> rtfs/src/runtime/capabilities/mod.rs:13:9
+   |
+13 | pub use providers::*;
+   |         ^^^^^^^^^^^^
+
+warning: unused import: `Keyword`
+  --> rtfs/src/runtime/evaluator.rs:11:5
+   |
+11 |     Keyword, LetExpr, Literal, MapKey, MatchExpr, Symbol, TopLevel, TryCatchExpr,
+   |     ^^^^^^^
+
+warning: unused import: `SimpleCachePolicy`
+  --> rtfs/src/runtime/evaluator.rs:22:65
+   |
+22 |     ConflictResolution, ExecutionResultStruct, SimpleAgentCard, SimpleCachePolicy,
+   |                                                                 ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Mutex`
+  --> rtfs/src/runtime/evaluator.rs:31:22
+   |
+31 | use std::sync::{Arc, Mutex, RwLock};
+   |                      ^^^^^
+
+warning: unused imports: `File` and `OpenOptions`
+  --> rtfs/src/runtime/microvm/providers/firecracker.rs:20:21
+   |
+20 | use std::fs::{self, File, OpenOptions};
+   |                     ^^^^  ^^^^^^^^^^^
+
+warning: unused import: `Sha256`
+  --> rtfs/src/runtime/module_runtime.rs:13:20
+   |
+13 | use sha2::{Digest, Sha256};
+   |                    ^^^^^^
+
+warning: unused import: `std::sync::Arc`
+  --> rtfs/src/runtime/stdlib.rs:23:5
+   |
+23 | use std::sync::Arc;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused import: `std::fs`
+  --> rtfs/src/runtime/stdlib.rs:31:5
+   |
+31 | use std::fs;
+   |     ^^^^^^^
+
+warning: unused imports: `SystemTime` and `UNIX_EPOCH`
+  --> rtfs/src/runtime/stdlib.rs:33:17
+   |
+33 | use std::time::{SystemTime, UNIX_EPOCH};
+   |                 ^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> rtfs/src/runtime/stubs.rs:4:5
+  |
+4 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Digest`
+  --> rtfs/src/runtime/module_runtime.rs:13:12
+   |
+13 | use sha2::{Digest, Sha256};
+   |            ^^^^^^
+
+warning: unused variable: `content`
+  --> rtfs/src/config/types.rs:99:23
+   |
+99 |             if let Ok(content) = std::fs::read_to_string(&path) {
+   |                       ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_content`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `meta`
+    --> rtfs/src/ir/converter.rs:1066:40
+     |
+1066 |             Expression::WithMetadata { meta, expr } => {
+     |                                        ^^^^ help: try ignoring the field: `meta: _`
+
+warning: unused variable: `for_expr`
+    --> rtfs/src/ir/converter.rs:3181:31
+     |
+3181 |     fn convert_for(&mut self, for_expr: ForExpr) -> IrConversionResult<IrNode> {
+     |                               ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_for_expr`
+
+warning: unused variable: `span`
+   --> rtfs/src/parser/expressions.rs:390:9
+    |
+390 |     let span = pair_to_source_span(&pair);
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unreachable pattern
+   --> rtfs/src/parser/types.rs:214:33
+    |
+214 | ...                   Rule::WHITESPACE | Rule::COMMENT => {
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> rtfs/src/parser/types.rs:214:33
+    |
+189 | ...                   Rule::WHITESPACE | Rule::COMMENT => {}
+    |                       -------------------------------- matches some of the same values
+190 | ...                   _ => {
+    |                       - matches some of the same values
+...
+214 | ...                   Rule::WHITESPACE | Rule::COMMENT => {
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ collectively making this unreachable
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable pattern
+   --> rtfs/src/parser/types.rs:217:33
+    |
+217 | ...                   _ => {
+    |                       ^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> rtfs/src/parser/types.rs:217:33
+    |
+180 | ...                   Rule::keyword => {
+    |                       ------------- matches some of the same values
+...
+183 | ...                   Rule::optional_marker => {
+    |                       --------------------- matches some of the same values
+...
+189 | ...                   Rule::WHITESPACE | Rule::COMMENT => {}
+    |                       -------------------------------- matches some of the same values
+190 | ...                   _ => {
+    |                       - matches some of the same values
+...
+217 | ...                   _ => {
+    |                       ^ collectively making this unreachable
+
+warning: unused variable: `positives`
+   --> rtfs/src/parser_error_reporter.rs:305:9
+    |
+305 |         positives: &[Rule],
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_positives`
+
+warning: value assigned to `child_env_opt` is never read
+   --> rtfs/src/runtime/evaluator.rs:913:17
+    |
+913 |         let mut child_env_opt: Option<Environment> = None;
+    |                 ^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `hc`
+   --> rtfs/src/runtime/evaluator.rs:924:52
+    |
+924 |                     ExecutionOutcome::RequiresHost(hc) => Err(RuntimeError::Generic(
+    |                                                    ^^ help: if this is intentional, prefix it with an underscore: `_hc`
+
+warning: variable `merge_policy` is assigned to, but never used
+    --> rtfs/src/runtime/evaluator.rs:1327:17
+     |
+1327 |         let mut merge_policy = ConflictResolution::KeepExisting;
+     |                 ^^^^^^^^^^^^
+     |
+     = note: consider using `_merge_policy` instead
+
+warning: value assigned to `merge_policy` is never read
+    --> rtfs/src/runtime/evaluator.rs:1376:25
+     |
+1376 |                         merge_policy = match val {
+     |                         ^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: unused variable: `child_id`
+    --> rtfs/src/runtime/evaluator.rs:1428:17
+     |
+1428 |             let child_id = {
+     |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_child_id`
+
+warning: unused variable: `final_prompt`
+    --> rtfs/src/runtime/evaluator.rs:1697:13
+     |
+1697 |         let final_prompt = if let Some(sys) = system_prompt {
+     |             ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_final_prompt`
+
+warning: unused variable: `temp_env`
+    --> rtfs/src/runtime/evaluator.rs:3604:29
+     |
+3604 |                     let mut temp_env = env.clone();
+     |                             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_temp_env`
+
+warning: variable does not need to be mutable
+    --> rtfs/src/runtime/evaluator.rs:3604:25
+     |
+3604 |                     let mut temp_env = env.clone();
+     |                         ----^^^^^^^^
+     |                         |
+     |                         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `security_context`
+    --> rtfs/src/runtime/microvm/providers/firecracker.rs:2247:13
+     |
+2247 |         let security_context = vm.get_security_context();
+     |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_security_context`
+
+warning: unused variable: `monitoring_stats`
+    --> rtfs/src/runtime/microvm/providers/firecracker.rs:2257:13
+     |
+2257 |         let monitoring_stats = self.get_monitoring_stats()?;
+     |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_monitoring_stats`
+
+warning: unused variable: `runtime_path`
+   --> rtfs/src/runtime/microvm/providers/gvisor.rs:310:13
+    |
+310 |         let runtime_path = format!("/tmp/rtfs-runtime-{}.sh", container_id);
+    |             ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_runtime_path`
+
+warning: unused variable: `source`
+   --> rtfs/src/runtime/microvm/providers/process.rs:432:76
+    |
+432 |                 crate::runtime::microvm::core::Program::Binary { language, source } => {
+    |                                                                            ^^^^^^ help: try ignoring the field: `source: _`
+
+warning: unused variable: `env`
+  --> rtfs/src/runtime/stdlib.rs:92:28
+   |
+92 |     fn load_tool_functions(env: &mut Environment) {
+   |                            ^^^ help: if this is intentional, prefix it with an underscore: `_env`
+
+warning: unused variable: `function`
+   --> rtfs/src/runtime/stdlib.rs:327:25
+    |
+327 |                     let function = &args[0];
+    |                         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_function`
+
+warning: unused variable: `v`
+   --> rtfs/src/runtime/stdlib.rs:342:37
+    |
+342 | ...                   for (k, v) in m {
+    |                               ^ help: if this is intentional, prefix it with an underscore: `_v`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:425:23
+    |
+425 |     fn tool_open_file(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                       ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:673:17
+    |
+673 |     fn tool_log(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:683:21
+    |
+683 |     fn tool_time_ms(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:870:16
+    |
+870 |     fn println(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:880:21
+    |
+880 |     fn thread_sleep(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:890:20
+    |
+890 |     fn file_exists(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                    ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:900:16
+    |
+900 |     fn get_env(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:910:19
+    |
+910 |     fn read_lines(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                   ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:920:13
+    |
+920 |     fn step(args: Vec<Value>) -> RuntimeResult<Value> {
+    |             ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:942:18
+    |
+942 |     fn read_file(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                  ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `meta`
+   --> rtfs/src/runtime/values.rs:487:40
+    |
+487 |             Expression::WithMetadata { meta, expr } => {
+    |                                        ^^^^ help: try ignoring the field: `meta: _`
+
+warning: unused variable: `input_schema`
+   --> rtfs/src/builders/capability_builder.rs:383:21
+    |
+383 |         if let Some(input_schema) = &self.input_schema {
+    |                     ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_input_schema`
+
+warning: unused variable: `output_schema`
+   --> rtfs/src/builders/capability_builder.rs:390:21
+    |
+390 |         if let Some(output_schema) = &self.output_schema {
+    |                     ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_output_schema`
+
+warning: struct `IrStrategy` is never constructed
+  --> rtfs/src/development_tooling.rs:19:8
+   |
+19 | struct IrStrategy {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `new` is never used
+  --> rtfs/src/development_tooling.rs:24:8
+   |
+23 | impl IrStrategy {
+   | --------------- associated function in this implementation
+24 |     fn new() -> Self {
+   |        ^^^
+
+warning: fields `type_aliases` and `constraints` are never read
+  --> rtfs/src/ir/converter.rs:96:5
+   |
+95 | pub struct TypeContext {
+   |            ----------- fields in this struct
+96 |     type_aliases: HashMap<String, IrType>,
+   |     ^^^^^^^^^^^^
+97 |     constraints: Vec<TypeConstraint>,
+   |     ^^^^^^^^^^^
+   |
+   = note: `TypeContext` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `type_context` and `capture_analysis` are never read
+   --> rtfs/src/ir/converter.rs:111:5
+    |
+108 | pub struct IrConverter<'a> {
+    |            ----------- fields in this struct
+...
+111 |     type_context: TypeContext,
+    |     ^^^^^^^^^^^^
+112 |     capture_analysis: HashMap<NodeId, Vec<IrCapture>>,
+    |     ^^^^^^^^^^^^^^^^
+
+warning: field `max_inline_depth` is never read
+  --> rtfs/src/ir/enhanced_optimizer.rs:12:5
+   |
+ 9 | pub struct EnhancedIrOptimizer {
+   |            ------------------- field in this struct
+...
+12 |     max_inline_depth: usize,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: function `create_example_ast` is never used
+   --> rtfs/src/ir/ir_demo.rs:203:4
+    |
+203 | fn create_example_ast() -> Expression {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `print_ast_simplified` is never used
+   --> rtfs/src/ir/ir_demo.rs:244:4
+    |
+244 | fn print_ast_simplified(expr: &Expression) {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: field `max_inline_depth` is never read
+  --> rtfs/src/ir/optimizer.rs:12:5
+   |
+ 9 | pub struct EnhancedIrOptimizer {
+   |            ------------------- field in this struct
+...
+12 |     max_inline_depth: usize,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: function `values_equivalent` is never used
+  --> rtfs/src/runtime/evaluator.rs:57:4
+   |
+57 | fn values_equivalent(a: &Value, b: &Value) -> bool {
+   |    ^^^^^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> rtfs/src/runtime/evaluator.rs:226:8
+     |
+  70 | impl Evaluator {
+     | -------------- methods in this implementation
+...
+ 226 |     fn validate_expression_result(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+3079 |     fn cleanup_resource(
+     |        ^^^^^^^^^^^^^^^^
+...
+3144 |     fn parse_criteria_to_query(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+3208 |     fn parse_options_to_query(
+     |        ^^^^^^^^^^^^^^^^^^^^^^
+...
+3289 |     fn simple_agent_card_to_value(&self, agent_card: SimpleAgentCard) -> Value {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+3362 |     fn parse_capabilities_list(&self, value: &Value) -> RuntimeResult<Vec<String>> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+3390 |     fn parse_string_value(&self, value: &Value) -> RuntimeResult<String> {
+     |        ^^^^^^^^^^^^^^^^^^
+
+warning: method `get_or_create_persistent_env` is never used
+  --> rtfs/src/runtime/ir_runtime.rs:63:8
+   |
+35 | impl IrStrategy {
+   | --------------- method in this implementation
+...
+63 |     fn get_or_create_persistent_env(&mut self) -> Result<&mut IrEnvironment, RuntimeError> {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> rtfs/src/runtime/microvm/providers/firecracker.rs:837:8
+     |
+ 813 | impl FirecrackerMicroVMProvider {
+     | ------------------------------- methods in this implementation
+...
+ 837 |     fn deploy_rtfs_runtime(&self, vm: &mut FirecrackerVM) -> RuntimeResult<()> {
+     |        ^^^^^^^^^^^^^^^^^^^
+...
+1555 |     fn execute_rtfs_in_vm(
+     |        ^^^^^^^^^^^^^^^^^^
+...
+1676 |     fn perform_security_checks(&self, vm: &mut FirecrackerVM) -> RuntimeResult<()> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+1705 |     fn perform_resource_checks(&self, vm: &mut FirecrackerVM) -> RuntimeResult<()> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+1723 |     fn update_performance_metrics(&self, execution_time: Duration) -> RuntimeResult<()> {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1733 |     fn update_resource_usage(&self, vm: &mut FirecrackerVM) -> RuntimeResult<()> {
+     |        ^^^^^^^^^^^^^^^^^^^^^
+...
+1745 |     fn calculate_security_score(&self, vm: &FirecrackerVM) -> f64 {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1766 |     fn get_vm(&mut self) -> RuntimeResult<&mut FirecrackerVM> {
+     |        ^^^^^^
+...
+1791 |     fn is_vm_healthy(&self, vm: &FirecrackerVM) -> bool {
+     |        ^^^^^^^^^^^^^
+
+warning: method `get_enhanced_metadata` is never used
+    --> rtfs/src/runtime/microvm/providers/firecracker.rs:2238:8
+     |
+2236 | impl FirecrackerMicroVMProvider {
+     | ------------------------------- method in this implementation
+2237 |     /// Get enhanced metadata from monitoring systems
+2238 |     fn get_enhanced_metadata(
+     |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `config` and `rtfs_runtime_path` are never read
+  --> rtfs/src/runtime/microvm/providers/gvisor.rs:74:5
+   |
+73 | pub struct GvisorMicroVMProvider {
+   |            --------------------- fields in this struct
+74 |     config: GvisorConfig,
+   |     ^^^^^^
+75 |     containers: HashMap<String, GvisorContainer>,
+76 |     rtfs_runtime_path: PathBuf,
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: methods `create_container`, `start_container`, `execute_in_container`, `deploy_rtfs_runtime`, `execute_rtfs_in_container`, and `get_container` are never used
+   --> rtfs/src/runtime/microvm/providers/gvisor.rs:101:8
+    |
+ 80 | impl GvisorMicroVMProvider {
+    | -------------------------- methods in this implementation
+...
+101 |     fn create_container(&mut self, container_id: &str) -> RuntimeResult<GvisorContainer> {
+    |        ^^^^^^^^^^^^^^^^
+...
+179 |     fn start_container(&mut self, container: &mut GvisorContainer) -> RuntimeResult<()> {
+    |        ^^^^^^^^^^^^^^^
+...
+200 |     fn execute_in_container(
+    |        ^^^^^^^^^^^^^^^^^^^^
+...
+270 |     fn deploy_rtfs_runtime(&self, container_id: &str) -> RuntimeResult<()> {
+    |        ^^^^^^^^^^^^^^^^^^^
+...
+305 |     fn execute_rtfs_in_container(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+351 |     fn get_container(&mut self) -> RuntimeResult<String> {
+    |        ^^^^^^^^^^^^^
+
+warning: method `create_simple_wasm_module` is never used
+   --> rtfs/src/runtime/microvm/providers/wasm.rs:119:8
+    |
+ 23 | impl WasmMicroVMProvider {
+    | ------------------------ method in this implementation
+...
+119 |     fn create_simple_wasm_module(&self, _source: &str) -> RuntimeResult<Vec<u8>> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple associated functions are never used
+    --> rtfs/src/runtime/stdlib.rs:425:8
+     |
+  42 | impl StandardLibrary {
+     | -------------------- associated functions in this implementation
+...
+ 425 |     fn tool_open_file(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^^
+...
+ 437 |     fn http_fetch_via_host(
+     |        ^^^^^^^^^^^^^^^^^^^
+...
+ 465 |     fn open_file_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^^^^^^
+...
+ 472 |     fn tool_log_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^^^^^
+...
+ 477 |     fn time_ms_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^^^^
+...
+ 484 |     fn file_exists_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^^^^^^^^
+...
+ 491 |     fn get_env_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^^^^
+...
+ 498 |     fn println_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^^^^
+...
+ 503 |     fn thread_sleep_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^^^^^^^^^
+...
+ 510 |     fn read_lines_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^^^^^^^
+...
+ 518 |     fn step_via_host(args: Vec<Value>, evaluator: &Evaluator) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^
+...
+ 526 |     fn kv_assoc_bang(
+     |        ^^^^^^^^^^^^^
+...
+ 575 |     fn kv_dissoc_bang(
+     |        ^^^^^^^^^^^^^^
+...
+ 623 |     fn kv_conj_bang(
+     |        ^^^^^^^^^^^^
+...
+ 673 |     fn tool_log(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^
+...
+ 683 |     fn tool_time_ms(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^
+...
+ 870 |     fn println(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^
+...
+ 880 |     fn thread_sleep(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^
+...
+ 890 |     fn file_exists(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^
+...
+ 900 |     fn get_env(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^
+...
+ 910 |     fn read_lines(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^
+...
+ 920 |     fn step(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^
+...
+1199 |     fn odd(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^
+...
+1222 |     fn inc(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^
+...
+1245 |     fn str(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^
+...
+1421 |     fn some(
+     |        ^^^^
+...
+1488 |     fn every(
+     |        ^^^^^
+...
+1555 |     fn even(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^
+...
+1578 |     fn first(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^
+...
+1618 |     fn rest(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^
+...
+1658 |     fn nth(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^
+...
+1709 |     fn range(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^
+...
+1808 |     fn map(args: Vec<Value>, evaluator: &Evaluator, env: &mut Environment) -> RuntimeResult<Value> {
+     |        ^^^
+...
+1862 |     fn filter(
+     |        ^^^^^^
+...
+1963 |     fn reduce(
+     |        ^^^^^^
+...
+2035 |     fn sort(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^
+...
+2096 |     fn sort_by(
+     |        ^^^^^^^
+...
+2162 |     fn frequencies(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^
+...
+2208 |     fn distinct(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^
+...
+2249 |     fn contains(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^
+...
+2292 |     fn merge(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^
+...
+2322 |     fn coordinate_work_stub(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `f32_to_bits` is never used
+  --> rtfs/src/bytecode/mod.rs:79:4
+   |
+79 | fn f32_to_bits(f: f64) -> u32 {
+   |    ^^^^^^^^^^^
+
+warning: function `properties_to_map` is never used
+  --> rtfs/src/builders/module_builder.rs:77:4
+   |
+77 | fn properties_to_map(props: Vec<Property>) -> HashMap<MapKey, Expression> {
+   |    ^^^^^^^^^^^^^^^^^
+
+warning: `rtfs` (lib) generated 67 warnings (run `cargo fix --lib -p rtfs` to apply 13 suggestions)
+warning: unused imports: `AgentDefinition` and `AgentRegistryConfig`
+  --> ccos/src/cognitive_engine/delegating_engine.rs:12:5
+   |
+12 |     AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig...
+   |     ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `PlanBody`, `PlanLanguage`, and `PlanStatus`
+  --> ccos/src/cognitive_engine/delegating_engine.rs:31:50
+   |
+31 | ...ntStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
+   |                    ^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: use of deprecated struct `approval::queue::ApprovalQueue`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:216:6
+    |
+216 | impl ApprovalQueue {
+    |      ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated struct `cognitive_engine::config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+   --> ccos/src/cognitive_engine/config.rs:152:21
+    |
+152 |     pub agents: Vec<AgentDefinition>,
+    |                     ^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `cognitive_engine::config::AgentRegistryConfig`: Use CapabilityMarketplace configuration instead
+   --> ccos/src/cognitive_engine/config.rs:585:18
+    |
+585 | impl Default for AgentRegistryConfig {
+    |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `cognitive_engine::config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+  --> ccos/src/cognitive_engine/delegating_engine.rs:12:5
+   |
+12 |     AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig...
+   |     ^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `cognitive_engine::config::AgentRegistryConfig`: Use CapabilityMarketplace configuration instead
+  --> ccos/src/cognitive_engine/delegating_engine.rs:12:22
+   |
+12 |     AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig...
+   |                      ^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `base64::decode`: Use Engine::decode
+    --> ccos/src/capability_marketplace/executors.rs:1303:61
+     |
+1303 | ...   let wasm_bytes = if let Ok(bytes) = base64::decode(&sandboxed...
+     |                                                   ^^^^^^
+
+warning: use of deprecated function `utils::fs::find_workspace_root`: Use get_workspace_root() instead
+  --> ccos/src/ops/server.rs:13:23
+   |
+13 | use crate::utils::fs::find_workspace_root;
+   |                       ^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `utils::fs::find_workspace_root`: Use get_workspace_root() instead
+   --> ccos/src/ops/server.rs:551:26
+    |
+551 |     let workspace_root = find_workspace_root();
+    |                          ^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `resolution_method`
+   --> ccos/src/planner/capabilities_v2.rs:322:29
+    |
+322 | ...                   resolution_method,
+    |                       ^^^^^^^^^^^^^^^^^-
+    |                       |
+    |                       help: try removing the field
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `next_message` is never read
+   --> ccos/src/planner/dialogue_planner/planner.rs:229:17
+    |
+229 |         let mut next_message = None;
+    |                 ^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `next_message` is never read
+  --> ccos/src/planner/dialogue_planner/turn_processor.rs:80:17
+   |
+80 |         let mut next_message = None;
+   |                 ^^^^^^^^^^^^
+   |
+   = help: maybe it is overwritten before being read?
+
+warning: value assigned to `should_continue` is never read
+   --> ccos/src/planner/dialogue_planner/turn_processor.rs:243:17
+    |
+243 |                 should_continue = false;
+    |                 ^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unused variable: `arbiter`
+    --> ccos/src/planner/modular_planner/orchestrator.rs:1596:37
+     |
+1596 | ...           if let Some(arbiter) = &self.delegating_arbiter {
+     |                           ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_arbiter`
+
+warning: value assigned to `synthetic_target_schema` is never read
+    --> ccos/src/planner/modular_planner/orchestrator.rs:1739:37
+     |
+1739 | ...   let mut synthetic_target_schema: Option<serde_json::Value> = ...
+     |               ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: variable does not need to be mutable
+    --> ccos/src/planner/modular_planner/orchestrator.rs:1577:17
+     |
+1577 |             let mut call_expr = match resolutions.get(intent_id) {
+     |                 ----^^^^^^^^^
+     |                 |
+     |                 help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `result`
+   --> ccos/src/planner/modular_planner/steps.rs:532:32
+    |
+532 | ...                   Ok(result) => {
+    |                          ^^^^^^ help: if this is intentional, prefix it with an underscore: `_result`
+
+warning: variable does not need to be mutable
+   --> ccos/src/planner/modular_planner/steps.rs:789:9
+    |
+789 |     let mut result = step_resolve_intents(sub_intents, intent_ids, r...
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `source_url`
+    --> ccos/src/synthesis/core/missing_capability_resolver.rs:3833:9
+     |
+3833 |         source_url: &str,
+     |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_source_url`
+
+warning: unused variable: `introspection_query`
+  --> ccos/src/synthesis/importers/graphql_importer.rs:85:13
+   |
+85 |         let introspection_query = r#"
+   |             ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_introspection_query`
+
+warning: unused variable: `governance_result`
+  --> ccos/src/synthesis/registration/registration_flow.rs:81:13
+   |
+81 |         let governance_result = self.apply_governance_policies(&manif...
+   |             ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_governance_result`
+
+warning: unused variable: `native_provider`
+    --> ccos/src/capability_marketplace/executors.rs:1377:37
+     |
+1377 |             ExecutorVariant::Native(native_provider) => {
+     |                                     ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_native_provider`
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:219:13
+    |
+219 |             base_path: base_path.as_ref().to_path_buf(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:275:9
+    |
+275 |         self.base_path.join("capabilities/servers/pending")
+    |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:279:9
+    |
+279 |         self.base_path.join("capabilities/servers/approved")
+    |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:283:9
+    |
+283 |         self.base_path.join("capabilities/servers/rejected")
+    |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:287:9
+    |
+287 |         self.base_path.join("capabilities/servers/timeout")
+    |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:468:27
+    |
+468 | ...   let legacy_path = self.base_path.join("capabilities/servers/pe...
+    |                         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:493:27
+    |
+493 | ...   let legacy_path = self.base_path.join("capabilities/servers/ap...
+    |                         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:512:27
+    |
+512 | ...   let legacy_path = self.base_path.join("capabilities/servers/re...
+    |                         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:531:27
+    |
+531 | ...   let legacy_path = self.base_path.join("capabilities/servers/ti...
+    |                         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:857:25
+    |
+857 |                         self.base_path.join(path)
+    |                         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:876:29
+    |
+876 | ...                   self.base_path.join(path)
+    |                       ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `cognitive_engine::config::AgentRegistryConfig::registry_type`: Use CapabilityMarketplace configuration instead
+   --> ccos/src/cognitive_engine/config.rs:588:13
+    |
+588 |             registry_type: RegistryType::InMemory,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `cognitive_engine::config::AgentRegistryConfig::database_url`: Use CapabilityMarketplace configuration instead
+   --> ccos/src/cognitive_engine/config.rs:589:13
+    |
+589 |             database_url: None,
+    |             ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `cognitive_engine::config::AgentRegistryConfig::agents`: Use CapabilityMarketplace configuration instead
+   --> ccos/src/cognitive_engine/config.rs:590:13
+    |
+590 |             agents: vec![],
+    |             ^^^^^^^^^^^^^^
+
+warning: unused import: `std::io::Write`
+  --> ccos/src/ops/server.rs:15:5
+   |
+15 | use std::io::Write;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused import: `StreamChunkSink`
+ --> ccos/src/streaming/mock_loop.rs:2:27
+  |
+2 |     McpStreamingProvider, StreamChunkSink, StreamTransport, StreamTran...
+  |                           ^^^^^^^^^^^^^^^
+
+warning: unused variable: `wrapper_fn`
+   --> ccos/src/approval/queue.rs:421:9
+    |
+421 |         wrapper_fn: fn(Vec<T>) -> T, // Dummy wrapper not needed, we...
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_wrapper_fn`
+
+warning: variable does not need to be mutable
+    --> ccos/src/approval/queue.rs:1000:17
+     |
+1000 |             let mut approved_state = self.load_approved()?;
+     |                 ----^^^^^^^^^^^^^^
+     |                 |
+     |                 help: remove this `mut`
+
+warning: variable `deleted` is assigned to, but never used
+   --> ccos/src/approval/storage_file.rs:206:17
+    |
+206 |         let mut deleted = false;
+    |                 ^^^^^^^
+    |
+    = note: consider using `_deleted` instead
+
+warning: value assigned to `deleted` is never read
+   --> ccos/src/approval/storage_file.rs:217:17
+    |
+217 |                 deleted = true;
+    |                 ^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `found_plan_or_do` is never read
+    --> ccos/src/cognitive_engine/delegating_engine.rs:1527:21
+     |
+1527 |                     found_plan_or_do = true;
+     |                     ^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: unused variable: `response_preview`
+   --> ccos/src/cognitive_engine/delegation_analysis.rs:225:17
+    |
+225 |             let response_preview = if response.len() > 500 {
+    |                 ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_response_preview`
+
+warning: variable does not need to be mutable
+   --> ccos/src/cognitive_engine/learning_augmenter.rs:442:9
+    |
+442 |     let mut skipped = vec![];
+    |         ----^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `intent`
+    --> ccos/src/governance_kernel.rs:1292:9
+     |
+1292 |         intent: Option<&StorableIntent>,
+     |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_intent`
+
+warning: unused variable: `graph`
+    --> ccos/src/governance_kernel.rs:1545:13
+     |
+1545 |         let graph = self
+     |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_graph`
+
+warning: unused variable: `t`
+   --> ccos/src/planner/modular_planner/resolution/mcp.rs:710:38
+    |
+710 |             if all_tools.iter().any(|t: &ToolSummary| {
+    |                                      ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `meta_map`
+   --> ccos/src/rtfs_bridge/extractors.rs:430:48
+    |
+430 |                         if let Expression::Map(meta_map) = value {
+    |                                                ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_meta_map`
+
+warning: value assigned to `missing_dependencies` is never read
+  --> ccos/src/synthesis/core/dependency_extractor.rs:49:13
+   |
+49 |     let mut missing_dependencies = HashSet::new();
+   |             ^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: maybe it is overwritten before being read?
+
+warning: unused variable: `meta`
+   --> ccos/src/synthesis/dialogue/artifact_generator.rs:613:15
+    |
+613 |     for (key, meta) in &schema.params {
+    |               ^^^^ help: if this is intentional, prefix it with an underscore: `_meta`
+
+warning: unused variable: `skills`
+   --> ccos/src/synthesis/dialogue/artifact_generator.rs:648:5
+    |
+648 |     skills: &[ExtractedSkill],
+    |     ^^^^^^ help: if this is intentional, prefix it with an underscore: `_skills`
+
+warning: unused variable: `i`
+   --> ccos/src/synthesis/dialogue/artifact_generator.rs:661:24
+    |
+661 | ...   .map(|(i, param)| format!("{} {}", param.replace("/", "_"), pa...
+    |              ^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+661 |                 .map(|(_i, param)| format!("{} {}", param.replace("/", "_"), param))
+    |                        +
+help: you might have meant to pattern match on the similarly named constant `DEFAULT_MAX_VERSIONS`
+    |
+661 -                 .map(|(i, param)| format!("{} {}", param.replace("/", "_"), param))
+661 +                 .map(|(capability_marketplace::version_store::DEFAULT_MAX_VERSIONS, param)| format!("{} {}", param.replace("/", "_"), param))
+    |
+
+warning: unused variable: `i`
+   --> ccos/src/synthesis/dialogue/artifact_generator.rs:689:16
+    |
+689 | ...   .map(|(i, param)| format!(":{} {}", param.replace("/", "_"), p...
+    |              ^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+689 |         .map(|(_i, param)| format!(":{} {}", param.replace("/", "_"), param.replace("/", "_")))
+    |                +
+help: you might have meant to pattern match on the similarly named constant `DEFAULT_MAX_VERSIONS`
+    |
+689 -         .map(|(i, param)| format!(":{} {}", param.replace("/", "_"), param.replace("/", "_")))
+689 +         .map(|(capability_marketplace::version_store::DEFAULT_MAX_VERSIONS, param)| format!(":{} {}", param.replace("/", "_"), param.replace("/", "_")))
+    |
+
+warning: unused variable: `root`
+   --> ccos/src/synthesis/introspection/schema_refiner.rs:106:9
+    |
+106 |     let root = get_workspace_root();
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_root`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/governance_policies.rs:370:32
+    |
+370 | ...heck_compliance(&self, manifest: &CapabilityManifest, rtfs_code: ...
+    |                           ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/registration_flow.rs:205:9
+    |
+205 |         manifest: &CapabilityManifest,
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/registration_flow.rs:216:9
+    |
+216 |         manifest: &CapabilityManifest,
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+  --> ccos/src/synthesis/registration/static_analyzers.rs:36:23
+   |
+36 |     fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str)...
+   |                       ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/static_analyzers.rs:143:23
+    |
+143 |     fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str...
+    |                       ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/static_analyzers.rs:235:23
+    |
+235 |     fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str...
+    |                       ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/static_analyzers.rs:371:23
+    |
+371 |     fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str...
+    |                       ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `validation_result`
+   --> ccos/src/synthesis/registration/validation_harness.rs:799:37
+    |
+799 | ..._provenance(&self, validation_result: &ValidationResult) -> Capab...
+    |                       ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_validation_result`
+
+warning: unused variable: `state`
+    --> ccos/src/tui/panels.rs:2278:5
+     |
+2278 |     state: &mut AppState,
+     |     ^^^^^ help: if this is intentional, prefix it with an underscore: `_state`
+
+warning: unused variable: `capability_id`
+   --> ccos/src/capabilities/providers/github_mcp.rs:538:9
+    |
+538 |         capability_id: &str,
+    |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_capability_id`
+
+warning: unused variable: `context`
+   --> ccos/src/capabilities/providers/weather_mcp.rs:387:9
+    |
+387 |         context: &ExecutionContext,
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_context`
+
+warning: unused variable: `memory`
+   --> ccos/src/capabilities/agent_ops.rs:125:21
+    |
+125 |         if let Some(memory) = memories.get(agent_id) {
+    |                     ^^^^^^ help: if this is intentional, prefix it with an underscore: `_memory`
+
+warning: unused variable: `content`
+   --> ccos/src/capability_marketplace/discovery.rs:106:13
+    |
+106 |         let content = fs::read_to_string(&self.manifest_path)
+    |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_content`
+
+warning: unused variable: `args`
+   --> ccos/src/capability_marketplace/executors.rs:727:17
+    |
+727 |             let args = match inputs {
+    |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `i`
+   --> ccos/src/capability_marketplace/mcp_discovery.rs:982:14
+    |
+982 |         for (i, top_level) in top_levels.iter().enumerate() {
+    |              ^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+982 |         for (_i, top_level) in top_levels.iter().enumerate() {
+    |              +
+help: you might have meant to pattern match on the similarly named constant `DEFAULT_MAX_VERSIONS`
+    |
+982 -         for (i, top_level) in top_levels.iter().enumerate() {
+982 +         for (capability_marketplace::version_store::DEFAULT_MAX_VERSIONS, top_level) in top_levels.iter().enumerate() {
+    |
+
+warning: unused variable: `module_def`
+    --> ccos/src/capability_marketplace/mcp_discovery.rs:1201:9
+     |
+1201 |         module_def: &rtfs::ast::ModuleDefinition,
+     |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_module_def`
+
+warning: unused variable: `indent_str`
+    --> ccos/src/capability_marketplace/mcp_discovery.rs:1566:13
+     |
+1566 |         let indent_str = "  ".repeat(indent);
+     |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_indent_str`
+
+warning: unused variable: `name`
+   --> ccos/src/capability_marketplace/types.rs:925:14
+    |
+925 |         for (name, limit) in &self.extended_limits {
+    |              ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `microvm_provider`
+   --> ccos/src/environment.rs:140:13
+    |
+140 |         let microvm_provider = config.microvm_provider.clone();
+    |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_microvm_provider`
+
+warning: unused variable: `http_allow_hosts`
+   --> ccos/src/environment.rs:141:13
+    |
+141 |         let http_allow_hosts = config.http_allow_hosts.clone();
+    |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_http_allow_hosts`
+
+warning: unused variable: `http_mocking_enabled`
+   --> ccos/src/environment.rs:142:13
+    |
+142 |         let http_mocking_enabled = config.http_mocking_enabled;
+    |             ^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_http_mocking_enabled`
+
+warning: variable `version` is assigned to, but never used
+   --> ccos/src/environment.rs:882:33
+    |
+882 |                         let mut version: Option<String> = None;
+    |                                 ^^^^^^^
+    |
+    = note: consider using `_version` instead
+
+warning: variable `source_url` is assigned to, but never used
+   --> ccos/src/environment.rs:883:33
+    |
+883 |                         let mut source_url: Option<String> = None;
+    |                                 ^^^^^^^^^^
+    |
+    = note: consider using `_source_url` instead
+
+warning: value assigned to `version` is never read
+   --> ccos/src/environment.rs:903:41
+    |
+903 | ...                   version = Some(s);
+    |                       ^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `source_url` is never read
+   --> ccos/src/environment.rs:910:41
+    |
+910 | ...                   source_url = Some(s);
+    |                       ^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unused variable: `env`
+   --> ccos/src/examples_common/builder.rs:227:13
+    |
+227 |     fn from(env: CcosEnv) -> Self {
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_env`
+
+warning: unused variable: `now`
+  --> ccos/src/hints/handlers/cache.rs:63:17
+   |
+63 |             let now = Instant::now();
+   |                 ^^^ help: if this is intentional, prefix it with an underscore: `_now`
+
+warning: unused variable: `capability_args`
+   --> ccos/src/host.rs:375:13
+    |
+375 |         let capability_args = Value::Map(call_map);
+    |             ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_capability_args`
+
+warning: unused variable: `config`
+    --> ccos/src/streaming/runtime.rs:1701:9
+     |
+1701 |         config: &StreamConfig,
+     |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+
+warning: unused variable: `wisdom`
+   --> ccos/src/context_horizon.rs:278:9
+    |
+278 |         wisdom: DistilledWisdom,
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_wisdom`
+
+warning: unused variable: `task`
+   --> ccos/src/context_horizon.rs:675:41
+    |
+675 | ...te_abstract_steps(&self, task: &Task) -> Result<Vec<AbstractStep>...
+    |                             ^^^^ help: if this is intentional, prefix it with an underscore: `_task`
+
+warning: unused variable: `task`
+   --> ccos/src/context_horizon.rs:692:39
+    |
+692 | ...eate_data_handles(&self, task: &Task) -> Result<Vec<ResourceId>, ...
+    |                             ^^^^ help: if this is intentional, prefix it with an underscore: `_task`
+
+warning: method `save_rejected` is never used
+   --> ccos/src/approval/queue.rs:523:8
+    |
+216 | impl ApprovalQueue {
+    | ------------------ method in this implementation
+...
+523 |     fn save_rejected(&self, state: &RejectedQueueState) -> RuntimeRe...
+    |        ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `template_config` is never read
+   --> ccos/src/cognitive_engine/legacy/hybrid_arbiter.rs:222:5
+    |
+221 | pub struct HybridArbiter {
+    |            ------------- field in this struct
+222 |     template_config: TemplateConfig,
+    |     ^^^^^^^^^^^^^^^
+
+warning: method `validate_plan` is never used
+   --> ccos/src/cognitive_engine/legacy/llm_arbiter.rs:470:14
+    |
+229 | impl LlmArbiter {
+    | --------------- method in this implementation
+...
+470 |     async fn validate_plan(&self, plan: &Plan) -> Result<bool, Runti...
+    |              ^^^^^^^^^^^^^
+
+warning: field `config` is never read
+  --> ccos/src/cognitive_engine/legacy/template_arbiter.rs:21:5
+   |
+20 | pub struct TemplateArbiter {
+   |            --------------- field in this struct
+21 |     config: TemplateConfig,
+   |     ^^^^^^
+
+warning: function `hashmap_to_rtfs_map` is never used
+  --> ccos/src/cognitive_engine/llm_provider.rs:25:4
+   |
+25 | fn hashmap_to_rtfs_map(m: &std::collections::HashMap<String, Value>) ...
+   |    ^^^^^^^^^^^^^^^^^^^
+
+warning: field `delegating_arbiter` is never read
+  --> ccos/src/discovery/engine.rs:40:5
+   |
+36 | pub struct DiscoveryEngine {
+   |            --------------- field in this struct
+...
+40 |     delegating_arbiter: Option<Arc<DelegatingCognitiveEngine>>,
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: struct `StorageBackupData` is never constructed
+    --> ccos/src/intent_graph/core.rs:1519:8
+     |
+1519 | struct StorageBackupData {
+     |        ^^^^^^^^^^^^^^^^^
+
+warning: field `age_threshold_days` is never read
+   --> ccos/src/intent_graph/processing.rs:205:5
+    |
+203 | pub struct IntentPruningEngine {
+    |            ------------------- field in this struct
+204 |     importance_threshold: f64,
+205 |     age_threshold_days: u64,
+    |     ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `IntentPruningEngine` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `search_cache` is never read
+  --> ccos/src/intent_graph/search.rs:12:5
+   |
+10 | pub struct SemanticSearchEngine {
+   |            -------------------- field in this struct
+11 |     /// Cache for search results
+12 |     search_cache: HashMap<String, Vec<IntentId>>,
+   |     ^^^^^^^^^^^^
+   |
+   = note: `SemanticSearchEngine` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `context_manager` is never read
+  --> ccos/src/intent_graph/virtualization.rs:15:5
+   |
+14 | pub struct IntentGraphVirtualization {
+   |            ------------------------- field in this struct
+15 |     context_manager: ContextWindowManager,
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `IntentGraphVirtualization` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `provided_env_var` is never read
+   --> ccos/src/mcp/http_transport.rs:708:5
+    |
+704 | struct ApproveSecretRequest {
+    |        -------------------- field in this struct
+...
+708 |     provided_env_var: Option<String>,
+    |     ^^^^^^^^^^^^^^^^
+
+warning: method `get_mock_servers` is never used
+   --> ccos/src/mcp/registry.rs:322:8
+    |
+129 | impl MCPRegistryClient {
+    | ---------------------- method in this implementation
+...
+322 |     fn get_mock_servers(&self, _query: &str) -> Vec<McpServer> {
+    |        ^^^^^^^^^^^^^^^^
+
+warning: associated items `new_with_policies`, `extract_string_from_map`, `execute_capability_call`, `execute_intent_graph`, `get_children_order`, and `extract_exported_variables` are never used
+    --> ccos/src/orchestrator.rs:642:19
+     |
+ 602 | impl Orchestrator {
+     | ----------------- associated items in this implementation
+...
+ 642 |     pub(crate) fn new_with_policies(
+     |                   ^^^^^^^^^^^^^^^^^
+...
+ 906 |     fn extract_string_from_map(value: &Value, key: &str) -> Option<...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 926 |     async fn execute_capability_call(
+     |              ^^^^^^^^^^^^^^^^^^^^^^^
+...
+1177 |     pub(crate) async fn execute_intent_graph(
+     |                         ^^^^^^^^^^^^^^^^^^^^
+...
+1275 |     fn get_children_order(&self, root_id: &str) -> RuntimeResult<Ve...
+     |        ^^^^^^^^^^^^^^^^^^
+...
+1594 |     fn extract_exported_variables(&self, result: &ExecutionResult) ...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `DiscoverToolsInput` is never constructed
+   --> ccos/src/planner/capabilities_v2.rs:841:8
+    |
+841 | struct DiscoverToolsInput {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: struct `DiscoverToolsOutput` is never constructed
+   --> ccos/src/planner/capabilities_v2.rs:848:8
+    |
+848 | struct DiscoverToolsOutput {
+    |        ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `DiscoveredToolDto` is never constructed
+   --> ccos/src/planner/capabilities_v2.rs:854:8
+    |
+854 | struct DiscoveredToolDto {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: field `name` is never read
+  --> ccos/src/planner/dialogue_planner/entity.rs:65:5
+   |
+64 | pub struct HumanEntity {
+   |            ----------- field in this struct
+65 |     name: Option<String>,
+   |     ^^^^
+
+warning: struct `PatternDef` is never constructed
+  --> ccos/src/planner/modular_planner/decomposition/pattern.rs:39:8
+   |
+39 | struct PatternDef {
+   |        ^^^^^^^^^^
+
+warning: field `allow_partial` is never read
+  --> ccos/src/planner/modular_planner/decomposition/pattern.rs:51:5
+   |
+49 | pub struct PatternDecomposition {
+   |            -------------------- field in this struct
+50 |     /// Whether to allow partial matches (lower confidence)
+51 |     allow_partial: bool,
+   |     ^^^^^^^^^^^^^
+
+warning: fields `registry_client`, `marketplace`, and `config_discovery` are never read
+  --> ccos/src/planner/modular_planner/resolution/mcp.rs:69:5
+   |
+68 | pub struct RuntimeMcpDiscovery {
+   |            ------------------- fields in this struct
+69 |     registry_client: MCPRegistryClient,
+   |     ^^^^^^^^^^^^^^^
+70 |     marketplace: Arc<CapabilityMarketplace>,
+   |     ^^^^^^^^^^^
+...
+74 |     config_discovery: LocalConfigMcpDiscovery,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: method `is_safe` is never used
+   --> ccos/src/planner/modular_planner/safe_executor.rs:233:8
+    |
+ 72 | impl SafeCapabilityExecutor {
+    | --------------------------- method in this implementation
+...
+233 |     fn is_safe(&self, manifest: &CapabilityManifest) -> bool {
+    |        ^^^^^^^
+
+warning: function `extract_plan_from_function_call` is never used
+   --> ccos/src/rtfs_bridge/extractors.rs:331:4
+    |
+331 | fn extract_plan_from_function_call(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `db_path` is never read
+  --> ccos/src/storage_backends/sqlite_archive.rs:10:5
+   |
+ 8 | pub struct SqliteArchive {
+   |            ------------- field in this struct
+ 9 |     conn: Arc<Mutex<Connection>>,
+10 |     db_path: PathBuf,
+   |     ^^^^^^^
+   |
+   = note: `SqliteArchive` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `max_attempts` is never read
+   --> ccos/src/synthesis/core/missing_capability_resolver.rs:357:5
+    |
+349 | pub struct MissingCapabilityQueue {
+    |            ---------------------- field in this struct
+...
+357 |     max_attempts: u32,
+    |     ^^^^^^^^^^^^
+    |
+    = note: `MissingCapabilityQueue` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: methods `suggest_mcp_token_env_var`, `is_capability_match`, `attempt_external_llm_hint`, `json_schema_to_rtfs`, and `save_multi_capability_with_code` are never used
+    --> ccos/src/synthesis/core/missing_capability_resolver.rs:670:8
+     |
+ 636 | impl MissingCapabilityResolver {
+     | ------------------------------ methods in this implementation
+...
+ 670 |     fn suggest_mcp_token_env_var(&self, server_name: &str) -> String {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+3406 |     fn is_capability_match(
+     |        ^^^^^^^^^^^^^^^^^^^
+...
+3733 |     async fn attempt_external_llm_hint(
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+3898 |     fn json_schema_to_rtfs(&self, json_schema: Option<&serde_json::...
+     |        ^^^^^^^^^^^^^^^^^^^
+...
+3932 |     async fn save_multi_capability_with_code(
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `config` is never read
+   --> ccos/src/synthesis/core/missing_capability_strategies.rs:106:5
+    |
+104 | pub struct CompositeMissingCapabilityStrategy {
+    |            ---------------------------------- field in this struct
+105 |     strategies: Vec<Arc<dyn MissingCapabilityStrategy>>,
+106 |     config: MissingCapabilityStrategyConfig,
+    |     ^^^^^^
+
+warning: field `auth_injector` is never read
+   --> ccos/src/synthesis/dialogue/capability_synthesizer.rs:115:5
+    |
+113 | pub struct CapabilitySynthesizer {
+    |            --------------------- field in this struct
+114 |     /// Auth injector for handling credentials
+115 |     auth_injector: AuthInjector,
+    |     ^^^^^^^^^^^^^
+
+warning: method `generate_synthesis_prompt` is never used
+   --> ccos/src/synthesis/dialogue/capability_synthesizer.rs:677:8
+    |
+124 | impl CapabilitySynthesizer {
+    | -------------------------- method in this implementation
+...
+677 |     fn generate_synthesis_prompt(&self, request: &SynthesisRequest) ...
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `auth_injector` is never read
+  --> ccos/src/synthesis/importers/graphql_importer.rs:55:5
+   |
+51 | pub struct GraphQLImporter {
+   |            --------------- field in this struct
+...
+55 |     auth_injector: AuthInjector,
+   |     ^^^^^^^^^^^^^
+
+warning: field `auth_injector` is never read
+  --> ccos/src/synthesis/importers/http_wrapper.rs:50:5
+   |
+46 | pub struct HTTPWrapper {
+   |            ----------- field in this struct
+...
+50 |     auth_injector: AuthInjector,
+   |     ^^^^^^^^^^^^^
+
+warning: field `auth_injector` is never read
+   --> ccos/src/synthesis/importers/openapi_importer.rs:180:5
+    |
+176 | pub struct OpenAPIImporter {
+    |            --------------- field in this struct
+...
+180 |     auth_injector: AuthInjector,
+    |     ^^^^^^^^^^^^^
+
+warning: field `updated_capabilities` is never read
+   --> ccos/src/synthesis/registration/registration_flow.rs:511:5
+    |
+509 | struct IntegrationResult {
+    |        ----------------- field in this struct
+510 |     issues: Vec<String>,
+511 |     updated_capabilities: Vec<String>,
+    |     ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `IntegrationResult` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `secure_patterns` is never read
+   --> ccos/src/synthesis/registration/static_analyzers.rs:119:5
+    |
+116 | pub struct SecurityAnalyzer {
+    |            ---------------- field in this struct
+...
+119 |     secure_patterns: HashSet<String>,
+    |     ^^^^^^^^^^^^^^^
+
+warning: field `max_loop_iterations` is never read
+   --> ccos/src/synthesis/registration/static_analyzers.rs:221:5
+    |
+218 | pub struct PerformanceAnalyzer {
+    |            ------------------- field in this struct
+...
+221 |     max_loop_iterations: u32,
+    |     ^^^^^^^^^^^^^^^^^^^
+
+warning: method `get_pending_capabilities` is never used
+   --> ccos/src/synthesis/runtime/continuous_resolution.rs:780:14
+    |
+150 | impl ContinuousResolutionLoop {
+    | ----------------------------- method in this implementation
+...
+780 |     async fn get_pending_capabilities(&self) -> RuntimeResult<Vec<St...
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `ensure_loaded` is never used
+  --> ccos/src/local_models.rs:44:14
+   |
+25 | impl LocalLlamaModel {
+   | -------------------- method in this implementation
+...
+44 |     async fn ensure_loaded(&self) -> Result<(), Box<dyn std::error::E...
+   |              ^^^^^^^^^^^^^
+
+warning: field `created_at` is never read
+  --> ccos/src/capabilities/mcp_session_handler.rs:21:5
+   |
+17 | struct MCPSession {
+   |        ---------- field in this struct
+...
+21 |     created_at: std::time::Instant,
+   |     ^^^^^^^^^^
+   |
+   = note: `MCPSession` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: method `get_server_url` is never used
+   --> ccos/src/capabilities/mcp_session_handler.rs:103:8
+    |
+ 37 | impl MCPSessionHandler {
+    | ---------------------- method in this implementation
+...
+103 |     fn get_server_url(&self, metadata: &HashMap<String, String>) -> ...
+    |        ^^^^^^^^^^^^^^
+
+warning: function `get_default_storage_path` is never used
+  --> ccos/src/capabilities/native_provider.rs:14:4
+   |
+14 | fn get_default_storage_path() -> PathBuf {
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `get_bool_param` is never used
+   --> ccos/src/capabilities/native_provider.rs:575:4
+    |
+575 | fn get_bool_param(inputs: &Value, key: &str, default: bool) -> bool {
+    |    ^^^^^^^^^^^^^^
+
+warning: function `create_server_list_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:591:4
+    |
+591 | fn create_server_list_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_server_add_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:616:4
+    |
+616 | fn create_server_add_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_server_remove_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:640:4
+    |
+640 | fn create_server_remove_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_server_health_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:663:4
+    |
+663 | fn create_server_health_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_server_search_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:691:4
+    |
+691 | fn create_server_search_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_discovery_goal_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:724:4
+    |
+724 | fn create_discovery_goal_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_discovery_search_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:755:4
+    |
+755 | fn create_discovery_search_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_discovery_inspect_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:786:4
+    |
+786 | fn create_discovery_inspect_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_approval_pending_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:814:4
+    |
+814 | fn create_approval_pending_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_approval_approve_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:839:4
+    |
+839 | fn create_approval_approve_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_approval_reject_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:869:4
+    |
+869 | fn create_approval_reject_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_approval_timeout_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:900:4
+    |
+900 | fn create_approval_timeout_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_config_show_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:927:4
+    |
+927 | fn create_config_show_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_config_validate_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:960:4
+    |
+960 | fn create_config_validate_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_config_init_capability` is never used
+   --> ccos/src/capabilities/native_provider.rs:993:4
+    |
+993 | fn create_config_init_capability() -> NativeCapability {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_governance_check_capability` is never used
+    --> ccos/src/capabilities/native_provider.rs:1021:4
+     |
+1021 | fn create_governance_check_capability() -> NativeCapability {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_governance_audit_capability` is never used
+    --> ccos/src/capabilities/native_provider.rs:1047:4
+     |
+1047 | fn create_governance_audit_capability() -> NativeCapability {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_governance_constitution_capability` is never used
+    --> ccos/src/capabilities/native_provider.rs:1067:4
+     |
+1067 | fn create_governance_constitution_capability() -> NativeCapability {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_plan_create_capability` is never used
+    --> ccos/src/capabilities/native_provider.rs:1089:4
+     |
+1089 | fn create_plan_create_capability() -> NativeCapability {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_plan_execute_capability` is never used
+    --> ccos/src/capabilities/native_provider.rs:1127:4
+     |
+1127 | fn create_plan_execute_capability() -> NativeCapability {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `create_plan_validate_capability` is never used
+    --> ccos/src/capabilities/native_provider.rs:1165:4
+     |
+1165 | fn create_plan_validate_capability() -> NativeCapability {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `default_repo` and `cache` are never read
+  --> ccos/src/capabilities/providers/github_mcp.rs:26:5
+   |
+20 | pub struct GitHubMCPCapability {
+   |            ------------------- fields in this struct
+...
+26 |     default_repo: Option<String>,
+   |     ^^^^^^^^^^^^
+27 |     /// Cache for recent API calls
+28 |     cache: HashMap<String, CachedGitHubData>,
+   |     ^^^^^
+   |
+   = note: `GitHubMCPCapability` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `data` and `timestamp` are never read
+  --> ccos/src/capabilities/providers/github_mcp.rs:34:5
+   |
+33 | struct CachedGitHubData {
+   |        ---------------- fields in this struct
+34 |     data: Value,
+   |     ^^^^
+35 |     timestamp: std::time::SystemTime,
+   |     ^^^^^^^^^
+   |
+   = note: `CachedGitHubData` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `api_key` and `base_url` are never read
+  --> ccos/src/capabilities/providers/weather_mcp.rs:21:5
+   |
+19 | pub struct WeatherMCPCapability {
+   |            -------------------- fields in this struct
+20 |     /// API key for OpenWeatherMap (in real implementation)
+21 |     api_key: Option<String>,
+   |     ^^^^^^^
+22 |     /// Base URL for weather API
+23 |     base_url: String,
+   |     ^^^^^^^^
+   |
+   = note: `WeatherMCPCapability` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: associated functions `discover_agents_capability`, `task_coordination_capability`, `discover_and_assess_agents_capability`, and `establish_system_baseline_capability` are never used
+    --> ccos/src/capabilities/registry.rs:1541:8
+     |
+ 495 | impl CapabilityRegistry {
+     | ----------------------- associated functions in this implementation
+...
+1541 |     fn discover_agents_capability(_args: Vec<Value>) -> RuntimeResu...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1546 |     fn task_coordination_capability(_args: Vec<Value>) -> RuntimeRe...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1551 |     fn discover_and_assess_agents_capability(_args: Vec<Value>) -> ...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1556 |     fn establish_system_baseline_capability(_args: Vec<Value>) -> R...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `timeout_seconds` is never read
+   --> ccos/src/capability_marketplace/discovery.rs:131:5
+    |
+129 | pub struct NetworkDiscoveryProvider {
+    |            ------------------------ field in this struct
+130 |     endpoint_url: String,
+131 |     timeout_seconds: u64,
+    |     ^^^^^^^^^^^^^^^
+
+warning: field `auth_token` is never read
+   --> ccos/src/capability_marketplace/discovery.rs:173:16
+    |
+171 | pub struct NetworkDiscoveryAgent {
+    |            --------------------- field in this struct
+172 |     pub(crate) registry_endpoint: String,
+173 |     pub(crate) auth_token: Option<String>,
+    |                ^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> ccos/src/capability_marketplace/mcp_discovery.rs:456:8
+     |
+ 124 | impl MCPDiscoveryProvider {
+     | ------------------------- methods in this implementation
+...
+ 456 |     fn convert_tool_to_capability(&self, tool: MCPTool) -> Capabili...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 528 |     async fn convert_tool_to_capability_with_introspection(
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 559 |     async fn introspect_output_schema_for_tool(
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 597 |     fn build_discovered_tool(
+     |        ^^^^^^^^^^^^^^^^^^^^^
+...
+1351 |     fn parse_rtfs_capabilities(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+1371 |     fn parse_rtfs_capability_from_line(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1413 |     fn parse_rtfs_map(&self, map_str: &str) -> RuntimeResult<Expres...
+     |        ^^^^^^^^^^^^^^
+...
+2231 |     fn convert_json_provider_to_manifest(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+2303 |     fn convert_rtfs_type_to_json_schema(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `network_registry` is never read
+    --> ccos/src/capability_marketplace/types.rs:1258:16
+     |
+1254 | pub struct CapabilityMarketplace {
+     |            --------------------- field in this struct
+...
+1258 |     pub(crate) network_registry: Option<NetworkRegistryConfig>,
+     |                ^^^^^^^^^^^^^^^^
+
+warning: field `description` is never read
+   --> ccos/src/examples_common/capability_helpers.rs:307:5
+    |
+303 | struct OverrideParameter {
+    |        ----------------- field in this struct
+...
+307 |     description: Option<String>,
+    |     ^^^^^^^^^^^
+    |
+    = note: `OverrideParameter` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `description` is never read
+   --> ccos/src/examples_common/capability_helpers.rs:313:5
+    |
+311 | struct OverrideEntry {
+    |        ------------- field in this struct
+312 |     #[serde(default)]
+313 |     description: Option<String>,
+    |     ^^^^^^^^^^^
+    |
+    = note: `OverrideEntry` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `graph_traversal` is never read
+   --> ccos/src/context_horizon.rs:488:5
+    |
+486 | pub struct IntentGraphVirtualization {
+    |            ------------------------- field in this struct
+487 |     semantic_search: SemanticSearchEngine,
+488 |     graph_traversal: GraphTraversalEngine,
+    |     ^^^^^^^^^^^^^^^
+
+warning: field `streaming` is never read
+   --> ccos/src/context_horizon.rs:642:5
+    |
+639 | pub struct PlanAbstraction {
+    |            --------------- field in this struct
+...
+642 |     streaming: StreamingDataProcessor,
+    |     ^^^^^^^^^
+
+warning: fields `analysis_engine`, `optimization_engine`, and `pattern_recognizer` are never read
+  --> ccos/src/subconscious.rs:10:5
+   |
+ 9 | pub struct SubconsciousV1 {
+   |            -------------- fields in this struct
+10 |     analysis_engine: AnalysisEngine,
+   |     ^^^^^^^^^^^^^^^
+11 |     optimization_engine: OptimizationEngine,
+   |     ^^^^^^^^^^^^^^^^^^^
+12 |     pattern_recognizer: PatternRecognizer,
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: method `load_jsonl_into_memory` is never used
+   --> ccos/src/working_memory/backend_inmemory.rs:115:8
+    |
+ 46 | impl InMemoryJsonlBackend {
+    | ------------------------- method in this implementation
+...
+115 |     fn load_jsonl_into_memory(&mut self, path: &Path) -> Result<(), ...
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `ccos` (lib) generated 163 warnings (run `cargo fix --lib -p ccos` to apply 10 suggestions)
+warning: variant `EntireValue` is never constructed
+    --> ccos/examples/smart_assistant_demo.rs:2891:5
+     |
+2889 | enum OutputBinding {
+     |      ------------- variant in this enum
+2890 |     MapKey(String),
+2891 |     EntireValue,
+     |     ^^^^^^^^^^^
+     |
+     = note: `OutputBinding` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `format_found_capabilities` is never used
+    --> ccos/examples/smart_assistant_demo.rs:2965:4
+     |
+2965 | fn format_found_capabilities(found: &[FoundCapability]) -> String {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `extract_plan_properties` is never used
+    --> ccos/examples/smart_assistant_demo.rs:4471:4
+     |
+4471 | fn extract_plan_properties(plan_rtfs: &str) -> DemoResult<ExtractedPlanProperties> {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `extract_plan_body` is never used
+    --> ccos/examples/smart_assistant_demo.rs:4567:4
+     |
+4567 | fn extract_plan_body(plan_rtfs: &str) -> DemoResult<String> {
+     |    ^^^^^^^^^^^^^^^^^
+
+warning: `ccos` (example "smart_assistant_demo") generated 4 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s

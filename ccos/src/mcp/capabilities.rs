@@ -4,11 +4,13 @@ use crate::capability_marketplace::types::{
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 use futures::future::FutureExt;
-use rtfs::ast::{Keyword, MapKey, Symbol};
+use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use crate::utils::value_conversion::rtfs_value_to_json;
 
 /// Register MCP bridge capabilities (ecosystem capabilities)
 pub async fn register_mcp_capabilities(marketplace: &CapabilityMarketplace) -> RuntimeResult<()> {
@@ -163,42 +165,5 @@ fn get_string_param(inputs: &Value, name: &str) -> RuntimeResult<String> {
             }
         }
         _ => Err(RuntimeError::Generic("Expected map input".to_string())),
-    }
-}
-
-/// Convert RTFS Value to serde_json::Value
-fn rtfs_value_to_json(v: &Value) -> RuntimeResult<serde_json::Value> {
-    match v {
-        Value::Nil => Ok(serde_json::Value::Null),
-        Value::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
-        Value::Integer(i) => Ok(serde_json::json!(i)),
-        Value::Float(f) => Ok(serde_json::json!(f)),
-        Value::String(s) => Ok(serde_json::Value::String(s.clone())),
-        Value::Keyword(k) => Ok(serde_json::Value::String(k.0.clone())),
-        Value::Symbol(s) => Ok(serde_json::Value::String(s.0.clone())),
-        Value::Timestamp(t) => Ok(serde_json::Value::String(t.clone())),
-        Value::Uuid(u) => Ok(serde_json::Value::String(u.clone())),
-        Value::ResourceHandle(r) => Ok(serde_json::Value::String(r.clone())),
-        Value::Vector(v) | Value::List(v) => {
-            let items: Result<Vec<_>, _> = v.iter().map(rtfs_value_to_json).collect();
-            Ok(serde_json::Value::Array(items?))
-        }
-        Value::Map(m) => {
-            let mut map = serde_json::Map::new();
-            for (k, v) in m {
-                let key_str = match k {
-                    MapKey::String(s) => s.clone(),
-                    MapKey::Keyword(k) => k.0.clone(),
-                    MapKey::Integer(i) => i.to_string(),
-                };
-                map.insert(key_str, rtfs_value_to_json(v)?);
-            }
-            Ok(serde_json::Value::Object(map))
-        }
-        Value::Error(e) => Ok(serde_json::json!({
-            "error": e.message,
-            "stack_trace": e.stack_trace
-        })),
-        _ => Ok(serde_json::Value::String(format!("{}", v))),
     }
 }

@@ -24,7 +24,7 @@ pub struct FileApprovalStorage {
 impl FileApprovalStorage {
     /// Create a new FileApprovalStorage with the given base path.
     pub fn new(base_path: PathBuf) -> RuntimeResult<Self> {
-        // Ensure directory exists
+        // Ensure base directory exists
         if !base_path.exists() {
             std::fs::create_dir_all(&base_path).map_err(|e| {
                 RuntimeError::IoError(format!(
@@ -34,10 +34,26 @@ impl FileApprovalStorage {
             })?;
         }
 
+        // Create subdirectories for each status
+        for status in &["pending", "approved", "rejected", "expired"] {
+            let status_path = base_path.join(status);
+            if !status_path.exists() {
+                std::fs::create_dir_all(&status_path).map_err(|e| {
+                    RuntimeError::IoError(format!(
+                        "Failed to create approval subdirectory {}: {}",
+                        status, e
+                    ))
+                })?;
+            }
+        }
+
         let storage = Self {
             base_path,
             cache: RwLock::new(HashMap::new()),
         };
+
+        // Migration: Move any JSON files from root to appropriate subdirectories
+        storage.migrate_legacy_files()?;
 
         // Load existing requests into cache
         storage.load_all()?;
@@ -45,34 +61,95 @@ impl FileApprovalStorage {
         Ok(storage)
     }
 
-    /// Get the file path for a given approval ID
-    fn get_request_path(&self, id: &str) -> PathBuf {
-        self.base_path.join(format!("{}.json", id))
+    /// Get the subdirectory name for a given status
+    fn get_status_dir_name(status: &super::types::ApprovalStatus) -> &'static str {
+        match status {
+            super::types::ApprovalStatus::Pending => "pending",
+            super::types::ApprovalStatus::Approved { .. } => "approved",
+            super::types::ApprovalStatus::Rejected { .. } => "rejected",
+            super::types::ApprovalStatus::Expired { .. } => "expired",
+        }
     }
 
-    /// Load all requests from disk into cache
-    fn load_all(&self) -> RuntimeResult<()> {
+    /// Get the full path for a request based on its ID and status
+    fn get_request_path_for_status(
+        &self,
+        id: &str,
+        status: &super::types::ApprovalStatus,
+    ) -> PathBuf {
+        self.base_path
+            .join(Self::get_status_dir_name(status))
+            .join(format!("{}.json", id))
+    }
+
+    /// Migrate legacy files from root directory to subdirectories
+    fn migrate_legacy_files(&self) -> RuntimeResult<()> {
         let entries = std::fs::read_dir(&self.base_path).map_err(|e| {
             RuntimeError::IoError(format!("Failed to read approval storage directory: {}", e))
         })?;
 
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().map_or(false, |ext| ext == "json") {
+                // Try to load the request to determine its status
+                match self.load_request_from_file(&path) {
+                    Ok(request) => {
+                        let new_path =
+                            self.get_request_path_for_status(&request.id, &request.status);
+
+                        // Move file
+                        if let Err(e) = std::fs::rename(&path, &new_path) {
+                            eprintln!(
+                                "[APPROVAL_STORAGE] Failed to migrate file {} to {}: {}",
+                                path.display(),
+                                new_path.display(),
+                                e
+                            );
+                        } else {
+                            println!(
+                                "[APPROVAL_STORAGE] Migrated {} to {}",
+                                path.display(),
+                                new_path.display()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[APPROVAL_STORAGE] Failed to load legacy file {} for migration: {}",
+                            path.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Load all requests from all subdirectories into cache
+    fn load_all(&self) -> RuntimeResult<()> {
         let mut cache = self.cache.write().map_err(|_| {
             RuntimeError::IoError("Failed to acquire write lock on cache".to_string())
         })?;
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "json") {
-                match self.load_request_from_file(&path) {
-                    Ok(request) => {
-                        cache.insert(request.id.clone(), request);
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "[APPROVAL_STORAGE] Failed to load {}: {}",
-                            path.display(),
-                            e
-                        );
+        for status in &["pending", "approved", "rejected", "expired"] {
+            let status_dir = self.base_path.join(status);
+            if let Ok(entries) = std::fs::read_dir(&status_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().map_or(false, |ext| ext == "json") {
+                        match self.load_request_from_file(&path) {
+                            Ok(request) => {
+                                cache.insert(request.id.clone(), request);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[APPROVAL_STORAGE] Failed to load {}: {}",
+                                    path.display(),
+                                    e
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -100,9 +177,9 @@ impl FileApprovalStorage {
         })
     }
 
-    /// Save a request to disk
+    /// Save a request to disk in the correct subdirectory
     fn save_request(&self, request: &ApprovalRequest) -> RuntimeResult<()> {
-        let path = self.get_request_path(&request.id);
+        let path = self.get_request_path_for_status(&request.id, &request.status);
         let content = serde_json::to_string_pretty(request).map_err(|e| {
             RuntimeError::IoError(format!("Failed to serialize approval request: {}", e))
         })?;
@@ -118,18 +195,41 @@ impl FileApprovalStorage {
         Ok(())
     }
 
-    /// Delete a request file from disk
+    /// Delete a request file from disk (checking all possible locations if needed,
+    /// but primarily relies on status if known)
     fn delete_request_file(&self, id: &str) -> RuntimeResult<()> {
-        let path = self.get_request_path(id);
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(|e| {
+        // Since we might not know the status when deleting by ID only (if not in cache),
+        // we should try to find it in all subdirectories.
+        // However, usually `remove` is called with the ID, and we check the cache first.
+        // But to be safe and thorough, we check all dirs.
+
+        let mut deleted = false;
+        for status in &["pending", "approved", "rejected", "expired"] {
+            let path = self.base_path.join(status).join(format!("{}.json", id));
+            if path.exists() {
+                std::fs::remove_file(&path).map_err(|e| {
+                    RuntimeError::IoError(format!(
+                        "Failed to delete approval file {}: {}",
+                        path.display(),
+                        e
+                    ))
+                })?;
+                deleted = true;
+            }
+        }
+
+        // Also check legacy root for completeness
+        let legacy_path = self.base_path.join(format!("{}.json", id));
+        if legacy_path.exists() {
+            std::fs::remove_file(&legacy_path).map_err(|e| {
                 RuntimeError::IoError(format!(
-                    "Failed to delete approval file {}: {}",
-                    path.display(),
+                    "Failed to delete legacy approval file {}: {}",
+                    legacy_path.display(),
                     e
                 ))
             })?;
         }
+
         Ok(())
     }
 
@@ -174,20 +274,41 @@ impl ApprovalStorage for FileApprovalStorage {
     }
 
     async fn update(&self, request: &ApprovalRequest) -> RuntimeResult<()> {
-        let cache = self.cache.read().map_err(|_| {
-            RuntimeError::IoError("Failed to acquire read lock on cache".to_string())
-        })?;
-        if !cache.contains_key(&request.id) {
+        let old_dir_name = {
+            let cache = self.cache.read().map_err(|_| {
+                RuntimeError::IoError("Failed to acquire read lock on cache".to_string())
+            })?;
+            match cache.get(&request.id) {
+                Some(r) => Some(Self::get_status_dir_name(&r.status)),
+                None => None,
+            }
+        };
+
+        if let Some(old_dir) = old_dir_name {
+            // Check if status changed (directory changed) and if so, remove old file
+            let new_dir = Self::get_status_dir_name(&request.status);
+
+            if old_dir != new_dir {
+                let old_path = self
+                    .base_path
+                    .join(old_dir)
+                    .join(format!("{}.json", request.id));
+                if old_path.exists() {
+                    // Best effort cleanup
+                    let _ = std::fs::remove_file(&old_path);
+                }
+            }
+        } else {
             return Err(RuntimeError::IoError(format!(
                 "Approval request not found: {}",
                 request.id
             )));
         }
-        drop(cache);
 
-        // Save to disk first
+        // Save to disk (new path)
         self.save_request(request)?;
-        // Then update cache
+
+        // Update cache
         let mut cache = self.cache.write().map_err(|_| {
             RuntimeError::IoError("Failed to acquire write lock on cache".to_string())
         })?;
@@ -257,7 +378,7 @@ impl ApprovalStorage for FileApprovalStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::approval::queue::{RiskAssessment, RiskLevel};
+    use crate::approval::queue::{ApprovalAuthority, RiskAssessment, RiskLevel};
     use crate::approval::{DiscoverySource, ServerInfo};
     use tempfile::tempdir;
 
@@ -346,5 +467,63 @@ mod tests {
 
         let retrieved = storage.get("remove-1").await.unwrap();
         assert!(retrieved.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_file_storage_migration() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+
+        // 1. Manually create a legacy file in the root
+        let request = create_test_request("legacy-1", true); // Status is Pending by default
+        let content = serde_json::to_string_pretty(&request).unwrap();
+        let legacy_file = path.join("legacy-1.json");
+        std::fs::write(&legacy_file, content).unwrap();
+
+        assert!(legacy_file.exists());
+        assert!(!path.join("pending").join("legacy-1.json").exists());
+
+        // 2. Initialize storage, which should trigger migration
+        let storage = FileApprovalStorage::new(path.clone()).unwrap();
+
+        // 3. Verify file moved
+        assert!(!legacy_file.exists());
+        let migrated_file = path.join("pending").join("legacy-1.json");
+        assert!(migrated_file.exists());
+
+        // 4. Verify we can still get it
+        let retrieved = storage.get("legacy-1").await.unwrap();
+        assert!(retrieved.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_file_storage_status_change_move() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let storage = FileApprovalStorage::new(path.clone()).unwrap();
+
+        // 1. Add pending request
+        let mut request = create_test_request("move-test-1", true);
+        storage.add(request.clone()).await.unwrap();
+
+        assert!(path.join("pending").join("move-test-1.json").exists());
+        assert!(!path.join("approved").join("move-test-1.json").exists());
+
+        // 2. Approve it
+        request.approve(
+            ApprovalAuthority::User("tester".to_string()),
+            Some("Looks good".to_string()),
+        );
+        storage.update(&request).await.unwrap();
+
+        // 3. Verify file moved
+        assert!(
+            path.join("approved").join("move-test-1.json").exists(),
+            "Approved file should exist"
+        );
+        assert!(
+            !path.join("pending").join("move-test-1.json").exists(),
+            "Pending file should NOT exist"
+        );
     }
 }

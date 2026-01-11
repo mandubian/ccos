@@ -12,15 +12,15 @@ use super::missing_capability_strategies::{
 };
 use super::schema_serializer::type_expr_to_rtfs_compact;
 use crate::arbiter::prompt::{FilePromptStore, PromptManager};
-use crate::arbiter::DelegatingArbiter;
 use crate::capability_marketplace::types::{
     CapabilityKind, CapabilityManifest, CapabilityQuery, EffectType, LocalCapability, ProviderType,
 };
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::checkpoint_archive::CheckpointArchive;
-use crate::discovery::capability_matcher::{
+use crate::catalog::matcher::{
     calculate_action_verb_match_score, calculate_description_match_score, extract_action_verbs,
 };
+use crate::checkpoint_archive::CheckpointArchive;
+use crate::cognitive_engine::DelegatingCognitiveEngine;
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::rtfs_bridge::expression_to_pretty_rtfs_string;
 use crate::rtfs_bridge::expression_to_rtfs_string;
@@ -487,7 +487,7 @@ pub struct MissingCapabilityResolver {
     /// Server trust registry for managing server trust and user interaction
     trust_registry: ServerTrustRegistry,
     /// Optional delegating arbiter for LLM-based synthesis
-    delegating_arbiter: Arc<RwLock<Option<Arc<DelegatingArbiter>>>>,
+    delegating_arbiter: Arc<RwLock<Option<Arc<DelegatingCognitiveEngine>>>>,
     /// Persistent alias store for previously selected tools
     alias_store: Arc<RwLock<ToolAliasStore>>,
     /// Optional observer for structured resolution events
@@ -1138,7 +1138,7 @@ impl MissingCapabilityResolver {
     }
 
     /// Inject the delegating arbiter for LLM-backed synthesis.
-    pub fn set_delegating_arbiter(&self, arbiter: Option<Arc<DelegatingArbiter>>) {
+    pub fn set_delegating_arbiter(&self, arbiter: Option<Arc<DelegatingCognitiveEngine>>) {
         ccos_eprintln!(
             "🔧 MissingCapabilityResolver: set_delegating_arbiter called with {:?}",
             if arbiter.is_some() {
@@ -4515,7 +4515,6 @@ impl MissingCapabilityResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capabilities::registry::CapabilityRegistry;
     use crate::synthesis::core::feature_flags::MissingCapabilityFeatureFlags;
     use tokio::sync::RwLock;
 

@@ -85,18 +85,22 @@ fn sample_plan(plan_id: &str) -> Plan {
     }
 }
 
-#[test]
-fn catalog_registers_capability_and_finds_by_keyword() {
+#[tokio::test]
+async fn catalog_registers_capability_and_finds_by_keyword() {
     let catalog = CatalogService::new();
     let manifest = sample_manifest();
 
-    catalog.register_capability(&manifest, CatalogSource::Discovered);
+    catalog
+        .register_capability(&manifest, CatalogSource::Discovered)
+        .await;
 
-    let hits = catalog.search_keyword(
-        "github issues",
-        Some(&CatalogFilter::for_kind(CatalogEntryKind::Capability)),
-        5,
-    );
+    let hits = catalog
+        .search_keyword(
+            "github issues",
+            Some(&CatalogFilter::for_kind(CatalogEntryKind::Capability)),
+            5,
+        )
+        .await;
 
     assert!(
         !hits.is_empty(),
@@ -111,18 +115,22 @@ fn catalog_registers_capability_and_finds_by_keyword() {
     );
 }
 
-#[test]
-fn catalog_registers_plan_and_semantic_search() {
+#[tokio::test]
+async fn catalog_registers_plan_and_semantic_search() {
     let catalog = CatalogService::new();
     let plan = sample_plan("plan-123");
 
-    catalog.register_plan(&plan, CatalogSource::Generated, None);
+    catalog
+        .register_plan(&plan, CatalogSource::Generated, None)
+        .await;
 
-    let hits = catalog.search_semantic(
-        "list github issues about rtfs",
-        Some(&CatalogFilter::for_kind(CatalogEntryKind::Plan)),
-        5,
-    );
+    let hits = catalog
+        .search_semantic(
+            "list github issues about rtfs",
+            Some(&CatalogFilter::for_kind(CatalogEntryKind::Plan)),
+            5,
+        )
+        .await;
 
     assert!(
         !hits.is_empty(),

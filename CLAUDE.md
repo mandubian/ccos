@@ -11,7 +11,7 @@ RTFS is the core language used by CCOS to exchange data between entitis so try t
 ## Key Architecture Concepts
 
 ### Separation of Powers Design
-- **Arbiter**: Low-privilege AI planner that proposes but cannot act directly
+- **Cognitive Engine (Arbiter)**: Low-privilege AI planner that proposes but cannot act directly
 - **Governance Kernel**: High-privilege validator that authorizes actions against Constitution 
 - **Orchestrator**: Deterministic executor for authorized plans
 - **Causal Chain**: Immutable audit trail of all actions
@@ -80,7 +80,7 @@ cargo run --example EXAMPLE -- --config ../config/agent_config.toml
 - `src/runtime/`: Execution engine with multiple strategies (AST, IR)
 - `src/ast.rs`: Core AST types and Value enum
 - `src/ir/`: Intermediate representation with optimization
-- `src/ccos/`: CCOS components (Arbiter, Orchestrator, etc.)
+- `src/ccos/`: CCOS components (Cognitive Engine, Orchestrator, etc.)
 
 ### Key Files
 - `src/runtime/evaluator.rs`: Core execution engine

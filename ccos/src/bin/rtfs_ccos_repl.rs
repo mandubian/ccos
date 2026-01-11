@@ -280,9 +280,6 @@ fn print_outcome(env: &CCOSEnvironment, outcome: ExecutionOutcome) {
         ExecutionOutcome::RequiresHost(hc) => {
             eprintln!("❌ Execution requires host call: {:?}", hc);
         }
-        _ => {
-            println!("ℹ️  Outcome: {:?}", outcome);
-        }
     }
 }
 
@@ -351,8 +348,7 @@ fn start_repl(env: CCOSEnvironment) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Err(rustyline::error::ReadlineError::Interrupted) => {
-                println!("^C");
-                continue;
+                // Do nothing, just continue the loop
             }
             Err(rustyline::error::ReadlineError::Eof) => {
                 println!("^D");

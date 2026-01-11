@@ -300,7 +300,7 @@ impl MCPIntrospector {
         &self,
         tool: &DiscoveredMCPTool,
         server_url: &str,
-        server_name: &str,
+        _server_name: &str,
         auth_headers: Option<HashMap<String, String>>,
         input_overrides: Option<serde_json::Value>,
     ) -> RuntimeResult<(Option<TypeExpr>, Option<String>)> {

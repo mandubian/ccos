@@ -291,7 +291,6 @@ fn extract_capability_ids_from_expression(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Plan, PlanBody, PlanLanguage};
 
     #[test]
     fn test_extract_capability_ids_from_rtfs_string() {

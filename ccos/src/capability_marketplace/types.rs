@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CapabilityAttestation {
     pub signature: String,
     pub authority: String,
@@ -24,7 +24,7 @@ pub struct CapabilityAttestation {
     pub metadata: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CapabilityProvenance {
     pub source: String,
     pub version: Option<String>,
@@ -33,16 +33,18 @@ pub struct CapabilityProvenance {
     pub registered_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkRegistryConfig {
     pub endpoint: String,
+    #[serde(skip)]
     pub callbacks: Option<StreamCallbacks>,
     pub auto_reconnect: bool,
     pub max_retries: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StreamCapabilityImpl {
+    #[serde(skip, default = "default_streaming_provider")]
     pub provider: StreamingProvider,
     pub stream_type: StreamType,
     pub input_schema: Option<TypeExpr>,
@@ -94,7 +96,7 @@ pub enum EffectType {
     PureProvisional,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityManifest {
     pub id: String,
     pub name: String,
@@ -151,7 +153,7 @@ pub struct OpenApiAuth {
 }
 
 /// Metadata flags to distinguish agents from capabilities in the unified model
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentMetadata {
     /// Kind of artifact: :primitive, :composite, or :agent
     pub kind: CapabilityKind,
@@ -161,12 +163,45 @@ pub struct AgentMetadata {
     pub stateful: bool,
     /// Whether this artifact can interact with humans (ask questions, get feedback)
     pub interactive: bool,
+    /// Current autonomy level
+    pub autonomy_level: u8,
+    /// Constraints on agent behavior
+    pub constraints: AgentConstraints,
     /// Additional agent-specific configuration
     pub config: HashMap<String, String>,
+    /// Agent cost (per request)
+    pub cost: f64,
+    /// Agent trust score (0.0-1.0)
+    pub trust_score: f64,
+}
+
+/// Constraints on what an agent can do autonomously.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct AgentConstraints {
+    /// Maximum autonomy level (0-4, mirrors SelfProgrammingConfig trust levels)
+    pub max_autonomy_level: u8,
+    /// Domains requiring human approval (e.g., "finance", "pii", "external_apis")
+    pub require_approval_domains: Vec<String>,
+    /// Maximum concurrent tasks this agent can handle
+    pub max_concurrent_tasks: usize,
+    /// Effects this agent is allowed to use
+    pub allowed_effects: Vec<String>,
+    /// Effects this agent is explicitly denied from using
+    pub denied_effects: Vec<String>,
+}
+
+impl AgentConstraints {
+    pub fn new(max_autonomy: u8) -> Self {
+        Self {
+            max_autonomy_level: max_autonomy,
+            max_concurrent_tasks: 5,
+            ..Default::default()
+        }
+    }
 }
 
 /// Types of capabilities in the unified model
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CapabilityKind {
     /// Single-shot, stateless capability (default)
     Primitive,
@@ -234,7 +269,11 @@ impl CapabilityManifest {
                 planning,
                 stateful,
                 interactive,
+                autonomy_level: 0,
+                constraints: AgentConstraints::new(2),
                 config: HashMap::new(),
+                cost: 0.0,
+                trust_score: 1.0,
             }),
             domains: Vec::new(),
             categories: Vec::new(),
@@ -1066,7 +1105,7 @@ impl CapabilityIsolationPolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SandboxedCapability {
     pub runtime: String, // e.g., "python", "node", "wasm"
     pub source: String,  // Code or path
@@ -1074,7 +1113,7 @@ pub struct SandboxedCapability {
     pub provider: Option<String>, // e.g., "process", "firecracker"
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ProviderType {
     Local(LocalCapability),
     Http(HttpCapability),
@@ -1089,16 +1128,25 @@ pub enum ProviderType {
     Sandboxed(SandboxedCapability),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemoteRTFSCapability {
     pub endpoint: String,
     pub timeout_ms: u64,
     pub auth_token: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LocalCapability {
+    #[serde(skip, default = "default_local_handler")]
     pub handler: Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync>,
+}
+
+fn default_local_handler() -> Arc<dyn Fn(&Value) -> RuntimeResult<Value> + Send + Sync> {
+    Arc::new(|_| {
+        Err(rtfs::runtime::error::RuntimeError::Generic(
+            "Local capability handler not serialized".to_string(),
+        ))
+    })
 }
 
 impl std::fmt::Debug for LocalCapability {
@@ -1113,17 +1161,24 @@ impl PartialEq for LocalCapability {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HttpCapability {
     pub base_url: String,
     pub auth_token: Option<String>,
     pub timeout_ms: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RegistryCapability {
     pub capability_id: String,
+    #[serde(skip, default = "default_registry")]
     pub registry: Arc<RwLock<crate::capabilities::registry::CapabilityRegistry>>,
+}
+
+fn default_registry() -> Arc<RwLock<crate::capabilities::registry::CapabilityRegistry>> {
+    Arc::new(RwLock::new(
+        crate::capabilities::registry::CapabilityRegistry::new(),
+    ))
 }
 
 impl std::fmt::Debug for RegistryCapability {
@@ -1140,7 +1195,7 @@ impl PartialEq for RegistryCapability {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MCPCapability {
     pub server_url: String,
     pub tool_name: String,
@@ -1148,7 +1203,7 @@ pub struct MCPCapability {
     pub auth_token: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct A2ACapability {
     pub agent_id: String,
     pub endpoint: String,
@@ -1156,17 +1211,29 @@ pub struct A2ACapability {
     pub timeout_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PluginCapability {
     pub plugin_path: String,
     pub function_name: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct NativeCapability {
+    #[serde(skip, default = "default_native_handler")]
     pub handler: Arc<dyn Fn(&Value) -> BoxFuture<'static, RuntimeResult<Value>> + Send + Sync>,
     pub security_level: String,
     pub metadata: HashMap<String, String>,
+}
+
+fn default_native_handler(
+) -> Arc<dyn Fn(&Value) -> BoxFuture<'static, RuntimeResult<Value>> + Send + Sync> {
+    Arc::new(|_| {
+        Box::pin(async {
+            Err(rtfs::runtime::error::RuntimeError::Generic(
+                "Native capability handler not serialized".to_string(),
+            ))
+        })
+    })
 }
 
 impl std::fmt::Debug for NativeCapability {
@@ -1566,5 +1633,68 @@ mod tests {
         assert!(manifest.domains.contains(&"github".to_string()));
         assert!(manifest.domains.contains(&"github.issues".to_string()));
         assert!(manifest.categories.contains(&"crud.read".to_string()));
+    }
+}
+
+fn default_streaming_provider() -> StreamingProvider {
+    Arc::new(DummyStreamingProvider)
+}
+
+#[derive(Clone)]
+struct DummyStreamingProvider;
+
+#[async_trait::async_trait]
+impl crate::streaming::StreamingCapability for DummyStreamingProvider {
+    fn start_stream(
+        &self,
+        _params: &rtfs::runtime::values::Value,
+    ) -> rtfs::runtime::error::RuntimeResult<crate::streaming::StreamHandle> {
+        Err(rtfs::runtime::error::RuntimeError::Generic(
+            "Dummy provider cannot start stream".to_string(),
+        ))
+    }
+    fn stop_stream(
+        &self,
+        _handle: &crate::streaming::StreamHandle,
+    ) -> rtfs::runtime::error::RuntimeResult<()> {
+        Ok(())
+    }
+    async fn start_stream_with_config(
+        &self,
+        _params: &rtfs::runtime::values::Value,
+        _config: &crate::streaming::StreamConfig,
+    ) -> rtfs::runtime::error::RuntimeResult<crate::streaming::StreamHandle> {
+        Err(rtfs::runtime::error::RuntimeError::Generic(
+            "Dummy provider cannot start stream".to_string(),
+        ))
+    }
+    async fn send_to_stream(
+        &self,
+        _handle: &crate::streaming::StreamHandle,
+        _data: &rtfs::runtime::values::Value,
+    ) -> rtfs::runtime::error::RuntimeResult<()> {
+        Err(rtfs::runtime::error::RuntimeError::Generic(
+            "Dummy provider cannot send".to_string(),
+        ))
+    }
+    fn start_bidirectional_stream(
+        &self,
+        _params: &rtfs::runtime::values::Value,
+    ) -> rtfs::runtime::error::RuntimeResult<crate::streaming::StreamHandle> {
+        Err(rtfs::runtime::error::RuntimeError::Generic(
+            "Dummy provider".to_string(),
+        ))
+    }
+    async fn start_bidirectional_stream_with_config(
+        &self,
+        _params: &rtfs::runtime::values::Value,
+        _config: &crate::streaming::StreamConfig,
+    ) -> rtfs::runtime::error::RuntimeResult<crate::streaming::StreamHandle> {
+        Err(rtfs::runtime::error::RuntimeError::Generic(
+            "Dummy provider".to_string(),
+        ))
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

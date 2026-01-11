@@ -1,4 +1,4 @@
-# CCOS: Cognitive-Causal Orchestration System
+# CCOS: Cognitive Computing Operating System
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/mandubian/ccos/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)

@@ -478,7 +478,7 @@ pub struct ModularPlanner {
     /// Optional missing capability resolver for immediate synthesis
     missing_capability_resolver: Option<Arc<MissingCapabilityResolver>>,
     /// Optional delegating arbiter for LLM-based adapter generation
-    delegating_arbiter: Option<Arc<crate::arbiter::DelegatingArbiter>>,
+    delegating_arbiter: Option<Arc<crate::cognitive_engine::DelegatingCognitiveEngine>>,
     /// Optional callback for real-time trace event streaming
     trace_callback: Option<Box<dyn Fn(&TraceEvent) + Send + Sync>>,
 }
@@ -547,7 +547,7 @@ impl ModularPlanner {
     /// Inject a delegating arbiter for LLM-based adapter generation.
     pub fn with_delegating_arbiter(
         mut self,
-        arbiter: Arc<crate::arbiter::DelegatingArbiter>,
+        arbiter: Arc<crate::cognitive_engine::DelegatingCognitiveEngine>,
     ) -> Self {
         self.delegating_arbiter = Some(arbiter);
         self
@@ -568,7 +568,7 @@ impl ModularPlanner {
                 crate::approval::storage_file::FileApprovalStorage,
             >,
         >,
-        _constraints: Option<crate::agents::identity::AgentConstraints>,
+        _constraints: Option<crate::capability_marketplace::types::AgentConstraints>,
     ) -> Self {
         // For now, just use the basic safe executor
         // TODO: Wire approval queue into SafeCapabilityExecutor when governance gates are enabled

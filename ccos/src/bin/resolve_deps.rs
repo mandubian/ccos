@@ -3,23 +3,23 @@
 //! This tool implements advanced CLI commands for managing missing capability resolution,
 //! monitoring, and observability as part of Phase 8 enhancements.
 
-use ccos::arbiter::arbiter_config::{
+use ccos::arbiter::config::{
     AgentRegistryConfig as ArbiterAgentRegistryConfig, DelegationConfig as ArbiterDelegationConfig,
     LlmConfig as ArbiterLlmConfig, LlmProviderType, RetryConfig,
 };
-use ccos::arbiter::delegating_arbiter::DelegatingArbiter;
+use ccos::arbiter::delegating_engine::DelegatingCognitiveEngine;
 use ccos::capability_marketplace::types::{
     CapabilityManifest, EffectType, LocalCapability, ProviderType,
 };
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::checkpoint_archive::CheckpointArchive;
+use ccos::config::types::{AgentConfig, LlmProfile};
 use ccos::intent_graph::IntentGraph;
 use ccos::synthesis::feature_flags::MissingCapabilityConfig;
 use ccos::synthesis::missing_capability_resolver::{MissingCapabilityResolver, ResolverConfig};
 use clap::{Parser, Subcommand};
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::config::profile_selection::expand_profiles;
-use ccos::config::types::{AgentConfig, LlmProfile};
 use rtfs::runtime::values::Value;
 use serde_json;
 use std::collections::{HashMap, HashSet};
@@ -276,14 +276,20 @@ fn apply_llm_profile(
     if let Some(llm_profiles) = &config.llm_profiles {
         // Convert CCOS AgentConfig to RTFS AgentConfig for expand_profiles
         let rtfs_config: rtfs::config::types::AgentConfig = serde_json::from_value(
-            serde_json::to_value(config).expect("Failed to serialize AgentConfig")
-        ).expect("Failed to deserialize AgentConfig");
+            serde_json::to_value(config).expect("Failed to serialize AgentConfig"),
+        )
+        .expect("Failed to deserialize AgentConfig");
         let (rtfs_profiles, _meta, _why) = expand_profiles(&rtfs_config);
         // Convert RTFS profiles to CCOS profiles
-        let profiles: Vec<LlmProfile> = rtfs_profiles.into_iter().map(|p| {
-            serde_json::from_value(serde_json::to_value(&p).expect("Failed to serialize LlmProfile"))
+        let profiles: Vec<LlmProfile> = rtfs_profiles
+            .into_iter()
+            .map(|p| {
+                serde_json::from_value(
+                    serde_json::to_value(&p).expect("Failed to serialize LlmProfile"),
+                )
                 .expect("Failed to deserialize LlmProfile")
-        }).collect();
+            })
+            .collect();
         let chosen = profile_name
             .map(|s| s.to_string())
             .or_else(|| llm_profiles.default.clone())
@@ -364,7 +370,7 @@ fn set_api_key(provider: &str, key: &str) {
 async fn maybe_create_delegating_arbiter(
     capability_marketplace: Arc<CapabilityMarketplace>,
     intent_graph: Arc<Mutex<IntentGraph>>,
-) -> Option<Arc<DelegatingArbiter>> {
+) -> Option<Arc<DelegatingCognitiveEngine>> {
     if !is_delegation_enabled() {
         return None;
     }
@@ -440,13 +446,13 @@ async fn maybe_create_delegating_arbiter(
         threshold: 0.65,
         max_candidates: 3,
         min_skill_hits: None,
-        agent_registry: ArbiterAgentRegistryConfig::default(),
+        agent_registry: None,
         adaptive_threshold: None,
         print_extracted_intent: Some(false),
         print_extracted_plan: Some(false),
     };
 
-    match DelegatingArbiter::new(
+    match DelegatingCognitiveEngine::new(
         llm_config,
         delegation_config,
         capability_marketplace,
@@ -839,7 +845,7 @@ async fn handle_monitor(
 }
 
 async fn handle_validate(
-    resolver: &Arc<MissingCapabilityResolver>,
+    _resolver: &Arc<MissingCapabilityResolver>,
     capability_id: &str,
     security_level: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -862,7 +868,7 @@ async fn handle_validate(
 }
 
 async fn handle_search(
-    resolver: &Arc<MissingCapabilityResolver>,
+    _resolver: &Arc<MissingCapabilityResolver>,
     query: &str,
     source: &str,
     limit: usize,
@@ -984,7 +990,7 @@ async fn handle_info(
 }
 
 async fn handle_cleanup(
-    resolver: &Arc<MissingCapabilityResolver>,
+    _resolver: &Arc<MissingCapabilityResolver>,
     days: u32,
     dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {

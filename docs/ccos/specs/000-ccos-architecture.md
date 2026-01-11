@@ -7,7 +7,7 @@
 
 ## Introduction: What is CCOS?
 
-CCOS (Cognitive-Causal Orchestration System) is a secure framework for coordinating AI agents. It treats AI as a 'mind' for reasoning (why/how) and provides a deterministic 'engine' for execution (what). At its core, CCOS embeds RTFS 2.0—a pure, immutable, reentrant language—as the substrate for plans. RTFS handles declarative logic; CCOS acts as the host, managing effects, state, and governance.
+CCOS (Cognitive Computing Operating System) is a secure framework for coordinating AI agents. It treats AI as a 'mind' for reasoning (why/how) and provides a deterministic 'engine' for execution (what). At its core, CCOS embeds RTFS 2.0—a pure, immutable, reentrant language—as the substrate for plans. RTFS handles declarative logic; CCOS acts as the host, managing effects, state, and governance.
 
 Why this design? AI-generated code can be unpredictable. RTFS's purity ensures safe evaluation; CCOS's layers add auditability, security, and adaptability. Result: Verifiable agentic systems where every action traces to an intent, without hidden mutations.
 

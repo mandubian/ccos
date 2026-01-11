@@ -1,6 +1,6 @@
 use crate::approval::queue::{RiskAssessment, RiskLevel};
 use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
-use crate::discovery::capability_matcher::calculate_description_match_score_improved;
+use crate::catalog::matcher::calculate_description_match_score_improved;
 use crate::discovery::config::DiscoveryConfig;
 use crate::discovery::llm_discovery::{IntentAnalysis, LlmDiscoveryService};
 use crate::discovery::registry_search::{RegistrySearchResult, RegistrySearcher};

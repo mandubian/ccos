@@ -3,7 +3,7 @@
 use rtfs::runtime::error::RuntimeResult;
 
 /// Check if action is allowed
-pub async fn check_action(action: String) -> RuntimeResult<bool> {
+pub async fn check_action(_action: String) -> RuntimeResult<bool> {
     // TODO: Implement governance check logic
     Ok(true)
 }

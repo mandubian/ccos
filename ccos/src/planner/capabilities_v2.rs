@@ -12,9 +12,11 @@ use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::{CatalogEntryKind, CatalogFilter, CatalogService};
 use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 // Note: Using local SubIntentDto instead of importing private SubIntent
+
 use crate::synthesis::validation::llm_validator::{
     auto_repair_plan, validate_plan, ValidationConfig, ValidationError,
 };
+use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 use crate::CCOS;
 
 /// Register granular planner capabilities (v2) for the autonomous agent loop.
@@ -31,38 +33,53 @@ pub async fn register_planner_capabilities_v2(
         let payload: BuildMenuInput = parse_payload("planner.build_menu", input)?;
         let catalog = Arc::clone(&catalog_for_menu);
 
-        // Use semantic search to find relevant capabilities
-        let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
-        let hits = catalog.search_semantic(&payload.goal, Some(&filter), 10);
+        // Capture Tokio handle for async execution
+        let rt_handle = tokio::runtime::Handle::current();
 
-        let is_meta_goal = payload.goal.to_lowercase().contains("plan")
-            || payload.goal.to_lowercase().contains("meta");
+        let menu = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                // Use semantic search to find relevant capabilities
+                let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
+                let hits = catalog
+                    .search_semantic(&payload.goal, Some(&filter), 10)
+                    .await;
 
-        let mut menu = Vec::new();
-        for hit in hits {
-            // Allow planner capabilities, but skip the very high-level ones
-            // from the menu unless we are specifically doing meta-planning
-            // to avoid confusing a standard planner.
-            if hit.entry.id.starts_with("planner.") {
-                if is_meta_goal
-                    || hit.entry.id.contains("validate")
-                    || hit.entry.id.contains("repair")
-                    || hit.entry.id.contains("discover")
-                {
-                    menu.push(hit.entry.id);
+                let is_meta_goal = payload.goal.to_lowercase().contains("plan")
+                    || payload.goal.to_lowercase().contains("meta");
+
+                let mut menu = Vec::new();
+                for hit in hits {
+                    // Allow planner capabilities, but skip the very high-level ones
+                    // from the menu unless we are specifically doing meta-planning
+                    // to avoid confusing a standard planner.
+                    if hit.entry.id.starts_with("planner.") {
+                        if is_meta_goal
+                            || hit.entry.id.contains("validate")
+                            || hit.entry.id.contains("repair")
+                            || hit.entry.id.contains("discover")
+                        {
+                            menu.push(hit.entry.id);
+                        }
+                    } else {
+                        menu.push(hit.entry.id);
+                    }
                 }
-            } else {
-                menu.push(hit.entry.id);
-            }
-        }
 
-        // Always add basic utilities
-        menu.push("ccos.user.ask".to_string());
-        menu.push("tool/log".to_string());
+                // Always add basic utilities
+                menu.push("ccos.user.ask".to_string());
+                menu.push("tool/log".to_string());
 
-        // Deduplicate
-        menu.sort();
-        menu.dedup();
+                // Deduplicate
+                menu.sort();
+                menu.dedup();
+
+                Ok::<Vec<String>, RuntimeError>(menu)
+            })
+        })
+        .join()
+        .map_err(|_| {
+            RuntimeError::Generic("Thread join error in planner.build_menu".to_string())
+        })??;
 
         produce_value("planner.build_menu", BuildMenuOutput { menu })
     });
@@ -82,7 +99,7 @@ pub async fn register_planner_capabilities_v2(
 
     // planner.decompose - Break a goal into sub-intents (recursive decomposition)
     let catalog_for_decompose = Arc::clone(&catalog);
-    let delegating_for_decompose = ccos.get_delegating_arbiter();
+    let delegating_for_decompose = ccos.cognitive_engine.clone();
 
     let decompose_handler = Arc::new(move |input: &Value| {
         let payload: DecomposeInput = parse_payload("planner.decompose", input)?;
@@ -97,7 +114,8 @@ pub async fn register_planner_capabilities_v2(
         let sub_intents = std::thread::spawn(move || {
             rt_handle.block_on(async {
                 // Use LLM to decompose if available
-                if let Some(arbiter) = delegating {
+                let arbiter = delegating;
+                {
                     let prompt = format!(
                         r#"Decompose this goal into 2-5 sub-tasks. Return JSON array.
 Goal: {}
@@ -136,7 +154,7 @@ Output format:
 
                 // Fallback: Use catalog semantic search to find related capabilities
                 let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
-                let hits = catalog.search_semantic(&goal, Some(&filter), 5);
+                let hits = catalog.search_semantic(&goal, Some(&filter), 5).await;
 
                 let intents: Vec<SubIntentDto> = hits
                     .iter()
@@ -192,7 +210,7 @@ Output format:
             rt_handle.block_on(async {
                 // 1. Try semantic search in catalog
                 let filter = CatalogFilter::for_kind(CatalogEntryKind::Capability);
-                let hits = catalog.search_semantic(&description, Some(&filter), 3);
+                let hits = catalog.search_semantic(&description, Some(&filter), 3).await;
 
                 // Instrumentation to understand why resolution fails
                 if let Some(best) = hits.first() {
@@ -256,7 +274,7 @@ Output format:
         .await?;
 
     // planner.synthesize_capability - Create a missing capability via LLM
-    let delegating_for_synthesis = ccos.get_delegating_arbiter();
+    let delegating_for_synthesis = ccos.cognitive_engine.clone();
     let resolver_for_synthesis = ccos.get_missing_capability_resolver();
 
     let synthesize_capability_handler = Arc::new(move |input: &Value| {
@@ -304,7 +322,7 @@ Output format:
                             resolution_method,
                             ..
                         } => {
-                            Ok(SynthesizeCapabilityOutput {
+                            Ok::<SynthesizeCapabilityOutput, RuntimeError>(SynthesizeCapabilityOutput {
                                 success: true,
                                 capability_id: Some(capability_id),
                                 rtfs_code: None, // Code is stored in capability file
@@ -312,7 +330,7 @@ Output format:
                             })
                         }
                         crate::synthesis::core::ResolutionResult::Failed { reason, .. } => {
-                            Ok(SynthesizeCapabilityOutput {
+                            Ok::<SynthesizeCapabilityOutput, RuntimeError>(SynthesizeCapabilityOutput {
                                 success: false,
                                 capability_id: None,
                                 rtfs_code: None,
@@ -322,7 +340,7 @@ Output format:
                         crate::synthesis::core::ResolutionResult::PermanentlyFailed {
                             reason,
                             ..
-                        } => Ok(SynthesizeCapabilityOutput {
+                        } => Ok::<SynthesizeCapabilityOutput, RuntimeError>(SynthesizeCapabilityOutput {
                             success: false,
                             capability_id: None,
                             rtfs_code: None,
@@ -332,31 +350,24 @@ Output format:
                 }
 
                 // Fallback: Direct LLM synthesis
-                if let Some(arbiter) = delegating {
-                    let prompt = format!(
-                        r#"Create an RTFS capability for: {}
+                // Fallback: Direct LLM synthesis
+                // delegating is Arc<DelegatingCognitiveEngine>, always present logic
+                let prompt = format!(
+                    r#"Create an RTFS capability for: {}
 Input schema hint: {:?}
 Output schema hint: {:?}
 
 Output ONLY valid RTFS capability code."#,
-                        description, input_schema, output_schema
-                    );
+                    description, input_schema, output_schema
+                );
 
-                    let response = arbiter.generate_raw_text(&prompt).await?;
+                let response = delegating.generate_raw_text(&prompt).await?;
 
-                    return Ok(SynthesizeCapabilityOutput {
-                        success: true,
-                        capability_id: Some(capability_id),
-                        rtfs_code: Some(response),
-                        error: None,
-                    });
-                }
-
-                Ok::<SynthesizeCapabilityOutput, RuntimeError>(SynthesizeCapabilityOutput {
-                    success: false,
-                    capability_id: None,
-                    rtfs_code: None,
-                    error: Some("No LLM provider or resolver available".to_string()),
+                Ok(SynthesizeCapabilityOutput {
+                    success: true,
+                    capability_id: Some(capability_id),
+                    rtfs_code: Some(response),
+                    error: None,
                 })
             })
         })
@@ -383,16 +394,14 @@ Output ONLY valid RTFS capability code."#,
 
     // 2. planner.synthesize
     // Creates a plan (list of steps) based on the goal and menu.
-    let delegating_opt_for_synth = ccos.get_delegating_arbiter();
+    let delegating_opt_for_synth = ccos.cognitive_engine.clone();
     let marketplace_for_synth = Arc::clone(&marketplace);
 
     let synthesize_handler = Arc::new(move |input: &Value| {
         let payload: SynthesizeInput = parse_payload("planner.synthesize", input)?;
 
         // Get delegating arbiter
-        let delegating = delegating_opt_for_synth
-            .clone()
-            .ok_or_else(|| RuntimeError::Generic("Delegating arbiter not available".to_string()))?;
+        let delegating = delegating_opt_for_synth.clone();
 
         let marketplace = marketplace_for_synth.clone();
 
@@ -406,7 +415,7 @@ Output ONLY valid RTFS capability code."#,
 
         let plan_dto = std::thread::spawn(move || {
             rt_handle.block_on(async {
-                // delegating is already Arc<DelegatingArbiter> which is Send
+                // delegating is already Arc<DelegatingCognitiveEngine> which is Send
 
                 // Enhance menu with capability details and schemas
                 let mut detailed_menu = Vec::new();
@@ -462,7 +471,7 @@ Instructions:
                 // DEBUG: Print prompt to verify schema injection
                 // println!("DEBUG: Prompt sent to LLM:\n{}", prompt);
 
-                let response = delegating.generate_raw_text(&prompt).await?;
+                let response: String = delegating.generate_raw_text(&prompt).await?;
 
                 // Extract JSON from response
                 let json_str = extract_json(&response).ok_or_else(||
@@ -539,7 +548,7 @@ Instructions:
         let args_json = payload.inputs;
 
         // Convert JSON args to RTFS Value (clone args_json as we might need the original json for MCP)
-        let args_value = json_to_rtfs_value(args_json.clone())?;
+        let args_value = json_to_rtfs_value(&args_json)?;
 
         // Execute
         // We spawn a new thread to avoid nested LocalPool execution issues
@@ -606,7 +615,7 @@ Instructions:
                         let response = result_json?;
 
                         // Convert response to RTFS Value
-                        json_to_rtfs_value(response)
+                        json_to_rtfs_value(&response)
                     }
                     _ => Err(RuntimeError::Generic(format!(
                         "Capability {} is not a supported capability type in this demo context",
@@ -908,41 +917,6 @@ fn parse_payload<T: DeserializeOwned>(capability: &str, value: &Value) -> Runtim
     })
 }
 
-fn rtfs_value_to_json(value: &Value) -> RuntimeResult<serde_json::Value> {
-    match value {
-        Value::Nil => Ok(serde_json::Value::Null),
-        Value::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
-        Value::Integer(i) => Ok(serde_json::json!(i)),
-        Value::Float(f) => Ok(serde_json::json!(f)),
-        Value::String(s) => Ok(serde_json::Value::String(s.clone())),
-        Value::Keyword(k) => Ok(serde_json::Value::String(k.0.clone())),
-        Value::Symbol(s) => Ok(serde_json::Value::String(s.0.clone())),
-        Value::List(l) | Value::Vector(l) => {
-            let mut arr = Vec::new();
-            for v in l {
-                arr.push(rtfs_value_to_json(v)?);
-            }
-            Ok(serde_json::Value::Array(arr))
-        }
-        Value::Map(m) => {
-            let mut map = serde_json::Map::new();
-            for (k, v) in m {
-                let key_str = match k {
-                    rtfs::ast::MapKey::String(s) => s.clone(),
-                    rtfs::ast::MapKey::Keyword(k) => k.0.clone(),
-                    rtfs::ast::MapKey::Integer(i) => i.to_string(),
-                };
-                map.insert(key_str, rtfs_value_to_json(v)?);
-            }
-            Ok(serde_json::Value::Object(map))
-        }
-        _ => Err(RuntimeError::Generic(format!(
-            "Cannot convert RTFS value to JSON: {:?}",
-            value
-        ))),
-    }
-}
-
 fn produce_value<T: Serialize>(capability: &str, output: T) -> RuntimeResult<Value> {
     let json_value = serde_json::to_value(output).map_err(|err| {
         RuntimeError::Generic(format!(
@@ -951,38 +925,7 @@ fn produce_value<T: Serialize>(capability: &str, output: T) -> RuntimeResult<Val
         ))
     })?;
 
-    json_to_rtfs_value(json_value)
-}
-
-fn json_to_rtfs_value(json: serde_json::Value) -> RuntimeResult<Value> {
-    match json {
-        serde_json::Value::Null => Ok(Value::Nil),
-        serde_json::Value::Bool(b) => Ok(Value::Boolean(b)),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Ok(Value::Integer(i))
-            } else if let Some(f) = n.as_f64() {
-                Ok(Value::Float(f))
-            } else {
-                Err(RuntimeError::Generic("Invalid number format".to_string()))
-            }
-        }
-        serde_json::Value::String(s) => Ok(Value::String(s)),
-        serde_json::Value::Array(arr) => {
-            let mut values = Vec::new();
-            for v in arr {
-                values.push(json_to_rtfs_value(v)?);
-            }
-            Ok(Value::List(values))
-        }
-        serde_json::Value::Object(map) => {
-            let mut values = HashMap::new();
-            for (k, v) in map {
-                values.insert(rtfs::ast::MapKey::String(k), json_to_rtfs_value(v)?);
-            }
-            Ok(Value::Map(values))
-        }
-    }
+    json_to_rtfs_value(&json_value)
 }
 
 fn extract_json(response: &str) -> Option<&str> {

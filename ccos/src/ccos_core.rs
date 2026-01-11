@@ -4,12 +4,12 @@
 // Keep one declaration per submodule to avoid duplicate module errors.
 // If some modules are not yet present, gate or comment them as needed.
 
-// Re-export some arbiter sub-modules at the ccos root for historic import paths
-// Tests and examples sometimes refer to `ccos::ccos::delegating_arbiter` or
+// Re-export some cognitive_engine sub-modules at the ccos root for historic import paths
+// Tests and examples sometimes refer to `ccos::ccos::delegating_engine` or
 // `ccos::ccos::arbiter_engine`. Provide lightweight re-exports to avoid
 // breaking consumers when the arbiter was nested under `ccos::arbiter`.
-pub use crate::arbiter::arbiter_engine;
-pub use crate::arbiter::delegating_arbiter;
+pub use crate::cognitive_engine::delegating_engine;
+pub use crate::cognitive_engine::engine as arbiter_engine;
 
 // --- Core CCOS System ---
 
@@ -18,15 +18,14 @@ use std::sync::{Arc, Mutex};
 
 // AgentRegistry migration: Removed AgentRegistry import
 // Agents are now managed via CapabilityMarketplace with :kind :agent capabilities
-use crate::arbiter::prompt::{FilePromptStore, PromptStore};
-use crate::arbiter::DelegatingArbiter;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::catalog::CatalogService;
+use crate::cognitive_engine::prompt::{FilePromptStore, PromptStore};
+use crate::cognitive_engine::DelegatingCognitiveEngine;
 use crate::config::types::AgentConfig;
 use crate::host::RuntimeHost;
 use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::security::RuntimeContext;
-use rtfs::runtime::values::Value;
 use rtfs::runtime::{ModuleRegistry, RTFSRuntime, Runtime};
 
 use crate::types::ExecutionResult;
@@ -48,7 +47,7 @@ use crate::plan_archive::PlanArchive;
 /// The main CCOS system struct, which initializes and holds all core components.
 /// This is the primary entry point for interacting with the CCOS.
 pub struct CCOS {
-    pub arbiter: Arc<DelegatingArbiter>,
+    pub cognitive_engine: Arc<DelegatingCognitiveEngine>,
     pub governance_kernel: Arc<GovernanceKernel>,
     pub orchestrator: Arc<Orchestrator>,
     // The following components are shared across the system
@@ -313,6 +312,20 @@ impl CCOS {
         // RuntimeHost factory moved to after Orchestrator creation for unified governance path
 
         let catalog_service = Arc::new(CatalogService::new());
+
+        // Optimize: Initialize embedding service if configured
+        if let Some(embedding_service) =
+            crate::discovery::embedding_service::EmbeddingService::from_env()
+        {
+            eprintln!(
+                "[CCOS] Semantic search enabled: {}",
+                embedding_service.provider_description()
+            );
+            catalog_service
+                .set_embedding_service(embedding_service)
+                .await;
+        }
+
         capability_marketplace
             .set_catalog_service(Arc::clone(&catalog_service))
             .await;
@@ -348,7 +361,7 @@ impl CCOS {
         catalog_service
             .ingest_marketplace(&capability_marketplace)
             .await;
-        catalog_service.ingest_plan_archive(&plan_archive);
+        catalog_service.ingest_plan_archive(&plan_archive).await;
         let orchestrator = Arc::new(Orchestrator::new(
             Arc::clone(&causal_chain),
             Arc::clone(&intent_graph),
@@ -384,7 +397,7 @@ impl CCOS {
         // TODO: Migrate delegation feedback tracking to CapabilityMarketplace
 
         // Always create delegating arbiter - this is now the primary arbiter
-        let delegating_arbiter = {
+        let delegating_engine = {
             // Try to extract LLM config from agent config first
             let llm_config = if let Some(llm_profiles) = &agent_config.llm_profiles {
                 // Use default profile or first available profile
@@ -408,21 +421,21 @@ impl CCOS {
 
                         let provider_type = match profile.provider.to_lowercase().as_str() {
                             "openai" | "openrouter" => {
-                                crate::arbiter::arbiter_config::LlmProviderType::OpenAI
+                                crate::cognitive_engine::config::LlmProviderType::OpenAI
                             }
                             "anthropic" | "claude" => {
-                                crate::arbiter::arbiter_config::LlmProviderType::Anthropic
+                                crate::cognitive_engine::config::LlmProviderType::Anthropic
                             }
                             "local" | "ollama" => {
-                                crate::arbiter::arbiter_config::LlmProviderType::Local
+                                crate::cognitive_engine::config::LlmProviderType::Local
                             }
                             "stub" | "test" => {
-                                crate::arbiter::arbiter_config::LlmProviderType::Stub
+                                crate::cognitive_engine::config::LlmProviderType::Stub
                             }
-                            _ => crate::arbiter::arbiter_config::LlmProviderType::OpenAI,
+                            _ => crate::cognitive_engine::config::LlmProviderType::OpenAI,
                         };
 
-                        crate::arbiter::arbiter_config::LlmConfig {
+                        crate::cognitive_engine::config::LlmConfig {
                             provider_type,
                             model: profile.model,
                             api_key,
@@ -431,7 +444,7 @@ impl CCOS {
                             temperature: profile.temperature.or(Some(0.7)),
                             timeout_seconds: Some(30),
                             prompts: None,
-                            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+                            retry_config: crate::cognitive_engine::config::RetryConfig::default(),
                         }
                     } else {
                         // Profile not found, fall through to env var logic
@@ -458,15 +471,15 @@ impl CCOS {
                             || model == "stub"
                             || api_key.is_none()
                         {
-                            crate::arbiter::arbiter_config::LlmProviderType::Stub
+                            crate::cognitive_engine::config::LlmProviderType::Stub
                         } else if provider_hint.eq_ignore_ascii_case("anthropic") {
-                            crate::arbiter::arbiter_config::LlmProviderType::Anthropic
+                            crate::cognitive_engine::config::LlmProviderType::Anthropic
                         } else if provider_hint.eq_ignore_ascii_case("local") {
-                            crate::arbiter::arbiter_config::LlmProviderType::Local
+                            crate::cognitive_engine::config::LlmProviderType::Local
                         } else {
-                            crate::arbiter::arbiter_config::LlmProviderType::OpenAI
+                            crate::cognitive_engine::config::LlmProviderType::OpenAI
                         };
-                        crate::arbiter::arbiter_config::LlmConfig {
+                        crate::cognitive_engine::config::LlmConfig {
                             provider_type,
                             model,
                             api_key,
@@ -475,7 +488,7 @@ impl CCOS {
                             temperature: Some(0.7),
                             timeout_seconds: Some(30),
                             prompts: None,
-                            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+                            retry_config: crate::cognitive_engine::config::RetryConfig::default(),
                         }
                     }
                 } else {
@@ -502,15 +515,15 @@ impl CCOS {
                         || model == "stub"
                         || api_key.is_none()
                     {
-                        crate::arbiter::arbiter_config::LlmProviderType::Stub
+                        crate::cognitive_engine::config::LlmProviderType::Stub
                     } else if provider_hint.eq_ignore_ascii_case("anthropic") {
-                        crate::arbiter::arbiter_config::LlmProviderType::Anthropic
+                        crate::cognitive_engine::config::LlmProviderType::Anthropic
                     } else if provider_hint.eq_ignore_ascii_case("local") {
-                        crate::arbiter::arbiter_config::LlmProviderType::Local
+                        crate::cognitive_engine::config::LlmProviderType::Local
                     } else {
-                        crate::arbiter::arbiter_config::LlmProviderType::OpenAI
+                        crate::cognitive_engine::config::LlmProviderType::OpenAI
                     };
-                    crate::arbiter::arbiter_config::LlmConfig {
+                    crate::cognitive_engine::config::LlmConfig {
                         provider_type,
                         model,
                         api_key,
@@ -519,7 +532,7 @@ impl CCOS {
                         temperature: Some(0.7),
                         timeout_seconds: Some(30),
                         prompts: None,
-                        retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+                        retry_config: crate::cognitive_engine::config::RetryConfig::default(),
                     }
                 }
             } else {
@@ -550,16 +563,16 @@ impl CCOS {
                     || model == "stub"
                     || api_key.is_none()
                 {
-                    crate::arbiter::arbiter_config::LlmProviderType::Stub
+                    crate::cognitive_engine::config::LlmProviderType::Stub
                 } else if provider_hint.eq_ignore_ascii_case("anthropic") {
-                    crate::arbiter::arbiter_config::LlmProviderType::Anthropic
+                    crate::cognitive_engine::config::LlmProviderType::Anthropic
                 } else if provider_hint.eq_ignore_ascii_case("local") {
-                    crate::arbiter::arbiter_config::LlmProviderType::Local
+                    crate::cognitive_engine::config::LlmProviderType::Local
                 } else {
-                    crate::arbiter::arbiter_config::LlmProviderType::OpenAI
+                    crate::cognitive_engine::config::LlmProviderType::OpenAI
                 };
 
-                crate::arbiter::arbiter_config::LlmConfig {
+                crate::cognitive_engine::config::LlmConfig {
                     provider_type,
                     model,
                     api_key,
@@ -568,7 +581,7 @@ impl CCOS {
                     temperature: Some(0.7),
                     timeout_seconds: Some(30),
                     prompts: None,
-                    retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+                    retry_config: crate::cognitive_engine::config::RetryConfig::default(),
                 }
             };
 
@@ -589,29 +602,26 @@ impl CCOS {
                 rc.use_stub_fallback = matches!(v.as_str(), "1" | "true" | "yes" | "on");
             }
             // apply overrides back into llm_config
-            let llm_config = crate::arbiter::arbiter_config::LlmConfig {
+            let llm_config = crate::cognitive_engine::config::LlmConfig {
                 retry_config: rc,
                 ..llm_config
             };
 
             // Convert agent config delegation to arbiter delegation config
-            let delegation_config = crate::arbiter::arbiter_config::DelegationConfig {
+            #[allow(deprecated)]
+            let delegation_config = crate::cognitive_engine::config::DelegationConfig {
                 enabled: true,
                 threshold: 0.65,
                 max_candidates: 3,
                 min_skill_hits: None,
-                agent_registry: crate::arbiter::arbiter_config::AgentRegistryConfig {
-                    registry_type: crate::arbiter::arbiter_config::RegistryType::InMemory,
-                    database_url: None,
-                    agents: vec![],
-                },
+                agent_registry: None,
                 adaptive_threshold: None,
                 print_extracted_intent: Some(false),
                 print_extracted_plan: Some(false),
             };
 
             // Always create delegating arbiter - fail properly if LLM provider is not configured
-            let delegating_arbiter = crate::arbiter::DelegatingArbiter::new(
+            let delegating_engine = crate::cognitive_engine::DelegatingCognitiveEngine::new(
                 llm_config,
                 delegation_config,
                 Arc::clone(&capability_marketplace),
@@ -620,25 +630,25 @@ impl CCOS {
             .await
             .map_err(|e| {
                 RuntimeError::Generic(format!(
-                    "Failed to initialize DelegatingArbiter. This typically means no LLM provider is configured. \
+                    "Failed to initialize DelegatingCognitiveEngine. This typically means no LLM provider is configured. \
                     Please set one of: CCOS_LLM_PROVIDER_HINT=openai|anthropic|local with OPENAI_API_KEY, ANTHROPIC_API_KEY, \
                     or OPENROUTER_API_KEY with CCOS_LLM_BASE_URL. Error: {}",
                     e
                 ))
             })?;
-            Arc::new(delegating_arbiter)
+            Arc::new(delegating_engine)
         };
 
         // Log which LLM provider is being used
         {
-            let cfg = delegating_arbiter.get_llm_config();
+            let cfg = delegating_engine.get_llm_config();
             let provider_type = format!("{:?}", cfg.provider_type);
             let model = &cfg.model;
             ccos_eprintln!("🤖 Arbiter using {} (model: {})", provider_type, model);
         }
 
-        // The delegating_arbiter is now the primary arbiter
-        let arbiter = Arc::clone(&delegating_arbiter);
+        // The delegating_engine is now the primary arbiter
+        let arbiter = Arc::clone(&delegating_engine);
 
         // Wire arbiter to global accessor for LLM operations (ccos.llm.generate)
         crate::ops::llm::set_global_arbiter(Arc::clone(&arbiter));
@@ -687,7 +697,7 @@ impl CCOS {
         );
 
         // Always set the delegating arbiter for missing capability resolution
-        missing_capability_resolver.set_delegating_arbiter(Some(Arc::clone(&delegating_arbiter)));
+        missing_capability_resolver.set_delegating_arbiter(Some(Arc::clone(&delegating_engine)));
 
         // Set the resolver in the capability registry
         {
@@ -696,7 +706,7 @@ impl CCOS {
         }
 
         Ok(Self {
-            arbiter,
+            cognitive_engine: delegating_engine,
             governance_kernel,
             orchestrator,
             intent_graph,
@@ -976,7 +986,7 @@ impl CCOS {
     /// The main entry point for processing a user request.
     ///
     /// Architectural flow:
-    /// 1. Arbiter (or DelegatingArbiter) converts the natural language request into a `Plan` + (optionally) an `Intent` stored in the intent graph.
+    /// 1. Arbiter (or DelegatingCognitiveEngine) converts the natural language request into a `Plan` + (optionally) an `Intent` stored in the intent graph.
     /// 2. Pre‑flight capability validation ensures every referenced `ccos.*` capability is registered (fast fail before governance / orchestration work).
     /// 3. Governance Kernel validates / scaffolds / sanitizes the plan.
     /// 4. Orchestrator executes the validated plan, emitting causal chain actions.
@@ -990,7 +1000,7 @@ impl CCOS {
     /// - `plan_execution_completed`    : {"event":"plan_execution_completed","plan_id":"...","success":<bool>,"ts":...}
     ///
     /// Notes:
-    /// * `intent_id` key is only present when using the DelegatingArbiter path (an intent object is explicitly materialized before plan creation).
+    /// * `intent_id` key is only present when using the DelegatingCognitiveEngine path (an intent object is explicitly materialized before plan creation).
     /// * Timestamps are coarse (seconds) and intended for ordering, not precise latency measurement.
     /// * The callback is synchronous & lightweight: heavy processing / I/O should be offloaded by the consumer to avoid blocking the request path.
     /// * Additional causal chain detail can be retrieved separately via `get_causal_chain()`; this debug stream is intentionally minimal and stable.
@@ -1010,9 +1020,9 @@ impl CCOS {
         });
         // 1. Arbiter: Generate a plan from the natural language request.
         // Use delegating arbiter to produce a plan via its engine API
-        use crate::arbiter::ArbiterEngine;
+        use crate::cognitive_engine::CognitiveEngine;
         let intent = self
-            .arbiter
+            .cognitive_engine
             .natural_language_to_intent(natural_language_request, None)
             .await?;
 
@@ -1060,7 +1070,7 @@ impl CCOS {
             ig.store_intent(storable_intent)?;
         }
 
-        let proposed_plan = self.arbiter.intent_to_plan(&intent).await?;
+        let proposed_plan = self.cognitive_engine.intent_to_plan(&intent).await?;
         self.emit_debug(|| {
             format!(
             "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
@@ -1164,9 +1174,9 @@ impl CCOS {
         });
 
         // Plan generation - using delegating arbiter directly
-        use crate::arbiter::ArbiterEngine;
+        use crate::cognitive_engine::CognitiveEngine;
         let intent = self
-            .arbiter
+            .cognitive_engine
             .natural_language_to_intent(natural_language_request, None)
             .await?;
         if let Ok(mut ig) = self.intent_graph.lock() {
@@ -1208,7 +1218,7 @@ impl CCOS {
             };
             ig.store_intent(storable_intent)?;
         }
-        let proposed_plan = self.arbiter.intent_to_plan(&intent).await?;
+        let proposed_plan = self.cognitive_engine.intent_to_plan(&intent).await?;
         self.emit_debug(|| {
             format!(
             "{{\"event\":\"plan_generated\",\"plan_id\":\"{}\",\"intent_id\":\"{}\",\"ts\":{}}}",
@@ -1300,9 +1310,9 @@ impl CCOS {
         });
         // 1. Arbiter: Generate a plan from the natural language request.
         // Use delegating arbiter to produce a plan via its engine API
-        use crate::arbiter::ArbiterEngine;
+        use crate::cognitive_engine::CognitiveEngine;
         let intent = self
-            .arbiter
+            .cognitive_engine
             .natural_language_to_intent(natural_language_request, arbiter_context.cloned())
             .await?;
 
@@ -1355,7 +1365,7 @@ impl CCOS {
             ig.store_intent(storable_intent)?;
         }
 
-        let proposed_plan = self.arbiter.intent_to_plan(&intent).await?;
+        let proposed_plan = self.cognitive_engine.intent_to_plan(&intent).await?;
 
         // 1.5 Preflight capability validation (M3)
         self.emit_debug(|| {
@@ -1480,13 +1490,8 @@ impl CCOS {
         )
         .await?;
 
-        // Register agent capabilities (Phase 5) - uses shared WorkingMemory
-        let workspace_root = crate::utils::fs::get_workspace_root();
-        let agent_registry = Arc::new(crate::agents::AgentRegistry::with_persistence(
-            workspace_root.join(".ccos").join("agents.jsonl"),
-        ));
-        // Attempt to load persisted agents
-        let _ = agent_registry.load();
+        // Register agent capabilities (Phase 5) - uses unified marketplace
+        let _workspace_root = crate::utils::fs::get_workspace_root();
 
         // Create in-memory working memory for agent operations
         let backend =
@@ -1494,9 +1499,8 @@ impl CCOS {
         let wm = crate::working_memory::WorkingMemory::new(Box::new(backend));
         let agent_working_memory = Arc::new(std::sync::Mutex::new(wm));
 
-        crate::agents::capabilities::register_agent_capabilities(
+        crate::capabilities::register_agent_ops_capabilities(
             Arc::clone(&self.capability_marketplace),
-            agent_registry,
             Arc::clone(&agent_working_memory),
         )
         .await?;
@@ -1505,7 +1509,7 @@ impl CCOS {
         crate::learning::capabilities::register_llm_learning_capabilities(
             Arc::clone(&self.capability_marketplace),
             Arc::clone(&self.causal_chain),
-            Arc::clone(&self.arbiter),
+            Arc::clone(&self.cognitive_engine),
         )
         .await?;
 
@@ -1528,8 +1532,8 @@ impl CCOS {
         Ok(())
     }
 
-    pub fn get_delegating_arbiter(&self) -> Option<Arc<DelegatingArbiter>> {
-        Some(Arc::clone(&self.arbiter))
+    pub fn get_delegating_engine(&self) -> Option<Arc<DelegatingCognitiveEngine>> {
+        Some(Arc::clone(&self.cognitive_engine))
     }
 
     pub fn get_missing_capability_resolver(

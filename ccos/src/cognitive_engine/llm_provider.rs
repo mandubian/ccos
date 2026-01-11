@@ -396,7 +396,7 @@ pub struct LlmProviderConfig {
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
     pub timeout_seconds: Option<u64>,
-    pub retry_config: crate::arbiter::arbiter_config::RetryConfig,
+    pub retry_config: crate::cognitive_engine::config::RetryConfig,
 }
 
 /// Supported LLM provider types
@@ -3006,7 +3006,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             timeout_seconds: None,
-            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+            retry_config: crate::cognitive_engine::config::RetryConfig::default(),
         };
 
         let provider = StubLlmProvider::new(config);
@@ -3030,7 +3030,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             timeout_seconds: None,
-            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+            retry_config: crate::cognitive_engine::config::RetryConfig::default(),
         };
 
         let provider = StubLlmProvider::new(config);
@@ -3058,7 +3058,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             timeout_seconds: None,
-            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+            retry_config: crate::cognitive_engine::config::RetryConfig::default(),
         };
 
         let provider = StubLlmProvider::new(config);
@@ -3088,7 +3088,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             timeout_seconds: None,
-            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+            retry_config: crate::cognitive_engine::config::RetryConfig::default(),
         };
 
         let model = config.model.clone();
@@ -3134,7 +3134,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             timeout_seconds: None,
-            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+            retry_config: crate::cognitive_engine::config::RetryConfig::default(),
         };
 
         let model = config.model.clone();
@@ -3190,7 +3190,7 @@ mod tests {
             max_tokens: Some(1000),
             temperature: Some(0.7),
             timeout_seconds: Some(30),
-            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+            retry_config: crate::cognitive_engine::config::RetryConfig::default(),
         };
 
         // Test that provider can be created (even without valid API key)
@@ -3216,7 +3216,7 @@ mod tests {
             max_tokens: Some(1000),
             temperature: Some(0.7),
             timeout_seconds: Some(30),
-            retry_config: crate::arbiter::arbiter_config::RetryConfig::default(),
+            retry_config: crate::cognitive_engine::config::RetryConfig::default(),
         };
 
         // Test that factory can create Anthropic provider

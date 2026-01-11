@@ -1,6 +1,6 @@
 use rtfs::runtime::{RuntimeError, RuntimeResult};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Options for filesystem operations
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

@@ -976,7 +976,9 @@ impl MCPDiscoveryService {
 
         // Index in catalog if available
         if let Some(ref catalog) = self.catalog {
-            catalog.register_capability(manifest, CatalogSource::Discovered);
+            catalog
+                .register_capability(manifest, CatalogSource::Discovered)
+                .await;
         }
 
         Ok(())

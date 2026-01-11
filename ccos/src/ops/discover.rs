@@ -2,13 +2,11 @@
 
 use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
 use crate::discovery::config::DiscoveryConfig;
-use crate::discovery::goal_discovery::LlmSearchResult;
 use crate::discovery::GoalDiscoveryAgent;
-// removed unused find_workspace_root import
 #[cfg(feature = "tui")]
-use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
+use dialoguer::theme::ColorfulTheme;
 use rtfs::runtime::error::RuntimeResult;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Options for goal-driven server discovery
@@ -839,7 +837,7 @@ async fn handle_documentation_url(
     agent: &GoalDiscoveryAgent,
     goal: &str,
     url: &str,
-    llm_enabled: bool,
+    _llm_enabled: bool,
     storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     println!("🔍 Fetching API documentation from {}...", url);

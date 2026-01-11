@@ -5,9 +5,11 @@
 
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::mcp::discovery_session::MCPSessionManager;
+use crate::synthesis::introspection::{AuthConfig, LlmDocParser};
 use rtfs::runtime::error::RuntimeResult;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::convert::TryInto;
 use std::sync::Arc;
 
 /// Result of browser-based API discovery
@@ -21,6 +23,7 @@ pub struct BrowserDiscoveryResult {
     pub found_openapi_urls: Vec<String>,
     /// OpenAPI spec URL discovered from Swagger UI globals or script tags
     pub spec_url: Option<String>,
+    pub auth: Option<AuthConfig>,
     pub error: Option<String>,
 }
 
@@ -316,6 +319,7 @@ impl BrowserDiscoveryService {
                         discovered_endpoints: endpoints,
                         found_openapi_urls: found_links,
                         spec_url,
+                        auth: None,
                         error: None,
                     })
                 } else {
@@ -335,6 +339,7 @@ impl BrowserDiscoveryService {
                         discovered_endpoints: vec![],
                         found_openapi_urls: vec![],
                         spec_url: None,
+                        auth: None,
                         error: None,
                     })
                 }
@@ -349,6 +354,7 @@ impl BrowserDiscoveryService {
                     discovered_endpoints: vec![],
                     found_openapi_urls: vec![],
                     spec_url: None,
+                    auth: None,
                     error: Some(format!("Failed to evaluate page: {}", e)),
                 })
             }
@@ -361,25 +367,119 @@ impl BrowserDiscoveryService {
         url: &str,
         llm_service: &crate::discovery::llm_discovery::LlmDiscoveryService,
     ) -> RuntimeResult<BrowserDiscoveryResult> {
-        let result = self.extract_from_url(url).await?;
+        let mut result = self.extract_from_url(url).await?;
 
-        // If we got HTML content, use LLM to analyze it
+        // If heuristic extraction failed to find endpoints or spec URL, or if we need auth info, fallback to LLM analysis
+        let needs_llm = (result.discovered_endpoints.is_empty() && result.spec_url.is_none())
+            || (result.auth.is_none() && result.spec_url.is_none());
+
+        // If we got HTML content and need deeper analysis
         if let Some(ref html) = result.extracted_html {
             if html.len() > 100 {
-                match llm_service
-                    .search_external_apis("api analysis", Some(url))
-                    .await
-                {
-                    Ok(apis) => {
-                        for api in apis {
+                // If we have low confidence results, use the dedicated doc parser
+                if needs_llm {
+                    eprintln!("[BrowserDiscovery] Low confidence in heuristic extraction. Using LLM Doc Parser...");
+
+                    // Simple HTML to text conversion
+                    let text_content = html
+                        .replace("<script", " <script")
+                        .replace("<style", " <style")
+                        .replace("<", " <"); // Rudimentary spacing
+
+                    // Remove script/style tags roughly
+                    let re =
+                        regex::Regex::new(r"<script[^>]*>.*?</script>| <style[^>]*>.*?</style>")
+                            .unwrap();
+                    let clean_text = re.replace_all(&text_content, "").to_string();
+
+                    // Remove tags
+                    let tags = regex::Regex::new(r"<[^>]+>").unwrap();
+                    let plain_text = tags.replace_all(&clean_text, " ").to_string();
+                    let plain_text = plain_text.replace("&nbsp;", " ");
+                    let plain_text = plain_text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+                    // Limit text length
+                    let truncated_text = if plain_text.len() > 15000 {
+                        &plain_text[..15000]
+                    } else {
+                        &plain_text
+                    };
+
+                    let parser = LlmDocParser::new();
+                    let api_domain = url
+                        .split("://")
+                        .nth(1)
+                        .unwrap_or(url)
+                        .split('/')
+                        .next()
+                        .unwrap_or("unknown");
+
+                    // Use the provider from the passed service
+                    let provider = llm_service.provider();
+
+                    match parser
+                        .parse_with_llm(truncated_text, api_domain, provider)
+                        .await
+                    {
+                        Ok(llm_result) => {
                             eprintln!(
-                                "[BrowserDiscovery] LLM found API: {} - {}",
-                                api.name, api.description
+                                "[BrowserDiscovery] LLM Parser success! Found {} endpoints.",
+                                llm_result.endpoints.len()
                             );
+
+                            // Merge endpoints
+                            if result.discovered_endpoints.is_empty() {
+                                result.discovered_endpoints = llm_result
+                                    .endpoints
+                                    .iter()
+                                    .map(|e| crate::ops::browser_discovery::DiscoveredEndpoint {
+                                        method: e.method.clone(),
+                                        path: e.path.clone(),
+                                        description: Some(e.description.clone()),
+                                    })
+                                    .collect();
+                            }
+
+                            // Use LLM found base URL if heuristic missed it (or as spec_url/base)
+                            if result.source_url == url
+                                && !llm_result.base_url.is_empty()
+                                && llm_result.base_url != "https://api.example.com"
+                            {
+                                result.source_url = llm_result.base_url;
+                            }
+
+                            // Extract Auth
+                            if let Some(extracted_auth) = llm_result.auth {
+                                if let Ok(auth_config) = extracted_auth.try_into() {
+                                    eprintln!(
+                                        "[BrowserDiscovery] Discovered Auth Config: {:?}",
+                                        auth_config
+                                    );
+                                    result.auth = Some(auth_config);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[BrowserDiscovery] LLM Doc Parser failed: {}", e);
                         }
                     }
-                    Err(e) => {
-                        eprintln!("[BrowserDiscovery] LLM analysis failed: {}", e);
+                } else {
+                    // Just do the generic search if heuristics worked reasonably well
+                    match llm_service
+                        .search_external_apis("api analysis", Some(url))
+                        .await
+                    {
+                        Ok(apis) => {
+                            for api in apis {
+                                eprintln!(
+                                    "[BrowserDiscovery] LLM found API: {} - {}",
+                                    api.name, api.description
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[BrowserDiscovery] LLM analysis failed: {}", e);
+                        }
                     }
                 }
             }

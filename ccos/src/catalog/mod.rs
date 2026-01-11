@@ -1,5 +1,6 @@
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::capability_marketplace::CapabilityMarketplace;
+use crate::discovery::embedding_service::EmbeddingService;
 use crate::plan_archive::PlanArchive;
 use crate::types::Plan;
 use rtfs::ast::{MapKey, MapTypeEntry, TypeExpr};
@@ -8,6 +9,10 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::RwLock;
+use tokio::sync::RwLock as TokioRwLock;
+
+pub mod matcher;
+pub use matcher::calculate_description_match_score;
 
 /// Result entry returned from catalog queries
 #[derive(Clone, Debug)]
@@ -161,7 +166,11 @@ impl CatalogEntry {
         categories.iter().any(|c| self.has_category(c))
     }
 
-    fn new_capability(manifest: &CapabilityManifest, source: CatalogSource) -> Self {
+    async fn new_capability(
+        manifest: &CapabilityManifest,
+        source: CatalogSource,
+        embedding_service: Option<&mut EmbeddingService>,
+    ) -> Self {
         let tags = manifest.metadata.keys().cloned().collect::<Vec<_>>();
         let inputs = extract_schema_fields(manifest.input_schema.as_ref());
         let outputs = extract_schema_fields(manifest.output_schema.as_ref());
@@ -182,7 +191,20 @@ impl CatalogEntry {
             &inputs,
             &outputs,
         );
-        let embedding = Some(embed_text(&search_blob));
+
+        let embedding = if let Some(es) = embedding_service {
+            match es.embed(&search_blob).await {
+                Ok(emb) => Some(emb),
+                Err(e) => {
+                    // Fallback to basic embedding if service fails or log?
+                    // For now, let's just log and fallback
+                    eprintln!("Failed to generate embedding: {}", e);
+                    Some(embed_text(&search_blob))
+                }
+            }
+        } else {
+            Some(embed_text(&search_blob))
+        };
 
         Self {
             id: manifest.id.clone(),
@@ -214,7 +236,12 @@ impl CatalogEntry {
         }
     }
 
-    fn new_plan(plan: &Plan, source: CatalogSource, location: Option<CatalogLocation>) -> Self {
+    async fn new_plan(
+        plan: &Plan,
+        source: CatalogSource,
+        location: Option<CatalogLocation>,
+        embedding_service: Option<&mut EmbeddingService>,
+    ) -> Self {
         let tags = plan.metadata.keys().cloned().collect::<Vec<_>>();
 
         let inputs = plan
@@ -250,7 +277,18 @@ impl CatalogEntry {
         }
 
         let search_blob = build_search_blob(&text_components, &tags, &inputs, &outputs);
-        let embedding = Some(embed_text(&search_blob));
+
+        let embedding = if let Some(es) = embedding_service {
+            match es.embed(&search_blob).await {
+                Ok(emb) => Some(emb),
+                Err(e) => {
+                    eprintln!("Failed to generate embedding for plan: {}", e);
+                    Some(embed_text(&search_blob))
+                }
+            }
+        } else {
+            Some(embed_text(&search_blob))
+        };
 
         Self {
             id: plan.plan_id.clone(),
@@ -279,6 +317,7 @@ impl CatalogEntry {
 pub struct CatalogService {
     entries: RwLock<HashMap<String, CatalogEntry>>,
     embedding_index: RwLock<Vec<(String, Vec<f32>)>>,
+    embedding_service: TokioRwLock<Option<EmbeddingService>>,
 }
 
 impl CatalogService {
@@ -286,23 +325,32 @@ impl CatalogService {
         Self {
             entries: RwLock::new(HashMap::new()),
             embedding_index: RwLock::new(Vec::new()),
+            embedding_service: TokioRwLock::new(None),
         }
     }
 
+    /// Set or update the embedding service
+    pub async fn set_embedding_service(&self, service: EmbeddingService) {
+        let mut guard = self.embedding_service.write().await;
+        *guard = Some(service);
+    }
+
     /// Upsert a capability manifest into the catalog
-    pub fn register_capability(&self, manifest: &CapabilityManifest, source: CatalogSource) {
-        let entry = CatalogEntry::new_capability(manifest, source);
+    pub async fn register_capability(&self, manifest: &CapabilityManifest, source: CatalogSource) {
+        let mut service_guard = self.embedding_service.write().await;
+        let entry = CatalogEntry::new_capability(manifest, source, service_guard.as_mut()).await;
         self.insert_entry(entry);
     }
 
     /// Upsert a plan into the catalog
-    pub fn register_plan(
+    pub async fn register_plan(
         &self,
         plan: &Plan,
         source: CatalogSource,
         location: Option<CatalogLocation>,
     ) {
-        let entry = CatalogEntry::new_plan(plan, source, location);
+        let mut service_guard = self.embedding_service.write().await;
+        let entry = CatalogEntry::new_plan(plan, source, location, service_guard.as_mut()).await;
         self.insert_entry(entry);
     }
 
@@ -329,12 +377,13 @@ impl CatalogService {
         };
 
         for manifest in manifests {
-            self.register_capability(&manifest, source_infer(&manifest));
+            self.register_capability(&manifest, source_infer(&manifest))
+                .await;
         }
     }
 
     /// Re-index plans contained within the provided plan archive
-    pub fn ingest_plan_archive(&self, plan_archive: &PlanArchive) {
+    pub async fn ingest_plan_archive(&self, plan_archive: &PlanArchive) {
         for plan_id in plan_archive.list_plan_ids() {
             if let Some(archivable_plan) = plan_archive.get_plan_by_id(&plan_id) {
                 let plan =
@@ -343,13 +392,14 @@ impl CatalogService {
                     &plan,
                     CatalogSource::Generated,
                     Some(CatalogLocation::ArchiveHash(plan_id.clone())),
-                );
+                )
+                .await;
             }
         }
     }
 
     /// Keyword-based search across the catalog
-    pub fn search_keyword(
+    pub async fn search_keyword(
         &self,
         query: &str,
         filter: Option<&CatalogFilter>,
@@ -400,6 +450,11 @@ impl CatalogService {
                     }
                 }
 
+                // Use advanced keyword matching from matcher if needed
+                // For now, we keep it simple, but we could use calculate_description_match_score here
+                // However, that function requires specific fields ("rationale", etc.)
+                // Let's stick to blob search for general keyword search.
+
                 if score > 0.0 {
                     hits.push(CatalogHit {
                         entry: entry.clone(),
@@ -420,15 +475,30 @@ impl CatalogService {
         hits
     }
 
-    /// Semantic search using simple hashed embeddings
-    pub fn search_semantic(
+    /// Semantic search using embeddings
+    pub async fn search_semantic(
         &self,
         query: &str,
         filter: Option<&CatalogFilter>,
         limit: usize,
     ) -> Vec<CatalogHit> {
         let filter = filter.cloned().unwrap_or_default();
-        let query_embedding = embed_text(query);
+
+        let query_embedding = {
+            let mut service_guard = self.embedding_service.write().await;
+            if let Some(es) = service_guard.as_mut() {
+                match es.embed(query).await {
+                    Ok(emb) => emb,
+                    Err(e) => {
+                        eprintln!("Semantic search embedding failed: {}", e);
+                        embed_text(query)
+                    }
+                }
+            } else {
+                embed_text(query)
+            }
+        };
+
         let mut hits = Vec::new();
 
         let entries_guard = self.entries.read().expect("catalog entries poisoned");
@@ -442,6 +512,7 @@ impl CatalogService {
                 if !filter.matches(entry) {
                     continue;
                 }
+                // We use f32 similarity for compatibility
                 let score = cosine_similarity(&query_embedding, embedding);
                 hits.push(CatalogHit {
                     entry: entry.clone(),
@@ -586,7 +657,10 @@ fn extract_schema_fields(schema: Option<&TypeExpr>) -> Vec<String> {
                 }
                 walk(return_type, acc);
             }
-            TypeExpr::ParametricMap { key_type, value_type } => {
+            TypeExpr::ParametricMap {
+                key_type,
+                value_type,
+            } => {
                 walk(key_type, acc);
                 walk(value_type, acc);
             }

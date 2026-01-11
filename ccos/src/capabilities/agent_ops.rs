@@ -1,12 +1,17 @@
-//! Agent Capabilities
+//! Agent Operations Capabilities
 //!
 //! RTFS-callable capabilities for agent operations.
 //! Provides: agent.create, agent.recall, agent.learn, agent.list
+//!
+//! This module replaces the legacy `src/agents/capabilities.rs` and implements
+//! the unified artifact model where agents are stored in the CapabilityMarketplace.
 
-use crate::agents::identity::{AgentIdentity, AgentRegistry, AgentRegistryError};
-use crate::agents::memory::{AgentMemory, LearnedPattern};
+use crate::capability_marketplace::types::{
+    AgentConstraints, CapabilityKind, CapabilityManifest, CapabilityQuery, LocalCapability,
+    ProviderType,
+};
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::working_memory::backend_inmemory::InMemoryJsonlBackend;
+use crate::working_memory::agent_memory::{AgentMemory, LearnedPattern};
 use crate::working_memory::facade::WorkingMemory;
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -103,15 +108,13 @@ pub struct AgentSummary {
 
 /// Shared state for agent capabilities
 pub struct AgentCapabilityState {
-    registry: Arc<AgentRegistry>,
     memories: Arc<Mutex<HashMap<String, AgentMemory>>>,
     working_memory: Arc<Mutex<WorkingMemory>>,
 }
 
 impl AgentCapabilityState {
-    pub fn new(registry: Arc<AgentRegistry>, working_memory: Arc<Mutex<WorkingMemory>>) -> Self {
+    pub fn new(working_memory: Arc<Mutex<WorkingMemory>>) -> Self {
         Self {
-            registry,
             memories: Arc::new(Mutex::new(HashMap::new())),
             working_memory,
         }
@@ -120,7 +123,7 @@ impl AgentCapabilityState {
     fn get_or_create_memory(&self, agent_id: &str) -> AgentMemory {
         let mut memories = self.memories.lock().unwrap();
         if let Some(memory) = memories.get(agent_id) {
-            // Clone just the parameters, create new wrapper
+            // Return a new wrapper with same backend
             AgentMemory::new(agent_id, self.working_memory.clone())
         } else {
             let memory = AgentMemory::new(agent_id, self.working_memory.clone());
@@ -133,42 +136,57 @@ impl AgentCapabilityState {
     }
 }
 
-/// Register agent capabilities with the marketplace.
-pub async fn register_agent_capabilities(
+/// Register agent operational capabilities with the marketplace.
+pub async fn register_agent_ops_capabilities(
     marketplace: Arc<CapabilityMarketplace>,
-    registry: Arc<AgentRegistry>,
     working_memory: Arc<Mutex<WorkingMemory>>,
 ) -> Result<(), RuntimeError> {
-    let state = Arc::new(AgentCapabilityState::new(registry, working_memory));
+    let state = Arc::new(AgentCapabilityState::new(working_memory));
 
-    // agent.create - Create a new agent identity
+    // agent.create - Create a new agent (registers a :kind :agent capability)
     marketplace
         .register_native_capability(
             "agent.create".to_string(),
             "Create Agent".to_string(),
-            "Create a new persistent agent identity".to_string(),
+            "Register a new goal-directed agent artifact".to_string(),
             Arc::new({
-                let state = state.clone();
+                let marketplace = marketplace.clone();
                 move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
                     let args_clone = args.clone();
-                    let state = state.clone();
+                    let marketplace = marketplace.clone();
                     async move {
                         let input: CreateAgentInput = parse_input(&args_clone)?;
 
-                        let mut identity = AgentIdentity::new(&input.agent_id, &input.name);
-                        if let Some(desc) = input.description {
-                            identity = identity.with_description(desc);
-                        }
-                        if let Some(level) = input.autonomy_level {
-                            identity = identity.with_autonomy_level(level);
+                        // Create a manifest for the agent
+                        let mut manifest = CapabilityManifest::new_agent(
+                            input.agent_id.clone(),
+                            input.name.clone(),
+                            input
+                                .description
+                                .unwrap_or_else(|| "Dynamic Agent".to_string()),
+                            ProviderType::Local(LocalCapability {
+                                handler: Arc::new(|_| Ok(Value::Nil)),
+                            }), // Default no-op local provider
+                            "1.0.0".to_string(),
+                            true, // planning
+                            true, // stateful
+                            true, // interactive
+                        );
+
+                        // Set autonomy level in agent metadata
+                        if let Some(ref mut meta) = manifest.agent_metadata {
+                            meta.autonomy_level = input.autonomy_level.unwrap_or(0);
+                            meta.constraints = AgentConstraints::new(2);
                         }
 
-                        match state.registry.register(identity) {
+                        // Register in marketplace
+                        match marketplace.register_capability_manifest(manifest).await {
                             Ok(_) => {
                                 let output = CreateAgentOutput {
                                     agent_id: input.agent_id,
                                     created: true,
-                                    message: "Agent created successfully".to_string(),
+                                    message: "Agent registered in marketplace successfully"
+                                        .to_string(),
                                 };
                                 to_value(&output)
                             }
@@ -176,7 +194,7 @@ pub async fn register_agent_capabilities(
                                 let output = CreateAgentOutput {
                                     agent_id: input.agent_id,
                                     created: false,
-                                    message: format!("Failed to create agent: {}", e),
+                                    message: format!("Failed to register agent: {}", e),
                                 };
                                 to_value(&output)
                             }
@@ -197,16 +215,18 @@ pub async fn register_agent_capabilities(
             "Recall relevant entries from an agent's working memory".to_string(),
             Arc::new({
                 let state = state.clone();
+                let marketplace = marketplace.clone();
                 move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
                     let args_clone = args.clone();
                     let state = state.clone();
+                    let marketplace = marketplace.clone();
                     async move {
                         let input: RecallInput = parse_input(&args_clone)?;
 
-                        // Verify agent exists
-                        if state.registry.get(&input.agent_id).is_none() {
+                        // Verify agent exists in marketplace
+                        if marketplace.get_capability(&input.agent_id).await.is_none() {
                             return Err(RuntimeError::Generic(format!(
-                                "Agent not found: {}",
+                                "Agent capability not found: {}",
                                 input.agent_id
                             )));
                         }
@@ -247,16 +267,18 @@ pub async fn register_agent_capabilities(
             "Store a learned pattern in an agent's memory".to_string(),
             Arc::new({
                 let state = state.clone();
+                let marketplace = marketplace.clone();
                 move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
                     let args_clone = args.clone();
                     let state = state.clone();
+                    let marketplace = marketplace.clone();
                     async move {
                         let input: LearnInput = parse_input(&args_clone)?;
 
-                        // Verify agent exists
-                        if state.registry.get(&input.agent_id).is_none() {
+                        // Verify agent exists in marketplace
+                        if marketplace.get_capability(&input.agent_id).await.is_none() {
                             return Err(RuntimeError::Generic(format!(
-                                "Agent not found: {}",
+                                "Agent capability not found: {}",
                                 input.agent_id
                             )));
                         }
@@ -277,7 +299,6 @@ pub async fn register_agent_capabilities(
                             pattern.add_related_capability(cap);
                         }
 
-                        // Store in memory (note: in production, would persist)
                         let mut memories = state
                             .memories
                             .lock()
@@ -302,27 +323,39 @@ pub async fn register_agent_capabilities(
         )
         .await?;
 
-    // agent.list - List all registered agents
+    // agent.list - List all agents from the marketplace
     marketplace
         .register_native_capability(
             "agent.list".to_string(),
             "List Agents".to_string(),
-            "List all registered agent identities".to_string(),
+            "List all registered agent artifacts in the marketplace".to_string(),
             Arc::new({
-                let state = state.clone();
-                move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-                    let state = state.clone();
+                let marketplace = marketplace.clone();
+                move |_args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+                    let marketplace = marketplace.clone();
                     async move {
-                        let agents = state.registry.list();
+                        let query = CapabilityQuery::new()
+                            .with_kind(CapabilityKind::Agent)
+                            .with_limit(100);
+
+                        let agents = marketplace.list_capabilities_with_query(&query).await;
+
                         let output = ListAgentsOutput {
                             agents: agents
                                 .into_iter()
-                                .map(|a| AgentSummary {
-                                    agent_id: a.agent_id,
-                                    name: a.name,
-                                    autonomy_level: a.autonomy_level,
-                                    capabilities_count: a.capabilities_owned.len(),
-                                    created_at: a.created_at,
+                                .map(|a| {
+                                    let autonomy = a
+                                        .agent_metadata
+                                        .as_ref()
+                                        .map(|m| m.autonomy_level)
+                                        .unwrap_or(0);
+                                    AgentSummary {
+                                        agent_id: a.id,
+                                        name: a.name,
+                                        autonomy_level: autonomy,
+                                        capabilities_count: 0, // Marketplace-based agents might not "own" fixed lists
+                                        created_at: 0, // Could pull from provenance if available
+                                    }
                                 })
                                 .collect(),
                         };
@@ -335,7 +368,7 @@ pub async fn register_agent_capabilities(
         )
         .await?;
 
-    eprintln!("🤖 Registered 4 agent capabilities");
+    eprintln!("🤖 Registered 4 unified agent capabilities");
     Ok(())
 }
 

@@ -8,7 +8,7 @@ use rtfs::runtime::values::Value;
 use super::plan_generation::PlanGenerationResult;
 use crate::types::{ExecutionResult, Intent, IntentId, Plan, StorableIntent};
 
-/// High-level interface exposed by all Arbiter implementations.
+/// High-level interface exposed by all Cognitive Engine implementations.
 ///
 /// 1. `natural_language_to_intent` – parse user text and create a structured [`Intent`].
 /// 2. `intent_to_plan` – turn that intent into a concrete RTFS [`Plan`].
@@ -18,7 +18,7 @@ use crate::types::{ExecutionResult, Intent, IntentId, Plan, StorableIntent};
 /// stages together.  Implementers may override it for custom behaviour but
 /// typically the default is sufficient.
 #[async_trait(?Send)]
-pub trait ArbiterEngine {
+pub trait CognitiveEngine {
     /// Convert natural-language user input into a structured [`Intent`].
     async fn natural_language_to_intent(
         &self,
@@ -65,7 +65,7 @@ pub trait ArbiterEngine {
         _natural_language_goal: &str,
     ) -> Result<IntentId, RuntimeError> {
         Err(RuntimeError::Generic(
-            "natural_language_to_graph not implemented for this ArbiterEngine".to_string(),
+            "natural_language_to_graph not implemented for this CognitiveEngine".to_string(),
         ))
     }
 
@@ -76,7 +76,7 @@ pub trait ArbiterEngine {
         _intent: &StorableIntent,
     ) -> Result<PlanGenerationResult, RuntimeError> {
         Err(RuntimeError::Generic(
-            "generate_plan_for_intent not implemented for this ArbiterEngine".to_string(),
+            "generate_plan_for_intent not implemented for this CognitiveEngine".to_string(),
         ))
     }
 }

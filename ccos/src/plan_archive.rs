@@ -199,11 +199,19 @@ impl PlanArchive {
         }
 
         if let Some(catalog) = self.catalog.lock().unwrap().clone() {
-            catalog.register_plan(
-                plan,
-                CatalogSource::Generated,
-                Some(CatalogLocation::ArchiveHash(hash.clone())),
-            );
+            let plan = plan.clone();
+            let hash = hash.clone();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    catalog
+                        .register_plan(
+                            &plan,
+                            CatalogSource::Generated,
+                            Some(CatalogLocation::ArchiveHash(hash)),
+                        )
+                        .await;
+                });
+            }
         }
 
         Ok(hash)

@@ -34,7 +34,6 @@ use ccos::tui::{
         NodeStatus, PendingServerEntry, ServerInfo, ServerStatus, TraceEventType, View,
     },
 };
-use ccos::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 
 /// Format a JSON schema into a compact "field: type" format
 fn format_schema_compact(json_value: &serde_json::Value) -> String {
@@ -156,6 +155,7 @@ struct ResolutionInfo {
 #[derive(Debug)]
 enum TuiEvent {
     Trace(TraceEventType, String, Option<String>),
+    #[allow(dead_code)]
     GoalReceived(String, String, String, usize), // goal, rtfs_plan, prompt, prompt_scroll
     PlanComplete {
         root_id: String,
@@ -163,7 +163,7 @@ enum TuiEvent {
         sub_intents: Vec<SubIntentInfo>,
         resolutions: Vec<ResolutionInfo>,
         rtfs_plan: String,
-        decomposition_prompt: Option<String>,
+        _decomposition_prompt: Option<String>,
     },
     PlanError(String),
     EnvError(String),
@@ -215,7 +215,8 @@ enum TuiEvent {
     },
     /// Log message during introspection
     IntrospectionLog(String),
-    /// Popup closed - reset popup state
+    /// Popup closed
+    #[allow(dead_code)]
     PopupClosed,
     
     // =========================================
@@ -228,11 +229,11 @@ enum TuiEvent {
     /// Approved servers loaded
     ApprovedServersLoaded(Vec<ApprovedServerEntry>),
     /// Server approved successfully
-    ServerApproved { server_id: String, server_name: String },
+    ServerApproved { _server_id: String, server_name: String },
     /// Server rejected
-    ServerRejected { server_id: String, server_name: String },
+    ServerRejected { _server_id: String, server_name: String },
     /// Server added to pending queue
-    ServerAddedToPending { server_name: String, pending_id: String },
+    ServerAddedToPending { server_name: String, _pending_id: String },
     /// Auth token set successfully
     AuthTokenSet { env_var: String },
     /// Approvals operation error
@@ -388,7 +389,7 @@ fn process_tui_event(state: &mut AppState, event: TuiEvent, event_tx: mpsc::Unbo
             sub_intents,
             resolutions,
             rtfs_plan,
-            decomposition_prompt: _,
+            _decomposition_prompt: _,
         } => {
             // Build decomposition tree
             state.decomp_root_id = Some(root_id.clone());
@@ -671,7 +672,7 @@ fn process_tui_event(state: &mut AppState, event: TuiEvent, event_tx: mpsc::Unbo
             state.approvals_loading = false;
             state.approved_selected = 0;
         }
-        TuiEvent::ServerApproved { server_id: _, server_name } => {
+        TuiEvent::ServerApproved { _server_id: _, server_name } => {
             state.add_trace(
                 TraceEventType::Info,
                 format!("Server approved: {}", server_name),
@@ -679,7 +680,7 @@ fn process_tui_event(state: &mut AppState, event: TuiEvent, event_tx: mpsc::Unbo
             );
             state.approvals_loading = false;
         }
-        TuiEvent::ServerRejected { server_id: _, server_name } => {
+        TuiEvent::ServerRejected { _server_id: _, server_name } => {
             state.add_trace(
                 TraceEventType::Info,
                 format!("Server rejected: {}", server_name),
@@ -687,7 +688,7 @@ fn process_tui_event(state: &mut AppState, event: TuiEvent, event_tx: mpsc::Unbo
             );
             state.approvals_loading = false;
         }
-        TuiEvent::ServerAddedToPending { server_name, pending_id: _ } => {
+        TuiEvent::ServerAddedToPending { server_name, _pending_id: _ } => {
             state.add_trace(
                 TraceEventType::ToolDiscovery,
                 format!("Server added to pending: {}", server_name),
@@ -1103,7 +1104,7 @@ fn spawn_planner_task(state: &mut AppState, event_tx: mpsc::UnboundedSender<TuiE
                             .collect();
 
                         // No LlmCalled variant in TraceEvent, so we generate a placeholder prompt
-                        let decomposition_prompt: Option<String> = None;
+                        let _decomposition_prompt: Option<String> = None;
 
                         let _ = event_tx.send(TuiEvent::PlanComplete {
                             root_id: result.root_intent_id.clone(),
@@ -1111,7 +1112,7 @@ fn spawn_planner_task(state: &mut AppState, event_tx: mpsc::UnboundedSender<TuiE
                             sub_intents,
                             resolutions,
                             rtfs_plan: result.rtfs_plan.clone(),
-                            decomposition_prompt,
+                            _decomposition_prompt: _decomposition_prompt,
                         });
                     }
                     Err(e) => {
@@ -1867,7 +1868,7 @@ fn approve_server_async(
         match queue.approve(&server_id, ApprovalAuthority::User("tui".to_string()), Some("Approved via TUI".to_string())).await {
             Ok(()) => {
                 let _ = event_tx.send(TuiEvent::ServerApproved { 
-                    server_id: server_id.clone(), 
+                    _server_id: server_id.clone(), 
                     server_name: server_name.clone() 
                 });
                 // Reload the queues
@@ -1902,7 +1903,7 @@ fn reject_server_async(
         match queue.reject(&server_id, ApprovalAuthority::User("tui".to_string()), "Rejected via TUI".to_string()).await {
             Ok(()) => {
                 let _ = event_tx.send(TuiEvent::ServerRejected { 
-                    server_id: server_id.clone(), 
+                    _server_id: server_id.clone(), 
                     server_name: server_name.clone() 
                 });
                 // Reload the queues
@@ -1935,7 +1936,7 @@ fn dismiss_server_async(
         match queue.dismiss_server(&server_id, "Dismissed via TUI".to_string()).await {
             Ok(()) => {
                 let _ = event_tx.send(TuiEvent::ServerRejected { 
-                    server_id: server_id.clone(), 
+                    _server_id: server_id.clone(), 
                     server_name: server_name.clone() 
                 });
                 // Reload the queues
@@ -1979,7 +1980,7 @@ fn get_approval_queue_base() -> std::path::PathBuf {
 }
 
 /// Create a UnifiedApprovalQueue with FileApprovalStorage
-fn create_unified_queue() -> Result<ccos::approval::UnifiedApprovalQueue<ccos::approval::storage_file::FileApprovalStorage>, rtfs::runtime::error::RuntimeError> {
+fn create_unified_queue() -> Result<ccos::approval::UnifiedApprovalQueue<ccos::approval::storage_file::FileApprovalStorage>, Box<dyn std::error::Error>> {
     let queue_base = get_approval_queue_base();
     let storage_path = queue_base.join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
     let storage = std::sync::Arc::new(ccos::approval::storage_file::FileApprovalStorage::new(storage_path)?);
@@ -2084,7 +2085,7 @@ fn add_server_to_pending_async(
             Ok(pending_id) => {
                 let _ = event_tx.send(TuiEvent::ServerAddedToPending {
                     server_name: server_name.clone(),
-                    pending_id,
+                    _pending_id: pending_id,
                 });
                 let _ = event_tx.send(TuiEvent::Trace(
                     TraceEventType::ToolDiscovery,
@@ -2112,7 +2113,6 @@ fn load_servers_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
     // Signal loading started
     let _ = event_tx.send(TuiEvent::ServersLoading);
     
-    // Spawn background task to load servers
     tokio::task::spawn_local(async move {
         use ccos::mcp::core::MCPDiscoveryService;
         use std::collections::HashSet;

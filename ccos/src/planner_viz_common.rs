@@ -1,8 +1,8 @@
-use std::{error::Error, fs, path::Path};
+use std::{error::Error, fs};
 
+use crate::config::types::AgentConfig;
 use crossterm::style::Stylize;
 use rtfs::config::profile_selection::expand_profiles;
-use crate::config::types::{AgentConfig, LlmProfile};
 
 pub fn load_agent_config(path: &str) -> Result<AgentConfig, Box<dyn Error>> {
     let data = fs::read_to_string(path)?;
@@ -38,7 +38,7 @@ pub fn print_architecture_summary(config: &AgentConfig, profile_name: Option<&st
     println!("\n  {} Key Components:", "2.".bold());
     println!(
         "     • {}: Governs intent extraction and plan synthesis",
-        "DelegatingArbiter".cyan()
+        "DelegatingCognitiveEngine".cyan()
     );
     println!(
         "     • {}: Runs marketplace/MCP discovery pipeline",
@@ -86,8 +86,9 @@ pub fn print_architecture_summary(config: &AgentConfig, profile_name: Option<&st
         // Convert CCOS AgentConfig to RTFS AgentConfig for expand_profiles
         // (types are identical, just in different crates)
         let rtfs_config: rtfs::config::types::AgentConfig = serde_json::from_value(
-            serde_json::to_value(config).expect("Failed to serialize AgentConfig")
-        ).expect("Failed to deserialize AgentConfig");
+            serde_json::to_value(config).expect("Failed to serialize AgentConfig"),
+        )
+        .expect("Failed to deserialize AgentConfig");
         let (profiles, _meta, _why) = expand_profiles(&rtfs_config);
         println!("\n  {} LLM Profile:", "4.".bold());
         let chosen = profile_name

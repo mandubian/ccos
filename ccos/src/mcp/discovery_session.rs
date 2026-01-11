@@ -344,7 +344,7 @@ impl MCPSessionManager {
             .map_err(|e| RuntimeError::Generic(format!("MCP request failed: {}", e)))?;
 
         let status = response.status();
-        let content_type = response
+        let _content_type = response
             .headers()
             .get("content-type")
             .and_then(|h| h.to_str().ok())
@@ -481,8 +481,8 @@ fn extract_sse_data(body: &str) -> Option<String> {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct McpToolCallResult {
     pub content: Vec<McpContent>,
-    #[serde(default)]
-    pub isError: bool,
+    #[serde(default, rename = "isError")]
+    pub is_error: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

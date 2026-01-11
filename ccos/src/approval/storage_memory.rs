@@ -2,7 +2,7 @@
 //!
 //! Simple in-memory storage for testing and ephemeral use cases.
 
-use super::types::{ApprovalFilter, ApprovalRequest, ApprovalStatus, ApprovalStorage};
+use super::types::{ApprovalFilter, ApprovalRequest, ApprovalStorage};
 use async_trait::async_trait;
 use chrono::Utc;
 use rtfs::runtime::error::RuntimeResult;

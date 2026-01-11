@@ -2,7 +2,7 @@ use crate::cli::CliContext;
 use crate::cli::OutputFormatter;
 use clap::Subcommand;
 #[cfg(feature = "tui")]
-use dialoguer::{Confirm, Select};
+use dialoguer::Select;
 use rtfs::runtime::error::RuntimeResult;
 
 #[derive(Subcommand)]

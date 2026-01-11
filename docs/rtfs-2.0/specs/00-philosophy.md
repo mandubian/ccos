@@ -2,7 +2,7 @@
 
 ## Core Principles
 
-RTFS 2.0 is a **pure functional language** designed for **secure, auditable computation** within the CCOS (Cognitive Cognitive Operating System) ecosystem. Its design emphasizes **minimalism**, **extensibility**, and a **strict no-effect principle** that ensures deterministic execution by delegating all side effects to the host environment through capabilities.
+RTFS 2.0 is a **pure functional language** designed for **secure, auditable computation** within the CCOS (Cognitive Computing Operating System) ecosystem. Its design emphasizes **minimalism**, **extensibility**, and a **strict no-effect principle** that ensures deterministic execution by delegating all side effects to the host environment through capabilities.
 
 ## Pure Kernel with Host Boundary
 

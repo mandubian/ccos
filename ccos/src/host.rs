@@ -240,7 +240,7 @@ impl RuntimeHost {
         }
     }
 
-    fn get_causal_chain(&self) -> RuntimeResult<MutexGuard<CausalChain>> {
+    fn get_causal_chain(&self) -> RuntimeResult<MutexGuard<'_, CausalChain>> {
         self.causal_chain
             .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock CausalChain".to_string()))

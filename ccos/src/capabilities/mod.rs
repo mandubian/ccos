@@ -7,6 +7,7 @@ pub mod provider;
 pub mod providers;
 pub mod registry;
 pub mod session_pool;
+pub mod agent_ops;
 
 pub use capability::*;
 pub use defaults::register_default_capabilities;
@@ -16,3 +17,4 @@ pub use provider::*;
 pub use providers::*;
 pub use registry::*;
 pub use session_pool::*;
+pub use agent_ops::register_agent_ops_capabilities;

@@ -2,23 +2,19 @@
 
 use super::{ServerInfo, ServerListOutput};
 use crate::approval::{
-    storage_file::FileApprovalStorage, suggest_auth_env_var, ApprovalCategory, ApprovalRequest,
-    DiscoverySource, RiskAssessment, RiskLevel, ServerInfo as DiscoveryServerInfo,
-    UnifiedApprovalQueue,
+    storage_file::FileApprovalStorage, suggest_auth_env_var, ApprovalCategory, DiscoverySource,
+    RiskAssessment, RiskLevel, ServerInfo as DiscoveryServerInfo, UnifiedApprovalQueue,
 };
 use crate::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 use crate::discovery::RegistrySearcher;
 use crate::mcp::core::MCPDiscoveryService;
 use crate::mcp::types::{DiscoveryOptions, MCPTool};
-use crate::synthesis::introspection::api_introspector::APIIntrospector;
 use crate::synthesis::introspection::mcp_introspector::{MCPIntrospectionResult, MCPIntrospector};
 use crate::utils::fs::find_workspace_root;
-use chrono::Utc;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
-use uuid::Uuid;
 
 /// Create a unified approval queue with file storage
 fn create_queue(storage_path: PathBuf) -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {

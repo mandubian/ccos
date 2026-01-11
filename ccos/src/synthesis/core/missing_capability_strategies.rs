@@ -18,7 +18,7 @@ use regex::Regex;
 
 use super::missing_capability_resolver::{MissingCapabilityRequest, ResolutionResult};
 use crate::arbiter::prompt::{FilePromptStore, PromptManager};
-use crate::arbiter::DelegatingArbiter;
+use crate::cognitive_engine::DelegatingCognitiveEngine;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::planner::modular_planner::types::{
     ApiAction, DomainHint, IntentType, OutputFormat, ToolSummary, TransformType,
@@ -175,7 +175,7 @@ impl MissingCapabilityStrategy for CompositeMissingCapabilityStrategy {
 /// without external dependencies.
 pub struct PureRtfsGenerationStrategy {
     config: MissingCapabilityStrategyConfig,
-    arbiter: Option<Arc<DelegatingArbiter>>,
+    arbiter: Option<Arc<DelegatingCognitiveEngine>>,
 }
 
 impl PureRtfsGenerationStrategy {
@@ -186,7 +186,7 @@ impl PureRtfsGenerationStrategy {
         }
     }
 
-    pub fn with_arbiter(mut self, arbiter: Arc<DelegatingArbiter>) -> Self {
+    pub fn with_arbiter(mut self, arbiter: Arc<DelegatingCognitiveEngine>) -> Self {
         self.arbiter = Some(arbiter);
         self
     }
@@ -273,7 +273,7 @@ impl PureRtfsGenerationStrategy {
 
     async fn generate_via_prompt_manager(
         &self,
-        arbiter: &Arc<DelegatingArbiter>,
+        arbiter: &Arc<DelegatingCognitiveEngine>,
         capability_id: &str,
         description: &str,
         request: &MissingCapabilityRequest,
@@ -821,7 +821,7 @@ impl MissingCapabilityStrategy for PureRtfsGenerationStrategy {
 pub struct UserInteractionStrategy {
     config: MissingCapabilityStrategyConfig,
     marketplace: Option<Arc<CapabilityMarketplace>>,
-    arbiter: Option<Arc<DelegatingArbiter>>,
+    arbiter: Option<Arc<DelegatingCognitiveEngine>>,
 }
 
 impl UserInteractionStrategy {
@@ -838,7 +838,7 @@ impl UserInteractionStrategy {
         self
     }
 
-    pub fn with_arbiter(mut self, arbiter: Arc<DelegatingArbiter>) -> Self {
+    pub fn with_arbiter(mut self, arbiter: Arc<DelegatingCognitiveEngine>) -> Self {
         self.arbiter = Some(arbiter);
         self
     }
@@ -941,7 +941,7 @@ impl MissingCapabilityStrategy for UserInteractionStrategy {
 /// Queries an external LLM for implementation suggestions
 pub struct ExternalLlmHintStrategy {
     config: MissingCapabilityStrategyConfig,
-    arbiter: Option<Arc<DelegatingArbiter>>,
+    arbiter: Option<Arc<DelegatingCognitiveEngine>>,
 }
 
 // Prompt assets to steer the arbiter toward valid RTFS capability output.
@@ -955,7 +955,7 @@ impl ExternalLlmHintStrategy {
         }
     }
 
-    pub fn with_arbiter(mut self, arbiter: Arc<DelegatingArbiter>) -> Self {
+    pub fn with_arbiter(mut self, arbiter: Arc<DelegatingCognitiveEngine>) -> Self {
         self.arbiter = Some(arbiter);
         self
     }

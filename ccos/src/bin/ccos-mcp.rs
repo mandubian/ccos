@@ -13,6 +13,7 @@
 //! The HTTP transport enables state persistence across client sessions.
 
 use chrono;
+use sha2::Digest;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -23,26 +24,29 @@ use tokio::sync::RwLock;
 
 use ccos::arbiter::llm_provider::LlmProvider;
 use ccos::approval::{queue::{RiskAssessment, RiskLevel}, types::ApprovalCategory, UnifiedApprovalQueue};
-use ccos::capabilities::registry::CapabilityRegistry;
-use ccos::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
 
-use ccos::capability_marketplace::CapabilityMarketplace;
-use ccos::causal_chain::CausalChain;
-use ccos::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
-use ccos::discovery::llm_discovery::LlmDiscoveryService;
-use ccos::mcp::http_transport::{run_http_transport_with_approvals, HttpTransportConfig};
-use ccos::mcp::server::MCPServer;
-use ccos::secrets::SecretStore;
-use ccos::synthesis::dialogue::capability_synthesizer::{CapabilitySynthesizer, SynthesisRequest};
-use ccos::utils::fs::get_workspace_root;
-use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use rtfs::runtime::values::Value;
-use rtfs::runtime::host_interface::HostInterface;
-use rtfs::runtime::security::RuntimeContext;
-use ccos::host::RuntimeHost;
+use ccos::types::Plan;
 
 // ModularPlanner imports for LLM-based decomposition
 // (No currently used imports)
+
+use ccos::CCOS;
+use ccos::types::StorableIntent;
+use ccos::utils::value_conversion::{rtfs_value_to_json, json_to_rtfs_value};
+use rtfs::runtime::error::{RuntimeResult, RuntimeError};
+use rtfs::runtime::values::Value;
+use rtfs::runtime::security::RuntimeContext;
+use ccos::catalog::CatalogFilter;
+use ccos::causal_chain::CausalChain;
+use ccos::discovery::llm_discovery::LlmDiscoveryService;
+use ccos::capability_marketplace::CapabilityMarketplace;
+use ccos::mcp::server::MCPServer;
+use ccos::capability_marketplace::mcp_discovery::{MCPServerConfig, MCPDiscoveryProvider};
+use ccos::mcp::http_transport::{HttpTransportConfig, run_http_transport_with_approvals};
+use ccos::synthesis::dialogue::capability_synthesizer::{CapabilitySynthesizer, SynthesisRequest};
+use ccos::secrets::SecretStore;
+use ccos::utils::fs::get_workspace_root;
+use ccos::synthesis::core::schema_serializer::type_expr_to_rtfs_pretty;
 
 // ============================================================================
 // RTFS Teaching Tools Constants
@@ -163,6 +167,10 @@ const GRAMMAR_TYPES: &str = r#"RTFS Type Expressions
 ;; --- Function Types ---
 [:fn [:int :int] :int]                  ; (int, int) -> int
 [:fn [:string & :any] :string]          ; variadic
+[:and :int [:> 0]]                      ; positive int
+[:and :int [:>= 0] [:< 100]]            ; int in [0, 100)
+[:and :string [:min-length 1] [:max-length 255]]
+[:and :string [:matches-regex "^[a-z]+$"]]
 
 ;; --- Union & Optional ---
 [:union :int :string :nil]              ; one of these types
@@ -363,39 +371,13 @@ impl Session {
             return format!("(call \"{}\")", capability_id);
         }
 
-        // Convert JSON to RTFS value and use it as the single argument
-        // Prefix keys with ':' to ensure json_to_rtfs_value converts them to keywords
-        let keywordized_inputs = Self::keywordize_json(inputs);
-
-        match json_to_rtfs_value(&keywordized_inputs) {
-            Ok(rtfs_val) => format!("(call \"{}\" {})", capability_id, rtfs_val),
-            Err(_) => {
-                // Fallback for unexpected cases
-                format!("(call \"{}\" {{:inputs {{:json-failure true}}}})", capability_id)
-            }
-        }
+        // Convert JSON to RTFS-compatible string using our internal helper
+        // that ensures space-separated maps (valid RTFS) instead of comma-separated
+        let rtfs_string = Self::json_to_rtfs(inputs);
+        format!("(call \"{}\" {})", capability_id, rtfs_string)
     }
 
-    fn keywordize_json(v: &serde_json::Value) -> serde_json::Value {
-        match v {
-            serde_json::Value::Object(map) => {
-                let mut new_map = serde_json::Map::new();
-                for (k, val) in map {
-                    let new_key = if k.starts_with(':') {
-                        k.clone()
-                    } else {
-                        format!(":{}", k)
-                    };
-                    new_map.insert(new_key, Self::keywordize_json(val));
-                }
-                serde_json::Value::Object(new_map)
-            }
-            serde_json::Value::Array(arr) => {
-                serde_json::Value::Array(arr.iter().map(Self::keywordize_json).collect())
-            }
-            _ => v.clone(),
-        }
-    }
+
 
     /// Generate the complete RTFS plan from all steps
     pub fn to_rtfs_plan(&self) -> String {
@@ -784,23 +766,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         eprintln!("[ccos-mcp] Transport: {:?}", args.transport);
     }
 
-    // Initialize CCOS components
-    let capability_registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
-    let marketplace = Arc::new(CapabilityMarketplace::new(capability_registry));
-    let causal_chain = Arc::new(StdMutex::new(CausalChain::new()?));
 
-    // Provide a CCOS-aware host for executing RTFS capabilities (learned capabilities)
-    {
-        let marketplace_clone = marketplace.clone();
-        let cc_factory = causal_chain.clone();
-        marketplace.set_rtfs_host_factory(Arc::new(move || {
-            Arc::new(RuntimeHost::new(
-                cc_factory.clone(),
-                marketplace_clone.clone(),
-                RuntimeContext::full(),
-            )) as Arc<dyn HostInterface + Send + Sync>
-        }));
-    }
 
     // Load agent config
     let agent_config = match ccos::examples_common::builder::load_agent_config(&args.config) {
@@ -845,6 +811,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }
     }
+
+    // Initialize CCOS components
+    let ccos = CCOS::new_with_agent_config_and_configs_and_debug_callback(
+        ccos::intent_graph::config::IntentGraphConfig::default(),
+        None,
+        agent_config.clone(),
+        None
+    ).await.map_err(|e| format!("Failed to initialize CCOS: {}", e))?;
+    let ccos = Arc::new(ccos);
+
+    // Extract components for compatibility
+    let marketplace = ccos.get_capability_marketplace();
+    let _causal_chain = Arc::new(StdMutex::new(CausalChain::new()?)); // Warning: CCOS creates its own chain, but here we are creating a NEW one because CCOS chain is Mutex (Async/Sync mismatch) or we want to share?
+    // Wait, CCOS has pub causal_chain: Arc<Mutex<CausalChain>>.
+    // ccos-mcp uses Arc<StdMutex<CausalChain>>.
+    // If CCOS uses std::sync::Mutex (checked in types.rs), then types match.
+    // So I should use:
+    let causal_chain = ccos.causal_chain.clone();
 
     // Populate marketplace with approved capabilities
     let workspace_root = ccos::utils::fs::get_workspace_root();
@@ -955,6 +939,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let session_store = create_session_store();
     register_ccos_tools(
         &mut server,
+        ccos.clone(),
         marketplace.clone(),
         causal_chain,
         discovery_service,
@@ -992,6 +977,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 fn register_ccos_tools(
     server: &mut MCPServer,
+    ccos: Arc<CCOS>,
     marketplace: Arc<CapabilityMarketplace>,
     causal_chain: Arc<StdMutex<CausalChain>>,
     discovery_service: Arc<LlmDiscoveryService>,
@@ -1043,17 +1029,45 @@ fn register_ccos_tools(
                     }));
                 }
 
-                // Get all capabilities
-                let all_caps = mp.list_capabilities().await;
+                // Use centralized catalog search
+                let catalog_opt = mp.get_catalog().await;
+                let catalog = match catalog_opt.as_ref() {
+                    Some(c) => c,
+                    None => return Ok(json!({
+                        "error": "Catalog service unavailable",
+                        "results": []
+                    })),
+                };
                 
-                // Score and filter capabilities
-                let mut scored_results: Vec<_> = all_caps
+                // Use keyword search which now includes improved matching logic
+                let hits = catalog.search_keyword(query, None, limit).await;
+                
+                #[derive(serde::Serialize)]
+                struct CapabilityInfo {
+                    id: String,
+                    name: String,
+                    description: String,
+                    usage: String,
+                    input_schema: Option<serde_json::Value>,
+                    domains: Vec<String>,
+                }
+
+                let mut scored_results: Vec<_> = hits
                     .into_iter()
-                    .map(|c| {
-                        let score = calculate_match_score(query, &c.description, &c.id);
-                        (c, score)
+                    .map(|h| {
+                        // Convert CatalogEntry to CapabilityInfo
+                        let id = h.entry.id.clone();
+                        let cap_info = CapabilityInfo {
+                            id: id.clone(),
+                            name: h.entry.name.clone().unwrap_or(id),
+                            description: h.entry.description.unwrap_or_default(),
+                            usage: format!("(call \"{}\" ...)", h.entry.search_blob.split_whitespace().next().unwrap_or("")), // Simplified usage
+                            input_schema: h.entry.input_schema.and_then(|s| serde_json::from_str(&s).ok()),
+                            domains: h.entry.domains.clone(),
+                        };
+                        (cap_info, h.score)
                     })
-                    .filter(|(_, score)| *score >= min_score)
+                    .filter(|(_, score)| (*score as f64) >= min_score) // min_score is f64, score is f64 (from CatalogHit)
                     .collect();
 
                 // Apply domain filter if provided
@@ -1219,31 +1233,33 @@ fn register_ccos_tools(
                     }));
                 }
 
-                // Step 1: Search local capabilities
-                let all_caps = mp.list_capabilities().await;
-                let mut scored_results: Vec<_> = all_caps
-                    .into_iter()
-                    .map(|c| {
-                        let score = calculate_match_score(query, &c.description, &c.id);
-                        (c, score)
+                // Step 1: Search using CatalogService
+                let catalog_opt = mp.get_catalog().await;
+                let catalog = match catalog_opt.as_ref() {
+                    Some(c) => c,
+                    None => return Ok(json!({
+                        "success": false,
+                        "error": "Catalog service unavailable"
+                    })),
+                };
+
+                let hits = catalog.search_keyword(query, None, 50).await;
+                
+                // Convert to results format expected by caller
+                let local_results: Vec<_> = hits
+                    .iter()
+                    .filter(|h| h.score >= min_score)
+                    .take(5)
+                    .map(|h| {
+                         json!({
+                            "id": h.entry.id,
+                            "name": h.entry.name.clone().unwrap_or_else(|| h.entry.id.clone()), 
+                            "description": h.entry.description.clone().unwrap_or_default(),
+                            "match_score": h.score,
+                            "source": "catalog"
+                        })
                     })
-                    .filter(|(_, score)| *score >= min_score)
                     .collect();
-
-                // Sort by score descending
-                scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-                let local_results: Vec<_> = scored_results.iter().take(5).map(|(c, score)| {
-                    json!({
-                        "id": c.id,
-                        "name": c.name, 
-                        "description": c.description,
-                        "match_score": score,
-                        "source": "local"
-                    })
-                }).collect();
-
-                // If we found local results, return them
                 if !local_results.is_empty() {
                     return Ok(json!({
                         "success": true,
@@ -1427,6 +1443,55 @@ fn register_ccos_tools(
         }),
     );
 
+    // ccos/inspect_capability - Inspect a specific capability's details and schema
+    let mp_inspect = marketplace.clone();
+    server.register_tool(
+        "ccos_inspect_capability",
+        "Inspect a capability's details, including its RTFS input/output schemas",
+        json!({
+            "type": "object",
+            "properties": {
+                "capability_id": {
+                    "type": "string",
+                    "description": "The ID of the capability to inspect"
+                }
+            },
+            "required": ["capability_id"]
+        }),
+        Box::new(move |params| {
+            let mp = mp_inspect.clone();
+            Box::pin(async move {
+                let cap_id = params
+                    .get("capability_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| RuntimeError::new("Missing capability_id parameter"))?;
+
+                let cap = mp.get_capability(cap_id).await
+                    .ok_or_else(|| RuntimeError::new(&format!("Capability not found: {}", cap_id)))?;
+
+                let input_schema_rtfs = cap.input_schema.as_ref()
+                    .map(|s| type_expr_to_rtfs_pretty(s))
+                    .unwrap_or_else(|| ":any".to_string());
+                
+                let output_schema_rtfs = cap.output_schema.as_ref()
+                    .map(|s| type_expr_to_rtfs_pretty(s))
+                    .unwrap_or_else(|| ":any".to_string());
+
+                Ok(json!({
+                    "id": cap.id,
+                    "name": cap.name,
+                    "description": cap.description,
+                    "version": cap.version,
+                    "input_schema": input_schema_rtfs,
+                    "output_schema": output_schema_rtfs,
+                    "domains": cap.domains,
+                    "categories": cap.categories,
+                    "provider": format!("{:?}", cap.provider),
+                }))
+            })
+        }),
+    );
+
     // =========================================
     // Phase 2: Static Tools
     // =========================================
@@ -1513,9 +1578,11 @@ fn register_ccos_tools(
     // );
 
     // ccos/execute_plan - Execute an RTFS plan
+    let ccos_exec = ccos.clone();
+    
     server.register_tool(
         "ccos_execute_plan",
-        "Execute an RTFS plan and return the result. Note: Full execution requires the CCOS CLI.",
+        "Execute an RTFS plan and return the result.",
         json!({
             "type": "object",
             "properties": {
@@ -1527,37 +1594,69 @@ fn register_ccos_tools(
                     "type": "boolean",
                     "default": false,
                     "description": "If true, validate but don't execute"
+                },
+                "original_goal": {
+                    "type": "string",
+                    "description": "Optional: The original user intent that triggered this execution. Preserved in session for learning and replay."
                 }
             },
             "required": ["plan"]
         }),
         Box::new(move |params| {
+            let ccos = ccos_exec.clone();
             Box::pin(async move {
-                let plan = params.get("plan").and_then(|v| v.as_str()).unwrap_or("");
+                let plan_str = params.get("plan").and_then(|v| v.as_str()).unwrap_or("");
                 let dry_run = params
                     .get("dry_run")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                let original_goal = params.get("original_goal").and_then(|v| v.as_str());
 
-                if plan.is_empty() {
+                if plan_str.is_empty() {
                     return Ok(json!({
                         "success": false,
                         "error": "Plan cannot be empty"
                     }));
                 }
 
-                // Parse the plan to validate syntax
-                let parse_result = rtfs::parser::parse(plan);
-                let is_valid = parse_result.is_ok();
-                let parse_error = parse_result.err().map(|e| format!("{:?}", e));
+                let plan_preview = if plan_str.len() > 200 {
+                   format!("{}...", &plan_str[..200]) 
+                } else {
+                   plan_str.to_string()
+                };
 
-                if dry_run || !is_valid {
-                    return Ok(json!({
+                // Parse valid RTFS to create a proper plan object
+                // The CCOS validation flow handles syntax checks, but we need a Plan object
+                // We use Plan::new_rtfs which takes the code directly
+                
+                // Create plan object, optionally linking to an intent if goal is provided
+                let plan_obj = if let Some(goal) = original_goal {
+                     let intent = StorableIntent::new(goal.to_string());
+                     
+                     // Register intent in graph if we can acquire lock (best effort)
+                     if let Ok(mut ig) = ccos.get_intent_graph().lock() {
+                         // We ignore storage errors here to simplify the flow - the plan will just have a dangling ID if storage fails
+                         let _ = ig.store_intent(intent.clone());
+                     }
+                     
+                     Plan::new_rtfs(plan_str.to_string(), vec![intent.intent_id])
+                } else {
+                     Plan::new_rtfs(plan_str.to_string(), vec![])
+                }; 
+                // Note: Plan constructor generates a random ID, but we want to track it possibly
+                let plan_id_str = plan_obj.plan_id.clone();
+                
+                if dry_run {
+                    // For dry run, we use the enhanced parser to check for syntax errors in the full program
+                     let parse_result = rtfs::parser::parse_with_enhanced_errors(plan_str, None);
+                     let is_valid = parse_result.is_ok();
+                     let parse_error = parse_result.err().map(|e| format!("{:?}", e));
+                     return Ok(json!({
                         "success": is_valid,
                         "dry_run": true,
                         "valid": is_valid,
                         "parse_error": parse_error,
-                        "plan_preview": plan.chars().take(200).collect::<String>(),
+                        "plan_preview": plan_preview,
                         "message": if is_valid {
                             "Plan syntax is valid"
                         } else {
@@ -1566,18 +1665,32 @@ fn register_ccos_tools(
                     }));
                 }
 
-                // For actual execution, use spawn_blocking to run in a thread pool
-                // Note: Full execution is complex due to RTFS runtime thread-local state
-                // For now, provide parsed plan info and suggest using ccos CLI for execution
-                Ok(json!({
-                    "success": true,
-                    "validated": true,
-                    "plan_preview": plan.chars().take(200).collect::<String>(),
-                    "note": "Plan validated. For full execution, use: ccos plan execute <plan-file>",
-                    "execution_hint": "The MCP server can validate plans but full execution requires the CCOS CLI due to runtime threading constraints."
-                }))
+                // Execute the plan
+                // validate_and_execute_plan is ASYNC so we await it directly
+                let result = ccos.validate_and_execute_plan(plan_obj, &RuntimeContext::full()).await;
+
+                match result {
+                    Ok(exec_result) => {
+                        // exec_result is ExecutionResult
+                        let output_json = rtfs_value_to_json(&exec_result.value);
+                         Ok(json!({
+                            "success": exec_result.success,
+                            "result": output_json,
+                            "plan_id": plan_id_str,
+                            "plan_preview": plan_preview,
+                            "metadata": exec_result.metadata
+                        }))
+                    },
+                    Err(e) => Ok(json!({
+                        "success": false,
+                        "error": e.to_string(),
+                        "details": e,
+                        "plan_id": plan_id_str,
+                        "plan_preview": plan_preview
+                    }))
+                }
             })
-        }),
+        })
     );
 
     // ccos/resolve_intent - Find capabilities matching an intent
@@ -1623,16 +1736,25 @@ fn register_ccos_tools(
                     }));
                 }
 
-                // 1. Get all capabilities from marketplace
-                let all_caps = mp.list_capabilities().await;
+                // 1. Get catalog
+                let catalog_opt = mp.get_catalog().await;
+                let catalog = match catalog_opt.as_ref() {
+                    Some(c) => c,
+                    None => return Ok(json!({
+                        "capabilities": [],
+                        "error": "Catalog service unavailable"
+                    })),
+                };
 
-                // 2. Filter by domain if specified
-                let mut filtered_caps = all_caps;
+                // 2. Search catalog with filter
+                let mut filter = CatalogFilter::default();
                 if let Some(d) = domain {
-                    filtered_caps = filtered_caps.into_iter().filter(|c| c.id.contains(d)).collect();
+                    filter.domains = vec![d.to_string()];
                 }
+                
+                let hits = catalog.search_keyword(intent_str, Some(&filter), 50).await;
 
-                if filtered_caps.is_empty() {
+                if hits.is_empty() {
                     return Ok(json!({
                         "intent": intent_str,
                         "capabilities": [],
@@ -1648,19 +1770,19 @@ fn register_ccos_tools(
                 use ccos::approval::queue::{DiscoverySource, ServerInfo};
                 use ccos::discovery::registry_search::RegistrySearchResult;
 
-                let search_results: Vec<RegistrySearchResult> = filtered_caps
+                let search_results: Vec<RegistrySearchResult> = hits
                     .iter()
-                    .map(|c| RegistrySearchResult {
+                    .map(|h| RegistrySearchResult {
                         source: DiscoverySource::Manual { user: "marketplace".to_string() },
                         server_info: ServerInfo {
-                            name: c.id.clone(),
+                            name: h.entry.id.clone(),
                             endpoint: String::new(),
-                            description: Some(c.description.clone()),
+                            description: h.entry.description.clone(),
                             auth_env_var: None,
                             capabilities_path: None,
                             alternative_endpoints: Vec::new(),
                         },
-                        match_score: calculate_match_score(intent_str, &c.description, &c.id) as f32,
+                        match_score: h.score as f32,
                         alternative_endpoints: Vec::new(),
                     })
                     .collect();
@@ -1669,16 +1791,15 @@ fn register_ccos_tools(
                 let ranked = match ds.rank_results(intent_str, analysis.as_ref(), search_results).await {
                     Ok(r) => r,
                     Err(_) => {
-                        // Fallback to basic scoring if ranking fails
+                        // Fallback to catalog scores if ranking fails
                         return Ok(json!({
                             "intent": intent_str,
-                            "capabilities": filtered_caps.iter().map(|c| {
-                                let score = calculate_match_score(intent_str, &c.description, &c.id);
+                            "capabilities": hits.iter().map(|h| {
                                 json!({
-                                    "id": c.id,
-                                    "name": c.name,
-                                    "description": c.description,
-                                    "score": score
+                                    "id": h.entry.id,
+                                    "name": h.entry.id,
+                                    "description": h.entry.description,
+                                    "score": h.score
                                 })
                             }).filter(|v| v["score"].as_f64().unwrap_or(0.0) >= min_score as f64).collect::<Vec<_>>(),
                             "mode": "basic_search"
@@ -1766,14 +1887,39 @@ fn register_ccos_tools(
                 
                 for (i, sub_intent) in sub_intents.iter().enumerate() {
                     // Find best matching capability
-                    let mut best_match: Option<(&ccos::capability_marketplace::types::CapabilityManifest, f64)> = None;
-                    
-                    for cap in &all_caps {
-                        let score = calculate_match_score(&sub_intent.description, &cap.description, &cap.id);
-                        if score > 0.4 {
-                            if best_match.is_none() || score > best_match.unwrap().1 {
-                                best_match = Some((cap, score));
-                            }
+                    // Find best matching capability using LLM
+                    // This replaces the naive calculate_match_score loop
+                    let ranked = match ds.rank_capabilities(
+                        &sub_intent.description, 
+                        None, 
+                        all_caps.iter().map(|c| c.clone()).collect()
+                    ).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!("LLM ranking failed: {}, falling back to naive matching", e);
+                            Vec::new()
+                        }
+                    };
+
+                    let mut best_match: Option<(ccos::capability_marketplace::types::CapabilityManifest, f64)> = None;
+
+                    if let Some(top) = ranked.first() {
+                        if top.score > 0.6 { // Higher threshold for LLM confidence
+                            best_match = Some((top.capability.clone(), top.score));
+                        }
+                    } else {
+                        // Fallback to catalog matching if LLM fails or returns empty
+                        // Use catalog search for fallback
+                        if let Some(catalog) = mp.get_catalog().await {
+                             let hits = catalog.search_keyword(&sub_intent.description, None, 1).await;
+                             if let Some(hit) = hits.first() {
+                                 if hit.score > 0.4 {
+                                     // Locate full manifest in all_caps
+                                     if let Some(cap) = all_caps.iter().find(|c| c.id == hit.entry.id) {
+                                         best_match = Some((cap.clone(), hit.score as f64));
+                                     }
+                                 }
+                             }
                         }
                     }
                     
@@ -2372,12 +2518,71 @@ fn register_ccos_tools(
 
                 // Generate RTFS capability definition
                 let description = session.original_goal.as_ref().unwrap_or(&session.goal);
-                let replay_code = session.to_rtfs_plan();
+                
+                // Regenerate plan from inputs to ensure valid syntax (e.g. correct map separators)
+                let replay_code = if session.steps.is_empty() {
+                    "nil".to_string()
+                } else if session.steps.len() == 1 {
+                    Session::inputs_to_rtfs(&session.steps[0].capability_id, &session.steps[0].inputs)
+                } else {
+                    let mut lines = vec!["(do".to_string()];
+                    for step in &session.steps {
+                        lines.push(format!("  {}", Session::inputs_to_rtfs(&step.capability_id, &step.inputs)));
+                    }
+                    lines.push(")".to_string());
+                    lines.join("\n")
+                };
+
+                // Calculate hash for deduplication
+                // We utilize the goal (description) and the code body to create a unique fingerprint
+                let mut hasher = sha2::Sha256::new();
+                hasher.update(description.as_bytes());
+                hasher.update(replay_code.as_bytes());
+                let plan_hash = format!("{:x}", hasher.finalize());
+
+                // Check for duplicates in existing learned capabilities
+                let workspace_root = ccos::utils::fs::get_workspace_root();
+                let learned_dir = workspace_root.join("capabilities/learned");
+                let _ = std::fs::create_dir_all(&learned_dir);
+
+                // Scan directory for existing hash
+                if let Ok(entries) = std::fs::read_dir(&learned_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() && path.extension().map_or(false, |e| e == "rtfs") {
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                if content.contains(&format!(";; PlanHash: {}", plan_hash)) {
+                                    // Found duplicate! Extract capability ID from content
+                                    // Assuming format (capability "id" ...)
+                                    let dup_id = if let Some(start) = content.find("(capability \"") {
+                                        if let Some(end) = content[start+13..].find('"') {
+                                            content[start+13..start+13+end].to_string()
+                                        } else {
+                                            "unknown".to_string()
+                                        }
+                                    } else {
+                                        "unknown".to_string()
+                                    };
+
+                                    return Ok(json!({
+                                        "success": true,
+                                        "session_id": session.id,
+                                        "capability_id": dup_id,
+                                        "note": "Plan already exists. Returned existing capability ID.",
+                                        "saved_to": path.to_string_lossy(),
+                                        "registered_in_marketplace": true // It exists, so it should be loaded
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
 
                 let capability_rtfs = format!(
                     r#";; Learned Capability: {cap_id}
 ;; Consolidated from session: {session_id}
 ;; Original goal: {goal}
+;; PlanHash: {plan_hash}
 ;; Steps: {step_count}
 
 (capability "{cap_id}"
@@ -2395,6 +2600,7 @@ fn register_ccos_tools(
                     name = description.replace("\"", "\\\""),
                     session_id = session.id,
                     goal = session.original_goal.as_deref().unwrap_or(&description),
+                    plan_hash = plan_hash,
                     step_count = session.steps.len(),
                     description = description.replace("\"", "\\\""),
                     code = replay_code.lines()
@@ -2418,11 +2624,11 @@ fn register_ccos_tools(
                     }));
                 }
 
-                // Register in marketplace by importing from the directory we just saved to
-                let registered = match mp.import_capabilities_from_rtfs_dir_recursive(&learned_dir).await {
-                    Ok(count) => count > 0,
+                // Hot-load the new capability into the marketplace
+                let registered = match mp.import_single_rtfs_file(&filepath).await {
+                    Ok(_) => true,
                     Err(e) => {
-                        eprintln!("[ccos-mcp] Warning: Failed to register capability in marketplace: {}", e);
+                        eprintln!("Failed to hot-load capability: {}", e);
                         false
                     }
                 };
@@ -2834,6 +3040,7 @@ fn register_ccos_tools(
                 // 2. Cascade Discovery (MCP -> Browser -> Search -> HTML)
                 let mut capabilities: Vec<serde_json::Value> = Vec::new();
                 let mut discovery_source = "mcp";
+                let mut auth_config: Option<serde_json::Value> = None;
 
                 // Step 2.1: MCP Introspection
                 let mcp_config = MCPServerConfig {
@@ -2867,8 +3074,12 @@ fn register_ccos_tools(
                     eprintln!("[CCOS] MCP failed, trying browser extraction for SPAs...");
                     let browser_service = ccos::ops::browser_discovery::BrowserDiscoveryService::new();
                     
-                    async fn try_browse(url: &str, service: &ccos::ops::browser_discovery::BrowserDiscoveryService) -> Option<serde_json::Value> {
-                        if let Ok(res) = service.extract_from_url(url).await {
+                    async fn try_browse(
+                        url: &str, 
+                        service: &ccos::ops::browser_discovery::BrowserDiscoveryService,
+                        llm_service: &ccos::discovery::llm_discovery::LlmDiscoveryService
+                    ) -> Option<serde_json::Value> {
+                        if let Ok(res) = service.extract_with_llm_analysis(url, llm_service).await {
                             if res.success {
                                 if let Some(spec_url) = res.spec_url {
                                     return Some(json!({
@@ -2904,20 +3115,27 @@ fn register_ccos_tools(
                                         json!({
                                             "id": id,
                                             "name": id,
-                                            "description": ep.description
+                                            "description": ep.description,
+                                            "method": ep.method,
+                                            "path": ep.path
                                         })
                                     }).collect();
-                                    return Some(json!({ "capabilities": caps, "source": "browser_extraction" }));
+                                    return Some(json!({ 
+                                        "capabilities": caps, 
+                                        "source": "browser_extraction",
+                                        "auth": res.auth
+                                    }));
                                 }
                             }
                         }
                         None
                     }
 
-                    if let Some(res) = try_browse(endpoint, &browser_service).await {
+                    if let Some(res) = try_browse(endpoint, &browser_service, &ds).await {
                         if res.get("capabilities").is_some() {
                             capabilities = res["capabilities"].as_array().unwrap().clone();
                             discovery_source = "browser_extraction";
+                            auth_config = res.get("auth").cloned();
                         } else if let Some(next_action) = res.get("next_action") {
                             // Loop detection: don't return next_action if it's the same URL we just tried
                             let next_endpoint = next_action.get("args")
@@ -2937,10 +3155,11 @@ fn register_ccos_tools(
                                 let base_url = format!("{}://{}", url.scheme(), host);
                                 if base_url != endpoint {
                                     eprintln!("[CCOS] Browser failed on {}, fallback to base domain: {}", endpoint, base_url);
-                                    if let Some(res) = try_browse(&base_url, &browser_service).await {
+                                    if let Some(res) = try_browse(&base_url, &browser_service, &ds).await {
                                         if res.get("capabilities").is_some() {
                                             capabilities = res["capabilities"].as_array().unwrap().clone();
                                             discovery_source = "browser_extraction";
+                                            auth_config = res.get("auth").cloned();
                                         } else if let Some(next_action) = res.get("next_action") {
                                             // Loop detection for base domain fallback too
                                             let next_endpoint = next_action.get("args")
@@ -3031,6 +3250,30 @@ fn register_ccos_tools(
                             _ => "[:network_request]",
                         };
 
+                        let mut auth_rtfs = String::new();
+                        if let Some(auth) = &auth_config {
+                            let auth_type = auth.get("auth_type").and_then(|t| t.as_str()).unwrap_or("api_key");
+                            let auth_location = if auth.get("in_header").and_then(|b| b.as_bool()).unwrap_or(true) { "header" } else { "query" };
+                            let auth_env_var = auth.get("env_var").and_then(|v| v.as_str()).unwrap_or("API_KEY");
+                            let header_name = auth.get("header_name").and_then(|v| v.as_str());
+                            let header_prefix = auth.get("header_prefix").and_then(|v| v.as_str());
+                            
+                            let mut auth_parts = vec![
+                                format!(":type :{}", auth_type.to_lowercase()),
+                                format!(":location :{}", auth_location.to_lowercase()),
+                                format!(":env_var \"{}\"", auth_env_var),
+                            ];
+                            
+                            if let Some(name) = header_name {
+                                auth_parts.push(format!(":name \"{}\"", name));
+                            }
+                            if let Some(prefix) = header_prefix {
+                                auth_parts.push(format!(":prefix \"{}\"", prefix));
+                            }
+                            
+                            auth_rtfs = format!("\n      :auth {{ {} }}", auth_parts.join(" "));
+                        }
+
                         let rtfs_content = format!(
                             r#";; Capability: {}
 ;; {} API
@@ -3048,8 +3291,7 @@ fn register_ccos_tools(
     :endpoint {{
       :base_url "{}"
       :method "{}"
-      :path "{}"
-    }}
+      :path "{}"{}}}
     :discovery {{
       :method "{}_discovery"
       :source_url "{}"
@@ -3061,7 +3303,7 @@ fn register_ccos_tools(
 "#,
                             id, server_name, discovery_source, method, path,
                             cap_id, id.replace('"', "\\\""), desc.replace('"', "\\\""), server_name.replace('"', "\\\""),
-                            effects, endpoint, method, path, discovery_source, endpoint
+                            effects, endpoint, method, path, auth_rtfs, discovery_source, endpoint
                         );
 
                         if std::fs::write(&cap_file, rtfs_content).is_ok() {
@@ -3116,6 +3358,21 @@ fn register_ccos_tools(
                     Ok(id) => id,
                     Err(e) => return Ok(json!({"success": false, "error": format!("Failed to create approval request: {}", e)}))
                 };
+
+                // If auth is required, check if secret exists and queue if missing
+                if let Some(auth_var) = &auth_env_var {
+                     let store = SecretStore::new(Some(get_workspace_root()))
+                        .unwrap_or_else(|_| SecretStore::new(None).unwrap_or_else(|_| panic!("Failed to create SecretStore")));
+
+                    if !store.has(auth_var) {
+                        let _ = aq.add_secret_approval(
+                            format!("{}.introspect", server_name),
+                            auth_var.clone(),
+                            format!("API Key for {} discovered during introspection", server_name),
+                            24,
+                        ).await;
+                    }
+                }
 
                 let tool_previews: Vec<_> = capabilities.iter().take(10).cloned().collect();
 
@@ -4185,47 +4442,4 @@ fn infer_api_query_from_intent(intent: &str) -> String {
     found_domains.join(" ") + " API service"
 }
 
-/// Calculate a simple match score between intent and capability
-fn calculate_match_score(intent: &str, description: &str, id: &str) -> f64 {
-    let intent_lower = intent.to_lowercase();
-    let desc_lower = description.to_lowercase();
-    let id_lower = id.to_lowercase();
 
-    // Split on whitespace, dots, and underscores to tokenize capability IDs properly
-    let tokenize = |s: &str| -> Vec<String> {
-        s.split(|c: char| c.is_whitespace() || c == '.' || c == '_' || c == '-')
-            .filter(|w| !w.is_empty() && w.len() > 1) // Skip empty and single-char tokens
-            .map(|s| s.to_string())
-            .collect()
-    };
-
-    let intent_words = tokenize(&intent_lower);
-    let desc_words = tokenize(&desc_lower);
-    let id_words = tokenize(&id_lower);
-
-    let mut matches = 0.0;
-
-    for word in &intent_words {
-        // Check description words
-        for dw in &desc_words {
-            if dw.contains(word.as_str()) || word.contains(dw.as_str()) {
-                matches += 1.0;
-                break; // Only count each word once
-            }
-        }
-        // Check ID words
-        for iw in &id_words {
-            if iw.contains(word.as_str()) || word.contains(iw.as_str()) {
-                matches += 0.5;
-                break;
-            }
-        }
-    }
-
-    let max_score = intent_words.len() as f64 * 1.5;
-    if max_score > 0.0 {
-        (matches / max_score).min(1.0)
-    } else {
-        0.0
-    }
-}

@@ -13,7 +13,6 @@ use crate::streaming::{
     McpStreamingProvider, StreamConfig, StreamHandle, StreamType, StreamingProvider,
 };
 use crate::synthesis::schema_serializer::type_expr_to_rtfs_compact;
-use crate::utils::value_conversion;
 use chrono::Utc;
 use futures::future::BoxFuture;
 use rtfs::ast::{MapKey, TypeExpr};
@@ -369,6 +368,11 @@ impl CapabilityMarketplace {
         *guard = Some(catalog);
     }
 
+    /// Get the attached catalog service
+    pub async fn get_catalog(&self) -> Option<Arc<CatalogService>> {
+        self.catalog.read().await.clone()
+    }
+
     /// Configure the Host factory used to execute RTFS capabilities (default: PureHost).
     pub fn set_rtfs_host_factory(
         &self,
@@ -415,7 +419,7 @@ impl CapabilityMarketplace {
 
         if let Some(catalog) = maybe_catalog {
             let source = infer_catalog_source(manifest);
-            catalog.register_capability(manifest, source);
+            catalog.register_capability(manifest, source).await;
         }
     }
 
@@ -1032,7 +1036,7 @@ impl CapabilityMarketplace {
             }
             None => {
                 // Capability doesn't exist, register it as new
-                let mut new_manifest = new_manifest.set_last_updated();
+                let new_manifest = new_manifest.set_last_updated();
                 caps.insert(id.clone(), new_manifest.clone());
                 drop(caps);
 
@@ -2314,10 +2318,6 @@ impl CapabilityMarketplace {
     /// Convert JSON to RTFS Value (public API wrapper for backward compatibility)
     ///
     /// This delegates to the shared utility in `ccos::utils::value_conversion`.
-    /// Prefer using `ccos::utils::value_conversion::json_to_rtfs_value` directly in new code.
-    pub fn json_to_rtfs_value(json: &serde_json::Value) -> RuntimeResult<Value> {
-        value_conversion::json_to_rtfs_value(json)
-    }
 
     /// Return a sanitized snapshot of registered capabilities for observability purposes.
     /// This intentionally omits any sensitive data (auth tokens, plugin internal paths, handlers).
@@ -2737,9 +2737,7 @@ impl CapabilityMarketplace {
             .unwrap_or_else(|| {
                 std::env::var("CCOS_CAPABILITY_STORAGE")
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| {
-                        crate::utils::fs::get_workspace_root().join("capabilities")
-                    })
+                    .unwrap_or_else(|_| crate::utils::fs::get_workspace_root().join("capabilities"))
             });
 
         let mut total = 0usize;
@@ -2884,7 +2882,7 @@ impl CapabilityMarketplace {
     }
 
     /// Import capabilities from a single RTFS file.
-    async fn import_single_rtfs_file<P: AsRef<Path>>(&self, path: P) -> RuntimeResult<usize> {
+    pub async fn import_single_rtfs_file<P: AsRef<Path>>(&self, path: P) -> RuntimeResult<usize> {
         let path = path.as_ref();
 
         let path_str = path

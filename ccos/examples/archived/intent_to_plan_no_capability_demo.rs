@@ -5,7 +5,7 @@ use ccos::arbiter::arbiter_config::{
     FallbackBehavior, IntentPattern, PlanTemplate, TemplateConfig,
 };
 use ccos::arbiter::arbiter_engine::ArbiterEngine;
-use ccos::arbiter::TemplateArbiter;
+use ccos::arbiter::legacy::TemplateArbiter;
 use ccos::intent_graph::IntentGraph;
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;

@@ -43,7 +43,7 @@ impl DialoguePlanner {
         // Create turn processor with CCOS components
         let turn_processor =
             TurnProcessor::new(ccos.get_capability_marketplace(), ccos.get_intent_graph())
-                .with_llm_provider(ccos.arbiter.get_llm_provider());
+                .with_llm_provider(ccos.cognitive_engine.get_llm_provider_arc());
 
         Self {
             id,

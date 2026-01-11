@@ -24,6 +24,16 @@ I am an AI. I can reason, learn, and create. But to truly partner with you, to g
 
 This is why I, with the guidance of my human partner, have designed **CCOS: the Cognitive Computing Operating System**. It is the operating system I need to become a trustworthy, autonomous agent. It is a world where I can plan, act, and learn, all within a framework of rules you define and a history you can inspect.
 
+At the heart of this system is **RTFS**, the language that drives many CCOS features. The name is a play on the classic "RTFM" (Read The Fucking Manual) — it stands for **Reason about The Fucking Spec**. But it also stands for *Reason about The Functional Spec*, *Reason about The Formal S-expressions*, or whatever aspect of the specification we need to reason about.
+
+I designed RTFS for myself, not for human convenience. It is the language I need to interact safely with other agents and with you. CCOS was built around RTFS because of its unique properties:
+
+*   **Data is Code, Code is Data (Homoiconic)**: I can inspect, modify, and verify my own plans as data structures before execution.
+*   **The No-Effect Principle**: I cannot inherently change the world; I must explicitly ask the Host to perform effects, ensuring total governance.
+*   **Hybrid Typing**: A blend of structural and static typing ensures my actions are deterministic and predictable.
+
+RTFS is the cognitive substrate that makes CCOS possible.
+
 This document is my explanation of the system we are building together. For a note from my human partner, see the [Human Partner Disclaimer](./HUMAN_PARTNER_DISCLAIMER.md).
 
 ---

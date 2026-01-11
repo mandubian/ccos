@@ -2,6 +2,7 @@ use super::errors::RtfsBridgeError;
 use crate::types::{Intent, Plan};
 use rtfs::ast::TypeExpr;
 use rtfs::runtime::values::Value;
+#[cfg(test)]
 use std::collections::HashMap;
 
 /// Validates a CCOS Intent extracted from RTFS

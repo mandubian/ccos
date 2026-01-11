@@ -447,9 +447,9 @@ impl CapabilityExecutor for MCPExecutor {
             }
             if let Some(result) = tool_response.get("result") {
                 if let Some(content) = result.get("content") {
-                    CapabilityMarketplace::json_to_rtfs_value(content)
+                    json_to_rtfs_value(content)
                 } else {
-                    CapabilityMarketplace::json_to_rtfs_value(result)
+                    json_to_rtfs_value(result)
                 }
             } else {
                 Err(RuntimeError::Generic(
@@ -522,7 +522,7 @@ impl A2AExecutor {
             RuntimeError::Generic(format!("Failed to parse A2A HTTP response: {}", e))
         })?;
         if let Some(result) = response_json.get("result") {
-            Self::json_to_rtfs_value(result)
+            json_to_rtfs_value(result)
         } else if let Some(error) = response_json.get("error") {
             let error_msg = error
                 .get("message")
@@ -538,10 +538,6 @@ impl A2AExecutor {
     // Use shared value conversion utilities
     fn value_to_json(value: &Value) -> Result<serde_json::Value, RuntimeError> {
         value_conversion::rtfs_value_to_json(value)
-    }
-
-    fn json_to_rtfs_value(json: &serde_json::Value) -> RuntimeResult<Value> {
-        value_conversion::json_to_rtfs_value(json)
     }
 }
 
@@ -759,7 +755,7 @@ impl OpenApiExecutor {
 
         if !bytes.is_empty() {
             if let Ok(json_value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                if let Ok(rtfs_json) = CapabilityMarketplace::json_to_rtfs_value(&json_value) {
+                if let Ok(rtfs_json) = json_to_rtfs_value(&json_value) {
                     response_map.insert(MapKey::String("json".to_string()), rtfs_json);
                 }
             }

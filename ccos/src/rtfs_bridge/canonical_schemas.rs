@@ -313,7 +313,6 @@ impl CanonicalCapabilitySchema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rtfs::ast::Literal;
 
     #[test]
     fn test_canonical_plan_schema_validation() {

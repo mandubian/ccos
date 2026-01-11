@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Configuration for the Arbiter system
+/// Configuration for the Cognitive Engine system
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArbiterConfig {
-    /// The type of arbiter engine to use
-    pub engine_type: ArbiterEngineType,
+pub struct CognitiveEngineConfig {
+    /// The type of cognitive engine to use
+    pub engine_type: CognitiveEngineType,
     /// LLM-specific configuration (if using LLM engine)
     pub llm_config: Option<LlmConfig>,
     /// Delegation configuration (if using delegating engine)
@@ -18,9 +18,9 @@ pub struct ArbiterConfig {
     pub template_config: Option<TemplateConfig>,
 }
 
-/// Types of arbiter engines
+/// Types of cognitive engines
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ArbiterEngineType {
+pub enum CognitiveEngineType {
     /// Simple pattern matching with templates
     Template,
     /// LLM-driven reasoning
@@ -112,8 +112,9 @@ pub struct DelegationConfig {
     pub max_candidates: usize,
     /// Minimum skill hits required
     pub min_skill_hits: Option<usize>,
-    /// Agent registry configuration
-    pub agent_registry: AgentRegistryConfig,
+    /// [DEPRECATED] Agent registry configuration - use CapabilityMarketplace instead
+    #[serde(default)]
+    pub agent_registry: Option<serde_json::Value>,
     /// Adaptive threshold configuration
     pub adaptive_threshold: Option<crate::config::types::AdaptiveThresholdConfig>,
     /// Optional convenience flag to print the extracted RTFS intent s-expression
@@ -298,10 +299,10 @@ pub enum FallbackBehavior {
     Error,
 }
 
-impl Default for ArbiterConfig {
+impl Default for CognitiveEngineConfig {
     fn default() -> Self {
         Self {
-            engine_type: ArbiterEngineType::Dummy,
+            engine_type: CognitiveEngineType::Dummy,
             llm_config: None,
             delegation_config: None,
             capability_config: CapabilityConfig::default(),
@@ -404,26 +405,26 @@ impl Default for TemplateConfig {
     }
 }
 
-impl ArbiterConfig {
+impl CognitiveEngineConfig {
     /// Create a configuration from a TOML file
     pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
-        let config: ArbiterConfig = toml::from_str(&content)?;
+        let config: CognitiveEngineConfig = toml::from_str(&content)?;
         Ok(config)
     }
 
     /// Create a configuration from environment variables
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
-        let mut config = ArbiterConfig::default();
+        let mut config = CognitiveEngineConfig::default();
 
         // Engine type
         if let Ok(engine_type) = std::env::var("CCOS_ARBITER_ENGINE_TYPE") {
             config.engine_type = match engine_type.as_str() {
-                "template" => ArbiterEngineType::Template,
-                "llm" => ArbiterEngineType::Llm,
-                "delegating" => ArbiterEngineType::Delegating,
-                "hybrid" => ArbiterEngineType::Hybrid,
-                "dummy" => ArbiterEngineType::Dummy,
+                "template" => CognitiveEngineType::Template,
+                "llm" => CognitiveEngineType::Llm,
+                "delegating" => CognitiveEngineType::Delegating,
+                "hybrid" => CognitiveEngineType::Hybrid,
+                "dummy" => CognitiveEngineType::Dummy,
                 _ => return Err("Invalid engine type".into()),
             };
         }
@@ -500,7 +501,7 @@ impl ArbiterConfig {
                     min_skill_hits: std::env::var("CCOS_DELEGATION_MIN_SKILL_HITS")
                         .ok()
                         .and_then(|s| s.parse().ok()),
-                    agent_registry: AgentRegistryConfig::default(),
+                    agent_registry: None,
                     adaptive_threshold: None,
                     print_extracted_intent: None,
                     print_extracted_plan: None,
@@ -518,12 +519,12 @@ impl ArbiterConfig {
 
         // Validate engine type and required configs
         match self.engine_type {
-            ArbiterEngineType::Llm => {
+            CognitiveEngineType::Llm => {
                 if self.llm_config.is_none() {
                     errors.push("LLM engine requires llm_config".to_string());
                 }
             }
-            ArbiterEngineType::Delegating => {
+            CognitiveEngineType::Delegating => {
                 if self.llm_config.is_none() {
                     errors.push("Delegating engine requires llm_config".to_string());
                 }
@@ -531,7 +532,7 @@ impl ArbiterConfig {
                     errors.push("Delegating engine requires delegation_config".to_string());
                 }
             }
-            ArbiterEngineType::Hybrid => {
+            CognitiveEngineType::Hybrid => {
                 if self.llm_config.is_none() {
                     errors.push("Hybrid engine requires llm_config".to_string());
                 }
@@ -539,12 +540,12 @@ impl ArbiterConfig {
                     errors.push("Hybrid engine requires template_config".to_string());
                 }
             }
-            ArbiterEngineType::Template => {
+            CognitiveEngineType::Template => {
                 if self.template_config.is_none() {
                     errors.push("Template engine requires template_config".to_string());
                 }
             }
-            ArbiterEngineType::Dummy => {
+            CognitiveEngineType::Dummy => {
                 // No additional config required
             }
         }
@@ -597,7 +598,7 @@ mod tests {
 
     #[test]
     fn test_default_config() {
-        let config = ArbiterConfig::default();
+        let config = CognitiveEngineConfig::default();
         assert!(config.validate().is_ok());
     }
 

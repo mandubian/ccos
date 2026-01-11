@@ -44,7 +44,7 @@ use crate::runtime::pure_host::create_pure_host;
 use std::sync::Arc;
 
 /// Trait for RTFS runtime operations needed by CCOS
-pub trait RTFSRuntime {
+pub trait RTFSRuntime: Send {
     fn parse_expression(&mut self, source: &str) -> Result<Value, RuntimeError>;
     fn value_to_source(&self, value: &Value) -> Result<String, RuntimeError>;
     /// Evaluate expression (CCOS integration method - optional)
@@ -57,7 +57,7 @@ pub trait RTFSRuntime {
     ) -> Result<Value, RuntimeError>;
 }
 
-pub trait RuntimeStrategy: std::fmt::Debug + 'static {
+pub trait RuntimeStrategy: std::fmt::Debug + Send + 'static {
     fn run(&mut self, program: &Expression) -> Result<ExecutionOutcome, RuntimeError>;
     fn clone_box(&self) -> Box<dyn RuntimeStrategy>;
     /// Optional: inject a MacroExpander instance into the runtime so macro

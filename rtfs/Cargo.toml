@@ -21,6 +21,7 @@ cuda = []
 effect-boundary = []
 metrics_exporter = []
 benchmarks = []
+ccos-integration = []
 
 [[bin]]
 name = "rtfs_compiler"

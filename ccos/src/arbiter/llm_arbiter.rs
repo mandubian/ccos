@@ -16,13 +16,13 @@ use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use super::arbiter_config::ArbiterConfig;
-use super::arbiter_engine::ArbiterEngine;
-use super::llm_provider::{LlmProvider, LlmProviderConfig, LlmProviderFactory};
-use super::plan_generation::{
+use crate::arbiter::arbiter_config::ArbiterConfig;
+use crate::arbiter::arbiter_engine::ArbiterEngine;
+use crate::arbiter::llm_provider::{LlmProvider, LlmProviderConfig, LlmProviderFactory};
+use crate::arbiter::plan_generation::{
     LlmRtfsPlanGenerationProvider, PlanGenerationProvider, PlanGenerationResult,
 };
-use super::prompt::{FilePromptStore, PromptConfig, PromptManager};
+use crate::arbiter::prompt::{FilePromptStore, PromptConfig, PromptManager};
 use rtfs::ast::TopLevel;
 
 /// Extract the first top-level `(intent …)` s-expression from the given text.

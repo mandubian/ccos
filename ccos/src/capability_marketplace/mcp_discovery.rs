@@ -1896,9 +1896,49 @@ impl MCPDiscoveryProvider {
                                                     nv.clone(),
                                                 );
                                                 metadata.insert("base_url".to_string(), nv.clone());
+                                            } else if nk.0 == "path" {
+                                                metadata.insert(
+                                                    "openapi_endpoint_path".to_string(),
+                                                    nv.clone(),
+                                                );
+                                            } else if nk.0 == "method" {
+                                                metadata.insert(
+                                                    "openapi_endpoint_method".to_string(),
+                                                    nv.clone(),
+                                                );
                                             } else {
                                                 metadata.insert(
                                                     format!("openapi_{}", nk.0),
+                                                    nv.clone(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                (MapKey::Keyword(k), Expression::Map(nested_map))
+                                    if k.0 == "endpoint" =>
+                                {
+                                    // Extract base_url/method/path from nested endpoint map (used by browser extraction)
+                                    for (nested_key, nested_value) in nested_map {
+                                        if let (
+                                            MapKey::Keyword(nk),
+                                            Expression::Literal(Literal::String(nv)),
+                                        ) = (nested_key, nested_value)
+                                        {
+                                            if nk.0 == "base_url" {
+                                                metadata.insert("base_url".to_string(), nv.clone());
+                                                metadata.insert(
+                                                    "endpoint_base_url".to_string(),
+                                                    nv.clone(),
+                                                );
+                                            } else if nk.0 == "path" {
+                                                metadata.insert(
+                                                    "endpoint_path".to_string(),
+                                                    nv.clone(),
+                                                );
+                                            } else if nk.0 == "method" {
+                                                metadata.insert(
+                                                    "endpoint_method".to_string(),
                                                     nv.clone(),
                                                 );
                                             }
@@ -1983,15 +2023,18 @@ impl MCPDiscoveryProvider {
             // Create OpenApiCapability from metadata - this properly handles query params
             let base_url = metadata
                 .get("openapi_base_url")
+                .or_else(|| metadata.get("endpoint_base_url"))
                 .or_else(|| metadata.get("base_url"))
                 .cloned()
                 .unwrap_or_else(|| "https://api.example.com".to_string());
             let endpoint_path = metadata
                 .get("openapi_endpoint_path")
+                .or_else(|| metadata.get("endpoint_path"))
                 .cloned()
                 .unwrap_or_else(|| "/".to_string());
             let endpoint_method = metadata
                 .get("openapi_endpoint_method")
+                .or_else(|| metadata.get("endpoint_method"))
                 .cloned()
                 .unwrap_or_else(|| "GET".to_string());
 
@@ -2920,10 +2963,18 @@ mod tests {
         // Verify input/output schemas are in the capability map (they're stored there to avoid duplication)
         match &rtfs_cap.capability {
             Expression::Map(map) => {
-                let has_input_schema = map.contains_key(&MapKey::Keyword(Keyword("input-schema".to_string())));
-                let has_output_schema = map.contains_key(&MapKey::Keyword(Keyword("output-schema".to_string())));
-                assert!(has_input_schema, "RTFS capability missing input-schema in map");
-                assert!(has_output_schema, "RTFS capability missing output-schema in map");
+                let has_input_schema =
+                    map.contains_key(&MapKey::Keyword(Keyword("input-schema".to_string())));
+                let has_output_schema =
+                    map.contains_key(&MapKey::Keyword(Keyword("output-schema".to_string())));
+                assert!(
+                    has_input_schema,
+                    "RTFS capability missing input-schema in map"
+                );
+                assert!(
+                    has_output_schema,
+                    "RTFS capability missing output-schema in map"
+                );
             }
             _ => panic!("RTFS capability should be a map"),
         }
@@ -3000,7 +3051,11 @@ mod tests {
         match rtfs_expr {
             Expression::Vector(vec) => {
                 // Array schema converts to [:vector <element-type>], so len should be 2
-                assert_eq!(vec.len(), 2, "Array schema should convert to vector with 2 elements: [:vector <type>]");
+                assert_eq!(
+                    vec.len(),
+                    2,
+                    "Array schema should convert to vector with 2 elements: [:vector <type>]"
+                );
                 // First element should be the "vector" keyword
                 if let Some(Expression::Literal(Literal::Keyword(kw))) = vec.first() {
                     assert_eq!(kw.0, "vector", "First element should be 'vector' keyword");
@@ -3008,9 +3063,19 @@ mod tests {
                     panic!("First element of array schema should be 'vector' keyword");
                 }
                 // Second element should be the element type (in this case, a string type)
-                assert!(matches!(vec.get(1), Some(Expression::Literal(Literal::Keyword(_))) | Some(Expression::Symbol(_))), "Second element should be the element type");
+                assert!(
+                    matches!(
+                        vec.get(1),
+                        Some(Expression::Literal(Literal::Keyword(_)))
+                            | Some(Expression::Symbol(_))
+                    ),
+                    "Second element should be the element type"
+                );
             }
-            _ => panic!("Array schema should convert to Vector expression, got: {:?}", rtfs_expr),
+            _ => panic!(
+                "Array schema should convert to Vector expression, got: {:?}",
+                rtfs_expr
+            ),
         }
 
         // Test primitive type conversion
@@ -3019,7 +3084,9 @@ mod tests {
             .convert_json_schema_to_rtfs(&string_schema)
             .unwrap();
         // String schema converts to :string keyword literal
-        assert!(matches!(rtfs_expr, Expression::Literal(Literal::Keyword(Keyword(ref s))) if s == "string"));
+        assert!(
+            matches!(rtfs_expr, Expression::Literal(Literal::Keyword(Keyword(ref s))) if s == "string")
+        );
     }
 
     #[test]
