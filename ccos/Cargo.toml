@@ -111,7 +111,7 @@ path = "src/bin/diagnose_storage.rs"
 
 [[bin]]
 name = "mcp-local-server"
-path = "src/bin/mcp_local_server.rs"
+path = "src/bin/legacy/mcp_local_server.rs"
 required-features = ["server"]
 
 [[bin]]
@@ -125,11 +125,39 @@ path = "src/bin/resolve_deps.rs"
 
 [[bin]]
 name = "test-multi-capability-synthesis"
-path = "src/bin/test_multi_capability_synthesis.rs"
+path = "src/bin/legacy/test_multi_capability_synthesis.rs"
 
 [[bin]]
 name = "dialogue_planner_demo"
-path = "src/bin/dialogue_planner_demo.rs"
+path = "src/bin/legacy/dialogue_planner_demo.rs"
+
+[[bin]]
+name = "governance_demo"
+path = "src/bin/legacy/governance_demo.rs"
+
+[[bin]]
+name = "learning_demo"
+path = "src/bin/legacy/learning_demo.rs"
+
+[[bin]]
+name = "introspect_demo"
+path = "src/bin/legacy/introspect_demo.rs"
+
+[[bin]]
+name = "meta_planner_test"
+path = "src/bin/legacy/meta_planner_test.rs"
+
+[[bin]]
+name = "test_browser_extract"
+path = "src/bin/legacy/test_browser_extract.rs"
+
+[[bin]]
+name = "check_score_existence"
+path = "src/bin/legacy/check_score_existence.rs"
+
+[[bin]]
+name = "introspect_runtime_plan"
+path = "src/bin/legacy/introspect_runtime_plan.rs"
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"
