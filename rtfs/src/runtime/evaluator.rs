@@ -2,7 +2,7 @@
 
 use crate::ast::{
     CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr, ForExpr, IfExpr,
-    Keyword, LetExpr, Literal, MapKey, MatchExpr, Symbol, TopLevel, TryCatchExpr,
+    LetExpr, Literal, MapKey, MatchExpr, Symbol, TopLevel, TryCatchExpr,
 };
 use crate::compiler::expander::MacroExpander;
 use crate::runtime::environment::Environment;
@@ -13,14 +13,13 @@ use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::security::IsolationLevel;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::stubs::{
-    ConflictResolution, ExecutionResultStruct, SimpleAgentCard, SimpleCachePolicy,
+    ConflictResolution, ExecutionResultStruct, SimpleAgentCard,
     SimpleDiscoveryOptions, SimpleDiscoveryQuery,
 };
 use crate::runtime::type_validator::{
     TypeCheckingConfig, TypeValidator, ValidationLevel, VerificationContext,
 };
 use crate::runtime::values::{Arity, BuiltinFunctionWithContext, Function, Value};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 type SpecialFormHandler =
@@ -43,7 +42,7 @@ pub struct Evaluator {
     /// Type checking configuration for optimization
     pub type_config: TypeCheckingConfig,
     /// Macro expander for compile-time macro expansion
-    macro_expander: RefCell<MacroExpander>,
+    macro_expander: Arc<Mutex<MacroExpander>>,
 }
 
 // Helper function to check if two values are in equivalent
@@ -107,7 +106,7 @@ impl Evaluator {
             special_forms: Self::default_special_forms(),
             type_validator: Arc::new(TypeValidator::new()),
             type_config: TypeCheckingConfig::default(),
-            macro_expander: RefCell::new(macro_expander),
+            macro_expander: Arc::new(Mutex::new(macro_expander)),
         }
     }
 
@@ -115,7 +114,9 @@ impl Evaluator {
     /// the compiler driver to inject a shared expander so macro definitions
     /// are consistent across compilation and runtime paths.
     pub fn set_macro_expander(&mut self, expander: MacroExpander) {
-        *self.macro_expander.borrow_mut() = expander;
+        if let Ok(mut lock) = self.macro_expander.lock() {
+            *lock = expander;
+        }
     }
 
     /// Create a new evaluator with task context and security
@@ -529,7 +530,12 @@ impl Evaluator {
         }
 
         // Expand macros before evaluation
-        let expanded_expr = match self.macro_expander.borrow_mut().expand(expr, 0) {
+        let expanded_expr = match self
+            .macro_expander
+            .lock()
+            .map_err(|e| RuntimeError::Generic(format!("Macro expander lock poisoned: {}", e)))?
+            .expand(expr, 0)
+        {
             Ok(expanded) => expanded,
             Err(e) => {
                 return Err(RuntimeError::Generic(format!(
@@ -3781,7 +3787,7 @@ impl Evaluator {
             special_forms: Self::default_special_forms(),
             type_validator: self.type_validator.clone(),
             type_config: self.type_config.clone(),
-            macro_expander: RefCell::new(MacroExpander::default()),
+            macro_expander: Arc::new(Mutex::new(MacroExpander::default())),
         }
     }
 
@@ -3801,7 +3807,7 @@ impl Evaluator {
             special_forms: Self::default_special_forms(),
             type_validator: Arc::new(TypeValidator::new()),
             type_config: TypeCheckingConfig::default(),
-            macro_expander: RefCell::new(MacroExpander::default()),
+            macro_expander: Arc::new(Mutex::new(MacroExpander::default())),
         }
     }
 }

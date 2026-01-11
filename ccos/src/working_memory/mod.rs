@@ -32,3 +32,4 @@ pub use facade::WorkingMemory;
 pub use ingestor::{DerivedEntry, MemoryIngestor, WorkingMemorySink};
 pub use types::{WorkingMemoryEntry, WorkingMemoryId, WorkingMemoryMeta};
 pub use agent_memory::{AgentMemory, LearnedPattern};
+
