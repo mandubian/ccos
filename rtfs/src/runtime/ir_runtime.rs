@@ -189,6 +189,8 @@ impl IrRuntime {
             IT::Resource(name) => TypeExpr::Resource(crate::ast::Symbol(name.clone())),
             IT::LiteralValue(lit) => TypeExpr::Literal(lit.clone()),
             IT::TypeRef(name) => TypeExpr::Alias(crate::ast::Symbol(name.clone())),
+            IT::TypeVar(_) => TypeExpr::Any,
+            IT::ParametricMap { .. } => TypeExpr::Any,
         }
     }
 
