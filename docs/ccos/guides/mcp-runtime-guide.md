@@ -8,7 +8,7 @@ This guide explains how to **use** MCP (Model Context Protocol) capabilities in 
 
 ### Prerequisites
 
-1. MCP capabilities generated in `capabilities/mcp/` (see `mcp-synthesis-guide.md`)
+1. MCP capabilities generated in `capabilities/mcp/` (see `capability-synthesis.md`)
 2. Environment variable for authentication: `MCP_AUTH_TOKEN`
 
 ### Basic Usage

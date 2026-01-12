@@ -58,12 +58,14 @@ rtfs/.rtfs_ccos_repl_history
 
 # Runtime capabilities (not source code - stored at project root)
 capabilities/generated/
-capabilities/discovered/
 capabilities/pending_synth/
 capabilities/servers/
 capabilities/sessions/
 capabilities/learned/
 capabilities/web/
 capabilities/mcp/
+capabilities/agents/
 .ccos/
 storage/
+.rtfs_repl_history
+.rtfs_ccos_repl_history

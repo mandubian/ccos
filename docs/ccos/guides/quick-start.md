@@ -56,10 +56,20 @@ base_url = "https://openrouter.ai/api/v1"
 EOF
 ```
 
-## Step 3: Run the Demo!
+## Step 3: Run the Smart Assistant Demo!
+
+The Smart Assistant demo showcases the full lifecycle: Learning → Synthesis → Execution.
 
 ```bash
-./demo_smart_assistant.sh full
+# Run the interactive demo
+cargo run --example smart_assistant_demo -- --goal "Research quantum computing applications in cryptography"
+```
+
+### Optional: Autonomous Agent Demo
+For a more goal-agnostic experience with automatic discovery and synthesis:
+
+```bash
+cargo run --example autonomous_agent_demo -- --goal "Find the latest release of the linux kernel and tell me its version"
 ```
 
 That's it! 🎉
@@ -67,35 +77,12 @@ That's it! 🎉
 ## What You'll See
 
 ```
-🧠 CCOS/RTFS Self-Learning Demonstration 🧠
+🧠 CCOS/RTFS Demonstration 🧠
 ═══════════════════════════════════════════════════════════════
 
 ✓ CCOS initialized
+✓ Unified Artifact Model active
 ✓ LLM: gpt-4o-mini via OpenAI
-
-┌─────────────────────────────────────────────────────────────┐
-│ PHASE 1: Initial Learning - Understanding Your Workflow    │
-└─────────────────────────────────────────────────────────────┘
-
-User Request: quantum computing applications in cryptography
-
-💬 Interactive Preference Collection:
-  Q1: What domains should I focus on?
-  A1: academic papers, industry reports, expert blogs
-  ...
-
-┌─────────────────────────────────────────────────────────────┐
-│ PHASE 2: Capability Synthesis (LLM-Driven)                 │
-└─────────────────────────────────────────────────────────────┘
-
-🔬 Analyzing interaction patterns with LLM...
-✓ LLM analyzed conversation history
-✓ Extracted parameter schema from interactions
-✓ Generated RTFS capability definition
-
-📦 Synthesized Capability:
-```rtfs
-(capability "research.smart-assistant.v1" ...)
 ```
 
 [... more output ...]
