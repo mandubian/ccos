@@ -113,6 +113,7 @@ I cannot bypass the Kernel. I cannot act without authorization. This separation 
 Before I access sensitive resources, I use my UnifiedApprovalQueue system:
 
 - **Secret Access**: When a capability requires credentials, I check SecretStore. If secret is available, I use it directly without revealing value. If not available, I submit an approval request.
+- **Server Discovery**: Newly discovered MCP or OpenAPI servers are quarantined in a `pending` state and ignored by the marketplace until explicitly approved and promoted.
 - **Security Thresholds**: Certain operations (high-risk capabilities, large data transfers) automatically trigger approval requests.
 - **Human Approval**: For critical actions, a human must explicitly approve through the approval UI.
 - **LLM Approval**: Lower-risk approvals can be delegated to an LLM for faster throughput.

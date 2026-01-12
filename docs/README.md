@@ -15,25 +15,17 @@ This directory contains all documentation for the CCOS (Cognitive Computing Oper
 
 ## Directory Structure
 
-### `/implementation/`
-Detailed technical documentation about RTFS implementation:
-- Runtime system implementation summaries
-- Architecture deep-dives and design decisions
-- Performance analysis and optimization guides
-- Testing documentation and validation approaches
+### [CCOS Guides](./ccos/guides/)
+Practical guides for using CCOS, MCP servers, and RTFS capabilities.
 
-### Related Documentation (Outside `/docs/`)
+### [RTFS 2.0 Specs](./rtfs-2.0/specs/)
+Formal specifications for the RTFS language, type system, and runtime.
 
-#### `/specs/` - Language and System Specifications
-- Core language specifications and grammar
-- Type system and semantics documentation
-- Standard library specifications
-- Security and resource management models
+### [CCOS Specs](./ccos/specs/)
+Architectural specifications for the Cognitive OS (Arbiter, Governance, Orchestration).
 
-#### Root-level Documentation
-- **`README.md`** - Project overview and getting started
-- **`NEXT_STEPS.md`** / **`NEXT_STEPS_UPDATED.md`** - Development roadmap and priorities
-- **`IMPLEMENTATION_SUMMARY.md`** - High-level implementation status
+### [Archive](./archive/)
+Historical documents and older specifications kept for reference.
 
 ## Documentation Types
 
