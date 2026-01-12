@@ -22,10 +22,10 @@ impl LocalConfigMcpDiscovery {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         // Check common locations
         let candidates = vec![
-            root.join("capabilities/mcp/overrides.json"),
+            root.join("capabilities/servers/overrides.json"),
             root.parent()
                 .unwrap_or(&root)
-                .join("capabilities/mcp/overrides.json"),
+                .join("capabilities/servers/overrides.json"),
         ];
 
         for path in candidates {
@@ -172,10 +172,11 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
             let options = crate::mcp::types::DiscoveryOptions {
                 introspect_output_schemas: false,
                 use_cache: true,
-                register_in_marketplace: true, // Register in marketplace
+                register_in_marketplace: false, // Don't register yet, wait for approval
                 export_to_rtfs: true,          // Export to RTFS files
-                export_directory: Some("capabilities".to_string()),
+                export_directory: Some("capabilities/servers/pending".to_string()),
                 non_interactive: true, // Don't hang on prompts during startup
+                create_approval_request: true, // Create approval request automatically
                 auth_headers: config.auth_token.as_ref().map(|token| {
                     let mut headers = std::collections::HashMap::new();
                     headers.insert("Authorization".to_string(), format!("Bearer {}", token));
@@ -189,7 +190,7 @@ impl CapabilityDiscovery for LocalConfigMcpDiscovery {
                 .discover_and_export_tools(&config, &options)
                 .await
             {
-                Ok(manifests) => {
+                Ok((manifests, _approval_id)) => {
                     ccos_println!("      ✅ Found {} capabilities", manifests.len());
                     all_manifests.extend(manifests);
                 }

@@ -1322,6 +1322,29 @@ impl CapabilityMarketplace {
         handler: Arc<dyn Fn(&Value) -> BoxFuture<'static, RuntimeResult<Value>> + Send + Sync>,
         security_level: String,
     ) -> Result<(), RuntimeError> {
+        self.register_native_capability_with_schema(
+            id,
+            name,
+            description,
+            handler,
+            security_level,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Register a native capability dynamically with schema
+    pub async fn register_native_capability_with_schema(
+        &self,
+        id: String,
+        name: String,
+        description: String,
+        handler: Arc<dyn Fn(&Value) -> BoxFuture<'static, RuntimeResult<Value>> + Send + Sync>,
+        security_level: String,
+        input_schema: Option<TypeExpr>,
+        output_schema: Option<TypeExpr>,
+    ) -> Result<(), RuntimeError> {
         let provenance = CapabilityProvenance {
             source: "native".to_string(),
             version: Some("1.0.0".to_string()),
@@ -2732,28 +2755,35 @@ impl CapabilityMarketplace {
         &self,
         base_dir: Option<P>,
     ) -> RuntimeResult<usize> {
-        let dir = base_dir
+        let root = crate::utils::fs::get_workspace_root();
+        let capabilities_dir = base_dir
             .map(|p| p.as_ref().to_path_buf())
             .unwrap_or_else(|| {
                 std::env::var("CCOS_CAPABILITY_STORAGE")
                     .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| crate::utils::fs::get_workspace_root().join("capabilities"))
+                    .unwrap_or_else(|_| root.join("capabilities"))
             });
 
         let mut total = 0usize;
 
-        if dir.exists() {
-            total += self
-                .import_capabilities_from_rtfs_dir_recursive(&dir)
-                .await?;
-        } else if let Some(cb) = &self.debug_callback {
-            cb(format!(
-                "Discovered capabilities directory does not exist: {}",
-                dir.display()
-            ));
+        // Only load approved servers, core, and learned/generated
+        // DO NOT load from 'pending'
+        let subdirs = vec![
+            capabilities_dir.join("core"),
+            capabilities_dir.join("servers/approved"),
+            capabilities_dir.join("learned"),
+            capabilities_dir.join("generated"),
+        ];
+
+        for dir in subdirs {
+            if dir.exists() {
+                total += self
+                    .import_capabilities_from_rtfs_dir_recursive(&dir)
+                    .await?;
+            }
         }
 
-        // Also load synthesized capabilities
+        // Also load synthesized capabilities (which might be in a different storage path)
         total += self.load_synthesized_capabilities().await?;
 
         Ok(total)
@@ -2842,7 +2872,30 @@ impl CapabilityMarketplace {
 
                 // If it's a directory, add it to the queue for processing
                 if path.is_dir() {
+                    // EXPLICITLY SKIP 'pending' directories for security
+                    // These contain unauthorized capabilities that must go through the approval queue
+                    if path.file_name().and_then(|s| s.to_str()) == Some("pending") {
+                        if let Some(cb) = &self.debug_callback {
+                            cb(format!(
+                                "Skipping unauthorized 'pending' directory: {}",
+                                path.display()
+                            ));
+                        }
+                        continue;
+                    }
+
                     dirs_to_process.push(path);
+                    continue;
+                }
+
+                // Skip directory listing files (capabilities.rtfs) and server manifest files (server.rtfs)
+                if path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map_or(false, |name| {
+                        name == "capabilities.rtfs" || name == "server.rtfs"
+                    })
+                {
                     continue;
                 }
 
@@ -3004,11 +3057,13 @@ impl CapabilityMarketplace {
             if path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .map_or(false, |name| name == "capabilities.rtfs")
+                .map_or(false, |name| {
+                    name == "capabilities.rtfs" || name == "server.rtfs"
+                })
             {
                 if let Some(cb) = &self.debug_callback {
                     cb(format!(
-                        "Skipping directory listing file: {}",
+                        "Skipping directory listing/manifest file: {}",
                         path.display()
                     ));
                 }

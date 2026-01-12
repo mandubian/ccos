@@ -358,9 +358,11 @@ impl MCPDiscoveryProvider {
 
         if final_options.export_to_rtfs {
             // Use discovery service's unified discover_and_export_tools
-            self.discovery_service
+            let (manifests, _approval_id) = self
+                .discovery_service
                 .discover_and_export_tools(&self.config, &final_options)
-                .await
+                .await?;
+            Ok(manifests)
         } else {
             // Normal discovery
             let discovered_tools = self
@@ -1971,7 +1973,10 @@ impl MCPDiscoveryProvider {
         // which properly handles query parameters and authentication
         let has_openapi_metadata = metadata.contains_key("openapi_base_url")
             || metadata.contains_key("openapi_endpoint_path")
-            || metadata.contains_key("openapi_endpoint_method");
+            || metadata.contains_key("openapi_endpoint_method")
+            || metadata.contains_key("endpoint_base_url")
+            || metadata.contains_key("endpoint_path")
+            || metadata.contains_key("base_url");
 
         let provider = if let Some(impl_expr) = implementation_expr.clone() {
             // Pure RTFS implementation -> run locally
@@ -2059,53 +2064,62 @@ impl MCPDiscoveryProvider {
                     .find(|(k, _)| matches!(k, MapKey::Keyword(kw) if kw.0 == "metadata"))
                     .map(|(_, v)| v)
                 {
-                    if let Some(Expression::Map(openapi_map)) = metadata_map
+                    let auth_expr = if let Some(Expression::Map(openapi_map)) = metadata_map
                         .iter()
                         .find(|(k, _)| matches!(k, MapKey::Keyword(kw) if kw.0 == "openapi"))
                         .map(|(_, v)| v)
                     {
-                        let auth_expr = openapi_map
+                        openapi_map
                             .iter()
                             .find(|(k, _)| matches!(k, MapKey::Keyword(kw) if kw.0 == "auth"))
-                            .map(|(_, v)| v);
+                            .map(|(_, v)| v)
+                    } else if let Some(Expression::Map(endpoint_map)) = metadata_map
+                        .iter()
+                        .find(|(k, _)| matches!(k, MapKey::Keyword(kw) if kw.0 == "endpoint"))
+                        .map(|(_, v)| v)
+                    {
+                        endpoint_map
+                            .iter()
+                            .find(|(k, _)| matches!(k, MapKey::Keyword(kw) if kw.0 == "auth"))
+                            .map(|(_, v)| v)
+                    } else {
+                        None
+                    };
 
-                        if let Some(Expression::Map(auth_map)) = auth_expr {
-                            // Helper to extract string values from the auth map
-                            let get_str = |key: &str| -> Option<String> {
-                                auth_map
-                                    .iter()
-                                    .find(|(k, _)| matches!(k, MapKey::Keyword(kw) if kw.0 == key))
-                                    .and_then(|(_, v)| match v {
-                                        Expression::Literal(Literal::String(s)) => Some(s.clone()),
-                                        Expression::Literal(Literal::Keyword(k)) => {
-                                            Some(k.0.clone())
-                                        }
-                                        _ => None,
-                                    })
-                            };
+                    if let Some(Expression::Map(auth_map)) = auth_expr {
+                        // Helper to extract string values from the auth map
+                        let get_str = |key: &str| -> Option<String> {
+                            auth_map
+                                .iter()
+                                .find(|(k, _)| matches!(k, MapKey::Keyword(kw) if kw.0 == key))
+                                .and_then(|(_, v)| match v {
+                                    Expression::Literal(Literal::String(s)) => Some(s.clone()),
+                                    Expression::Literal(Literal::Keyword(k)) => Some(k.0.clone()),
+                                    _ => None,
+                                })
+                        };
 
-                            let auth_type = get_str("type").unwrap_or_else(|| "apiKey".to_string());
-                            let location =
-                                get_str("location").unwrap_or_else(|| "header".to_string());
-                            let param_name = get_str("param_name")
-                                .or_else(|| get_str("param")) // alias
-                                .unwrap_or_else(|| "Authorization".to_string());
-                            let env_var = get_str("env_var");
+                        let auth_type = get_str("type").unwrap_or_else(|| "apiKey".to_string());
+                        let location = get_str("location").unwrap_or_else(|| "header".to_string());
+                        let param_name = get_str("param_name")
+                            .or_else(|| get_str("param"))
+                            .or_else(|| get_str("name")) // alias
+                            .unwrap_or_else(|| "Authorization".to_string());
+                        let env_var = get_str("env_var");
 
-                            if let Some(env_name) = env_var {
-                                auth = Some(crate::capability_marketplace::types::OpenApiAuth {
-                                    auth_type,
-                                    location,
-                                    parameter_name: param_name,
-                                    env_var_name: Some(env_name.clone()),
-                                    required: true,
-                                });
+                        if let Some(env_name) = env_var {
+                            auth = Some(crate::capability_marketplace::types::OpenApiAuth {
+                                auth_type,
+                                location,
+                                parameter_name: param_name,
+                                env_var_name: Some(env_name.clone()),
+                                required: true,
+                            });
 
-                                debug!(
-                                     "Found generic auth configuration for capability '{}': env_var={}",
-                                     name, env_name
-                                 );
-                            }
+                            debug!(
+                                "Found generic auth configuration for capability '{}': env_var={}",
+                                name, env_name
+                            );
                         }
                     }
                 }
