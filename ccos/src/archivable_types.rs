@@ -123,7 +123,9 @@ impl From<&Plan> for ArchivablePlan {
                     };
                     ArchivablePlanBody::String(body_code)
                 }
-                PlanBody::Binary(_) | PlanBody::Wasm(_) => ArchivablePlanBody::String("<binary/WASM bytecode>".to_string()),
+                PlanBody::Binary(_) | PlanBody::Wasm(_) => {
+                    ArchivablePlanBody::String("<binary/WASM bytecode>".to_string())
+                }
             },
             status: plan.status.clone(),
             created_at: plan.created_at,

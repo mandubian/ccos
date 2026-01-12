@@ -10,9 +10,9 @@
 
 use std::sync::Arc;
 
-use crate::capability_marketplace::types::AgentConstraints;
 use crate::approval::types::{ApprovalCategory, RiskAssessment, RiskLevel};
 use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
+use crate::capability_marketplace::types::AgentConstraints;
 use crate::capability_marketplace::CapabilityManifest;
 use crate::capability_marketplace::CapabilityMarketplace;
 use rtfs::ast::{Keyword, MapKey};

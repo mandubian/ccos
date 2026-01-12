@@ -35,7 +35,7 @@ async fn main() -> RuntimeResult<()> {
         "🔍 Introspecting Puppeteer via stdio: '{}'...",
         config.endpoint
     );
-    let manifests = discovery_service
+    let (manifests, _approval_id) = discovery_service
         .discover_and_export_tools(&config, &options)
         .await?;
 

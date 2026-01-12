@@ -37,7 +37,10 @@ pub async fn run_example_with_args(
     } else {
         Err(format!(
             "Example '{}' failed: status {:?}\nstdout:\n{}\nstderr:\n{}",
-            bin_name, output.status.code(), stdout, stderr
+            bin_name,
+            output.status.code(),
+            stdout,
+            stderr
         )
         .into())
     }

@@ -689,7 +689,7 @@ impl CapabilityExplorer {
             use_cache: false,
             register_in_marketplace: true,
             export_to_rtfs: true, // Enable RTFS export for discovered capabilities
-            export_directory: None, // Uses default: ../capabilities/discovered
+            export_directory: None, // Uses default: ../capabilities/servers/pending
             auth_headers: None,
             retry_policy: Default::default(),
             rate_limit: Default::default(),

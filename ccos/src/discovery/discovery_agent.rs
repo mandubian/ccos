@@ -384,7 +384,7 @@ impl DiscoveryAgent {
         // Common operation verbs to skip
         let operations: HashSet<&str> = [
             "list", "search", "get", "fetch", "create", "update", "delete", "filter", "find",
-            "show", "display", "print", "return", "send", "receive",
+            "show", "display", "print", "return", "send", "receive", "need", "step",
         ]
         .iter()
         .cloned()

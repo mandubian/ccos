@@ -105,8 +105,8 @@ pub mod utils;
 pub mod planner_viz_common;
 
 // Re-export some arbiter sub-modules for historic import paths
-pub use crate::cognitive_engine::engine;
 pub use crate::cognitive_engine::delegating_engine;
+pub use crate::cognitive_engine::engine;
 
 // CCOS core implementation (formerly mod.rs)
 pub mod ccos_core;

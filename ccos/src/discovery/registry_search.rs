@@ -86,6 +86,7 @@ impl RegistrySearcher {
                                 )),
                                 capabilities_path: None,
                                 alternative_endpoints: alternatives,
+                                capability_files: None,
                             },
                             match_score: 1.0,                  // Default score
                             alternative_endpoints: Vec::new(), // Not used anymore, kept for compatibility
@@ -161,6 +162,7 @@ impl RegistrySearcher {
                         auth_env_var: Some(crate::approval::suggest_auth_env_var(&server_name)),
                         capabilities_path: None,
                         alternative_endpoints: Vec::new(),
+                        capability_files: None,
                     },
                     match_score: 0.8, // Slightly lower score than MCP registry
                     alternative_endpoints: Vec::new(),
@@ -285,6 +287,7 @@ impl RegistrySearcher {
                             )),
                             capabilities_path: None,
                             alternative_endpoints: Vec::new(),
+                            capability_files: None,
                         },
                         match_score: if is_mcp_server { 0.6 } else { 0.5 }, // MCP servers score slightly higher
                         alternative_endpoints: Vec::new(),
@@ -414,6 +417,7 @@ impl RegistrySearcher {
                                                 ),
                                                 capabilities_path: None,
                                                 alternative_endpoints: alternatives,
+                                                capability_files: None,
                                             },
                                             match_score: 1.2, // Slightly higher score for local overrides
                                             alternative_endpoints: Vec::new(),
