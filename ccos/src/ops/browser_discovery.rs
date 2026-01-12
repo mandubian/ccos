@@ -23,6 +23,8 @@ pub struct BrowserDiscoveryResult {
     pub found_openapi_urls: Vec<String>,
     /// OpenAPI spec URL discovered from Swagger UI globals or script tags
     pub spec_url: Option<String>,
+    /// The actual API base URL (distinct from source_url which might be docs)
+    pub api_base_url: Option<String>,
     pub auth: Option<AuthConfig>,
     pub error: Option<String>,
 }
@@ -319,6 +321,7 @@ impl BrowserDiscoveryService {
                         discovered_endpoints: endpoints,
                         found_openapi_urls: found_links,
                         spec_url,
+                        api_base_url: None,
                         auth: None,
                         error: None,
                     })
@@ -339,6 +342,7 @@ impl BrowserDiscoveryService {
                         discovered_endpoints: vec![],
                         found_openapi_urls: vec![],
                         spec_url: None,
+                        api_base_url: None,
                         auth: None,
                         error: None,
                     })
@@ -354,6 +358,7 @@ impl BrowserDiscoveryService {
                     discovered_endpoints: vec![],
                     found_openapi_urls: vec![],
                     spec_url: None,
+                    api_base_url: None,
                     auth: None,
                     error: Some(format!("Failed to evaluate page: {}", e)),
                 })
@@ -442,12 +447,13 @@ impl BrowserDiscoveryService {
                                     .collect();
                             }
 
-                            // Use LLM found base URL if heuristic missed it (or as spec_url/base)
-                            if result.source_url == url
-                                && !llm_result.base_url.is_empty()
+                            // Use LLM found base URL
+                            if !llm_result.base_url.is_empty()
                                 && llm_result.base_url != "https://api.example.com"
                             {
-                                result.source_url = llm_result.base_url;
+                                result.api_base_url = Some(llm_result.base_url.clone());
+                                // Also update source_url if we haven't found a better one,
+                                // but keeping them distinct is better for the manifest
                             }
 
                             // Extract Auth

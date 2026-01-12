@@ -50,6 +50,9 @@ pub enum DiscoverySource {
     ApisGuru { api_name: String },
     WebSearch { url: String },
     Manual { user: String },
+    OpenApi { url: String },
+    HtmlDocs { url: String },
+    Mcp { endpoint: String },
     LocalOverride { path: String },
     LocalConfig,
 }
@@ -57,10 +60,13 @@ pub enum DiscoverySource {
 impl DiscoverySource {
     pub fn name(&self) -> String {
         match self {
-            DiscoverySource::McpRegistry { name } => format!("mcp:{}", name),
+            DiscoverySource::McpRegistry { name } => format!("mcp_registry:{}", name),
             DiscoverySource::ApisGuru { api_name } => format!("apis:{}", api_name),
             DiscoverySource::WebSearch { url } => format!("web:{}", url),
             DiscoverySource::Manual { user } => format!("manual:{}", user),
+            DiscoverySource::OpenApi { url } => format!("openapi:{}", url),
+            DiscoverySource::HtmlDocs { url } => format!("htmldocs:{}", url),
+            DiscoverySource::Mcp { endpoint } => format!("mcp:{}", endpoint),
             DiscoverySource::LocalOverride { path } => format!("override:{}", path),
             DiscoverySource::LocalConfig => "local_config".to_string(),
         }

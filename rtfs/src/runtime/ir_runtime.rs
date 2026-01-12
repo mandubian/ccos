@@ -142,30 +142,35 @@ impl IrRuntime {
 
     /// Minimal converter from IR types to AST TypeExpr for runtime validation
     fn ir_to_type_expr(ir: &crate::ir::core::IrType) -> crate::ast::TypeExpr {
-        use crate::ast::{PrimitiveType, TypeExpr};
+        use crate::ast::{MapTypeEntry, ParamType, PrimitiveType, TypeExpr};
         use crate::ir::core::IrType as IT;
         match ir {
             IT::Int => TypeExpr::Primitive(PrimitiveType::Int),
             IT::Float => TypeExpr::Primitive(PrimitiveType::Float),
-            IT::String => TypeExpr::Primitive(PrimitiveType::String),
             IT::Bool => TypeExpr::Primitive(PrimitiveType::Bool),
+            IT::String => TypeExpr::Primitive(PrimitiveType::String),
             IT::Nil => TypeExpr::Primitive(PrimitiveType::Nil),
-            IT::Keyword => TypeExpr::Primitive(PrimitiveType::Keyword),
             IT::Symbol => TypeExpr::Primitive(PrimitiveType::Symbol),
+            IT::Keyword => TypeExpr::Primitive(PrimitiveType::Keyword),
             IT::Any => TypeExpr::Any,
             IT::Never => TypeExpr::Never,
-            IT::Vector(elem) => TypeExpr::Vector(Box::new(Self::ir_to_type_expr(elem))),
-            IT::List(elem) => {
-                // Map IR List to Vector type for validation purposes
-                TypeExpr::Vector(Box::new(Self::ir_to_type_expr(elem)))
-            }
+            IT::Vector(t) | IT::List(t) => TypeExpr::Vector(Box::new(Self::ir_to_type_expr(t))),
             IT::Tuple(types) => {
                 TypeExpr::Tuple(types.iter().map(|t| Self::ir_to_type_expr(t)).collect())
             }
-            IT::Map { .. } => {
-                // Simplify: treat as Any for now; extend if needed
-                TypeExpr::Any
-            }
+            IT::Map { entries, wildcard } => TypeExpr::Map {
+                entries: entries
+                    .iter()
+                    .map(|e| MapTypeEntry {
+                        key: e.key.clone(),
+                        value_type: Box::new(Self::ir_to_type_expr(&e.value_type)),
+                        optional: e.optional,
+                    })
+                    .collect(),
+                wildcard: wildcard
+                    .as_ref()
+                    .map(|w| Box::new(Self::ir_to_type_expr(w.as_ref()))),
+            },
             IT::Function {
                 param_types,
                 variadic_param_type,
@@ -173,7 +178,7 @@ impl IrRuntime {
             } => TypeExpr::Function {
                 param_types: param_types
                     .iter()
-                    .map(|t| crate::ast::ParamType::Simple(Box::new(Self::ir_to_type_expr(t))))
+                    .map(|t| ParamType::Simple(Box::new(Self::ir_to_type_expr(t))))
                     .collect(),
                 variadic_param_type: variadic_param_type
                     .as_ref()
@@ -190,8 +195,31 @@ impl IrRuntime {
             IT::LiteralValue(lit) => TypeExpr::Literal(lit.clone()),
             IT::TypeRef(name) => TypeExpr::Alias(crate::ast::Symbol(name.clone())),
             IT::TypeVar(_) => TypeExpr::Any,
-            IT::ParametricMap { .. } => TypeExpr::Any,
+            IT::ParametricMap {
+                key_type,
+                value_type,
+            } => TypeExpr::ParametricMap {
+                key_type: Box::new(Self::ir_to_type_expr(key_type.as_ref())),
+                value_type: Box::new(Self::ir_to_type_expr(value_type.as_ref())),
+            },
         }
+    }
+
+    fn validate_value_type(
+        &self,
+        value: &Value,
+        expected: &crate::ir::core::IrType,
+        context: &str,
+    ) -> Result<(), RuntimeError> {
+        let texpr = Self::ir_to_type_expr(expected);
+        self.type_validator
+            .validate_with_config(
+                value,
+                &texpr,
+                &self.type_config,
+                &VerificationContext::default(),
+            )
+            .map_err(|e| RuntimeError::TypeValidationError(format!("{}: {}", context, e)))
     }
 
     /// Executes a program by running its top-level forms.
@@ -294,9 +322,15 @@ impl IrRuntime {
                 Ok(ExecutionOutcome::Complete(val))
             }
             IrNode::VariableDef {
-                name, init_expr, ..
+                name,
+                type_annotation,
+                init_expr,
+                ..
             } => match self.execute_node(init_expr, env, false, module_registry)? {
                 ExecutionOutcome::Complete(value_to_assign) => {
+                    if let Some(t) = type_annotation {
+                        self.validate_value_type(&value_to_assign, t, &format!("def {}", name))?;
+                    }
                     env.define(name.clone(), value_to_assign);
                     Ok(ExecutionOutcome::Complete(Value::Nil))
                 }
@@ -489,15 +523,23 @@ impl IrRuntime {
                                 name.clone(),
                                 Value::FunctionPlaceholder(placeholder_cell.clone()),
                             );
-                            placeholders.push((name.clone(), &binding.init_expr, placeholder_cell));
+                            placeholders.push((
+                                name.clone(),
+                                &binding.init_expr,
+                                placeholder_cell,
+                                binding.type_annotation.as_ref(),
+                            ));
                         }
                     }
                 }
                 // Second pass: evaluate all function bindings and update placeholders
-                for (name, lambda_node, placeholder_cell) in &placeholders {
+                for (name, lambda_node, placeholder_cell, type_annotation) in &placeholders {
                     match self.execute_node(lambda_node, env, false, module_registry)? {
                         ExecutionOutcome::Complete(value) => {
                             if matches!(value, Value::Function(_)) {
+                                if let Some(t) = type_annotation {
+                                    self.validate_value_type(&value, t, &format!("let {}", name))?;
+                                }
                                 let mut guard = placeholder_cell.write().map_err(|e| {
                                     RuntimeError::InternalError(format!("RwLock poisoned: {}", e))
                                 })?;
@@ -526,7 +568,7 @@ impl IrRuntime {
                 for binding in bindings {
                     match &binding.pattern {
                         IrNode::VariableBinding { name, .. } => {
-                            if !placeholders.iter().any(|(n, _, _)| n == name) {
+                            if !placeholders.iter().any(|(n, _, _, _)| n == name) {
                                 match self.execute_node(
                                     &binding.init_expr,
                                     env,
@@ -534,6 +576,13 @@ impl IrRuntime {
                                     module_registry,
                                 )? {
                                     ExecutionOutcome::Complete(value) => {
+                                        if let Some(t) = &binding.type_annotation {
+                                            self.validate_value_type(
+                                                &value,
+                                                t,
+                                                &format!("let {}", name),
+                                            )?;
+                                        }
                                         env.define(name.clone(), value)
                                     }
                                     ExecutionOutcome::RequiresHost(host_call) => {
@@ -558,6 +607,9 @@ impl IrRuntime {
                                 module_registry,
                             )? {
                                 ExecutionOutcome::Complete(value) => {
+                                    if let Some(t) = &binding.type_annotation {
+                                        self.validate_value_type(&value, t, "let destructure")?;
+                                    }
                                     self.execute_destructure(
                                         pattern,
                                         &value,
@@ -1854,29 +1906,13 @@ impl IrRuntime {
             // Required params
             for i in 0..fixed_arity {
                 if let Some(Some(ir_t)) = ir_func.param_type_annotations.get(i) {
-                    let texpr = Self::ir_to_type_expr(ir_t);
-                    self.type_validator
-                        .validate_with_config(
-                            &args[i],
-                            &texpr,
-                            &self.type_config,
-                            &VerificationContext::default(),
-                        )
-                        .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))?;
+                    self.validate_value_type(&args[i], ir_t, &format!("param {}", param_names[i]))?;
                 }
             }
             // Variadic items
             if let Some(var_t) = &ir_func.variadic_param_type {
-                let texpr = Self::ir_to_type_expr(var_t);
                 for i in fixed_arity..args.len() {
-                    self.type_validator
-                        .validate_with_config(
-                            &args[i],
-                            &texpr,
-                            &self.type_config,
-                            &VerificationContext::default(),
-                        )
-                        .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))?;
+                    self.validate_value_type(&args[i], var_t, &format!("variadic param item {}", i - fixed_arity))?;
                 }
             }
         }
@@ -1935,6 +1971,8 @@ impl IrRuntime {
             env: IrEnvironment,
             // The current sequence to execute; we wrap the lambda body as a Seq
             states: Vec<EvalState>,
+            // The expected return type of this function frame
+            return_type: Option<crate::ir::core::IrType>,
         }
 
         let mut call_stack: Vec<CallFrame> = Vec::new();
@@ -1955,6 +1993,7 @@ impl IrRuntime {
         call_stack.push(CallFrame {
             env: initial_env,
             states: initial_states,
+            return_type: ir_func.return_type.clone(),
         });
 
         // Main trampoline loop
@@ -1967,16 +2006,8 @@ impl IrRuntime {
                     // Pop frame, keep last value for parent
                     let result = value_stack.pop().unwrap_or(Value::Nil);
                     // Enforce return type at function boundary if annotated
-                    if let Some(ir_ret) = &ir_func.return_type {
-                        let texpr = Self::ir_to_type_expr(ir_ret);
-                        self.type_validator
-                            .validate_with_config(
-                                &result,
-                                &texpr,
-                                &self.type_config,
-                                &VerificationContext::default(),
-                            )
-                            .map_err(|e| RuntimeError::TypeValidationError(e.to_string()))?;
+                    if let Some(ir_ret) = &frame.return_type {
+                        self.validate_value_type(&result, ir_ret, "fn return")?;
                     }
                     call_stack.pop();
                     if let Some(_parent) = call_stack.last_mut() {
@@ -2416,12 +2447,14 @@ impl IrRuntime {
                                         *frame = CallFrame {
                                             env: new_env,
                                             states,
+                                            return_type: next_ir.return_type.clone(),
                                         };
                                     } else {
                                         // Regular call: push new frame
                                         call_stack.push(CallFrame {
                                             env: new_env,
                                             states,
+                                            return_type: next_ir.return_type.clone(),
                                         });
                                     }
                                 }

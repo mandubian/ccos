@@ -12,9 +12,10 @@ use crate::capability_marketplace::types::CapabilityManifest;
 use crate::secrets::SecretStore;
 use crate::synthesis::core::schema_serializer::type_expr_to_rtfs_compact;
 use crate::synthesis::introspection::api_introspector::{
-    APIIntrospectionResult, APIIntrospector, DiscoveredEndpoint,
+    APIIntrospectionResult, APIIntrospector, AuthRequirements, DiscoveredEndpoint,
 };
 use crate::utils::fs::get_workspace_root;
+use rtfs::ast::TypeExpr;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -32,6 +33,8 @@ pub struct IntrospectionResult {
     pub server_name: String,
     /// API introspection result (if OpenAPI)
     pub api_result: Option<APIIntrospectionResult>,
+    /// Browser discovery result (if Browser)
+    pub browser_result: Option<crate::ops::browser_discovery::BrowserDiscoveryResult>,
     /// Discovered manifests (for MCP)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manifests: Vec<CapabilityManifest>,
@@ -49,6 +52,7 @@ pub enum IntrospectionSource {
     Mcp,
     McpStdio,
     HtmlDocs,
+    Browser,
     Unknown,
 }
 
@@ -68,6 +72,7 @@ pub struct IntrospectionService {
     introspector: APIIntrospector,
     mcp_discovery: Option<Arc<crate::mcp::core::MCPDiscoveryService>>,
     llm_discovery: Option<Arc<crate::discovery::llm_discovery::LlmDiscoveryService>>,
+    browser_discovery: Option<Arc<crate::ops::browser_discovery::BrowserDiscoveryService>>,
     approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
 }
 
@@ -77,6 +82,7 @@ impl Default for IntrospectionService {
             introspector: APIIntrospector::new(),
             mcp_discovery: None,
             llm_discovery: None,
+            browser_discovery: None,
             approval_queue: None,
         }
     }
@@ -87,12 +93,14 @@ impl IntrospectionService {
     pub fn new(
         mcp_discovery: Arc<crate::mcp::core::MCPDiscoveryService>,
         llm_discovery: Arc<crate::discovery::llm_discovery::LlmDiscoveryService>,
+        browser_discovery: Arc<crate::ops::browser_discovery::BrowserDiscoveryService>,
         approval_queue: UnifiedApprovalQueue<FileApprovalStorage>,
     ) -> Self {
         Self {
             introspector: APIIntrospector::new(),
             mcp_discovery: Some(mcp_discovery),
             llm_discovery: Some(llm_discovery),
+            browser_discovery: Some(browser_discovery),
             approval_queue: Some(approval_queue),
         }
     }
@@ -118,6 +126,7 @@ impl IntrospectionService {
                 source: IntrospectionSource::OpenApi,
                 server_name: server_name.to_string(),
                 api_result: Some(api_result),
+                browser_result: None,
                 manifests: Vec::new(),
                 approval_id: None,
                 error: None,
@@ -127,6 +136,7 @@ impl IntrospectionService {
                 source: IntrospectionSource::OpenApi,
                 server_name: server_name.to_string(),
                 api_result: None,
+                browser_result: None,
                 manifests: Vec::new(),
                 approval_id: None,
                 error: Some(e.to_string()),
@@ -178,6 +188,7 @@ impl IntrospectionService {
                 source: IntrospectionSource::Mcp,
                 server_name,
                 api_result: None,
+                browser_result: None,
                 manifests,
                 approval_id,
                 error: None,
@@ -187,6 +198,57 @@ impl IntrospectionService {
                 source: IntrospectionSource::Mcp,
                 server_name,
                 api_result: None,
+                browser_result: None,
+                manifests: Vec::new(),
+                approval_id: None,
+                error: Some(e.to_string()),
+            }),
+        }
+    }
+
+    /// Introspect a URL using browser discovery
+    pub async fn introspect_browser(
+        &self,
+        url: &str,
+        server_name: &str,
+    ) -> RuntimeResult<IntrospectionResult> {
+        let browser = self.browser_discovery.as_ref().ok_or_else(|| {
+            RuntimeError::Generic("Browser discovery service not configured".into())
+        })?;
+
+        eprintln!("🔍 Introspecting using browser: {}", url);
+
+        let extraction_result = if let Some(llm) = &self.llm_discovery {
+            browser.extract_with_llm_analysis(url, llm).await
+        } else {
+            browser.extract_from_url(url).await
+        };
+
+        match extraction_result {
+            Ok(browser_result) => {
+                // If we found an OpenAPI spec, we can prefer that
+                if let Some(spec_url) = &browser_result.spec_url {
+                    eprintln!("✅ Discovered OpenAPI spec via browser: {}", spec_url);
+                    return self.introspect_openapi(spec_url, server_name).await;
+                }
+
+                Ok(IntrospectionResult {
+                    success: browser_result.success,
+                    source: IntrospectionSource::Browser,
+                    server_name: server_name.to_string(),
+                    api_result: None,
+                    browser_result: Some(browser_result),
+                    manifests: Vec::new(),
+                    approval_id: None,
+                    error: None,
+                })
+            }
+            Err(e) => Ok(IntrospectionResult {
+                success: false,
+                source: IntrospectionSource::Browser,
+                server_name: server_name.to_string(),
+                api_result: None,
+                browser_result: None,
                 manifests: Vec::new(),
                 approval_id: None,
                 error: Some(e.to_string()),
@@ -201,19 +263,13 @@ impl IntrospectionService {
         output_dir: &Path,
         spec_url: &str,
     ) -> RuntimeResult<RtfsGenerationResult> {
-        let api_result = result
-            .api_result
-            .as_ref()
-            .ok_or_else(|| RuntimeError::Generic("No API result to generate files from".into()))?;
-
         // Create output directory
         std::fs::create_dir_all(output_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create output directory: {}", e))
         })?;
 
-        let server_id = sanitize_filename(&result.server_name);
-        let module_name = api_result
-            .api_title
+        let module_name = result
+            .server_name
             .to_lowercase()
             .replace(" ", "_")
             .replace("-", "_")
@@ -223,35 +279,78 @@ impl IntrospectionService {
 
         let mut capability_files = Vec::new();
 
-        // Group endpoints by tag (first path segment)
-        let mut endpoints_by_tag: std::collections::HashMap<String, Vec<&DiscoveredEndpoint>> =
-            std::collections::HashMap::new();
+        match result.source {
+            IntrospectionSource::OpenApi => {
+                if let Some(api_result) = &result.api_result {
+                    // Group endpoints by tag (first path segment)
+                    let mut endpoints_by_tag: std::collections::HashMap<
+                        String,
+                        Vec<&DiscoveredEndpoint>,
+                    > = std::collections::HashMap::new();
 
-        for ep in &api_result.endpoints {
-            let tag = ep
-                .path
-                .trim_start_matches('/')
-                .split('/')
-                .next()
-                .unwrap_or("general")
-                .to_string();
-            endpoints_by_tag.entry(tag).or_default().push(ep);
-        }
+                    for ep in &api_result.endpoints {
+                        let tag = ep
+                            .path
+                            .trim_start_matches('/')
+                            .split('/')
+                            .next()
+                            .unwrap_or("general")
+                            .to_string();
+                        endpoints_by_tag.entry(tag).or_default().push(ep);
+                    }
 
-        // Generate RTFS files per tag
-        for (tag, endpoints) in &endpoints_by_tag {
-            let tag_dir = output_dir.join("openapi").join(tag);
-            std::fs::create_dir_all(&tag_dir).ok();
+                    // Generate RTFS files per tag
+                    for (tag, endpoints) in &endpoints_by_tag {
+                        let tag_dir = output_dir.join("openapi").join(tag);
+                        std::fs::create_dir_all(&tag_dir).ok();
 
-            for ep in endpoints {
-                let cap_name = ep.endpoint_id.to_lowercase();
-                let rtfs_content =
-                    self.generate_rtfs_capability(ep, api_result, &module_name, spec_url);
+                        for ep in endpoints {
+                            let cap_name = ep.endpoint_id.to_lowercase();
+                            let rtfs_content = self.generate_rtfs_capability_from_openapi(
+                                ep,
+                                api_result,
+                                &module_name,
+                                spec_url,
+                            );
 
-                let cap_file = tag_dir.join(format!("{}.rtfs", cap_name));
-                if std::fs::write(&cap_file, &rtfs_content).is_ok() {
-                    capability_files.push(format!("openapi/{}/{}.rtfs", tag, cap_name));
+                            let cap_file = tag_dir.join(format!("{}.rtfs", cap_name));
+                            if std::fs::write(&cap_file, &rtfs_content).is_ok() {
+                                capability_files.push(format!("openapi/{}/{}.rtfs", tag, cap_name));
+                            }
+                        }
+                    }
                 }
+            }
+            IntrospectionSource::Browser => {
+                if let Some(browser_result) = &result.browser_result {
+                    let openapi_dir = output_dir.join("openapi");
+                    let _ = std::fs::create_dir_all(&openapi_dir);
+
+                    for ep in &browser_result.discovered_endpoints {
+                        let cap_name = ep
+                            .path
+                            .trim_start_matches('/')
+                            .replace('/', "_")
+                            .to_lowercase();
+                        if cap_name.is_empty() {
+                            continue;
+                        }
+
+                        let rtfs_content = self.generate_rtfs_capability_from_browser(
+                            ep,
+                            browser_result,
+                            &module_name,
+                            spec_url,
+                        );
+                        let cap_file = openapi_dir.join(format!("{}.rtfs", cap_name));
+                        if std::fs::write(&cap_file, &rtfs_content).is_ok() {
+                            capability_files.push(format!("openapi/{}.rtfs", cap_name));
+                        }
+                    }
+                }
+            }
+            _ => {
+                // For other types, we might not need to generate files here (already handled or not supported)
             }
         }
 
@@ -262,11 +361,95 @@ impl IntrospectionService {
             .collect::<Vec<_>>()
             .join(" ");
 
-        let server_rtfs = format!(
+        let server_rtfs = self.generate_server_manifest(result, spec_url, &capability_files);
+
+        let server_rtfs_path = output_dir.join("server.rtfs");
+        std::fs::write(&server_rtfs_path, &server_rtfs)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write server.rtfs: {}", e)))?;
+
+        Ok(RtfsGenerationResult {
+            output_dir: output_dir.to_path_buf(),
+            capability_files,
+            server_json_path: server_rtfs_path,
+        })
+    }
+
+    /// Generate the server.rtfs manifest content
+    fn generate_server_manifest(
+        &self,
+        result: &IntrospectionResult,
+        spec_url: &str,
+        capability_files: &[String],
+    ) -> String {
+        let files_rtfs = capability_files
+            .iter()
+            .map(|f| format!("\"{}\"", f))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let (source_type, endpoints_count, base_url, description, auth_env_var) =
+            match result.source {
+                IntrospectionSource::OpenApi => {
+                    let api = result.api_result.as_ref().unwrap();
+                    let module_name = result
+                        .server_name
+                        .to_lowercase()
+                        .replace(" ", "_")
+                        .replace("-", "_");
+                    (
+                        "OpenAPI",
+                        api.endpoints.len(),
+                        api.base_url.clone(),
+                        format!("{} v{}", api.api_title, api.api_version),
+                        if api.auth_requirements.auth_type.is_empty()
+                            || api.auth_requirements.auth_type == "none"
+                        {
+                            "nil".into()
+                        } else {
+                            format!("\"{}\"", format!("{}_API_KEY", module_name.to_uppercase()))
+                        },
+                    )
+                }
+                IntrospectionSource::Browser => {
+                    let browser = result.browser_result.as_ref().unwrap();
+                    let auth_env = if let Some(auth) = &browser.auth {
+                        if let Some(env_var) = &auth.env_var {
+                            format!("\"{}\"", env_var)
+                        } else {
+                            "nil".into()
+                        }
+                    } else {
+                        "nil".into()
+                    };
+
+                    let base_url = browser
+                        .api_base_url
+                        .clone()
+                        .unwrap_or_else(|| browser.source_url.clone());
+
+                    (
+                        "Browser",
+                        browser.discovered_endpoints.len(),
+                        base_url,
+                        format!("Discovered via browser from {}", browser.source_url),
+                        auth_env,
+                    )
+                }
+                IntrospectionSource::Mcp | IntrospectionSource::McpStdio => (
+                    "MCP",
+                    result.manifests.len(),
+                    result.server_name.clone(),
+                    format!("MCP server: {}", result.server_name),
+                    "nil".into(),
+                ),
+                _ => ("Unknown", 0, "".into(), "".into(), "nil".into()),
+            };
+
+        format!(
             r#";; Server Manifest: {}
 (server
   :source {{
-    :type "OpenAPI"
+    :type "{}"
     :spec_url "{}"
   }}
   :server_info {{
@@ -276,77 +459,152 @@ impl IntrospectionService {
     :auth_env_var {}
   }}
   :api_info {{
-    :title "{}"
-    :version "{}"
-    :base_url "{}"
     :endpoints_count {}
+    :base_url "{}"
   }}
   :capability_files [{}]
 )
 "#,
             result.server_name,
+            source_type,
             spec_url,
             result.server_name,
-            api_result.base_url,
-            format!("{} v{}", api_result.api_title, api_result.api_version),
-            if api_result.auth_requirements.auth_type.is_empty() {
-                "nil".to_string()
-            } else {
-                format!("\"{}\"", format!("{}_API_KEY", module_name.to_uppercase()))
-            },
-            api_result.api_title,
-            api_result.api_version,
-            api_result.base_url,
-            api_result.endpoints.len(),
+            base_url,
+            description,
+            auth_env_var,
+            endpoints_count,
+            base_url,
             files_rtfs
-        );
-
-        let server_rtfs_path = output_dir.join("server.rtfs");
-        std::fs::write(&server_rtfs_path, &server_rtfs)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to write server.rtfs: {}", e)))?;
-
-        Ok(RtfsGenerationResult {
-            output_dir: output_dir.to_path_buf(),
-            capability_files,
-            server_json_path: server_rtfs_path, // Returning path to rtfs in legacy field name for now
-        })
+        )
     }
 
-    /// Generate RTFS content for a single endpoint
-    fn generate_rtfs_capability(
+    /// Generate RTFS content for an OpenAPI endpoint
+    fn generate_rtfs_capability_from_openapi(
         &self,
         ep: &DiscoveredEndpoint,
         api_result: &APIIntrospectionResult,
         module_name: &str,
         spec_url: &str,
     ) -> String {
-        let cap_name = ep.endpoint_id.to_lowercase();
+        self.generate_rtfs_capability(
+            &ep.endpoint_id,
+            &ep.name,
+            &ep.description,
+            &api_result.api_title,
+            &api_result.api_version,
+            &api_result.base_url,
+            &ep.method,
+            &ep.path,
+            ep.requires_auth,
+            &api_result.auth_requirements,
+            module_name,
+            "openapi_introspection",
+            spec_url,
+            ep.input_schema.as_ref(),
+            ep.output_schema.as_ref(),
+        )
+    }
+
+    /// Generate RTFS content for a browser-discovered endpoint
+    fn generate_rtfs_capability_from_browser(
+        &self,
+        ep: &crate::ops::browser_discovery::DiscoveredEndpoint,
+        browser_result: &crate::ops::browser_discovery::BrowserDiscoveryResult,
+        module_name: &str,
+        spec_url: &str,
+    ) -> String {
+        let auth_reqs = if let Some(auth) = &browser_result.auth {
+            AuthRequirements {
+                auth_type: auth.auth_type.to_string(),
+                auth_location: auth
+                    .key_location
+                    .clone()
+                    .unwrap_or_else(|| "header".to_string()),
+                auth_param_name: auth
+                    .header_name
+                    .clone()
+                    .unwrap_or_else(|| "Authorization".to_string()),
+                required: auth.required,
+                env_var_name: auth.env_var.clone(),
+            }
+        } else {
+            AuthRequirements {
+                auth_type: "none".into(),
+                auth_location: "none".into(),
+                auth_param_name: "none".into(),
+                required: false,
+                env_var_name: None,
+            }
+        };
+
+        self.generate_rtfs_capability(
+            &ep.path.trim_start_matches('/').replace('/', "_"),
+            &format!("{} {}", ep.method, ep.path),
+            ep.description.as_deref().unwrap_or(""),
+            &browser_result
+                .page_title
+                .clone()
+                .unwrap_or_else(|| "Browser Discovered API".into()),
+            "1.0.0",
+            browser_result
+                .api_base_url
+                .as_deref()
+                .unwrap_or(&browser_result.source_url),
+            &ep.method,
+            &ep.path,
+            false,
+            &auth_reqs,
+            module_name,
+            "browser_discovery",
+            spec_url,
+            None,
+            None,
+        )
+    }
+
+    /// Generic RTFS capability generation
+    fn generate_rtfs_capability(
+        &self,
+        endpoint_id: &str,
+        name: &str,
+        description: &str,
+        api_title: &str,
+        api_version: &str,
+        base_url: &str,
+        method: &str,
+        path: &str,
+        requires_auth: bool,
+        auth: &AuthRequirements,
+        module_name: &str,
+        discovery_method: &str,
+        source_url: &str,
+        input_schema: Option<&TypeExpr>,
+        output_schema: Option<&TypeExpr>,
+    ) -> String {
+        let cap_name = endpoint_id.to_lowercase();
         let cap_id = format!("{}.{}", module_name, cap_name);
 
         let mut rtfs = String::new();
 
         // Header comment
-        rtfs.push_str(&format!(";; Capability: {}\n", ep.name));
-        rtfs.push_str(&format!(";; {} API\n", api_result.api_title));
-        rtfs.push_str(&format!(";; Base URL: {}\n", api_result.base_url));
-        rtfs.push_str(&format!(";; Endpoint: {} {}\n\n", ep.method, ep.path));
+        rtfs.push_str(&format!(";; Capability: {}\n", name));
+        rtfs.push_str(&format!(";; {} API\n", api_title));
+        rtfs.push_str(&format!(";; Base URL: {}\n", base_url));
+        rtfs.push_str(&format!(";; Endpoint: {} {}\n\n", method, path));
 
         // Capability definition
         rtfs.push_str(&format!("(capability \"{}\"\n", cap_id));
-        rtfs.push_str(&format!("  :name \"{}\"\n", escape_string(&ep.name)));
-        rtfs.push_str(&format!("  :version \"{}\"\n", api_result.api_version));
+        rtfs.push_str(&format!("  :name \"{}\"\n", escape_string(name)));
+        rtfs.push_str(&format!("  :version \"{}\"\n", api_version));
         rtfs.push_str(&format!(
             "  :description \"{}\"\n",
-            escape_string(&ep.description)
+            escape_string(description)
         ));
-        rtfs.push_str(&format!(
-            "  :provider \"{}\"\n",
-            escape_string(&api_result.api_title)
-        ));
+        rtfs.push_str(&format!("  :provider \"{}\"\n", escape_string(api_title)));
         rtfs.push_str("  :permissions [:network.http]\n");
 
         // Effects based on method
-        let effects = match ep.method.as_str() {
+        let effects = match method.to_uppercase().as_str() {
             "GET" => "[:network_request]",
             "POST" | "PUT" | "PATCH" => "[:network_request :state_write]",
             "DELETE" => "[:network_request :state_delete]",
@@ -356,15 +614,13 @@ impl IntrospectionService {
 
         // Metadata block
         rtfs.push_str("  :metadata {\n");
-        rtfs.push_str("    :openapi {\n");
-        rtfs.push_str(&format!("      :base_url \"{}\"\n", api_result.base_url));
-        rtfs.push_str(&format!("      :endpoint_method \"{}\"\n", ep.method));
-        rtfs.push_str(&format!("      :endpoint_path \"{}\"\n", ep.path));
+        rtfs.push_str("    :endpoint {\n");
+        rtfs.push_str(&format!("      :base_url \"{}\"\n", base_url));
+        rtfs.push_str(&format!("      :method \"{}\"\n", method));
+        rtfs.push_str(&format!("      :path \"{}\"\n", path));
 
-        // Auth info - only include if auth is actually required (not "none")
-        let auth = &api_result.auth_requirements;
-        let needs_auth =
-            ep.requires_auth || (!auth.auth_type.is_empty() && auth.auth_type != "none");
+        // Auth info
+        let needs_auth = requires_auth || (!auth.auth_type.is_empty() && auth.auth_type != "none");
         if needs_auth {
             rtfs.push_str("      :auth {\n");
             rtfs.push_str(&format!(
@@ -384,35 +640,46 @@ impl IntrospectionService {
                 }
             ));
             rtfs.push_str(&format!(
-                "        :env_var \"{}_API_KEY\"\n",
-                module_name.to_uppercase()
+                "        :param_name \"{}\"\n",
+                if auth.auth_param_name.is_empty() || auth.auth_param_name == "none" {
+                    "Authorization"
+                } else {
+                    &auth.auth_param_name
+                }
             ));
+
+            let env_var = if let Some(e) = &auth.env_var_name {
+                e.clone()
+            } else {
+                format!("{}_API_KEY", module_name.to_uppercase())
+            };
+
+            rtfs.push_str(&format!("        :env_var \"{}\"\n", env_var));
             rtfs.push_str("      }\n");
         }
         rtfs.push_str("    }\n");
 
         rtfs.push_str("    :discovery {\n");
-        rtfs.push_str("      :method \"openapi_introspection\"\n");
-        rtfs.push_str(&format!("      :source_url \"{}\"\n", spec_url));
+        rtfs.push_str(&format!("      :method \"{}\"\n", discovery_method));
+        rtfs.push_str(&format!("      :source_url \"{}\"\n", source_url));
         rtfs.push_str("    }\n");
         rtfs.push_str("  }\n");
 
-        // Input schema - use actual schema or fallback to :any
-        let input_schema_str = match &ep.input_schema {
+        // Input schema
+        let input_schema_str = match input_schema {
             Some(schema) => type_expr_to_rtfs_compact(schema),
             None => ":any".to_string(),
         };
         rtfs.push_str(&format!("  :input-schema {}\n", input_schema_str));
 
-        // Output schema - use actual schema or fallback to :any
-        let output_schema_str = match &ep.output_schema {
+        // Output schema
+        let output_schema_str = match output_schema {
             Some(schema) => type_expr_to_rtfs_compact(schema),
             None => ":any".to_string(),
         };
         rtfs.push_str(&format!("  :output-schema {}\n", output_schema_str));
 
         rtfs.push_str(")\n");
-
         rtfs
     }
 
@@ -425,51 +692,100 @@ impl IntrospectionService {
         capability_files: Option<Vec<String>>,
         expiry_hours: i64,
     ) -> RuntimeResult<String> {
-        let api_result = result
-            .api_result
-            .as_ref()
-            .ok_or_else(|| RuntimeError::Generic("No API result to create approval for".into()))?;
-
-        let server_info = ServerInfo {
-            name: result.server_name.clone(),
-            endpoint: api_result.base_url.clone(),
-            description: Some(format!(
-                "{} - {} endpoints discovered from OpenAPI spec",
-                api_result.api_title,
-                api_result.endpoints.len()
-            )),
-            auth_env_var: if api_result.auth_requirements.auth_type.is_empty()
-                || api_result.auth_requirements.auth_type == "none"
-            {
-                None
-            } else {
-                let module_name = api_result
-                    .api_title
+        let (endpoint, description, auth_env_var) = match result.source {
+            IntrospectionSource::OpenApi => {
+                let api_result = result.api_result.as_ref().ok_or_else(|| {
+                    RuntimeError::Generic("No API result to create approval for".into())
+                })?;
+                let module_name = result
+                    .server_name
                     .to_lowercase()
                     .replace(" ", "_")
                     .replace("-", "_");
-                Some(format!("{}_API_KEY", module_name.to_uppercase()))
-            },
+                (
+                    api_result.base_url.clone(),
+                    format!(
+                        "{} - {} endpoints discovered from OpenAPI spec",
+                        api_result.api_title,
+                        api_result.endpoints.len()
+                    ),
+                    if api_result.auth_requirements.auth_type.is_empty()
+                        || api_result.auth_requirements.auth_type == "none"
+                    {
+                        None
+                    } else {
+                        Some(format!("{}_API_KEY", module_name.to_uppercase()))
+                    },
+                )
+            }
+            IntrospectionSource::Browser => {
+                let browser_result = result.browser_result.as_ref().ok_or_else(|| {
+                    RuntimeError::Generic("No browser result to create approval for".into())
+                })?;
+                (
+                    browser_result.source_url.clone(),
+                    format!(
+                        "Discovered {} endpoints via browser from {}",
+                        browser_result.discovered_endpoints.len(),
+                        browser_result.source_url
+                    ),
+                    None,
+                )
+            }
+            IntrospectionSource::Mcp | IntrospectionSource::McpStdio => (
+                result.server_name.clone(),
+                format!("MCP server: {}", result.server_name),
+                None,
+            ),
+            _ => {
+                return Err(RuntimeError::Generic(format!(
+                    "Unsupported introspection source for approval: {:?}",
+                    result.source
+                )))
+            }
+        };
+
+        let server_info = ServerInfo {
+            name: result.server_name.clone(),
+            endpoint,
+            description: Some(description.clone()),
+            auth_env_var,
             capabilities_path: None,
             alternative_endpoints: vec![],
             capability_files,
         };
 
+        let discovery_source = match result.source {
+            IntrospectionSource::OpenApi => DiscoverySource::OpenApi {
+                url: spec_url.to_string(),
+            },
+            IntrospectionSource::Browser => DiscoverySource::HtmlDocs {
+                url: spec_url.to_string(), // Using spec_url as the source URL here
+            },
+            IntrospectionSource::Mcp | IntrospectionSource::McpStdio => DiscoverySource::Mcp {
+                endpoint: result.server_name.clone(),
+            },
+            _ => DiscoverySource::Manual {
+                user: "agent".to_string(),
+            },
+        };
+
         let approval_id = approval_queue
             .add_server_discovery(
-                DiscoverySource::WebSearch {
-                    url: spec_url.to_string(),
-                },
+                discovery_source,
                 server_info.clone(),
-                vec!["openapi".to_string()],
+                vec!["dynamic".to_string()],
                 RiskAssessment {
-                    level: RiskLevel::Low,
-                    reasons: vec!["OpenAPI spec provides structured API definition".to_string()],
+                    level: RiskLevel::Medium,
+                    reasons: vec![description],
                 },
-                Some(format!("Introspected from OpenAPI spec: {}", spec_url)),
+                Some("Agent requested introspection".to_string()),
                 expiry_hours,
             )
-            .await?;
+            .await
+            .map_err(|e| {
+                RuntimeError::Generic(format!("Failed to create approval request: {}", e))
+            })?;
 
         // If auth is required, check if secret exists and queue if missing
         if let Some(auth_var) = &server_info.auth_env_var {
