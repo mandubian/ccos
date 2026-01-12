@@ -12,8 +12,8 @@ use ratatui::{
 
 use super::state::{
     ActivePanel, AppState, ApprovalsTab, AuthStatus, CapabilityCategory, DiscoverPopup,
-    DiscoveryEntry, DiscoverySearchResult, ExecutionMode, NodeStatus, ServerStatus,
-    TraceEventType, View,
+    DiscoveryEntry, DiscoverySearchResult, ExecutionMode, NodeStatus, ServerStatus, TraceEventType,
+    View,
 };
 use super::theme;
 
@@ -511,10 +511,7 @@ fn render_approvals_tabs(f: &mut Frame, state: &AppState, area: Rect) {
     let loading_indicator = if state.approvals_loading { " ⟳" } else { "" };
 
     let tabs = Line::from(vec![
-        Span::styled(
-            format!(" [1] Pending ({}) ", pending_count),
-            pending_style,
-        ),
+        Span::styled(format!(" [1] Pending ({}) ", pending_count), pending_style),
         Span::raw("  "),
         Span::styled(
             format!(" [2] Approved ({}) ", approved_count),
@@ -701,9 +698,10 @@ fn render_pending_details(f: &mut Frame, state: &AppState, area: Rect) {
 
     if let Some(ref desc) = server.description {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Description:", Style::default().fg(theme::SUBTEXT0)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "Description:",
+            Style::default().fg(theme::SUBTEXT0),
+        )]));
         lines.push(Line::from(vec![Span::styled(
             format!("  {}", desc),
             Style::default().fg(theme::TEXT),
@@ -712,9 +710,10 @@ fn render_pending_details(f: &mut Frame, state: &AppState, area: Rect) {
 
     if let Some(ref goal) = server.requesting_goal {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Requested for goal:", Style::default().fg(theme::SUBTEXT0)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "Requested for goal:",
+            Style::default().fg(theme::SUBTEXT0),
+        )]));
         lines.push(Line::from(vec![Span::styled(
             format!("  \"{}\"", truncate(goal, 50)),
             Style::default().fg(theme::LAVENDER),
@@ -922,9 +921,10 @@ fn render_approved_details(f: &mut Frame, state: &AppState, area: Rect) {
 
     if let Some(ref desc) = server.description {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Description:", Style::default().fg(theme::SUBTEXT0)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "Description:",
+            Style::default().fg(theme::SUBTEXT0),
+        )]));
         lines.push(Line::from(vec![Span::styled(
             format!("  {}", desc),
             Style::default().fg(theme::TEXT),
@@ -987,7 +987,10 @@ fn render_auth_token_popup(f: &mut Frame, popup: &super::state::AuthTokenPopup) 
 
     // Env var name
     let env_var_line = Line::from(vec![
-        Span::styled("Environment variable: ", Style::default().fg(theme::SUBTEXT0)),
+        Span::styled(
+            "Environment variable: ",
+            Style::default().fg(theme::SUBTEXT0),
+        ),
         Span::styled(&popup.env_var, Style::default().fg(theme::PEACH)),
     ]);
     f.render_widget(Paragraph::new(env_var_line), chunks[1]);
