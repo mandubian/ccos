@@ -1,5 +1,6 @@
 //! Approval queue for discovered servers
 
+use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 use chrono::{DateTime, Utc};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,9 @@ pub struct ServerInfo {
     /// These can be tried during introspection if the primary endpoint fails
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub alternative_endpoints: Vec<String>,
+    /// List of capability files associated with this server
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_files: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -47,6 +51,7 @@ pub enum DiscoverySource {
     WebSearch { url: String },
     Manual { user: String },
     LocalOverride { path: String },
+    LocalConfig,
 }
 
 impl DiscoverySource {
@@ -57,6 +62,7 @@ impl DiscoverySource {
             DiscoverySource::WebSearch { url } => format!("web:{}", url),
             DiscoverySource::Manual { user } => format!("manual:{}", user),
             DiscoverySource::LocalOverride { path } => format!("override:{}", path),
+            DiscoverySource::LocalConfig => "local_config".to_string(),
         }
     }
 }
@@ -74,11 +80,15 @@ pub struct PendingDiscovery {
     pub id: String,
     pub source: DiscoverySource,
     pub server_info: ServerInfo,
-    pub domain_match: Vec<String>,
-    pub risk_assessment: RiskAssessment,
+    pub domain_match: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_assessment: Option<RiskAssessment>,
     pub requested_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub requesting_goal: Option<String>,
+    /// List of capability files (mirrored from server_info for root-level access)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_files: Option<Vec<String>>,
 }
 
 impl HasId for PendingDiscovery {
@@ -105,8 +115,9 @@ pub struct ApprovedDiscovery {
     pub id: String,
     pub source: DiscoverySource,
     pub server_info: ServerInfo,
-    pub domain_match: Vec<String>,
-    pub risk_assessment: RiskAssessment,
+    pub domain_match: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_assessment: Option<RiskAssessment>,
     pub requesting_goal: Option<String>,
 
     pub approved_at: DateTime<Utc>,
@@ -164,8 +175,9 @@ pub struct RejectedDiscovery {
     pub id: String,
     pub source: DiscoverySource,
     pub server_info: ServerInfo,
-    pub domain_match: Vec<String>,
-    pub risk_assessment: RiskAssessment,
+    pub domain_match: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_assessment: Option<RiskAssessment>,
     pub requesting_goal: Option<String>,
 
     pub rejected_at: DateTime<Utc>,
@@ -275,6 +287,10 @@ impl ApprovalQueue {
         self.base_path.join("capabilities/servers/pending")
     }
 
+    pub fn server_dir(&self) -> PathBuf {
+        self.base_path.join("servers")
+    }
+
     fn approved_path(&self) -> PathBuf {
         self.base_path.join("capabilities/servers/approved")
     }
@@ -309,7 +325,128 @@ impl ApprovalQueue {
         Ok(())
     }
 
-    fn load_from_dir<T: for<'a> Deserialize<'a> + HasId>(
+    pub fn load_item_from_file<T: for<'a> Deserialize<'a>>(
+        path: &Path,
+    ) -> RuntimeResult<Option<T>> {
+        if path.extension().map_or(false, |ext| ext == "json") {
+            let content = fs::read_to_string(path).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to read file {}: {}", path.display(), e))
+            })?;
+
+            match serde_json::from_str::<T>(&content) {
+                Ok(item) => Ok(Some(item)),
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to deserialize JSON from {}: {}",
+                        path.display(),
+                        e
+                    );
+                    Ok(None)
+                }
+            }
+        } else if path.extension().map_or(false, |ext| ext == "rtfs") {
+            let content = fs::read_to_string(path).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to read file {}: {}", path.display(), e))
+            })?;
+
+            // Parse RTFS
+            let ast = rtfs::parser::parse(&content).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to parse RTFS {}: {}", path.display(), e))
+            })?;
+
+            if let Some(toplevel) = ast.first() {
+                if let rtfs::ast::TopLevel::Expression(rtfs::ast::Expression::List(l)) = toplevel {
+                    if l.first().map_or(
+                        false,
+                        |e| matches!(e, rtfs::ast::Expression::Symbol(s) if s.0 == "server"),
+                    ) {
+                        // Convert list (server :k v ...) to map {:k v ...}
+                        let mut map = serde_json::Map::new();
+                        let mut iter = l.iter().skip(1);
+                        while let Some(k_expr) = iter.next() {
+                            if let Some(v_expr) = iter.next() {
+                                // Convert Key Expr to String
+                                let key = match k_expr {
+                                    rtfs::ast::Expression::Literal(
+                                        rtfs::ast::Literal::Keyword(k),
+                                    ) => Some(k.0.clone()),
+                                    rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(
+                                        s,
+                                    )) => Some(s.clone()),
+                                    _ => None,
+                                };
+
+                                // Convert Value Expr to JSON
+                                if let Some(k) = key {
+                                    if let Ok(json_val) = Self::ast_expr_to_json(v_expr) {
+                                        map.insert(k, json_val);
+                                    }
+                                }
+                            }
+                        }
+
+                        let final_json = serde_json::Value::Object(map);
+                        match serde_json::from_value::<T>(final_json) {
+                            Ok(item) => return Ok(Some(item)),
+                            Err(e) => {
+                                eprintln!(
+                                    "Warning: Failed to deserialize RTFS object in {}: {}",
+                                    path.display(),
+                                    e
+                                );
+                                return Ok(None);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If strictly invalid structure, log error or just ignore
+            eprintln!(
+                "Warning: Invalid or unrecognized RTFS content in {}",
+                path.display()
+            );
+            Ok(None)
+        } else {
+            Ok(None)
+        }
+    }
+
+    // Helper to convert AST Expression to JSON
+    fn ast_expr_to_json(expr: &rtfs::ast::Expression) -> RuntimeResult<serde_json::Value> {
+        match expr {
+            rtfs::ast::Expression::Literal(lit) => match lit {
+                rtfs::ast::Literal::Integer(i) => Ok(serde_json::Value::Number((*i).into())),
+                rtfs::ast::Literal::Float(f) => serde_json::Number::from_f64(*f)
+                    .map(serde_json::Value::Number)
+                    .ok_or_else(|| RuntimeError::Generic("Invalid float".to_string())),
+                rtfs::ast::Literal::String(s) => Ok(serde_json::Value::String(s.clone())),
+                rtfs::ast::Literal::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
+                rtfs::ast::Literal::Nil => Ok(serde_json::Value::Null),
+                rtfs::ast::Literal::Keyword(k) => Ok(serde_json::Value::String(k.0.clone())),
+                _ => Ok(serde_json::Value::String(format!("{}", lit))),
+            },
+            rtfs::ast::Expression::List(l) | rtfs::ast::Expression::Vector(l) => {
+                let mut arr = Vec::new();
+                for item in l {
+                    arr.push(Self::ast_expr_to_json(item)?);
+                }
+                Ok(serde_json::Value::Array(arr))
+            }
+            rtfs::ast::Expression::Map(m) => {
+                let mut map = serde_json::Map::new();
+                for (k, v) in m {
+                    map.insert(k.to_string(), Self::ast_expr_to_json(v)?);
+                }
+                Ok(serde_json::Value::Object(map))
+            }
+            _ => Err(RuntimeError::Generic(
+                "Unsupported expression type for JSON conversion".to_string(),
+            )),
+        }
+    }
+
+    pub fn load_from_dir<T: for<'a> Deserialize<'a> + HasId>(
         &self,
         dir: &Path,
     ) -> RuntimeResult<Vec<T>> {
@@ -328,34 +465,24 @@ impl ApprovalQueue {
             })?;
             let path = entry.path();
 
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "json") {
-                let content = fs::read_to_string(&path).map_err(|e| {
-                    RuntimeError::Generic(format!("Failed to read file {}: {}", path.display(), e))
-                })?;
-
-                match serde_json::from_str::<T>(&content) {
-                    Ok(item) => items.push(item),
-                    Err(e) => {
-                        // Log warning but continue
-                        eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
-                    }
+            if path.is_file() {
+                if let Ok(Some(item)) = Self::load_item_from_file::<T>(&path) {
+                    items.push(item);
                 }
             } else if path.is_dir() {
-                // Check for server.json or descriptor.json in subdirectory
+                // Check for server.rtfs first, then server.json
+                let server_rtfs = path.join("server.rtfs");
+                if server_rtfs.exists() {
+                    if let Ok(Some(item)) = Self::load_item_from_file::<T>(&server_rtfs) {
+                        items.push(item);
+                        continue;
+                    }
+                }
+
                 let server_json = path.join("server.json");
                 if server_json.exists() {
-                    let content = fs::read_to_string(&server_json).map_err(|e| {
-                        RuntimeError::Generic(format!(
-                            "Failed to read file {}: {}",
-                            server_json.display(),
-                            e
-                        ))
-                    })?;
-                    match serde_json::from_str::<T>(&content) {
-                        Ok(item) => items.push(item),
-                        Err(e) => {
-                            eprintln!("Warning: Failed to parse {}: {}", server_json.display(), e);
-                        }
+                    if let Ok(Some(item)) = Self::load_item_from_file::<T>(&server_json) {
+                        items.push(item);
                     }
                 }
             }
@@ -364,7 +491,7 @@ impl ApprovalQueue {
         Ok(items)
     }
 
-    fn save_to_dir<T: Serialize + HasId + HasName>(
+    pub fn save_to_dir<T: Serialize + HasId + HasName>(
         &self,
         dir: &Path,
         item: &T,
@@ -384,9 +511,44 @@ impl ApprovalQueue {
             })?;
         }
 
-        let file_path = server_dir.join("server.json");
-        let content = serde_json::to_string_pretty(item)
-            .map_err(|e| RuntimeError::Generic(format!("Failed to serialize item: {}", e)))?;
+        // Save as RTFS
+        let file_path = server_dir.join("server.rtfs");
+        let item_json = serde_json::to_value(item).map_err(|e| {
+            RuntimeError::Generic(format!("Failed to serialize item to JSON: {}", e))
+        })?;
+
+        let rtfs_val = json_to_rtfs_value(&item_json)?;
+
+        // Convert to (server ...) format if it's a map
+        let rtfs_content = if let rtfs::runtime::values::Value::Map(m) = rtfs_val {
+            let mut parts = Vec::new();
+            // Start with name comment or similar if desired, but for data preservation we just dump fields
+            parts.push("(server".to_string());
+
+            // Sort keys for deterministic output
+            let mut entries: Vec<_> = m.into_iter().collect();
+            entries.sort_by(|a, b| format!("{:?}", a.0).cmp(&format!("{:?}", b.0)));
+
+            for (k, v) in entries {
+                let key_str = match k {
+                    rtfs::ast::MapKey::Keyword(kw) => kw.0,
+                    rtfs::ast::MapKey::String(s) => format!(":{}", s.replace(" ", "_")), // Force keyword style
+                    _ => format!(":{}", k),
+                };
+
+                // Helper to format value nicely
+                let val_str = format!("{}", v);
+                parts.push(format!("  {} {}", key_str, val_str));
+            }
+            parts.push(")".to_string());
+            parts.join("\n")
+        } else {
+            // Fallback
+            format!("{}", rtfs_val)
+        };
+
+        // Add header
+        let content = format!(";; Server Manifest: {}\n{}\n", item.name(), rtfs_content);
 
         fs::write(&file_path, content).map_err(|e| {
             RuntimeError::Generic(format!(
@@ -394,7 +556,15 @@ impl ApprovalQueue {
                 file_path.display(),
                 e
             ))
-        })
+        })?;
+
+        // Remove legacy server.json if it exists
+        let legacy_path = server_dir.join("server.json");
+        if legacy_path.exists() {
+            let _ = fs::remove_file(legacy_path);
+        }
+
+        Ok(())
     }
 
     fn remove_from_dir<T: HasId + HasName>(&self, dir: &Path, item: &T) -> RuntimeResult<()> {

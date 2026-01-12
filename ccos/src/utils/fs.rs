@@ -196,15 +196,6 @@ pub fn get_configured_capabilities_path() -> PathBuf {
     get_workspace_root().join("capabilities")
 }
 
-/// Get the configured discovered capabilities path (capabilities_dir/discovered_subdir).
-pub fn get_configured_discovered_path() -> PathBuf {
-    if let Some(config) = load_agent_config() {
-        let base = resolve_workspace_path(&config.storage.capabilities_dir);
-        return base.join(&config.storage.discovered_subdir);
-    }
-    get_configured_capabilities_path().join("discovered")
-}
-
 /// Get the configured generated capabilities path (capabilities_dir/generated_subdir).
 pub fn get_configured_generated_path() -> PathBuf {
     if let Some(config) = load_agent_config() {
@@ -266,7 +257,6 @@ mod tests {
         let test_path = "/tmp/ccos_test_caps";
         std::env::set_var("CCOS_CAPABILITY_STORAGE", test_path);
         assert_eq!(get_configured_capabilities_path(), PathBuf::from(test_path));
-        assert!(get_configured_discovered_path().starts_with(test_path));
         assert!(get_configured_generated_path().starts_with(test_path));
 
         // Clean up env var for next tests
@@ -275,10 +265,6 @@ mod tests {
         // Test default (should be workspace/capabilities)
         let default_path = get_workspace_root().join("capabilities");
         assert_eq!(get_configured_capabilities_path(), default_path);
-        assert_eq!(
-            get_configured_discovered_path(),
-            default_path.join("discovered")
-        );
         assert_eq!(
             get_configured_generated_path(),
             default_path.join("generated")

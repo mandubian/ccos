@@ -89,6 +89,7 @@ pub async fn add_server(
         auth_env_var: Some(suggest_auth_env_var(&name_str)),
         capabilities_path: None,
         alternative_endpoints: Vec::new(),
+        capability_files: None,
     };
 
     let risk_assessment = RiskAssessment {
@@ -779,5 +780,80 @@ fn format_type_expr(type_expr: &rtfs::ast::TypeExpr) -> String {
         }
         TypeExpr::Alias(s) => format!(":{}", s.0),
         _ => ":any".to_string(),
+    }
+}
+
+/// Approve and register a discovered server
+pub async fn register_approved_server(
+    approval_id: String,
+    approval_queue: &UnifiedApprovalQueue<FileApprovalStorage>,
+    marketplace: &crate::capability_marketplace::types::CapabilityMarketplace,
+) -> RuntimeResult<usize> {
+    // Get the approval request
+    let request = match approval_queue.get(&approval_id).await? {
+        Some(req) => req,
+        None => {
+            return Err(RuntimeError::Generic("Approval request not found".into()));
+        }
+    };
+
+    // Check if approved
+    if !matches!(
+        request.status,
+        crate::approval::types::ApprovalStatus::Approved { .. }
+    ) {
+        return Err(RuntimeError::Generic(
+            "Server has not been approved yet".into(),
+        ));
+    }
+
+    // Extract server info
+    let (server_name, _endpoint, _auth_env_var) = match &request.category {
+        crate::approval::types::ApprovalCategory::ServerDiscovery { server_info, .. } => (
+            server_info.name.clone(),
+            server_info.endpoint.clone(),
+            server_info.auth_env_var.clone(),
+        ),
+        _ => {
+            return Err(RuntimeError::Generic(
+                "Approval is not for a server discovery".into(),
+            ));
+        }
+    };
+
+    // Check for RTFS files in pending or approved directories
+    let server_id = crate::utils::fs::sanitize_filename(&server_name);
+    let workspace_root = crate::utils::fs::get_workspace_root();
+    let pending_dir = workspace_root
+        .join("capabilities/servers/pending")
+        .join(&server_id);
+    let approved_dir = workspace_root
+        .join("capabilities/servers/approved")
+        .join(&server_id);
+
+    // If files exist in pending, move them to approved (since we're now approved)
+    if pending_dir.exists() && !approved_dir.exists() {
+        let _ = std::fs::create_dir_all(&approved_dir);
+        if let Ok(entries) = std::fs::read_dir(&pending_dir) {
+            for entry in entries.flatten() {
+                let src = entry.path();
+                let dst = approved_dir.join(entry.file_name());
+                let _ = std::fs::copy(&src, &dst);
+            }
+        }
+        // Remove pending dir after move
+        let _ = std::fs::remove_dir_all(&pending_dir);
+    }
+
+    if approved_dir.exists() {
+        let loaded_count = marketplace
+            .import_capabilities_from_rtfs_dir_recursive(&approved_dir)
+            .await?;
+        Ok(loaded_count)
+    } else {
+        Err(RuntimeError::Generic(format!(
+            "No RTFS files found for {} in approved directory",
+            server_name
+        )))
     }
 }

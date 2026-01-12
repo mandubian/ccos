@@ -338,21 +338,25 @@ impl MCPDiscoveryService {
                                     server_info: crate::approval::ServerInfo {
                                         name: server_config.name.clone(),
                                         endpoint: server_config.endpoint.clone(),
-                                        description: None,
+                                        description: Some(format!(
+                                            "Pre-loaded from RTFS files for {}",
+                                            server_config.name
+                                        )),
                                         auth_env_var: None,
                                         capabilities_path: None,
                                         alternative_endpoints: vec![],
+                                        capability_files: Some(files_to_load.clone()),
                                     },
-                                    domain_match: vec![],
-                                    risk_assessment: crate::approval::RiskAssessment {
+                                    domain_match: false,
+                                    risk_assessment: Some(crate::approval::RiskAssessment {
                                         level: crate::approval::RiskLevel::Low,
                                         reasons: vec![],
-                                    },
+                                    }),
                                     requesting_goal: None,
                                     approved_at: chrono::Utc::now(),
-                                    approved_by: crate::approval::ApprovalAuthority::Auto,
+                                    approved_by: crate::approval::queue::ApprovalAuthority::Auto,
                                     approval_reason: Some("Pre-loaded from RTFS files".to_string()),
-                                    capability_files: Some(files_to_load.clone()),
+                                    capability_files: None,
                                     version: 1,
                                     last_successful_call: None,
                                     consecutive_failures: 0,
@@ -991,7 +995,8 @@ impl MCPDiscoveryService {
         &self,
         server_config: &MCPServerConfig,
         options: &DiscoveryOptions,
-    ) -> RuntimeResult<Vec<CapabilityManifest>> {
+    ) -> RuntimeResult<(Vec<CapabilityManifest>, Option<String>)> {
+        let mut approval_id = None;
         // If caching is enabled and no force refresh, check if we already have an export file
         if options.use_cache && !options.force_refresh {
             let export_dir = options
@@ -1016,9 +1021,14 @@ impl MCPDiscoveryService {
                                 get_workspace_root().join(&path)
                             }
                         })
-                        .unwrap_or_else(|| get_workspace_root().join("capabilities"))
+                        .unwrap_or_else(|| {
+                            get_workspace_root()
+                                .join("capabilities")
+                                .join("servers")
+                                .join("pending")
+                        })
                 });
-            let server_dir = export_dir.join("mcp").join(&server_config.name);
+            let server_dir = export_dir.join(&server_config.name);
             let module_file = server_dir.join("capabilities.rtfs");
 
             if module_file.exists() {
@@ -1060,7 +1070,7 @@ impl MCPDiscoveryService {
                                 }
                             }
 
-                            return Ok(manifests);
+                            return Ok((manifests, None));
                         } else {
                             ccos_eprintln!("   ⚠️  Loaded 0 capabilities from export file");
                         }
@@ -1169,7 +1179,7 @@ impl MCPDiscoveryService {
                     self.register_capability(manifest).await?;
                 }
             }
-            return Ok(manifests);
+            return Ok((manifests, None));
         }
 
         // Check for existing capabilities and warn user
@@ -1208,9 +1218,14 @@ impl MCPDiscoveryService {
                                 get_workspace_root().join(&path)
                             }
                         })
-                        .unwrap_or_else(|| get_workspace_root().join("capabilities"))
+                        .unwrap_or_else(|| {
+                            get_workspace_root()
+                                .join("capabilities")
+                                .join("servers")
+                                .join("pending")
+                        })
                 });
-            let server_dir = export_dir.join("mcp").join(&server_config.name);
+            let server_dir = export_dir.join(&server_config.name);
             let module_file = server_dir.join("capabilities.rtfs");
             module_file.exists()
         };
@@ -1253,7 +1268,7 @@ impl MCPDiscoveryService {
 
                 if confirm != "y" && confirm != "yes" {
                     ccos_eprintln!("   Skipping registration and export.");
-                    return Ok(manifests); // Return manifests but don't register/export
+                    return Ok((manifests, None)); // Return manifests but don't register/export
                 }
             }
         }
@@ -1271,7 +1286,38 @@ impl MCPDiscoveryService {
                 .await?;
         }
 
-        Ok(manifests)
+        // Create approval request if requested
+        if options.create_approval_request {
+            let server_info = crate::approval::types::ServerInfo {
+                name: server_config.name.clone(),
+                endpoint: server_config.endpoint.clone(),
+                description: Some(format!("Discovered {} MCP tools", manifests.len())),
+                auth_env_var: None, // Use default or let user provide
+                capabilities_path: None,
+                alternative_endpoints: vec![],
+                capability_files: None,
+            };
+
+            approval_id = self
+                .approval_queue
+                .add_server_discovery(
+                    crate::approval::types::DiscoverySource::LocalConfig,
+                    server_info,
+                    vec!["mcp".to_string()],
+                    crate::approval::types::RiskAssessment {
+                        level: crate::approval::types::RiskLevel::Low,
+                        reasons: vec!["Local discovery from config/environment".to_string()],
+                    },
+                    Some(
+                        "Discovered via LocalConfigMcpDiscovery during initialization".to_string(),
+                    ),
+                    24 * 7, // 1 week expiry
+                )
+                .await
+                .ok();
+        }
+
+        Ok((manifests, approval_id))
     }
 
     /// Export capabilities from a server to a single RTFS module file
@@ -1310,18 +1356,21 @@ impl MCPDiscoveryService {
                         }
                     })
                     .unwrap_or_else(|_| {
-                        // Default to workspace_root/capabilities
-                        get_workspace_root().join("capabilities")
+                        // Default to workspace_root/capabilities/servers/pending
+                        get_workspace_root()
+                            .join("capabilities")
+                            .join("servers")
+                            .join("pending")
                     })
             });
 
-        // Create directory structure: capabilities/mcp/<server_name>/
-        let server_dir = export_dir.join("mcp").join(&server_config.name);
+        // Create directory structure: <export_dir>/<server_name>/
+        let server_dir = export_dir.join(&server_config.name);
         fs::create_dir_all(&server_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create export directory: {}", e))
         })?;
 
-        // Export to single module file: capabilities/mcp/<server_name>/capabilities.rtfs
+        // Export to single module file: <server_dir>/capabilities.rtfs
         let module_file = server_dir.join("capabilities.rtfs");
 
         // Create RTFS module with only the discovered capabilities from this server
