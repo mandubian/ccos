@@ -47,7 +47,7 @@ Each provider implements `SessionHandler` independently. Registry/marketplace kn
 
 ### SessionPoolManager (Generic)
 
-**Location**: `rtfs_compiler/src/ccos/capabilities/session_pool.rs`
+**Location**: [ccos/src/capabilities/session_pool.rs](ccos/src/capabilities/session_pool.rs)
 
 **Purpose**: Routes session requests to provider-specific handlers
 
@@ -84,7 +84,7 @@ fn detect_provider_type(&self, metadata: &HashMap<String, String>) -> RuntimeRes
 
 ### MCPSessionHandler (MCP-Specific)
 
-**Location**: `rtfs_compiler/src/ccos/capabilities/mcp_session_handler.rs`
+**Location**: [ccos/src/capabilities/mcp_session_handler.rs](ccos/src/capabilities/mcp_session_handler.rs)
 
 **Purpose**: Implements MCP protocol for session management
 
@@ -255,7 +255,7 @@ session_pool.register_handler("graphql", Arc::new(GraphQLSessionHandler::new()))
 
 ### Unit Tests
 
-**Location**: `rtfs_compiler/src/ccos/capabilities/session_pool.rs`
+**Location**: [ccos/src/capabilities/session_pool.rs](ccos/src/capabilities/session_pool.rs)
 
 **Tests** (3/3 passing):
 - Provider detection from metadata
@@ -325,18 +325,18 @@ session_pool.register_handler("graphql", Arc::new(GraphQLSessionHandler::new()))
 ## Files Reference
 
 ### Core Implementation
-- `rtfs_compiler/src/ccos/capabilities/session_pool.rs` (348 lines)
-- `rtfs_compiler/src/ccos/capabilities/mcp_session_handler.rs` (447 lines)
+- [ccos/src/capabilities/session_pool.rs](ccos/src/capabilities/session_pool.rs)
+- [ccos/src/capabilities/mcp_session_handler.rs](ccos/src/capabilities/mcp_session_handler.rs)
 
 ### Integration
-- `rtfs_compiler/src/ccos/capability_marketplace/marketplace.rs`
-- `rtfs_compiler/src/ccos/capability_marketplace/types.rs`
-- `rtfs_compiler/src/ccos/environment.rs`
-- `rtfs_compiler/src/ccos/capabilities/registry.rs`
+- [ccos/src/capability_marketplace/marketplace.rs](ccos/src/capability_marketplace/marketplace.rs)
+- [ccos/src/capability_marketplace/types.rs](ccos/src/capability_marketplace/types.rs)
+- [ccos/src/environment.rs](ccos/src/environment.rs)
+- [ccos/src/capabilities/registry.rs](ccos/src/capabilities/registry.rs)
 
 ### Tests
-- `rtfs_compiler/src/bin/test_end_to_end_session.rs`
-- `rtfs_compiler/src/bin/test_metadata_parsing.rs`
+- [ccos/src/bin/test_end_to_end_session.rs](ccos/src/bin/test_end_to_end_session.rs)
+- [ccos/src/bin/test_metadata_parsing.rs](ccos/src/bin/test_metadata_parsing.rs)
 - Unit tests in `session_pool.rs`
 
 ---

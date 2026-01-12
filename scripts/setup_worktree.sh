@@ -9,13 +9,23 @@ echo "🚀 Initializing CCOS worktree: $(pwd)"
 # 1. Create untracked directories required by the CCOS runtime
 # These are ignored by git but expected by agent_config.toml.
 echo "📂 Creating runtime directories..."
-mkdir -p capabilities/discovered \
-         capabilities/generated \
-         capabilities/pending_synth \
+mkdir -p capabilities/core \
+         capabilities/servers/pending \
          capabilities/servers/approved \
-         storage \
+         capabilities/generated \
+         capabilities/learned \
+         capabilities/samples \
+         capabilities/web \
+         capabilities/sessions \
+         storage/approvals \
+         storage/pending_synth \
+         storage/plans \
+         config \
+         config/storage \
+         demo_storage/intents \
+         demo_storage/plans \
+         demo_storage/edges \
          logs \
-         demo_storage \
          generated_capabilities
 
 # 2. Shared Build Cache (Optional but recommended for worktrees)

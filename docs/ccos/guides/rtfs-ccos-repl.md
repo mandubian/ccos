@@ -29,11 +29,11 @@ cargo run --bin rtfs-ccos-repl -v -e "(+ 1 2)"
 | `--disable <category>` | Disable capability category |
 | `--timeout <ms>` | Maximum execution time (default: 30000ms) |
 | `-v, --verbose` | Enable verbose output |
-| `--allow <capability>` | Allow specific capability |
-| `--deny <capability>` | Deny specific capability |
 | `--http-real` | Use real HTTP provider (not mock) |
 | `--http-allow <host>` | Allow outbound HTTP hostnames |
 | `--microvm-provider <provider>` | Select MicroVM provider (mock, process) |
+
+Note: Capability authorization is handled by the Governance Kernel, not CLI flags.
 
 ## Interactive REPL Commands
 
