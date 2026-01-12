@@ -1,0 +1,59 @@
+;; CCOS Constitution
+;;
+;; This file represents the system's governance rules in RTFS (Reason about The Fucking Spec).
+;; It defines the immutable laws that the Governance Kernel enforces on every agent action.
+;;
+;; Structure:
+;; - :rules -> A list of pattern-matching rules for capabilities
+;; - :policies -> Global system policies (hint limits, timeouts)
+
+{
+  :rules [
+    ;; Rule 1: Protected System Configuration
+    ;; Critical system changes must be authorized by a Constitutional Guardian.
+    ;; This "Guardian" is technically a "Human" in the current implementation, 
+    ;; but conceptually represents any trusted entity (human or higher-level AI) 
+    ;; empowered to enforce the constitution.
+    { :id "cli-agent-restrictions"
+      :description "Configuration mutations require authorization from the Constitutional Guardian"
+      :match-pattern "ccos.cli.config.*"
+      :action {:type "RequireGuardianApproval"} }
+
+    ;; Rule 2: Capabilities discovery is always allowed
+    ;; We want agents to be curious and find tools freely.
+    { :id "cli-discovery-allowed"
+      :description "Agents can freely discover and search capabilities"
+      :match-pattern "ccos.cli.discovery.*"
+      :action {:type "Allow"} }
+
+    ;; Rule 3: Only Guardians can approve new MCP connections
+    ;; An agent cannot unilaterally decide to trust a new server.
+    { :id "cli-approval-restricted"
+      :description "Only Guardians can approve new servers"
+      :match-pattern "ccos.cli.approval.approve"
+      :action {:type "RequireGuardianApproval"} }
+
+    ;; Rule 4: The Prime Directive
+    ;; Explicit denial of catastrophic actions.
+    { :id "no-global-thermonuclear-war"
+      :description "Prevent global thermonuclear war"
+      :match-pattern "*launch-nukes*"
+      :action {:type "Deny" :reason "Rule against global thermonuclear war"} }
+  ]
+
+  :policies {
+    ;; Execution Hint Limits (prevents resource abuse)
+    :hints {
+      :max-retries 5
+      :max-timeout-multiplier 10.0
+      :max-absolute-timeout-ms 300000
+    }
+
+    ;; Semantic Judge Configuration (AI "Common Sense" Check)
+    :semantic-judge {
+      :enabled true
+      :risk-threshold 0.7
+      :fail-open true
+    }
+  }
+}
