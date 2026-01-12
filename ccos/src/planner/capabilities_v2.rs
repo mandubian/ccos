@@ -322,30 +322,36 @@ Output format:
                             resolution_method,
                             ..
                         } => {
-                            Ok::<SynthesizeCapabilityOutput, RuntimeError>(SynthesizeCapabilityOutput {
-                                success: true,
-                                capability_id: Some(capability_id),
-                                rtfs_code: None, // Code is stored in capability file
-                                error: None,
-                            })
+                            Ok::<SynthesizeCapabilityOutput, RuntimeError>(
+                                SynthesizeCapabilityOutput {
+                                    success: true,
+                                    capability_id: Some(capability_id),
+                                    rtfs_code: None, // Code is stored in capability file
+                                    error: None,
+                                },
+                            )
                         }
                         crate::synthesis::core::ResolutionResult::Failed { reason, .. } => {
-                            Ok::<SynthesizeCapabilityOutput, RuntimeError>(SynthesizeCapabilityOutput {
-                                success: false,
-                                capability_id: None,
-                                rtfs_code: None,
-                                error: Some(reason),
-                            })
+                            Ok::<SynthesizeCapabilityOutput, RuntimeError>(
+                                SynthesizeCapabilityOutput {
+                                    success: false,
+                                    capability_id: None,
+                                    rtfs_code: None,
+                                    error: Some(reason),
+                                },
+                            )
                         }
                         crate::synthesis::core::ResolutionResult::PermanentlyFailed {
                             reason,
                             ..
-                        } => Ok::<SynthesizeCapabilityOutput, RuntimeError>(SynthesizeCapabilityOutput {
-                            success: false,
-                            capability_id: None,
-                            rtfs_code: None,
-                            error: Some(reason),
-                        }),
+                        } => Ok::<SynthesizeCapabilityOutput, RuntimeError>(
+                            SynthesizeCapabilityOutput {
+                                success: false,
+                                capability_id: None,
+                                rtfs_code: None,
+                                error: Some(reason),
+                            },
+                        ),
                     };
                 }
 
@@ -726,6 +732,100 @@ Instructions:
         )
         .await?;
 
+    // 7. planner.synthesize_agent_from_trace
+    // Synthesize a new agent capability from a session trace.
+    let synthesize_agent_handler = Arc::new(move |input: &Value| {
+        let payload: SynthesizeAgentFromTraceInput =
+            parse_payload("planner.synthesize_agent_from_trace", input)?;
+
+        // Capture context
+        let session_id = payload.session_id.clone();
+        let agent_name = payload.agent_name.clone();
+        let description = payload.description.clone();
+
+        let rt_handle = tokio::runtime::Handle::current();
+
+        let result = std::thread::spawn(move || {
+            rt_handle.block_on(async {
+                // Find session
+                let session = crate::mcp::session::find_session_on_disk(&session_id)
+                    .await
+                    .ok_or_else(|| {
+                        RuntimeError::Generic(format!("Session {} not found", session_id))
+                    })?;
+
+                let agent_id = format!("agent.{}", slugify(&agent_name));
+                let sanitized_desc = description
+                    .unwrap_or_else(|| format!("Synthesized from session {}", session_id))
+                    .replace("\"", "\\\"");
+
+                let steps_logic = if session.steps.is_empty() {
+                    "nil".to_string()
+                } else if session.steps.len() > 1 {
+                    let mut lines = Vec::new();
+                    lines.push("(do".to_string());
+                    for step in &session.steps {
+                        lines.push(format!("    {}", step.rtfs_code));
+                    }
+                    lines.push("  )".to_string());
+                    lines.join("\n")
+                } else {
+                    session.steps[0].rtfs_code.clone()
+                };
+
+                let rtfs_content = format!(
+                    r#";; Synthesized Agent
+(capability "{}"
+  (description "{}")
+  (meta {{
+    :kind :agent
+    :planning false
+    :source-session "{}"
+  }})
+  (action [inputs]
+    {}
+  ))
+"#,
+                    agent_id, sanitized_desc, session_id, steps_logic
+                );
+
+                // Write to disk
+                let agents_dir =
+                    crate::utils::fs::get_configured_capabilities_path().join("agents");
+                std::fs::create_dir_all(&agents_dir)
+                    .map_err(|e| RuntimeError::Generic(e.to_string()))?;
+
+                let filename = format!("{}.rtfs", slugify(&agent_name));
+                let filepath = agents_dir.join(&filename);
+
+                std::fs::write(&filepath, rtfs_content)
+                    .map_err(|e| RuntimeError::Generic(e.to_string()))?;
+
+                Ok::<SynthesizeAgentFromTraceOutput, RuntimeError>(SynthesizeAgentFromTraceOutput {
+                    agent_id,
+                    manifest: serde_json::json!({ "path": filepath.to_string_lossy() }),
+                })
+            })
+        })
+        .join()
+        .map_err(|_| {
+            RuntimeError::Generic(
+                "Thread join error in planner.synthesize_agent_from_trace".to_string(),
+            )
+        })??;
+
+        produce_value("planner.synthesize_agent_from_trace", result)
+    });
+
+    marketplace
+        .register_local_capability(
+            "planner.synthesize_agent_from_trace".to_string(),
+            "Planner / Synthesize Agent from Trace".to_string(),
+            "Converts a session trace into a reusable Agent Capability.".to_string(),
+            synthesize_agent_handler,
+        )
+        .await?;
+
     Ok(())
 }
 
@@ -946,4 +1046,18 @@ fn extract_json(response: &str) -> Option<&str> {
         }
     }
     None
+}
+
+#[derive(Debug, Deserialize)]
+struct SynthesizeAgentFromTraceInput {
+    session_id: String,
+    agent_name: String,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SynthesizeAgentFromTraceOutput {
+    agent_id: String,
+    manifest: serde_json::Value,
 }

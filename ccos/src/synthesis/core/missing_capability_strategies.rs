@@ -18,8 +18,8 @@ use regex::Regex;
 
 use super::missing_capability_resolver::{MissingCapabilityRequest, ResolutionResult};
 use crate::arbiter::prompt::{FilePromptStore, PromptManager};
-use crate::cognitive_engine::DelegatingCognitiveEngine;
 use crate::capability_marketplace::CapabilityMarketplace;
+use crate::cognitive_engine::DelegatingCognitiveEngine;
 use crate::planner::modular_planner::types::{
     ApiAction, DomainHint, IntentType, OutputFormat, ToolSummary, TransformType,
 };

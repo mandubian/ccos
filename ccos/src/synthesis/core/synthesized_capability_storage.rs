@@ -313,7 +313,10 @@ mod tests {
     #[test]
     fn test_slugify() {
         assert_eq!(slugify("Group By Author"), "group-by-author");
-        assert_eq!(slugify("filter items with high score"), "filter-items-with-high-score");
+        assert_eq!(
+            slugify("filter items with high score"),
+            "filter-items-with-high-score"
+        );
     }
 
     #[test]

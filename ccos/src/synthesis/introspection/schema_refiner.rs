@@ -125,18 +125,29 @@ pub fn find_capability_file(capability_id: &str) -> Option<PathBuf> {
         }
     }
 
-    // Check discovered capabilities
-    let discovered_dir = crate::utils::fs::get_configured_discovered_path();
-    if let Ok(entries) = fs::read_dir(&discovered_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let cap_file = path.join("capability.rtfs");
-                if cap_file.exists() {
-                    // Read and check if ID matches
-                    if let Ok(content) = fs::read_to_string(&cap_file) {
-                        if content.contains(&format!("\"{}\"", capability_id)) {
-                            return Some(cap_file);
+    // Check discovered/approved/pending capabilities
+    let workspace_root = crate::utils::fs::get_workspace_root();
+    let search_dirs = vec![
+        workspace_root.join("capabilities/servers/approved"),
+        workspace_root.join("capabilities/servers/pending"),
+    ];
+
+    for dir in search_dirs {
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let cap_file = path.join("capability.rtfs");
+                    let module_file = path.join("capabilities.rtfs");
+
+                    for f in &[cap_file, module_file] {
+                        if f.exists() {
+                            // Read and check if ID matches
+                            if let Ok(content) = fs::read_to_string(f) {
+                                if content.contains(&format!("\"{}\"", capability_id)) {
+                                    return Some(f.clone());
+                                }
+                            }
                         }
                     }
                 }

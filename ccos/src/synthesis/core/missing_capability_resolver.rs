@@ -29,7 +29,7 @@ use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;
 use crate::synthesis::runtime::server_trust::{
     create_default_trust_registry, ServerCandidate, ServerSelectionHandler, ServerTrustRegistry,
 };
-// removed unused find_workspace_root import
+use crate::utils::fs::get_workspace_root;
 use crate::utils::value_conversion;
 use rtfs::ast::TypeExpr;
 use rtfs::ast::{
@@ -131,7 +131,8 @@ struct ToolPromptCandidate {
 
 impl ToolAliasStore {
     fn load_default() -> Self {
-        let default_path = PathBuf::from("../capabilities/mcp/aliases.json");
+        let workspace_root = get_workspace_root();
+        let default_path = workspace_root.join("capabilities/servers/aliases.json");
         Self::load(default_path)
     }
 
@@ -665,17 +666,6 @@ impl MissingCapabilityResolver {
         }
 
         None
-    }
-
-    fn suggest_mcp_token_env_var(&self, server_name: &str) -> String {
-        let namespace = if let Some(slash_pos) = server_name.find('/') {
-            &server_name[..slash_pos]
-        } else {
-            server_name
-        };
-
-        let normalized = namespace.replace('-', "_").to_uppercase();
-        format!("{}_MCP_TOKEN", normalized)
     }
 
     fn attach_resolution_metadata(
@@ -1779,9 +1769,9 @@ impl MissingCapabilityResolver {
         let storage_root = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(|s| PathBuf::from(s))
             .unwrap_or_else(|_| crate::utils::fs::get_workspace_root().join("capabilities"));
-        let storage_root = storage_root.join("mcp");
+        let storage_root = storage_root.join("servers/pending");
         std::fs::create_dir_all(&storage_root).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to create MCP discovery directory: {}", e))
+            RuntimeError::Generic(format!("Failed to create discovery directory: {}", e))
         })?;
 
         let id_parts: Vec<&str> = manifest.id.split('.').collect();
@@ -3403,43 +3393,6 @@ impl MissingCapabilityResolver {
         false
     }
 
-    fn is_capability_match(
-        &self,
-        requested: &str,
-        capability_name: &str,
-        capability_desc: &str,
-    ) -> bool {
-        let requested_lower = requested.to_lowercase();
-        let name_lower = capability_name.to_lowercase();
-        let desc_lower = capability_desc.to_lowercase();
-
-        // Exact match
-        if name_lower == requested_lower {
-            return true;
-        }
-
-        // Partial match in capability name
-        if name_lower.contains(&requested_lower) || requested_lower.contains(&name_lower) {
-            return true;
-        }
-
-        // Check if requested capability is mentioned in description
-        if desc_lower.contains(&requested_lower) {
-            return true;
-        }
-
-        // Check for domain-based matching (e.g., "travel.flights" matches "flights")
-        let requested_parts: Vec<&str> = requested.split('.').collect();
-        if requested_parts.len() > 1 {
-            let last_part = requested_parts.last().unwrap().to_lowercase();
-            if name_lower.contains(&last_part) {
-                return true;
-            }
-        }
-
-        false
-    }
-
     /// Discover capabilities via web search
     async fn discover_via_web_search(
         &self,
@@ -3730,36 +3683,6 @@ impl MissingCapabilityResolver {
         }
     }
 
-    async fn attempt_external_llm_hint(
-        &self,
-        request: &MissingCapabilityRequest,
-        capability_id_normalized: &str,
-    ) -> RuntimeResult<Option<CapabilityManifest>> {
-        let config = MissingCapabilityStrategyConfig::default();
-        let mut strategy = ExternalLlmHintStrategy::new(config);
-
-        // Inject arbiter if available
-        {
-            let guard = self.delegating_arbiter.read().unwrap();
-            if let Some(arbiter) = guard.as_ref() {
-                strategy = strategy.with_arbiter(arbiter.clone());
-            } else {
-                return Ok(None);
-            }
-        }
-
-        match strategy.generate_implementation(request).await {
-            Ok(rtfs_source) => {
-                self.process_generated_rtfs(rtfs_source, capability_id_normalized, "llm_generated")
-                    .await
-            }
-            Err(e) => {
-                ccos_eprintln!("❌ LLM synthesis attempt failed: {}", e);
-                Ok(None)
-            }
-        }
-    }
-
     async fn attempt_service_discovery_hint(
         &self,
         request: &MissingCapabilityRequest,
@@ -3892,112 +3815,6 @@ impl MissingCapabilityResolver {
         }
 
         Ok(())
-    }
-
-    /// Convert JSON schema to RTFS schema string
-    fn json_schema_to_rtfs(&self, json_schema: Option<&serde_json::Value>) -> String {
-        match json_schema {
-            Some(schema) => {
-                // Convert JSON schema to RTFS format
-                // For now, create a simple RTFS schema based on the JSON structure
-                if let Some(properties) = schema.get("properties") {
-                    let mut rtfs_props = Vec::new();
-                    for (key, prop) in properties.as_object().unwrap_or(&serde_json::Map::new()) {
-                        if let Some(prop_type) = prop.get("type") {
-                            let rtfs_type = match prop_type.as_str().unwrap_or("string") {
-                                "string" => ":string",
-                                "number" => ":number",
-                                "boolean" => ":boolean",
-                                "array" => ":vector",
-                                "object" => ":map",
-                                _ => ":any",
-                            };
-                            rtfs_props.push(format!(":{} {}", key, rtfs_type));
-                        }
-                    }
-                    if rtfs_props.is_empty() {
-                        ":any".to_string()
-                    } else {
-                        format!("(map {})", rtfs_props.join(" "))
-                    }
-                } else {
-                    ":any".to_string()
-                }
-            }
-            None => ":any".to_string(),
-        }
-    }
-
-    /// Save a multi-capability synthesis result with actual RTFS implementation code
-    async fn save_multi_capability_with_code(
-        &self,
-        manifest: &CapabilityManifest,
-        implementation_code: &str,
-        base_url: &str,
-        endpoint: &MultiCapabilityEndpoint,
-    ) -> RuntimeResult<std::path::PathBuf> {
-        let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| {
-                // Find workspace root and use capabilities there
-                crate::utils::fs::get_configured_capabilities_path()
-            });
-
-        std::fs::create_dir_all(&storage_dir).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to create storage directory: {}", e))
-        })?;
-
-        let capability_dir = storage_dir.join(&manifest.id);
-        std::fs::create_dir_all(&capability_dir).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to create capability directory: {}", e))
-        })?;
-
-        // Convert JSON schemas to RTFS format
-        let input_schema_rtfs = self.json_schema_to_rtfs(endpoint.input_schema.as_ref());
-        let output_schema_rtfs = self.json_schema_to_rtfs(endpoint.output_schema.as_ref());
-
-        // Create the full capability definition with the generated RTFS implementation
-        let capability_file = capability_dir.join("capability.rtfs");
-        let full_capability_content = format!(
-            r#"(capability "{}"
-  :name "{}"
-  :version "{}"
-  :description "{}"
-  :source_url "{}"
-  :discovery_method "multi_capability_synthesis"
-  :created_at "{}"
-  :capability_type "specialized_http_api"
-  :permissions [:network.http]
-  :effects [:network_request]
-  :input-schema {}
-  :output-schema {}
-  :implementation
-    {}
-)"#,
-            manifest.id,
-            manifest.name,
-            manifest.version,
-            manifest.description,
-            base_url,
-            chrono::Utc::now().to_rfc3339(),
-            input_schema_rtfs,
-            output_schema_rtfs,
-            implementation_code
-        );
-
-        std::fs::write(&capability_file, full_capability_content).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to write capability file: {}", e))
-        })?;
-
-        if self.config.verbose_logging {
-            ccos_eprintln!(
-                "💾 MULTI-CAPABILITY: Saved capability with RTFS implementation: {} ({})",
-                manifest.id,
-                capability_file.display()
-            );
-        }
-
-        Ok(capability_file)
     }
 }
 
