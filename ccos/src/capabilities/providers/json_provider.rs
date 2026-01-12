@@ -97,7 +97,10 @@ impl JsonProvider {
             serde_json::Value::Object(map) => {
                 let mut rtfs_map = std::collections::HashMap::new();
                 for (k, v) in map.iter() {
-                    rtfs_map.insert(rtfs::ast::MapKey::String(k.clone()), Self::json_to_value(v));
+                    rtfs_map.insert(
+                        rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword(k.clone())),
+                        Self::json_to_value(v),
+                    );
                 }
                 Value::Map(rtfs_map)
             }

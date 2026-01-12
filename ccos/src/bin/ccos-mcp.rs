@@ -75,6 +75,26 @@ Core Syntax:
 Basic Pattern:
 (operator operand1 operand2 ...)
 
+;; --- Data Transformation ---
+(call "ccos.json.parse" "{\"a\": 1}")      ; => {:a 1} (keys become keywords)
+(call "ccos.json.stringify" {:a 1})        ; => "{\"a\":1}"
+
+;; --- System Capabilities ---
+(call "ccos.system.get-env" "PATH")        ; => "/usr/bin:..."
+(call "ccos.system.current-time")          ; => 1678900000
+
+;; --- I/O Capabilities ---
+(call "ccos.io.log" "message")             ; => nil
+(call "ccos.io.read-file" "/tmp/foo")      ; => "content"
+(call "ccos.io.write-file" "/tmp/foo" "bar"); => nil
+
+;; --- Network Capabilities ---
+(call "ccos.network.http-fetch" "https://api.example.com")
+
+;; --- State Capabilities ---
+(call "ccos.state.kv.put" :key "value")    ; => true
+(call "ccos.state.kv.get" :key)            ; => "value"
+
 ;; Example
 (let [x 1]
   (if (> x 0)
