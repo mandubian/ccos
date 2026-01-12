@@ -67,7 +67,10 @@ impl View {
     }
 
     pub fn is_implemented(&self) -> bool {
-        matches!(self, Self::Goals | Self::Servers | Self::Discover | Self::Approvals)
+        matches!(
+            self,
+            Self::Goals | Self::Servers | Self::Discover | Self::Approvals
+        )
     }
 }
 
@@ -455,9 +458,9 @@ pub struct AppState {
     pub discover_all_collapsed_by_default: bool, // When true, all groups are collapsed unless explicitly expanded
     pub discover_collapsed_sources: HashSet<String>,
     pub discover_expanded_sources: HashSet<String>, // Explicitly expanded sources (overrides all_collapsed_by_default)
-    pub discover_scroll: usize, // Scroll offset for capability list
-    pub discover_details_scroll: usize, // Scroll offset for details panel
-    pub discover_panel_height: usize, // Actual visible height of the panel
+    pub discover_scroll: usize,                     // Scroll offset for capability list
+    pub discover_details_scroll: usize,             // Scroll offset for details panel
+    pub discover_panel_height: usize,               // Actual visible height of the panel
     pub discover_auth_retry: Option<(String, String)>, // (server_name, endpoint) to retry introspection after auth token is set
 
     // =========================================
