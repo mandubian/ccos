@@ -145,8 +145,9 @@ This is the Reflective Loop — the path from reactive agent to proactive partne
 ```mermaid
 graph TD
     subgraph "My World: CCOS"
-        subgraph "🧠 My Mind (The Arbiter)"
-                A[("I, the Arbiter<br/>(Planner/Reasoner)")]
+        subgraph "🧠 My Mind (Cognitive Control)"
+                A[("The Arbiter<br/>(Planner/Reasoner)")]
+                CE[("Cognitive Engine<br/>(LLM / Model Provider)")]
             end
 
         subgraph "🔍 Discovery"
@@ -168,11 +169,11 @@ graph TD
         end
 
         subgraph "⚙️ My Body & Memory (Execution)"
-            subgraph "Orchestrator Host"
-                O["Orchestrator<br/>(Hosts & supervises the runtime)"]
+            subgraph "Execution Engine"
+                O["Orchestrator<br/>(Deterministic plan execution)"]
+                RH["RuntimeHost<br/>(Bridges RTFS yields ↔ capabilities)"]
                 RT["RTFS Runtime<br/>(Executes RTFS plans; enforces step semantics)"]
             end
-            M["🏪 Capability Marketplace<br/>(A subset of Effects/capabilities)"]
             Effects["Effects & External Calls<br/>(APIs, I/O, Capabilities)"]
             CC["⛓️ Causal Chain<br/>(My perfect memory)"]
         end
@@ -191,6 +192,7 @@ graph TD
     AI --> |"Structured Intent"| A
     H --> |"NL → Intent"| A
 
+    A <--> |"Prompt/Response"| CE
     A --> |"1. Interact"| IG
     IG --> |"2. Discover tools"| D2
     D2 --> |"Search"| D1
@@ -204,11 +206,15 @@ graph TD
     K --> |"Needs approval?"| Q
     K --> |"Approved plan graph"| O
 
-    O --> |"5. Execute plan"| RT
-    O --> |"Host and supervise runtime"| RT
+    O --> |"5. Execute / Resume"| RT
     RT --> |"Yield effect request"| O
-    O --> |"Invoke effects"| Effects
-    O --> |"Use capabilities"| M
+    O --> |"Validate yield"| K
+    K --> |"Approved / Denied"| O
+    O --> |"Invoke capability"| RH
+    RH --> |"Resolve capability"| D1
+    D1 --> |"Execute"| Effects
+    Effects --> |"Result"| RH
+    RH --> |"Return result"| O
     RT --> |"6. Record runtime events"| CC
 
     CC --> |"7. Learn from history"| R
