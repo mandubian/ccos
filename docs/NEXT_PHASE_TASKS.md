@@ -66,7 +66,8 @@
 ### Implementation Notes
 -   The system now supports a **graceful degradation** pattern: real MCP → synthesis → generic mock.
 -   MCP server configs detected via `capabilities/mcp/overrides.json` with pattern matching.
--   Discovered capabilities saved to `capabilities/discovered/mcp/{server_name}/`.
+-   Discovered capabilities saved to `capabilities/servers/pending/{server_name}/`.
+-   Promotion logic moves files from `pending/` to `approved/` upon approval.
 -   `MCPSessionManager` handles HTTP-based MCP with `initialize` + `tools/list` + `tools/call`.
 
 ### Recent Fixes (2025-11-25)
