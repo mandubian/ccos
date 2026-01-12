@@ -108,6 +108,14 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
                 RuntimeError::Generic(format!("Approval request not found: {}", id))
             })?;
 
+        // If it's a server discovery, move artifacts to rejected
+        if let ApprovalCategory::ServerDiscovery {
+            ref server_info, ..
+        } = request.category
+        {
+            let _ = self.move_server_directory(&server_info.name, "pending", "rejected");
+        }
+
         request.reject(by, reason);
         self.storage.update(&request).await
     }
@@ -206,69 +214,8 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             ..
         } = request.category
         {
-            let server_id = crate::utils::fs::sanitize_filename(&server_info.name);
-
-            // Get workspace root for file paths
-            let workspace_root = crate::utils::fs::get_workspace_root();
-            let pending_dir = workspace_root
-                .join("capabilities/servers/pending")
-                .join(&server_id);
-            let approved_dir = workspace_root
-                .join("capabilities/servers/approved")
-                .join(&server_id);
-
-            if pending_dir.exists() {
-                // Create approved directory structure
-                if let Err(e) =
-                    std::fs::create_dir_all(approved_dir.parent().unwrap_or(&approved_dir))
-                {
-                    eprintln!("[CCOS] Warning: Failed to create approved directory: {}", e);
-                }
-
-                // Remove existing approved dir if it exists
-                if approved_dir.exists() {
-                    let _ = std::fs::remove_dir_all(&approved_dir);
-                }
-
-                // Move from pending to approved
-                if let Err(e) = std::fs::rename(&pending_dir, &approved_dir) {
-                    eprintln!(
-                        "[CCOS] Warning: Failed to move capabilities from pending to approved: {}",
-                        e
-                    );
-                } else {
-                    eprintln!(
-                        "[CCOS] Moved capabilities from {} to {}",
-                        pending_dir.display(),
-                        approved_dir.display()
-                    );
-
-                    // Collect all RTFS files from the approved directory
-                    let mut files = Vec::new();
-                    fn collect_rtfs_files(
-                        dir: &std::path::Path,
-                        files: &mut Vec<String>,
-                        base: &std::path::Path,
-                    ) {
-                        if let Ok(entries) = std::fs::read_dir(dir) {
-                            for entry in entries.flatten() {
-                                let path = entry.path();
-                                if path.is_dir() {
-                                    collect_rtfs_files(&path, files, base);
-                                } else if path.extension().map_or(false, |ext| ext == "rtfs") {
-                                    if let Ok(rel) = path.strip_prefix(base) {
-                                        files.push(rel.to_string_lossy().to_string());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    collect_rtfs_files(&approved_dir, &mut files, &approved_dir);
-
-                    if !files.is_empty() {
-                        *capability_files = Some(files);
-                    }
-                }
+            if let Ok(Some(files)) = self.move_server_directory(&server_info.name, "pending", "approved") {
+                *capability_files = Some(files);
             }
         }
 
@@ -519,6 +466,15 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
                 reason,
                 at: chrono::Utc::now(),
             };
+
+            // Move artifacts to rejected
+            if let ApprovalCategory::ServerDiscovery {
+                ref server_info, ..
+            } = updated.category
+            {
+                let _ = self.move_server_directory(&server_info.name, "approved", "rejected");
+            }
+
             self.storage.update(&updated).await?;
             Ok(())
         } else {
@@ -566,6 +522,82 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             )))
         }
     }
+
+    /// Helper to move server artifacts between subdirectories (e.g. pending -> approved)
+    fn move_server_directory(
+        &self,
+        name: &str,
+        from_subdir: &str,
+        to_subdir: &str,
+    ) -> RuntimeResult<Option<Vec<String>>> {
+        let server_id = crate::utils::fs::sanitize_filename(name);
+        let workspace_root = crate::utils::fs::get_workspace_root();
+
+        let from_dir = workspace_root
+            .join("capabilities/servers")
+            .join(from_subdir)
+            .join(&server_id);
+        let to_dir = workspace_root
+            .join("capabilities/servers")
+            .join(to_subdir)
+            .join(&server_id);
+
+        if from_dir.exists() {
+            // Create target parent directory structure
+            if let Some(parent) = to_dir.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    RuntimeError::IoError(format!(
+                        "Failed to create directory {}: {}",
+                        parent.display(),
+                        e
+                    ))
+                })?;
+            }
+
+            // Remove existing target dir if it exists
+            if to_dir.exists() {
+                let _ = std::fs::remove_dir_all(&to_dir);
+            }
+
+            // Move
+            std::fs::rename(&from_dir, &to_dir).map_err(|e| {
+                RuntimeError::IoError(format!(
+                    "Failed to move server directory from {} to {}: {}",
+                    from_dir.display(),
+                    to_dir.display(),
+                    e
+                ))
+            })?;
+
+            // Collect RTFS files
+            let mut files = Vec::new();
+
+            fn collect_rtfs_files_recursive(
+                dir: &std::path::Path,
+                files: &mut Vec<String>,
+                base: &std::path::Path,
+            ) {
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            collect_rtfs_files_recursive(&path, files, base);
+                        } else if path.extension().map_or(false, |ext| ext == "rtfs") {
+                            if let Ok(rel) = path.strip_prefix(base) {
+                                files.push(rel.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+
+            collect_rtfs_files_recursive(&to_dir, &mut files, &to_dir);
+            if !files.is_empty() {
+                return Ok(Some(files));
+            }
+        }
+        Ok(None)
+    }
 }
 
 // ========================================================================
@@ -589,11 +621,12 @@ impl ApprovalRequest {
                 id: self.id.clone(),
                 source: source.clone(),
                 server_info: server_info.clone(),
-                domain_match: domain_match.clone(),
-                risk_assessment: self.risk_assessment.clone(),
+                domain_match: !domain_match.is_empty(), // Convert Vec<String> to bool
+                risk_assessment: Some(self.risk_assessment.clone()), // Convert RA to Option<RA>
                 requested_at: self.requested_at,
                 expires_at: self.expires_at,
                 requesting_goal: requesting_goal.clone(),
+                capability_files: None, // Will need to be handled if crucial, but Option makes `None` safe
             })
         } else {
             None
@@ -617,8 +650,8 @@ impl ApprovalRequest {
                     id: self.id.clone(),
                     source: source.clone(),
                     server_info: server_info.clone(),
-                    domain_match: domain_match.clone(),
-                    risk_assessment: self.risk_assessment.clone(),
+                    domain_match: !domain_match.is_empty(), // Convert Vec<String> to bool
+                    risk_assessment: Some(self.risk_assessment.clone()),
                     requesting_goal: requesting_goal.clone(),
                     approved_at: *at,
                     approved_by: by.clone(),
@@ -645,12 +678,22 @@ impl ApprovalRequest {
             category: ApprovalCategory::ServerDiscovery {
                 source: pd.source.clone(),
                 server_info: pd.server_info.clone(),
-                domain_match: pd.domain_match.clone(),
+                domain_match: if pd.domain_match {
+                    vec!["legacy_match".to_string()]
+                } else {
+                    vec![]
+                }, // Convert bool to Vec
                 requesting_goal: pd.requesting_goal.clone(),
                 health: None,
-                capability_files: None,
+                capability_files: pd.capability_files.clone(),
             },
-            risk_assessment: pd.risk_assessment.clone(),
+            risk_assessment: pd
+                .risk_assessment
+                .clone()
+                .unwrap_or_else(|| RiskAssessment {
+                    level: RiskLevel::Medium,
+                    reasons: vec!["Legacy request - no assessment".to_string()],
+                }), // Handle Option
             requested_at: pd.requested_at,
             expires_at: pd.expires_at,
             status: ApprovalStatus::Pending,
@@ -719,6 +762,7 @@ mod tests {
     async fn test_add_and_get() {
         let queue = create_test_queue();
 
+        let expiry_hours = 24; // Define expiry_hours
         let request = ApprovalRequest::new(
             ApprovalCategory::EffectApproval {
                 capability_id: "test.cap".to_string(),
@@ -729,7 +773,7 @@ mod tests {
                 level: RiskLevel::Low,
                 reasons: vec![],
             },
-            24,
+            expiry_hours,
             None,
         );
 
@@ -793,6 +837,7 @@ mod tests {
                     auth_env_var: None,
                     capabilities_path: None,
                     alternative_endpoints: vec![],
+                    capability_files: None,
                 },
                 vec!["test".to_string()],
                 RiskAssessment {
