@@ -22,7 +22,7 @@ use super::plan_generation::{
 };
 use super::prompt::{FilePromptStore, PromptManager};
 
-use crate::capability_marketplace::types::{CapabilityKind, CapabilityQuery, CapabilityManifest};
+use crate::capability_marketplace::types::{CapabilityKind, CapabilityManifest, CapabilityQuery};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::delegation_keys::{agent, generation};
 use crate::synthesis::artifact_generator::generate_planner_via_arbiter;

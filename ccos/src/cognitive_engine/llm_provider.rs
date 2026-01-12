@@ -366,7 +366,7 @@ fn calculate_backoff_delay(attempt: u32, config: &HttpRetryConfig) -> Duration {
     let base_delay = config.initial_delay.as_millis() as u64;
     let multiplier = 2u64.saturating_pow(attempt.saturating_sub(1));
     let delay_ms = base_delay.saturating_mul(multiplier);
-    
+
     // Add jitter (±25%)
     let jitter_range = delay_ms / 4;
     let jitter = if jitter_range > 0 {
@@ -378,10 +378,10 @@ fn calculate_backoff_delay(attempt: u32, config: &HttpRetryConfig) -> Duration {
     } else {
         0
     };
-    
+
     let final_delay_ms = (delay_ms as i64 + jitter).max(0) as u64;
     let final_delay = Duration::from_millis(final_delay_ms);
-    
+
     // Cap at max_delay
     std::cmp::min(final_delay, config.max_delay)
 }
@@ -649,10 +649,10 @@ impl OpenAILlmProvider {
         let mut attempt = 0u32;
 
         let start = Instant::now();
-        
+
         loop {
             attempt += 1;
-            
+
             // Clone request body for retry (needed because body is consumed)
             let request = self
                 .client
@@ -660,7 +660,7 @@ impl OpenAILlmProvider {
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
                 .body(payload_bytes.clone());
-            
+
             // Add OpenRouter-specific headers if needed
             let request = if base_url.contains("openrouter.ai") {
                 let referer = std::env::var("OPENROUTER_HTTP_REFERER")
@@ -673,11 +673,11 @@ impl OpenAILlmProvider {
             } else {
                 request
             };
-            
+
             match request.send().await {
                 Ok(response) => {
                     let status = response.status();
-                    
+
                     // Check if we should retry based on status code
                     if is_retryable_status(status) && attempt <= retry_config.max_retries {
                         let delay = calculate_backoff_delay(attempt, &retry_config);
@@ -691,7 +691,7 @@ impl OpenAILlmProvider {
                         tokio::time::sleep(delay).await;
                         continue;
                     }
-                    
+
                     // Read response bytes
                     let bytes = match response.bytes().await {
                         Ok(b) => b,
@@ -808,19 +808,20 @@ impl OpenAILlmProvider {
 
                     let response_hash = sha256_hex(raw_body.as_bytes());
 
-                    let response_body: OpenAIResponse = serde_json::from_str(&raw_body).map_err(|e| {
-                        let response_preview = if raw_body.len() > 1000 {
-                            format!(
-                                "{}...\n[truncated, total length: {} chars]",
-                                &raw_body[..1000],
-                                raw_body.len()
-                            )
-                        } else {
-                            raw_body.clone()
-                        };
+                    let response_body: OpenAIResponse =
+                        serde_json::from_str(&raw_body).map_err(|e| {
+                            let response_preview = if raw_body.len() > 1000 {
+                                format!(
+                                    "{}...\n[truncated, total length: {} chars]",
+                                    &raw_body[..1000],
+                                    raw_body.len()
+                                )
+                            } else {
+                                raw_body.clone()
+                            };
 
-                        RuntimeError::Generic(format!(
-                            "❌ Failed to parse LLM API response as JSON\n\n\
+                            RuntimeError::Generic(format!(
+                                "❌ Failed to parse LLM API response as JSON\n\n\
                             📥 Raw API response:\n\
                             ┌─────────────────────────────────────────────────────────\n\
                             {}\n\
@@ -832,14 +833,13 @@ impl OpenAILlmProvider {
                             • Network issue causing incomplete response\n\
                             • API rate limiting or authentication error\n\n\
                             🔧 Check the raw response above to see what the API actually returned.",
-                            response_preview, e
-                        ))
-                    })?;
+                                response_preview, e
+                            ))
+                        })?;
 
-                    let choice = response_body
-                        .choices
-                        .first()
-                        .ok_or_else(|| RuntimeError::Generic("LLM response missing choices".to_string()))?;
+                    let choice = response_body.choices.first().ok_or_else(|| {
+                        RuntimeError::Generic("LLM response missing choices".to_string())
+                    })?;
 
                     let content = choice.message.content.clone();
                     let finish_reason = choice.finish_reason.as_deref();
@@ -909,8 +909,7 @@ impl OpenAILlmProvider {
                         • Network connection\n\
                         • API endpoint URL\n\
                         • Environment variables (OPENROUTER_API_KEY, etc.)",
-                        attempt,
-                        e
+                        attempt, e
                     )));
                 }
             }

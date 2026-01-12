@@ -4,8 +4,8 @@
 //! LLM providers to generate intents and plans with structured prompts.
 
 use crate::delegation_keys::generation;
-use crate::types::IntentGraph;
 use crate::rtfs_bridge::graph_interpreter::build_graph_from_rtfs;
+use crate::types::IntentGraph;
 use crate::types::{
     ExecutionResult, GenerationContext, Intent, IntentStatus, Plan, StorableIntent, TriggerSource,
 };
@@ -16,13 +16,13 @@ use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::cognitive_engine::config::CognitiveEngineConfig;
-use crate::cognitive_engine::engine::CognitiveEngine;
 use crate::arbiter::llm_provider::{LlmProvider, LlmProviderConfig, LlmProviderFactory};
 use crate::arbiter::plan_generation::{
     LlmRtfsPlanGenerationProvider, PlanGenerationProvider, PlanGenerationResult,
 };
 use crate::arbiter::prompt::{FilePromptStore, PromptConfig, PromptManager};
+use crate::cognitive_engine::config::CognitiveEngineConfig;
+use crate::cognitive_engine::engine::CognitiveEngine;
 use rtfs::ast::TopLevel;
 
 /// Extract the first top-level `(intent …)` s-expression from the given text.
@@ -469,7 +469,9 @@ Now generate the RTFS graph for this goal:"#;
     /// Validate plan using LLM provider
     async fn validate_plan(&self, plan: &Plan) -> Result<bool, RuntimeError> {
         let plan_content = match &plan.body {
-            crate::types::PlanBody::Source(content) | crate::types::PlanBody::Rtfs(content) => content,
+            crate::types::PlanBody::Source(content) | crate::types::PlanBody::Rtfs(content) => {
+                content
+            }
             crate::types::PlanBody::Binary(_) | crate::types::PlanBody::Wasm(_) => {
                 return Err(RuntimeError::Generic(
                     "Binary/WASM plans not supported for validation".to_string(),
