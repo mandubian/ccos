@@ -242,7 +242,6 @@ impl SecureStandardLibrary {
         );
     }
 
-
     pub(crate) fn load_comparison_functions(env: &mut Environment) {
         // Comparison functions (safe, pure)
         env.define(
@@ -2156,7 +2155,7 @@ impl SecureStandardLibrary {
                             let msg = "Host effect required in group-by key function".to_string();
                             #[cfg(not(feature = "effect-boundary"))]
                             let msg = "Host call required in group-by key function".to_string();
-                            return Err(RuntimeError::Generic(msg))
+                            return Err(RuntimeError::Generic(msg));
                         }
                     }
                 }
