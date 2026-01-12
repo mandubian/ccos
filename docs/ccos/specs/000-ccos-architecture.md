@@ -19,7 +19,16 @@ Key Benefits:
 
 ## Core Concepts
 
-### 1. Intent: The 'Why'
+### 1. Execution Modes
+
+CCOS operates in two distinct modes, sharing the same underlying capability and safety kernel:
+
+- **Autonomous Mode (Target State)**: CCOS acts as the complete agent. The **Intent Graph** drives the system, the **Arbiter** plans, and the **Orchestrator** executes. This is for background, self-directed tasks.
+- **Interactive Mode (MCP Server)**: CCOS acts as the "Body" for an external "Brain" (like an IDE AI or Chatbot). The external agent drives the intent; CCOS provides the **Capabilities**, **Memory**, and **Audit Log** via the Model Context Protocol (MCP). The **Session** replaces the complex Intent Graph for linear, user-driven tasks.
+
+*(See [007: Interactive Mode](./007-mcp-server-interactive-mode.md) for details)*
+
+### 2. Intent: The 'Why' (Autonomous Mode)
 Intents originate from natural language goals provided by users or systems. The Arbiter, leveraging LLM capabilities, transforms this ambiguous text into a structured, immutable RTFS Map stored in the Intent Graph. This RTFS format offers superior expressiveness over plain JSON—homoiconic s-expressions enable nested semantics, symbolic references, and easy transformation into executable plans. The Intent represents objectives with metadata like priority, constraints, and dependencies.
 
 **Sample Intent** (JSON-like for readability; natively an RTFS Map):
@@ -34,7 +43,7 @@ Intents originate from natural language goals provided by users or systems. The 
 ```
 Intents evolve immutably: New versions link to priors based on outcomes, feeding back into the graph for contextual planning.
 
-### 2. Plan: The 'How' in Pure RTFS
+### 3. Plan: The 'How' in Pure RTFS (Autonomous Mode)
 Building on the structured Intent, the Arbiter again employs LLM to generate RTFS source code—a declarative, pure program that the Orchestrator compiles into immutable IR. This IR consists of pure functions for data transformation and explicit yields for effects. No internal mutation: State is threaded through arguments or delegated to host capabilities (e.g., KV stores). 
 
 In production, the workflow favors compiling RTFS source to IR once, verifying it thoroughly, and executing the cached IR multiple times for performance and security. For flexibility in dynamic or exploratory scenarios (e.g., quick iterations on new intents), the system supports on-the-fly compilation from the Arbiter's freshly generated source, preserving RTFS's deterministic purity and reentrancy.

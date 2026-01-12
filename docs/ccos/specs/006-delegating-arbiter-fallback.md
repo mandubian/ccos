@@ -95,9 +95,9 @@ The system logs parsing attempts to `logs/arbiter_llm.log`:
 
 ## Related Files
 
-- `rtfs_compiler/src/ccos/arbiter/delegating_arbiter.rs` - Main implementation
-- `rtfs_compiler/src/ccos/arbiter/llm_provider.rs` - LLM provider interface
-- `rtfs_compiler/src/parser.rs` - RTFS parser
+- `ccos/src/arbiter/delegating_arbiter.rs` - Main implementation
+- `ccos/src/arbiter/llm_provider.rs` - LLM provider interface
+- `rtfs/src/parser/mod.rs` - RTFS parser (formerly `parser.rs`)
 - `logs/arbiter_llm.log` - Runtime logging
 
 ## Migration Notes

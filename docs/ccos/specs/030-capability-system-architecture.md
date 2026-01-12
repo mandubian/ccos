@@ -239,33 +239,31 @@ capabilities/
 
 ## 4. Capability Lifecycle
 
-### 4.1 Discovery → Registration → Execution Flow
+### 4.1 Discovery → Approval → Execution Flow
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
-│  Discovery  │────▶│ Registration │────▶│    Execution    │
-│   Sources   │     │   Pipeline   │     │                 │
-└─────────────┘     └──────────────┘     └─────────────────┘
-      │                    │                      │
-      ▼                    ▼                      ▼
- ┌─────────┐         ┌──────────┐          ┌──────────┐
- │ MCP     │         │ Validate │          │ Provider │
- │ OpenAPI │         │ Govern   │          │ Execute  │
- │ A2A     │         │ Catalog  │          │ Cache    │
- │ Web     │         │ Version  │          │ Monitor  │
- └─────────┘         └──────────┘          └──────────┘
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐     ┌─────────────────┐
+│  Discovery  │────▶│   Pending    │────▶│ Approval &   │────▶│    Execution    │
+│   Sources   │     │   Review     │     │ Registration │     │                 │
+└─────────────┘     └──────────────┘     └──────────────┘     └─────────────────┘
+      │                    │                    │                      │
+      ▼                    ▼                    ▼                      ▼
+ ┌─────────┐         ┌──────────┐         ┌──────────┐           ┌──────────┐
+ │ MCP     │         │ Gen RTFS │         │ Validate │           │ Provider │
+ │ OpenAPI │         │ Review   │         │ Promote  │           │ Execute  │
+ │ A2A     │         │ Audit    │         │ Catalog  │           │ Cache    │
+ │ Web     │         │          │         │ Version  │           │ Monitor  │
+ └─────────┘         └──────────┘         └──────────┘           └──────────┘
 ```
 
 ### 4.2 Registration Pipeline
 
-1. **Manifest Creation**: Build `CapabilityManifest` from source
-2. **Domain/Category Inference**: Automatically classify
-3. **Validation**: Schema validation, static analysis
-4. **Governance Check**: Apply policies (trust, permissions)
-5. **Version Comparison**: Check for breaking changes
-6. **Marketplace Registration**: Store in memory
-7. **Catalog Indexing**: Index for search
-8. **RTFS Export** (optional): Persist to filesystem
+1. **Discovery**: `IntrospectionService` identifies capabilities from remote sources.
+2. **Persistence**: Generated RTFS files are stored in `capabilities/servers/pending/`.
+3. **Approval Request**: An entries is added to the `UnifiedApprovalQueue`.
+4. **Promotion**: Upon approval, files are moved to `capabilities/servers/approved/`.
+5. **Marketplace Registration**: The `CapabilityMarketplace` loads the approved files.
+6. **Catalog Indexing**: Index for search.
 
 ### 4.3 Versioning and Updates
 

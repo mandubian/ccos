@@ -11,6 +11,8 @@ Plans in CCOS are executable RTFS 2.0 programs—compiled, immutable IR represen
 
 Core Idea: Plans are data transformers. Effects (I/O, state) yield to CCOS; local logic (maps, lets) runs purely. Reentrancy: Execution can pause/resume without side effects, using chain for state.
 
+> **Note on Interactive Mode**: In the **MPC Server** implementation, full Orchestration is bypassed in favor of a simpler **Session** model. Here, the external agent acts as the Orchestrator, submitting tool calls one by one. The Session accumulates these steps, which can ostensibly be replayed as a linear RTFS plan. See [007: Interactive Mode](./007-mcp-server-interactive-mode.md).
+
 ## Core Concepts
 
 ### 1. Plan Structure

@@ -1,15 +1,15 @@
-# CCOS: Cognitive Computing Operating System
+# CCOS: Cognitive Computing Operating System (and RTFS, its kernel language)
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/mandubian/ccos/actions)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Guides
+An architecture that gives AI models more execution and logical power — while keeping every effect traceable and every decision verifiable.
 
-- CCOS/RTFS Guides index: docs/ccos/guides/README.md
+## Documentation Navigation
 
-# CCOS: Cognitive Computing Operating System (and RTFS, its kernel language)
-
-An architecture that gives AI models more execution and logical power—while keeping every effect traceable and every decision verifiable.
+- **Guides Index**: [docs/ccos/guides/README.md](../guides/README.md)
+- **Documentation Hub**: [docs/doc_organization.md](../../doc_organization.md)
+- **RTFS 2.0 Spec Hub**: [docs/rtfs-2.0/specs/README.md](../../rtfs-2.0/specs/README.md)
 
 ---
 
@@ -133,31 +133,31 @@ CCOS complements open protocols. External tools and agents appear as capabilitie
 ## Getting started
 
 1) Explore the vision and architecture
-- Documentation Hub: ./docs/doc_organization.md
-- CCOS Core Specifications:
-  - System Architecture: ./docs/ccos/specs/000-ccos-architecture.md
-  - Intent Graph: ./docs/ccos/specs/001-intent-graph.md
-  - Plans & Orchestration: ./docs/ccos/specs/002-plans-and-orchestration.md
-  - Causal Chain: ./docs/ccos/specs/003-causal-chain.md
-  - Arbiter & Delegation: ./docs/ccos/specs/006-arbiter-and-cognitive-control.md
-  - Context Horizon: ./docs/ccos/specs/009-context-horizon.md
-  - **Capability System**: ./docs/ccos/specs/030-capability-system-architecture.md
-  - **MCP Discovery**: ./docs/ccos/specs/031-mcp-discovery-unified-service.md
-  - Working Memory: ./docs/ccos/specs/013-working-memory.md
-  - **Missing Capability Resolution**: ./docs/ccos/specs/032-missing-capability-resolution.md
-  - **Importers & Synthesis**: ./docs/ccos/specs/033-capability-importers-and-synthesis.md
-  - **Two-Tier Governance**: ./docs/ccos/specs/035-two-tier-governance.md
-  - **Execution Modes**: ./docs/ccos/specs/execution-modes.md
-  - **Semantic Plan Judge**: ./docs/ccos/specs/041-semantic-plan-judge.md
-  - **Execution Hints**: ./docs/ccos/specs/040-execution-hints.md
+- **Documentation Hub**: [docs/doc_organization.md](../../doc_organization.md)
+- **CCOS Core Specifications**:
+  - **System Architecture**: [000-ccos-architecture.md](000-ccos-architecture.md)
+  - **Intent Graph**: [001-intent-graph.md](001-intent-graph.md)
+  - **Plans & Orchestration**: [002-plans-and-orchestration.md](002-plans-and-orchestration.md)
+  - **Causal Chain**: [003-causal-chain.md](003-causal-chain.md)
+  - **Arbiter & Delegation**: [006-arbiter-and-cognitive-control.md](006-arbiter-and-cognitive-control.md)
+  - **Context Horizon**: [009-context-horizon.md](009-context-horizon.md)
+  - **Capability System**: [030-capability-system-architecture.md](030-capability-system-architecture.md) (Strict approval & quarantine)
+  - **MCP Discovery**: [031-mcp-discovery-unified-service.md](031-mcp-discovery-unified-service.md) (Unified service & approval flow)
+  - **Working Memory**: [013-working-memory.md](013-working-memory.md)
+  - **Missing Capability Resolution**: [032-missing-capability-resolution.md](032-missing-capability-resolution.md)
+  - **Importers & Synthesis**: [033-capability-importers-and-synthesis.md](033-capability-importers-and-synthesis.md)
+  - **Two-Tier Governance**: [035-two-tier-governance.md](035-two-tier-governance.md)
+  - **Execution Modes**: [execution-modes.md](execution-modes.md)
+  - **Semantic Plan Judge**: [041-semantic-plan-judge.md](041-semantic-plan-judge.md)
+  - **Execution Hints**: [040-execution-hints.md](040-execution-hints.md)
 
 2) Understand the RTFS language
-- RTFS 2.0 Spec Hub: ./docs/rtfs-2.0/specs/README.md
-- RTFS & CCOS Integration: ./docs/rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md
+- **RTFS 2.0 Spec Hub**: [docs/rtfs-2.0/specs/README.md](../../rtfs-2.0/specs/README.md)
+- **RTFS & CCOS Integration**: [13-rtfs-ccos-integration-guide.md](../../rtfs-2.0/specs/13-rtfs-ccos-integration-guide.md)
 
 3) Dive into implementation
-- Reference implementation: ./rtfs_compiler/ (Rust)
-- Reentrance demo: ./rtfs_compiler/examples/rtfs_reentrance_demo.rs
+- **Reference implementation**: Rust crates [ccos](../../ccos) and [rtfs](../../rtfs)
+- **Reentrance demo**: [rtfs_reentrance_demo.rs](../../ccos/examples/rtfs_reentrance_demo.rs)
 
 ## Development status
 
@@ -171,11 +171,14 @@ CCOS is active and evolving. The RTFS 2.0 migration and reentrance demo are merg
 | Context Horizon            | Enhanced          | Added reduction strategies, boundaries, LLM integration    |
 | Working Memory            | Enhanced          | Backend abstraction, boundaries, reduction strategies       |
 | Plans & Orchestration    | Enhanced          | Added MicroVM integration, step profiling             |
-| Capability System         | Enhanced          | Added version comparison, breaking change detection       |
-| Orchestrator              | Basic Complete    | Yield-resume engine; deterministic execution         |
-| MCP Discovery             | Complete          | Unified service with domain inference, caching       |
+| Capability System         | Enhanced          | Strict quarantine logic; approval-based recruitment   |
+| Orchestrator              | Complete          | Yield-resume engine; deterministic execution         |
+| MCP Discovery             | Complete          | Unified service; mandatory approval queue flow        |
+| Unified Approval Queue    | Complete          | Secure lifecycle for servers and secrets              |
 | Missing Cap Resolution    | Complete          | 4 strategies, backoff, risk assessment               |
 | Governance Kernel         | Basic Complete    | Plan/yield validation; quotas/ACLs                   |
+| Semantic Plan Judge       | Complete          | LLM-based common sense validation of plans           |
+| Execution Hints           | Complete          | Two-tier governance for retries, timeouts, fallbacks |
 | Delegation Engine         | Complete          | StaticDelegationEngine, L1 cache, ModelProvider (simple DE deprecated)|
 | Arbiter (LLM Bridge)      | In Progress       | Constrained outputs; plan compilation pipeline       |
 | RTFS 2.0 Language         | In Progress       | Purity, yields, IR verification, reentrancy          |
