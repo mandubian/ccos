@@ -428,6 +428,9 @@ If no API links are found, return empty arrays. Only include links that are clea
         format!(
             r#"You are an API documentation parser. Extract REST API endpoint information from the following documentation text.
 
+CRITICAL INSTRUCTION:
+'base_url' must be the actual API endpoint where requests are sent (e.g. 'https://api.example.com/v1'), NOT the documentation URL. Look for "Base URL", "Endpoint", "Host", or code blocks showing curl requests.
+
 API Domain: {}
 
 Documentation text:

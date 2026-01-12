@@ -13,7 +13,7 @@
 //! The HTTP transport enables state persistence across client sessions.
 
 use chrono;
-use sha2::Digest;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -22,31 +22,41 @@ use clap::{Parser, ValueEnum};
 use serde_json::json;
 use tokio::sync::RwLock;
 
+use ccos::approval::{
+    queue::{RiskAssessment, RiskLevel},
+    UnifiedApprovalQueue,
+};
 use ccos::arbiter::llm_provider::LlmProvider;
-use ccos::approval::{queue::{RiskAssessment, RiskLevel}, types::ApprovalCategory, UnifiedApprovalQueue};
 
 use ccos::types::Plan;
 
 // ModularPlanner imports for LLM-based decomposition
 // (No currently used imports)
 
-use ccos::CCOS;
-use ccos::types::StorableIntent;
-use ccos::utils::value_conversion::{rtfs_value_to_json, json_to_rtfs_value};
-use rtfs::runtime::error::{RuntimeResult, RuntimeError};
-use rtfs::runtime::values::Value;
-use rtfs::runtime::security::RuntimeContext;
+use ccos::mcp::core::MCPDiscoveryService;
+use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::catalog::CatalogFilter;
 use ccos::causal_chain::CausalChain;
 use ccos::discovery::llm_discovery::LlmDiscoveryService;
-use ccos::capability_marketplace::CapabilityMarketplace;
+use ccos::mcp::http_transport::{run_http_transport_with_approvals, HttpTransportConfig};
 use ccos::mcp::server::MCPServer;
-use ccos::capability_marketplace::mcp_discovery::{MCPServerConfig, MCPDiscoveryProvider};
-use ccos::mcp::http_transport::{HttpTransportConfig, run_http_transport_with_approvals};
-use ccos::synthesis::dialogue::capability_synthesizer::{CapabilitySynthesizer, SynthesisRequest};
 use ccos::secrets::SecretStore;
-use ccos::utils::fs::get_workspace_root;
 use ccos::synthesis::core::schema_serializer::type_expr_to_rtfs_pretty;
+use ccos::synthesis::dialogue::capability_synthesizer::{CapabilitySynthesizer, SynthesisRequest};
+use ccos::synthesis::mcp_introspector::MCPIntrospector;
+use futures::future::BoxFuture;
+use ccos::types::StorableIntent;
+use ccos::utils::fs::get_workspace_root;
+use ccos::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
+use ccos::mcp::session::{
+    create_session_store, save_session, Session, SessionStore,
+};
+use ccos::CCOS;
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
+use rtfs::runtime::security::RuntimeContext;
+use ccos::working_memory::{
+    AgentMemory, InMemoryJsonlBackend, LearnedPattern, WorkingMemory,
+};
 
 // ============================================================================
 // RTFS Teaching Tools Constants
@@ -292,434 +302,7 @@ impl LlmProvider for StubLlmProvider {
 // ============================================================================
 // Session Management Types
 // ============================================================================
-
-/// A single step in an execution session
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ExecutionStep {
-    pub step_number: usize,
-    pub capability_id: String,
-    pub inputs: serde_json::Value,
-    pub result: serde_json::Value,
-    pub rtfs_code: String,
-    pub success: bool,
-    pub executed_at: String,
-}
-
-/// An execution session that tracks steps toward a goal
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Session {
-    pub id: String,
-    pub goal: String,
-    /// The original user intent that triggered this session (preserved verbatim)
-    pub original_goal: Option<String>,
-    pub steps: Vec<ExecutionStep>,
-    pub context: std::collections::HashMap<String, serde_json::Value>,
-    pub created_at: String,
-}
-
-impl Session {
-    pub fn new(goal: &str) -> Self {
-        let id = format!(
-            "session_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0)
-        );
-
-        Self {
-            id,
-            goal: goal.to_string(),
-            original_goal: Some(goal.to_string()),
-            steps: Vec::new(),
-            context: std::collections::HashMap::new(),
-            created_at: chrono::Utc::now().to_rfc3339(),
-        }
-    }
-
-    /// Create a new session with an explicit original goal
-    pub fn new_with_original_goal(goal: &str, original_goal: &str) -> Self {
-        let mut session = Self::new(goal);
-        session.original_goal = Some(original_goal.to_string());
-        session
-    }
-
-    pub fn add_step(
-        &mut self,
-        capability_id: &str,
-        inputs: serde_json::Value,
-        result: serde_json::Value,
-        success: bool,
-    ) -> ExecutionStep {
-        let rtfs_code = Self::inputs_to_rtfs(capability_id, &inputs);
-        let step = ExecutionStep {
-            step_number: self.steps.len() + 1,
-            capability_id: capability_id.to_string(),
-            inputs,
-            result,
-            rtfs_code,
-            success,
-            executed_at: chrono::Utc::now().to_rfc3339(),
-        };
-        self.steps.push(step.clone());
-        step
-    }
-
-    /// Convert JSON inputs to RTFS call syntax
-    pub fn inputs_to_rtfs(capability_id: &str, inputs: &serde_json::Value) -> String {
-        if inputs.is_null() || (inputs.is_object() && inputs.as_object().unwrap().is_empty()) {
-            return format!("(call \"{}\")", capability_id);
-        }
-
-        // Convert JSON to RTFS-compatible string using our internal helper
-        // that ensures space-separated maps (valid RTFS) instead of comma-separated
-        let rtfs_string = Self::json_to_rtfs(inputs);
-        format!("(call \"{}\" {})", capability_id, rtfs_string)
-    }
-
-
-
-    /// Generate the complete RTFS plan from all steps
-    pub fn to_rtfs_plan(&self) -> String {
-        if self.steps.is_empty() {
-            return format!(
-                ";; Session: {} - No steps executed\n;; Goal: {}",
-                self.id, self.goal
-            );
-        }
-
-        if self.steps.len() == 1 {
-            return format!(
-                ";; Goal: {}\n;; Session: {}\n\n{}",
-                self.goal, self.id, self.steps[0].rtfs_code
-            );
-        }
-
-        // Multiple steps - wrap in (do ...)
-        let mut lines = vec![
-            format!(";; Goal: {}", self.goal),
-            format!(";; Session: {}", self.id),
-            "".to_string(),
-            "(do".to_string(),
-        ];
-
-        for step in &self.steps {
-            lines.push(format!("  {}", step.rtfs_code));
-        }
-        lines.push(")".to_string());
-
-        lines.join("\n")
-    }
-
-    /// Generate a complete RTFS session file with metadata, causal chain, and replay plan
-    pub fn to_rtfs_session(&self) -> String {
-        let timestamp = chrono::Utc::now().timestamp();
-        
-        let mut lines = vec![
-            format!(";; CCOS Session: {}", self.id),
-            format!(";; Goal: {}", self.goal),
-            format!(";; Created: {}", self.created_at),
-            "".to_string(),
-        ];
-
-        lines.push(";; === SESSION METADATA ===".to_string());
-        lines.push("(def session-meta".to_string());
-        lines.push("  {".to_string());
-        lines.push(format!("    :session-id \"{}\"", self.id));
-        lines.push(format!("    :goal \"{}\"", self.goal.replace("\"", "\\\"")));
-        if let Some(ref og) = self.original_goal {
-            lines.push(format!("    :original-goal \"{}\"", og.replace("\"", "\\\"")));
-        }
-        lines.push(format!("    :created-at {}", timestamp));
-        lines.push(format!("    :step-count {}", self.steps.len()));
-        lines.push("  })".to_string());
-        lines.push("".to_string());
-
-        // Add causal chain
-        lines.push(";; === CAUSAL CHAIN ===".to_string());
-        lines.push("(def causal-chain".to_string());
-        lines.push("  [".to_string());
-        
-        for (i, step) in self.steps.iter().enumerate() {
-            lines.push("    {".to_string());
-            lines.push(format!("      :step-number {}", step.step_number));
-            lines.push(format!("      :capability-id \"{}\"", step.capability_id));
-            lines.push(format!("      :inputs {}", Self::json_to_rtfs(&step.inputs)));
-            lines.push(format!("      :rtfs-code \"{}\"", step.rtfs_code.replace("\"", "\\\"")));
-            lines.push(format!("      :success {}", step.success));
-            lines.push(format!("      :executed-at \"{}\"", step.executed_at));
-            if i < self.steps.len() - 1 {
-                lines.push("    }".to_string());
-            } else {
-                lines.push("    }])".to_string());
-            }
-        }
-
-        if self.steps.is_empty() {
-            lines.push("  ])".to_string());
-        }
-
-        lines.push("".to_string());
-
-        // Add replay plan as a function (not executed on load)
-        lines.push(";; === REPLAY PLAN (call (replay-session) to execute) ===".to_string());
-        lines.push("(defn replay-session []".to_string());
-        
-        if self.steps.is_empty() {
-            lines.push("  nil)".to_string());
-        } else if self.steps.len() == 1 {
-            lines.push(format!("  {})", self.steps[0].rtfs_code));
-        } else {
-            lines.push("  (do".to_string());
-            for step in &self.steps {
-                lines.push(format!("    {}", step.rtfs_code));
-            }
-            lines.push("  ))".to_string());
-        }
-
-        lines.join("\n")
-    }
-
-    /// Convert JSON value to RTFS representation
-    fn json_to_rtfs(value: &serde_json::Value) -> String {
-        match value {
-            serde_json::Value::Null => "nil".to_string(),
-            serde_json::Value::Bool(b) => b.to_string(),
-            serde_json::Value::Number(n) => n.to_string(),
-            serde_json::Value::String(s) => format!("\"{}\"", s.replace("\"", "\\\"")),
-            serde_json::Value::Array(arr) => {
-                let items: Vec<String> = arr.iter().map(Self::json_to_rtfs).collect();
-                format!("[{}]", items.join(" "))
-            }
-            serde_json::Value::Object(obj) => {
-                let pairs: Vec<String> = obj
-                    .iter()
-                    .map(|(k, v)| format!(":{} {}", k, Self::json_to_rtfs(v)))
-                    .collect();
-                format!("{{{}}}", pairs.join(" "))
-            }
-        }
-    }
-}
-
-/// Session store - thread-safe storage for active sessions
-pub type SessionStore = Arc<RwLock<std::collections::HashMap<String, Session>>>;
-
-pub fn create_session_store() -> SessionStore {
-    Arc::new(RwLock::new(std::collections::HashMap::new()))
-}
-
-/// Generate a URL-safe slug from a goal string
-fn slugify_goal(goal: &str) -> String {
-    goal.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '_' })
-        .collect::<String>()
-        .split('_')
-        .filter(|s| !s.is_empty())
-        .take(5) // Limit to 5 words
-        .collect::<Vec<_>>()
-        .join("_")
-        .chars()
-        .take(50) // Limit total length
-        .collect()
-}
-
-/// Save a session to an RTFS file in the sessions directory
-pub fn save_session(
-    session: &Session,
-    sessions_dir: Option<&std::path::Path>,
-    filename: Option<&str>,
-) -> std::io::Result<std::path::PathBuf> {
-    let dir = match sessions_dir {
-        Some(d) => d.to_path_buf(),
-        None => ccos::utils::fs::get_configured_sessions_path(),
-    };
-    
-    // Create sessions directory if it doesn't exist
-    std::fs::create_dir_all(&dir)?;
-    
-    // Generate filename: use override if provided, otherwise slugify goal
-    let actual_filename = match filename {
-        Some(f) => {
-            if f.ends_with(".rtfs") {
-                f.to_string()
-            } else {
-                format!("{}.rtfs", f)
-            }
-        }
-        None => {
-            let goal_slug = slugify_goal(&session.goal);
-            format!("{}_{}.rtfs", session.id, goal_slug)
-        }
-    };
-    
-    let filepath = dir.join(&actual_filename);
-    
-    // Generate and write RTFS content
-    let content = session.to_rtfs_session();
-    std::fs::write(&filepath, content)?;
-    
-    eprintln!("[ccos-mcp] Session saved to: {}", filepath.display());
-    Ok(filepath)
-}
-
-/// Find a session on disk by its ID
-async fn find_session_on_disk(session_id: &str) -> Option<Session> {
-    let sessions_dir = ccos::utils::fs::get_configured_sessions_path();
-    if !sessions_dir.exists() {
-        return None;
-    }
-
-    let Ok(entries) = std::fs::read_dir(sessions_dir) else { return None; };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "rtfs") {
-            let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-            if filename.starts_with(session_id) {
-                if let Ok(content) = std::fs::read_to_string(path) {
-                    return parse_session_from_rtfs(&content);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Parse a Session struct from RTFS content
-fn parse_session_from_rtfs(content: &str) -> Option<Session> {
-    // Parse using rtfs::parser::parse which returns Vec<TopLevel>
-    let top_levels = match rtfs::parser::parse(content) {
-        Ok(tls) => tls,
-        Err(e) => {
-            eprintln!("[ccos-mcp] Failed to parse session RTFS: {:?}", e);
-            return None;
-        }
-    };
-    
-    let mut session_id = None;
-    let mut goal = None;
-    let mut original_goal = None;
-    let mut steps = Vec::new();
-    let mut created_at = chrono::Utc::now().to_rfc3339();
-
-    for tl in top_levels {
-        if let rtfs::ast::TopLevel::Expression(expr) = tl {
-            if let rtfs::ast::Expression::Def(def_expr) = expr {
-                if def_expr.symbol.0 == "session-meta" {
-                    if let rtfs::ast::Expression::Map(map) = &*def_expr.value {
-                        for (key, val) in map {
-                            let key_str = key.to_string();
-                            match key_str.as_str() {
-                                ":session-id" => {
-                                    if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
-                                        session_id = Some(s.clone());
-                                    }
-                                }
-                                ":goal" => {
-                                    if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
-                                        goal = Some(s.clone());
-                                    }
-                                }
-                                ":original-goal" => {
-                                    if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
-                                        original_goal = Some(s.clone());
-                                    }
-                                }
-                                ":created-at" => {
-                                    if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::Integer(ts)) = val {
-                                        if let Some(dt) = chrono::DateTime::from_timestamp(*ts, 0) {
-                                            created_at = dt.to_rfc3339();
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                } else if def_expr.symbol.0 == "causal-chain" {
-                    if let rtfs::ast::Expression::Vector(vec) = &*def_expr.value {
-                        for step_expr in vec {
-                            if let rtfs::ast::Expression::Map(step_map) = step_expr {
-                                let mut step_number = 0;
-                                let mut capability_id = String::new();
-                                let mut inputs = json!({});
-                                let mut success = true;
-                                let mut executed_at = String::new();
-                                let mut rtfs_code_opt = None;
-
-                                for (key, val) in step_map {
-                                    let key_str = key.to_string();
-                                    match key_str.as_str() {
-                                        ":step-number" => {
-                                            if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::Integer(n)) = val {
-                                                step_number = *n as usize;
-                                            }
-                                        }
-                                        ":capability-id" => {
-                                            if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
-                                                capability_id = s.clone();
-                                            }
-                                        }
-                                        ":inputs" => {
-                                            let rtfs_val = Value::from(val.clone());
-                                            if let Ok(j) = rtfs_value_to_json(&rtfs_val) {
-                                                inputs = j;
-                                            }
-                                        }
-                                        ":success" => {
-                                            if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::Boolean(b)) = val {
-                                                success = *b;
-                                            }
-                                        }
-                                        ":executed-at" => {
-                                            if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
-                                                executed_at = s.clone();
-                                            }
-                                        }
-                                        ":rtfs-code" => {
-                                            if let rtfs::ast::Expression::Literal(rtfs::ast::Literal::String(s)) = val {
-                                                rtfs_code_opt = Some(s.clone());
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                
-                                let rtfs_code = rtfs_code_opt.unwrap_or_else(|| {
-                                    Session::inputs_to_rtfs(&capability_id, &inputs)
-                                });
-
-                                steps.push(ExecutionStep {
-                                    step_number,
-                                    capability_id,
-                                    inputs,
-                                    result: json!({}),
-                                    rtfs_code,
-                                    success,
-                                    executed_at,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if let (Some(id), Some(g)) = (session_id, goal) {
-        Some(Session {
-            id,
-            goal: g,
-            original_goal,
-            steps,
-            context: HashMap::new(),
-            created_at,
-        })
-    } else {
-        None
-    }
-}
+// Moved to ccos::mcp::session
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Transport {
@@ -766,8 +349,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         eprintln!("[ccos-mcp] Transport: {:?}", args.transport);
     }
 
-
-
     // Load agent config
     let agent_config = match ccos::examples_common::builder::load_agent_config(&args.config) {
         Ok(cfg) => {
@@ -798,11 +379,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .map(|cwd| cwd.join(&config_path))
                 .unwrap_or(config_path)
         };
-        
+
         if let Some(config_parent) = abs_config_path.parent() {
             if let Some(workspace_root) = config_parent.parent() {
                 if args.verbose {
-                    eprintln!("[ccos-mcp] Setting workspace root to: {}", workspace_root.display());
+                    eprintln!(
+                        "[ccos-mcp] Setting workspace root to: {}",
+                        workspace_root.display()
+                    );
                 }
                 ccos::utils::fs::set_workspace_root(workspace_root.to_path_buf());
             } else {
@@ -817,27 +401,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ccos::intent_graph::config::IntentGraphConfig::default(),
         None,
         agent_config.clone(),
-        None
-    ).await.map_err(|e| format!("Failed to initialize CCOS: {}", e))?;
+        None,
+    )
+    .await
+    .map_err(|e| format!("Failed to initialize CCOS: {}", e))?;
     let ccos = Arc::new(ccos);
 
     // Extract components for compatibility
     let marketplace = ccos.get_capability_marketplace();
     let _causal_chain = Arc::new(StdMutex::new(CausalChain::new()?)); // Warning: CCOS creates its own chain, but here we are creating a NEW one because CCOS chain is Mutex (Async/Sync mismatch) or we want to share?
-    // Wait, CCOS has pub causal_chain: Arc<Mutex<CausalChain>>.
-    // ccos-mcp uses Arc<StdMutex<CausalChain>>.
-    // If CCOS uses std::sync::Mutex (checked in types.rs), then types match.
-    // So I should use:
+                                                                      // Wait, CCOS has pub causal_chain: Arc<Mutex<CausalChain>>.
+                                                                      // ccos-mcp uses Arc<StdMutex<CausalChain>>.
+                                                                      // If CCOS uses std::sync::Mutex (checked in types.rs), then types match.
+                                                                      // So I should use:
     let causal_chain = ccos.causal_chain.clone();
 
     // Populate marketplace with approved capabilities
     let workspace_root = ccos::utils::fs::get_workspace_root();
-    let _ = marketplace.import_capabilities_from_rtfs_dir_recursive(workspace_root.join("capabilities/servers/approved")).await;
-    let _ = marketplace.import_capabilities_from_rtfs_dir_recursive(workspace_root.join("capabilities/core")).await;
-    let _ = marketplace.import_capabilities_from_rtfs_dir_recursive(workspace_root.join("capabilities/learned")).await;
+    let _ = marketplace
+        .import_capabilities_from_rtfs_dir_recursive(
+            workspace_root.join("capabilities/servers/approved"),
+        )
+        .await;
+    let _ = marketplace
+        .import_capabilities_from_rtfs_dir_recursive(workspace_root.join("capabilities/core"))
+        .await;
+    let _ = marketplace
+        .import_capabilities_from_rtfs_dir_recursive(workspace_root.join("capabilities/learned"))
+        .await;
 
-    // Create discovery service
-    let discovery_service = if let Some(config) = &agent_config {
+    // Create discovery services
+    let llm_discovery = if let Some(config) = &agent_config {
         // Try to find the requested profile
         if let Some(profile) =
             ccos::examples_common::builder::find_llm_profile(config, &args.profile)
@@ -924,11 +518,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
+    let mcp_discovery = Arc::new(MCPDiscoveryService::new().with_marketplace(marketplace.clone()));
+
     // Create shared approval queue for both executor and HTTP UI
     let approval_queue = {
         let storage = ccos::approval::storage_file::FileApprovalStorage::new(
-            std::path::PathBuf::from(".ccos/approvals")
-        ).expect("Failed to create approval storage");
+            std::path::PathBuf::from(".ccos/approvals"),
+        )
+        .expect("Failed to create approval storage");
         UnifiedApprovalQueue::new(std::sync::Arc::new(storage))
     };
 
@@ -937,14 +534,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Register core CCOS tools
     let session_store = create_session_store();
+
+    // Initialize Agent Memory for Tangible Learning
+    let wm_backend = InMemoryJsonlBackend::new(None, None, None);
+    let working_memory = Arc::new(StdMutex::new(WorkingMemory::new(Box::new(wm_backend))));
+    let agent_memory = Arc::new(RwLock::new(AgentMemory::new("system-mcp", working_memory)));
+
+    // Try to load persisted memory
+    // We use a specific path in the workspace dot-dir
+    let memory_path = get_workspace_root().join(".ccos/agent_memory/system_memory.json");
+    if memory_path.exists() {
+        // We need an async block to await the lock
+        let am = agent_memory.clone();
+        let path = memory_path.clone();
+        tokio::spawn(async move {
+            let mut mem = am.write().await;
+            if let Err(e) = mem.load_from_disk(&path) {
+                eprintln!("[ccos-mcp] Failed to load agent memory: {}", e);
+            } else {
+                 eprintln!("[ccos-mcp] Loaded agent memory from {}", path.display());
+            }
+        });
+    }
+
     register_ccos_tools(
         &mut server,
         ccos.clone(),
         marketplace.clone(),
         causal_chain,
-        discovery_service,
+        llm_discovery,
+        mcp_discovery,
         session_store,
         approval_queue.clone(),
+        agent_memory.clone(), // Pass AgentMemory
     );
 
     if args.verbose {
@@ -959,7 +581,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 port: args.port,
                 keep_alive_secs: 30,
             };
-            run_http_transport_with_approvals(server, config, Some(approval_queue), Some(marketplace.clone())).await?;
+            run_http_transport_with_approvals(
+                server,
+                config,
+                Some(approval_queue),
+                Some(marketplace.clone()),
+            )
+            .await?;
         }
         Transport::Stdio => {
             if args.verbose {
@@ -975,18 +603,182 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
+// ============================================================================
+// Helper functionality
+// ============================================================================
+
+/// Helper to register a tool with both the MCP Server (for direct client access)
+/// and the CapabilityMarketplace (for agent discovery via ccos_search and internal execution)
+fn register_ecosystem_tool(
+    server: &mut MCPServer,
+    marketplace: Arc<CapabilityMarketplace>,
+    name: &str,
+    description: &str,
+    input_schema: serde_json::Value,
+    handler: Arc<dyn Fn(serde_json::Value) -> BoxFuture<'static, Result<serde_json::Value, String>> + Send + Sync>,
+) {
+    // 1. Register with MCP Server
+    let server_handler = handler.clone();
+    server.register_tool(
+        name,
+        description,
+        input_schema.clone(),
+        Box::new(move |p| {
+            let h = server_handler.clone();
+            Box::pin(async move {
+                h(p).await.map_err(|e| RuntimeError::Generic(e))
+            })
+        }),
+    );
+
+    // 2. Register with CapabilityMarketplace (async)
+    // We spawn a task because the marketplace registration is async but this function is sync
+    let name = name.to_string();
+    let description = description.to_string();
+    let mp_handler = handler.clone();
+    
+    // Wrap the handler for the Marketplace's different signature types
+    // Wrap the handler for the Marketplace's different signature types
+    let native_handler = Arc::new(move |p: &rtfs::runtime::Value| -> BoxFuture<'static, RuntimeResult<rtfs::runtime::Value>> {
+        let p_json_res = serde_json::to_value(p);
+        let h = mp_handler.clone();
+        Box::pin(async move {
+            let p_json = p_json_res.map_err(|e| RuntimeError::Generic(e.to_string()))?;
+            match h(p_json).await {
+                Ok(v) => serde_json::from_value(v).map_err(|e| RuntimeError::Generic(e.to_string())),
+                Err(e) => Err(RuntimeError::Generic(e)),
+            }
+        })
+    });
+
+    tokio::spawn(async move {
+        // Convert JSON schema to RTFS TypeExpr
+        let input_type_expr = MCPIntrospector::type_expr_from_json_schema(&input_schema).ok();
+        
+        if let Err(e) = marketplace.register_native_capability_with_schema(
+            name.clone(),
+            name.clone(),
+            description,
+            native_handler,
+            "system".to_string(),
+            input_type_expr,
+            None // Output schema unknown/any
+        ).await {
+            eprintln!("[CCOS] Failed to register ecosystem tool '{}' in marketplace: {}", name, e);
+        } else {
+            // eprintln!("[CCOS] Registered ecosystem tool '{}' in marketplace", name);
+        }
+    });
+}
+
 fn register_ccos_tools(
     server: &mut MCPServer,
     ccos: Arc<CCOS>,
     marketplace: Arc<CapabilityMarketplace>,
     causal_chain: Arc<StdMutex<CausalChain>>,
     discovery_service: Arc<LlmDiscoveryService>,
+    mcp_discovery_service: Arc<MCPDiscoveryService>,
     session_store: SessionStore,
     approval_queue: UnifiedApprovalQueue<ccos::approval::storage_file::FileApprovalStorage>,
+    agent_memory: Arc<RwLock<AgentMemory>>,
 ) {
     // ccos/discover_capabilities
     let mp = marketplace.clone();
-    server.register_tool(
+    // ccos_search
+    let mp = marketplace.clone();
+    let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        let mp = mp.clone();
+        Box::pin(async move {
+            let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let domains = params.get("domains").and_then(|v| v.as_array());
+            let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+            let min_score = params.get("min_score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+            if query.is_empty() {
+                return Ok(json!({
+                    "error": "query is required",
+                    "results": []
+                }));
+            }
+
+            // Use centralized catalog search
+            let catalog_opt = mp.get_catalog().await;
+            let catalog = match catalog_opt.as_ref() {
+                Some(c) => c,
+                None => return Ok(json!({
+                    "error": "Catalog service unavailable",
+                    "results": []
+                })),
+            };
+            
+            // Use keyword search which now includes improved matching logic
+            let hits = catalog.search_keyword(query, None, limit).await;
+            
+            #[derive(serde::Serialize)]
+            struct CapabilityInfo {
+                id: String,
+                name: String,
+                description: String,
+                usage: String,
+                input_schema: Option<serde_json::Value>,
+                domains: Vec<String>,
+            }
+
+            let mut scored_results: Vec<_> = hits
+                .into_iter()
+                .map(|h| {
+                    // Convert CatalogEntry to CapabilityInfo
+                    let id = h.entry.id.clone();
+                    let cap_info = CapabilityInfo {
+                        id: id.clone(),
+                        name: h.entry.name.clone().unwrap_or(id),
+                        description: h.entry.description.unwrap_or_default(),
+                        usage: format!("(call \"{}\" ...)", h.entry.search_blob.split_whitespace().next().unwrap_or("")), // Simplified usage
+                        input_schema: h.entry.input_schema.and_then(|s| serde_json::from_str(&s).ok()),
+                        domains: h.entry.domains.clone(),
+                    };
+                    (cap_info, h.score)
+                })
+                .filter(|(_, score)| (*score as f64) >= min_score) // min_score is f64, score is f64 (from CatalogHit)
+                .collect();
+
+            // Apply domain filter if provided
+            if let Some(domains) = domains {
+                let domain_strs: Vec<&str> = domains.iter().filter_map(|v| v.as_str()).collect();
+                if !domain_strs.is_empty() {
+                    scored_results = scored_results
+                        .into_iter()
+                        .filter(|(c, _)| {
+                            domain_strs.iter().any(|&d| {
+                                c.id.contains(d) || c.domains.iter().any(|cd| cd.contains(d))
+                            })
+                        })
+                        .collect();
+                }
+            }
+
+            // Sort by score descending
+            scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let total = scored_results.len();
+            let limited: Vec<_> = scored_results.into_iter().take(limit).collect();
+
+            Ok(json!({
+                "results": limited.iter().map(|(c, score)| json!({
+                    "id": c.id,
+                    "name": c.name,
+                    "description": c.description,
+                    "match_score": score,
+                    "input_schema": c.input_schema
+                })).collect::<Vec<_>>(),
+                "total": total,
+                "hint": if total > 0 { "Use ccos_execute_capability to run these" } else { "Try a different query or check available capabilities with ccos_list_capabilities" }
+            }))
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
         "ccos_search",
         "Search for capabilities by query, ID pattern, or domain. Use this to find capabilities before executing them.",
         json!({
@@ -1014,99 +806,8 @@ fn register_ccos_tools(
             },
             "required": ["query"]
         }),
-        Box::new(move |params| {
-            let mp = mp.clone();
-            Box::pin(async move {
-                let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                let domains = params.get("domains").and_then(|v| v.as_array());
-                let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-                let min_score = params.get("min_score").and_then(|v| v.as_f64()).unwrap_or(0.0);
-
-                if query.is_empty() {
-                    return Ok(json!({
-                        "error": "query is required",
-                        "results": []
-                    }));
-                }
-
-                // Use centralized catalog search
-                let catalog_opt = mp.get_catalog().await;
-                let catalog = match catalog_opt.as_ref() {
-                    Some(c) => c,
-                    None => return Ok(json!({
-                        "error": "Catalog service unavailable",
-                        "results": []
-                    })),
-                };
-                
-                // Use keyword search which now includes improved matching logic
-                let hits = catalog.search_keyword(query, None, limit).await;
-                
-                #[derive(serde::Serialize)]
-                struct CapabilityInfo {
-                    id: String,
-                    name: String,
-                    description: String,
-                    usage: String,
-                    input_schema: Option<serde_json::Value>,
-                    domains: Vec<String>,
-                }
-
-                let mut scored_results: Vec<_> = hits
-                    .into_iter()
-                    .map(|h| {
-                        // Convert CatalogEntry to CapabilityInfo
-                        let id = h.entry.id.clone();
-                        let cap_info = CapabilityInfo {
-                            id: id.clone(),
-                            name: h.entry.name.clone().unwrap_or(id),
-                            description: h.entry.description.unwrap_or_default(),
-                            usage: format!("(call \"{}\" ...)", h.entry.search_blob.split_whitespace().next().unwrap_or("")), // Simplified usage
-                            input_schema: h.entry.input_schema.and_then(|s| serde_json::from_str(&s).ok()),
-                            domains: h.entry.domains.clone(),
-                        };
-                        (cap_info, h.score)
-                    })
-                    .filter(|(_, score)| (*score as f64) >= min_score) // min_score is f64, score is f64 (from CatalogHit)
-                    .collect();
-
-                // Apply domain filter if provided
-                if let Some(domains) = domains {
-                    let domain_strs: Vec<&str> = domains.iter().filter_map(|v| v.as_str()).collect();
-                    if !domain_strs.is_empty() {
-                        scored_results = scored_results
-                            .into_iter()
-                            .filter(|(c, _)| {
-                                domain_strs.iter().any(|&d| {
-                                    c.id.contains(d) || c.domains.iter().any(|cd| cd.contains(d))
-                                })
-                            })
-                            .collect();
-                    }
-                }
-
-                // Sort by score descending
-                scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-                let total = scored_results.len();
-                let limited: Vec<_> = scored_results.into_iter().take(limit).collect();
-
-                Ok(json!({
-                    "results": limited.iter().map(|(c, score)| json!({
-                        "id": c.id,
-                        "name": c.name,
-                        "description": c.description,
-                        "match_score": score,
-                        "input_schema": c.input_schema
-                    })).collect::<Vec<_>>(),
-                    "total": total,
-                    "hint": if total > 0 { "Use ccos_execute_capability to run these" } else { "Try a different query or check available capabilities with ccos_list_capabilities" }
-                }))
-            })
-        }),
+        handler,
     );
-
-
 
     // ccos_suggest_apis - Pure LLM suggestions for external APIs (no auto-approval)
     // Returns suggestions for user selection, then user can approve and introspect
@@ -1244,7 +945,7 @@ fn register_ccos_tools(
                 };
 
                 let hits = catalog.search_keyword(query, None, 50).await;
-                
+
                 // Convert to results format expected by caller
                 let local_results: Vec<_> = hits
                     .iter()
@@ -1253,7 +954,7 @@ fn register_ccos_tools(
                     .map(|h| {
                          json!({
                             "id": h.entry.id,
-                            "name": h.entry.name.clone().unwrap_or_else(|| h.entry.id.clone()), 
+                            "name": h.entry.name.clone().unwrap_or_else(|| h.entry.id.clone()),
                             "description": h.entry.description.clone().unwrap_or_default(),
                             "match_score": h.score,
                             "source": "catalog"
@@ -1310,7 +1011,7 @@ fn register_ccos_tools(
                 for api in discovery_result.iter().take(3) {
                     // Create approval request
                     use ccos::approval::queue::{DiscoverySource, ServerInfo};
-                    
+
                     let server_info = ServerInfo {
                         name: api.name.clone(),
                         endpoint: api.endpoint.clone(),
@@ -1321,7 +1022,7 @@ fn register_ccos_tools(
                     };
 
                     let category = ApprovalCategory::ServerDiscovery {
-                        source: DiscoverySource::WebSearch { 
+                        source: DiscoverySource::WebSearch {
                             url: format!("llm-discovery:{}", query),
                         },
                         server_info: server_info.clone(),
@@ -1367,57 +1068,260 @@ fn register_ccos_tools(
     );
     END DISABLED */
 
-
     // ccos/log_thought
-    // Note: Direct CausalChain log_plan_event requires ActionType which is private.
-    // For now, we log to stderr and return success. In Phase 2, we'll expose a public
-    // logging API or make ActionType public.
-    let _cc = causal_chain.clone();
-    server.register_tool(
+    // Logs thought to AgentMemory and persists it.
+    let am_log = agent_memory.clone();
+    // ccos/log_thought
+    // Logs thought to AgentMemory and persists it.
+    let am_log = agent_memory.clone();
+    let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        let am = am_log.clone();
+        Box::pin(async move {
+            let thought = params.get("thought").and_then(|v| v.as_str()).unwrap_or("");
+            let plan_id = params.get("plan_id").and_then(|v| v.as_str()).unwrap_or("agent-thought");
+            let is_failure = params.get("is_failure").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            // Log to stderr for observability
+            eprintln!("[ccos/log_thought] plan={} thought={}", plan_id, thought);
+
+            // Store in memory
+            {
+                let memory = am.read().await;
+                
+                let mut tags = vec!["thought".to_string(), plan_id.to_string()];
+                if is_failure {
+                    tags.push("learning".to_string());
+                    tags.push("failure".to_string());
+                }
+
+                memory.store(
+                    format!("Thought: {}", plan_id),
+                    thought,
+                    &tags.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                ).map_err(|e| e.to_string())?;
+
+                // Save to disk
+                let path = get_workspace_root().join(".ccos/agent_memory/system_memory.json");
+                 memory.save_to_disk(&path).map_err(|e| e.to_string())?;
+            }
+
+            Ok(json!({
+                "success": true,
+                "logged": true,
+                "persisted": true
+            }))
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
         "ccos_log_thought",
-        "Record the agent's reasoning process into the CausalChain for learning",
+        "Record the agent's reasoning process (and occasional failures) into Agent Memory",
         json!({
             "type": "object",
             "properties": {
-                "plan_id": {
-                    "type": "string",
-                    "description": "Optional plan ID to associate with"
-                },
-                "thought": {
-                    "type": "string",
-                    "description": "The agent's reasoning or thought"
-                },
-                "context": {
-                    "type": "object",
-                    "description": "Optional context metadata (e.g., model, confidence)"
-                }
+                "plan_id": { "type": "string", "description": "Optional plan ID to associate with" },
+                "thought": { "type": "string", "description": "The agent's reasoning or thought" },
+                "context": { "type": "object", "description": "Context metadata" },
+                "is_failure": { "type": "boolean", "description": "If true, records this as a failure pattern" }
             },
             "required": ["thought"]
         }),
-        Box::new(move |params| {
-            Box::pin(async move {
-                let thought = params.get("thought").and_then(|v| v.as_str()).unwrap_or("");
-                let plan_id = params
-                    .get("plan_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("agent-thought");
+        handler,
+    );
 
-                // TODO: Integrate with CausalChain once we expose a public logging API
-                // For now, log to stderr for observability
-                eprintln!("[ccos/log_thought] plan={} thought={}", plan_id, thought);
+    // ccos/recall_memories
+    let am_recall = agent_memory.clone();
+    // ccos/recall_memories
+    let am_recall = agent_memory.clone();
+    let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        let am = am_recall.clone();
+        Box::pin(async move {
+            let tags_val = params.get("tags").and_then(|v| v.as_array());
+            let limit = params.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize);
+            
+            let tags: Vec<String> = if let Some(arr) = tags_val {
+                arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+            } else {
+                vec![]
+            };
+            
+            if tags.is_empty() {
+                return Err("At least one tag is required for recall".to_string());
+            }
+            
+            let tags_str: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
 
-                Ok(json!({
-                    "success": true,
-                    "logged": true,
-                    "note": "Logged to stderr; CausalChain integration pending"
-                }))
-            })
+            let memory = am.read().await;
+            let results = memory.recall_relevant(&tags_str, limit)
+                .map_err(|e| e.to_string())?;
+            
+            // Convert WorkingMemoryEntry to JSON
+            let result_json: Vec<serde_json::Value> = results.into_iter().map(|entry| {
+                json!({
+                    "id": entry.id.to_string(),
+                    "content": entry.content,
+                    "meta": entry.meta
+                })
+            }).collect();
+
+            Ok(json!({
+                "memories": result_json
+            }))
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos_recall_memories",
+        "Recall relevant memories or patterns based on tags",
+        json!({
+            "type": "object",
+            "properties": {
+                "tags": { "type": "array", "items": { "type": "string" }, "description": "Filter by tags (e.g. 'thought', 'failure', 'learning', 'agent-thought')" },
+                "limit": { "type": "integer", "description": "Max results" }
+            },
+            "required": ["tags"]
+         }),
+         handler,
+    );
+
+    // ccos/get_constitution
+    let ccos_const = ccos.clone();
+    // ccos/get_constitution
+    let ccos_const = ccos.clone();
+    let handler = Arc::new(move |_params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        let ccos = ccos_const.clone();
+        Box::pin(async move {
+            let rules = ccos.governance_kernel.get_rules();
+            let rules_json = serde_json::to_value(rules)
+                .map_err(|e| format!("Failed to serialize constitution: {}", e))?;
+            
+            Ok(json!({
+                "constitution": rules_json
+            }))
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos_get_constitution",
+        "Get the system constitution rules and policies",
+        json!({
+            "type": "object",
+            "properties": {},
+            "required": []
         }),
+        handler,
+    );
+
+    // ccos/get_guidelines
+    // ccos/get_guidelines
+    let handler = Arc::new(move |_params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        Box::pin(async move {
+            let docs_path = get_workspace_root().join("docs/agent_guidelines.md");
+            
+            if !docs_path.exists() {
+                 return Err("Guidelines file not found at docs/agent_guidelines.md".to_string());
+            }
+
+            let content = tokio::fs::read_to_string(&docs_path).await
+                .map_err(|e| format!("Failed to read guidelines: {}", e))?;
+            
+            Ok(json!({
+                "guidelines": content
+            }))
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos_get_guidelines",
+        "Get the official guidelines for AI agents operating within CCOS. Read this to understand how to interact effectively with the system.",
+        json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+        handler,
+    );
+    let am_learn = agent_memory.clone();
+    let am_learn = agent_memory.clone();
+    let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+         let am = am_learn.clone();
+         Box::pin(async move {
+             let pattern = params.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+             let context = params.get("context").and_then(|v| v.as_str()).unwrap_or("");
+             let outcome = params.get("outcome").and_then(|v| v.as_str()).unwrap_or("");
+             let confidence = params.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.8);
+
+             // Generate ID
+             let ts = chrono::Utc::now().timestamp_micros();
+             let id = format!("lp-{}", ts);
+             
+             let desc = format!("{} [Context: {}] [Outcome: {}]", pattern, context, outcome);
+
+             let p = LearnedPattern::new(id, desc)
+                 .with_confidence(confidence);
+
+             // Store
+             {
+                 // AgentMemory needs mutable access to store_learned_pattern
+                 let mut memory = am.write().await;
+                 memory.store_learned_pattern(p);
+                 
+                 // Save
+                 let path = get_workspace_root().join(".ccos/agent_memory/system_memory.json");
+                 memory.save_to_disk(&path).map_err(|e| e.to_string())?;
+             }
+
+             Ok(json!({
+                 "success": true,
+                 "recorded": true
+             }))
+         })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos_record_learning",
+        "Explicitly record a learned pattern (e.g. a reusable solution or a failure to avoid)",
+        json!({
+            "type": "object",
+            "properties": {
+                "pattern": { "type": "string", "description": "The pattern description" },
+                "context": { "type": "string", "description": "Context where this applies" },
+                "outcome": { "type": "string", "description": "Outcome observed" },
+                "confidence": { "type": "number", "description": "Confidence score 0.0-1.0" }
+            },
+            "required": ["pattern", "context", "outcome"]
+        }),
+        handler,
     );
 
     // ccos/list_capabilities - List internal CCOS capabilities from the marketplace
     let mp3 = marketplace.clone();
-    server.register_tool(
+    // ccos/list_capabilities - List internal CCOS capabilities from the marketplace
+    let mp3 = marketplace.clone();
+    let handler = Arc::new(move |_params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        let mp = mp3.clone();
+        Box::pin(async move {
+            let caps = mp.list_capabilities().await;
+
+            Ok(json!({
+                "capabilities": caps.iter().map(|c| json!({
+                    "id": c.id,
+                    "name": c.name,
+                    "description": c.description
+                })).collect::<Vec<_>>(),
+                "count": caps.len(),
+                "note": "These are internal CCOS capabilities. For MCP tools exposed by this server, use the tools/list MCP method."
+            }))
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
         "ccos_list_capabilities",
         "List all registered CCOS capabilities from the internal capability marketplace (not MCP tools - use tools/list for that)",
         json!({
@@ -1425,27 +1329,53 @@ fn register_ccos_tools(
             "properties": {},
             "required": []
         }),
-        Box::new(move |_params| {
-            let mp = mp3.clone();
-            Box::pin(async move {
-                let caps = mp.list_capabilities().await;
-
-                Ok(json!({
-                    "capabilities": caps.iter().map(|c| json!({
-                        "id": c.id,
-                        "name": c.name,
-                        "description": c.description
-                    })).collect::<Vec<_>>(),
-                    "count": caps.len(),
-                    "note": "These are internal CCOS capabilities. For MCP tools exposed by this server, use the tools/list MCP method."
-                }))
-            })
-        }),
+        handler,
     );
 
     // ccos/inspect_capability - Inspect a specific capability's details and schema
     let mp_inspect = marketplace.clone();
-    server.register_tool(
+    // ccos/inspect_capability - Inspect a specific capability's details and schema
+    let mp_inspect = marketplace.clone();
+    let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        let mp = mp_inspect.clone();
+        Box::pin(async move {
+            let cap_id = params
+                .get("capability_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing capability_id parameter".to_string())?;
+
+            let cap = mp.get_capability(cap_id).await.ok_or_else(|| {
+                format!("Capability not found: {}", cap_id)
+            })?;
+
+            let input_schema_rtfs = cap
+                .input_schema
+                .as_ref()
+                .map(|s| type_expr_to_rtfs_pretty(s))
+                .unwrap_or_else(|| ":any".to_string());
+
+            let output_schema_rtfs = cap
+                .output_schema
+                .as_ref()
+                .map(|s| type_expr_to_rtfs_pretty(s))
+                .unwrap_or_else(|| ":any".to_string());
+
+            Ok(json!({
+                "id": cap.id,
+                "name": cap.name,
+                "description": cap.description,
+                "version": cap.version,
+                "input_schema": input_schema_rtfs,
+                "output_schema": output_schema_rtfs,
+                "domains": cap.domains,
+                "categories": cap.categories,
+                "provider": format!("{:?}", cap.provider),
+            }))
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
         "ccos_inspect_capability",
         "Inspect a capability's details, including its RTFS input/output schemas",
         json!({
@@ -1458,38 +1388,7 @@ fn register_ccos_tools(
             },
             "required": ["capability_id"]
         }),
-        Box::new(move |params| {
-            let mp = mp_inspect.clone();
-            Box::pin(async move {
-                let cap_id = params
-                    .get("capability_id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| RuntimeError::new("Missing capability_id parameter"))?;
-
-                let cap = mp.get_capability(cap_id).await
-                    .ok_or_else(|| RuntimeError::new(&format!("Capability not found: {}", cap_id)))?;
-
-                let input_schema_rtfs = cap.input_schema.as_ref()
-                    .map(|s| type_expr_to_rtfs_pretty(s))
-                    .unwrap_or_else(|| ":any".to_string());
-                
-                let output_schema_rtfs = cap.output_schema.as_ref()
-                    .map(|s| type_expr_to_rtfs_pretty(s))
-                    .unwrap_or_else(|| ":any".to_string());
-
-                Ok(json!({
-                    "id": cap.id,
-                    "name": cap.name,
-                    "description": cap.description,
-                    "version": cap.version,
-                    "input_schema": input_schema_rtfs,
-                    "output_schema": output_schema_rtfs,
-                    "domains": cap.domains,
-                    "categories": cap.categories,
-                    "provider": format!("{:?}", cap.provider),
-                }))
-            })
-        }),
+        handler,
     );
 
     // =========================================
@@ -1579,7 +1478,7 @@ fn register_ccos_tools(
 
     // ccos/execute_plan - Execute an RTFS plan
     let ccos_exec = ccos.clone();
-    
+
     server.register_tool(
         "ccos_execute_plan",
         "Execute an RTFS plan and return the result.",
@@ -1781,6 +1680,7 @@ fn register_ccos_tools(
                             auth_env_var: None,
                             capabilities_path: None,
                             alternative_endpoints: Vec::new(),
+                            capability_files: None,
                         },
                         match_score: h.score as f32,
                         alternative_endpoints: Vec::new(),
@@ -1827,7 +1727,6 @@ fn register_ccos_tools(
             })
         }),
     );
-
 
     // ============================================================================
     // Planning Tool - ccos_plan (ModularPlanner with LLM decomposition)
@@ -2013,7 +1912,6 @@ fn register_ccos_tools(
     // ============================================================================
     // Session Management Tools
     // ============================================================================
-
 
     // ccos_session_start - Start a new planning/execution session
     let ss1 = session_store.clone();
@@ -2276,7 +2174,6 @@ fn register_ccos_tools(
         }),
     );
 
-
     // ccos_session_plan - Get the accumulated RTFS plan from a session
     let ss3 = session_store.clone();
     server.register_tool(
@@ -2438,223 +2335,75 @@ fn register_ccos_tools(
         }),
     );
 
-    // ccos_consolidate_session - Convert a session into a reusable capability
-    let ss_consolidate = session_store.clone();
+    // ccos_consolidate_session - Convert a session into a reusable Agent Capability
     let mp_consolidate = marketplace.clone();
     server.register_tool(
         "ccos_consolidate_session",
-        "Convert a saved session's execution path into a reusable capability. The capability is automatically registered in the marketplace and will appear in ccos_list_capabilities.",
+        "Consolidates a Session Trace into a new Agent Capability using the Planner. Returns the new Agent ID which is immediately available for use.",
         json!({
             "type": "object",
             "properties": {
                 "session_id": {
                     "type": "string",
-                    "description": "The session ID to consolidate"
+                    "description": "ID of the session to consolidate (must be saved to disk)"
                 },
-                "capability_id": {
+                "agent_name": {
                     "type": "string",
-                    "description": "Optional custom capability ID. If not provided, one will be generated from the goal."
+                    "description": "Name for the new agent (e.g. 'research_helper')"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Description of what the agent does"
                 }
             },
-            "required": ["session_id"]
+            "required": ["session_id", "agent_name"]
         }),
         Box::new(move |params| {
-            let ss = ss_consolidate.clone();
             let mp = mp_consolidate.clone();
             Box::pin(async move {
-                let session_id = params.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
-                let custom_capability_id = params.get("capability_id").and_then(|v| v.as_str());
+                let session_id = params
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| RuntimeError::Generic("session_id is required".to_string()))?;
 
-                if session_id.is_empty() {
-                    return Ok(json!({
-                        "success": false,
-                        "error": "session_id is required"
-                    }));
-                }
+                let agent_name = params
+                    .get("agent_name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| RuntimeError::Generic("agent_name is required".to_string()))?;
 
-                // Get session from store
-                let store = ss.read().await;
-                let session = match store.get(session_id) {
-                    Some(s) => Some(s.clone()),
-                    None => {
-                        // Try to load from disk if not in memory
-                        find_session_on_disk(session_id).await
-                    }
-                };
+                let description = params
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
 
-                let session = match session {
-                    Some(s) => s,
-                    None => {
-                        return Ok(json!({
-                            "success": false,
-                            "error": format!("Session '{}' not found. Make sure the session ID is correct or matches a saved file in 'capabilities/sessions'.", session_id)
-                        }));
-                    }
-                };
-                drop(store);
-
-                if session.steps.is_empty() {
-                    return Ok(json!({
-                        "success": false,
-                        "error": "Cannot consolidate a session with no executed steps"
-                    }));
-                }
-
-                // Generate capability ID from goal
-                let goal_for_id = session.original_goal.as_ref().unwrap_or(&session.goal);
-                let capability_id = custom_capability_id.map(|s| s.to_string()).unwrap_or_else(|| {
-                    let slug = goal_for_id
-                        .to_lowercase()
-                        .chars()
-                        .map(|c| if c.is_alphanumeric() { c } else { '_' })
-                        .collect::<String>()
-                        .split('_')
-                        .filter(|s| !s.is_empty())
-                        .take(5)
-                        .collect::<Vec<_>>()
-                        .join("_");
-                    format!("learned.{}", slug)
+                let inputs = json!({
+                    "session_id": session_id,
+                    "agent_name": agent_name,
+                    "description": description
                 });
 
-                // Generate RTFS capability definition
-                let description = session.original_goal.as_ref().unwrap_or(&session.goal);
-                
-                // Regenerate plan from inputs to ensure valid syntax (e.g. correct map separators)
-                let replay_code = if session.steps.is_empty() {
-                    "nil".to_string()
-                } else if session.steps.len() == 1 {
-                    Session::inputs_to_rtfs(&session.steps[0].capability_id, &session.steps[0].inputs)
-                } else {
-                    let mut lines = vec!["(do".to_string()];
-                    for step in &session.steps {
-                        lines.push(format!("  {}", Session::inputs_to_rtfs(&step.capability_id, &step.inputs)));
-                    }
-                    lines.push(")".to_string());
-                    lines.join("\n")
-                };
+                // Call planner.synthesize_agent_from_trace
+                let rtfs_inputs = json_to_rtfs_value(&inputs)
+                    .map_err(|e| RuntimeError::Generic(format!("Input conversion failed: {}", e)))?;
 
-                // Calculate hash for deduplication
-                // We utilize the goal (description) and the code body to create a unique fingerprint
-                let mut hasher = sha2::Sha256::new();
-                hasher.update(description.as_bytes());
-                hasher.update(replay_code.as_bytes());
-                let plan_hash = format!("{:x}", hasher.finalize());
+                let result_value = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        mp.execute_capability(
+                            "planner.synthesize_agent_from_trace",
+                            &rtfs_inputs,
+                        )
+                        .await
+                    })
+                });
 
-                // Check for duplicates in existing learned capabilities
-                let workspace_root = ccos::utils::fs::get_workspace_root();
-                let learned_dir = workspace_root.join("capabilities/learned");
-                let _ = std::fs::create_dir_all(&learned_dir);
-
-                // Scan directory for existing hash
-                if let Ok(entries) = std::fs::read_dir(&learned_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_file() && path.extension().map_or(false, |e| e == "rtfs") {
-                            if let Ok(content) = std::fs::read_to_string(&path) {
-                                if content.contains(&format!(";; PlanHash: {}", plan_hash)) {
-                                    // Found duplicate! Extract capability ID from content
-                                    // Assuming format (capability "id" ...)
-                                    let dup_id = if let Some(start) = content.find("(capability \"") {
-                                        if let Some(end) = content[start+13..].find('"') {
-                                            content[start+13..start+13+end].to_string()
-                                        } else {
-                                            "unknown".to_string()
-                                        }
-                                    } else {
-                                        "unknown".to_string()
-                                    };
-
-                                    return Ok(json!({
-                                        "success": true,
-                                        "session_id": session.id,
-                                        "capability_id": dup_id,
-                                        "note": "Plan already exists. Returned existing capability ID.",
-                                        "saved_to": path.to_string_lossy(),
-                                        "registered_in_marketplace": true // It exists, so it should be loaded
-                                    }));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                let capability_rtfs = format!(
-                    r#";; Learned Capability: {cap_id}
-;; Consolidated from session: {session_id}
-;; Original goal: {goal}
-;; PlanHash: {plan_hash}
-;; Steps: {step_count}
-
-(capability "{cap_id}"
-  :name "{name}"
-  :description "{description}"
-  :input-schema [:map]
-  :output-schema :any
-  :kind :learned
-  :effects [:io]
-  :implementation (fn []
-    {code}
-  ))
-"#,
-                    cap_id = capability_id,
-                    name = description.replace("\"", "\\\""),
-                    session_id = session.id,
-                    goal = session.original_goal.as_deref().unwrap_or(&description),
-                    plan_hash = plan_hash,
-                    step_count = session.steps.len(),
-                    description = description.replace("\"", "\\\""),
-                    code = replay_code.lines()
-                        .map(|l| format!("    {}", l))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
-
-                // Save to capabilities/learned/ directory
-                let workspace_root = ccos::utils::fs::get_workspace_root();
-                let learned_dir = workspace_root.join("capabilities/learned");
-                let _ = std::fs::create_dir_all(&learned_dir);
-                
-                let filename = format!("{}.rtfs", capability_id.replace(".", "_"));
-                let filepath = learned_dir.join(&filename);
-                
-                if let Err(e) = std::fs::write(&filepath, &capability_rtfs) {
-                    return Ok(json!({
+                match result_value {
+                    Ok(val) => rtfs_value_to_json(&val)
+                        .map_err(|e| RuntimeError::Generic(format!("Output conversion failed: {}", e))),
+                    Err(e) => Ok(json!({
                         "success": false,
-                        "error": format!("Failed to save capability: {}", e)
-                    }));
+                        "error": e.to_string()
+                    })),
                 }
-
-                // Hot-load the new capability into the marketplace
-                let registered = match mp.import_single_rtfs_file(&filepath).await {
-                    Ok(_) => true,
-                    Err(e) => {
-                        eprintln!("Failed to hot-load capability: {}", e);
-                        false
-                    }
-                };
-
-                Ok(json!({
-                    "success": true,
-                    "session_id": session.id,
-                    "capability_id": capability_id,
-                    "original_goal": session.original_goal,
-                    "session_goal": session.goal,
-                    "steps_count": session.steps.len(),
-                    "saved_to": filepath.to_string_lossy(),
-                    "registered_in_marketplace": registered,
-                    "rtfs_preview": capability_rtfs.lines().take(10).collect::<Vec<_>>().join("\n"),
-                    "next_steps": if registered {
-                        vec![
-                            "The capability is now available in ccos_list_capabilities.",
-                            "To execute: call ccos_execute_capability with the new capability_id"
-                        ]
-                    } else {
-                        vec![
-                            "The capability file was saved but marketplace registration failed.",
-                            "Restart ccos-mcp to load learned capabilities."
-                        ]
-                    }
-                }))
             })
         }),
     );
@@ -2928,8 +2677,8 @@ fn register_ccos_tools(
 
     // ccos_introspect_remote_api - Introspect an external MCP/OpenAPI server and queue for approval
     let aq_introspect = approval_queue.clone();
-    let mp_introspect = marketplace.clone();
-    let ds_introspect = discovery_service.clone(); // For HTML docs fallback
+    let ds_introspect = discovery_service.clone(); 
+    let mcp_ds_introspect = mcp_discovery_service.clone();
     server.register_tool(
         "ccos_introspect_remote_api",
         "Introspect an external server (MCP, OpenAPI, or HTML documentation) to discover its capabilities. Works with MCP endpoints, OpenAPI specs, and API documentation pages. Creates an approval request for the server.",
@@ -2953,8 +2702,8 @@ fn register_ccos_tools(
         }),
         Box::new(move |params| {
             let aq = aq_introspect.clone();
-            let mp = mp_introspect.clone();
             let ds = ds_introspect.clone();
+            let mcp_ds = mcp_ds_introspect.clone();
             Box::pin(async move {
                 let endpoint = params.get("endpoint").and_then(|v| v.as_str()).unwrap_or("");
                 let name = params.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -2993,19 +2742,26 @@ fn register_ccos_tools(
                 let workspace_root = ccos::utils::fs::get_workspace_root();
                 let pending_dir = workspace_root.join("capabilities/servers/pending").join(&server_id);
 
+                let introspection_service = ccos::ops::introspection_service::IntrospectionService::new(mcp_ds.clone(), ds.clone(), aq.clone());
+
                 // 1. OpenAPI Fast Path
                 if ccos::ops::introspection_service::IntrospectionService::is_openapi_url(endpoint) {
-                    let introspection_service = ccos::ops::introspection_service::IntrospectionService::new();
                     if let Ok(result) = introspection_service.introspect_openapi(endpoint, &server_name).await {
                         if result.success {
                             let api_result = result.api_result.as_ref().unwrap();
-                            let approval_id = match introspection_service.create_approval_request(&result, endpoint, &aq, 24 * 7).await {
-                                Ok(id) => id,
-                                Err(e) => return Ok(json!({"success": false, "error": format!("Failed to create approval request: {}", e)}))
-                            };
-
                             match introspection_service.generate_rtfs_files(&result, &pending_dir, endpoint) {
                                 Ok(gen_result) => {
+                                    let approval_id = match introspection_service.create_approval_request(
+                                        &result, 
+                                        endpoint, 
+                                        &aq, 
+                                        Some(gen_result.capability_files.clone()),
+                                        24 * 7
+                                    ).await {
+                                        Ok(id) => id,
+                                        Err(e) => return Ok(json!({"success": false, "error": format!("Failed to create approval request: {}", e)}))
+                                    };
+
                                     let endpoint_previews: Vec<_> = api_result.endpoints.iter().take(10).map(|ep| {
                                         json!({"id": ep.endpoint_id, "name": ep.name, "method": ep.method, "path": ep.path, "description": ep.description})
                                     }).collect();
@@ -3031,43 +2787,46 @@ fn register_ccos_tools(
                                         ]
                                     }));
                                 }
-                                Err(e) => return Ok(json!({"success": true, "approval_id": approval_id, "server_name": server_name, "source": "openapi", "warning": format!("Failed to generate RTFS files: {}", e)}))
+                                Err(e) => return Ok(json!({"success": false, "source": "openapi", "error": format!("Failed to generate RTFS files: {}", e)}))
                             }
                         }
                     }
                 }
 
-                // 2. Cascade Discovery (MCP -> Browser -> Search -> HTML)
+                // Step 2.1: Unified MCP & Discovery
+                if let Ok(result) = introspection_service.introspect_mcp(
+                    endpoint, 
+                    name.clone(), 
+                    auth_env_var.clone(),
+                    &*mcp_ds,
+                    &pending_dir,
+                ).await {
+                    if !result.manifests.is_empty() {
+                         let endpoint_previews: Vec<_> = result.manifests.iter().take(10).map(|m| {
+                             json!({"id": m.id, "name": m.name, "description": m.description})
+                         }).collect();
+
+                         return Ok(json!({
+                            "success": true,
+                            "approval_id": result.approval_id,
+                            "server_name": server_name,
+                            "source": "mcp",
+                            "discovered_capabilities_count": result.manifests.len(),
+                            "endpoint_previews": endpoint_previews,
+                            "agent_guidance": format!("Server '{}' discovered via MCP. MANDATORY: You must now ask the user to manually approve this server at the /approvals UI. DO NOT call ccos_register_server until the user confirms approval.", server_name),
+                            "next_steps": [
+                                "Notify the user that introspection is complete.",
+                                "Tell the user to go to the CCOS Control Center at /approvals to approve the new capabilities.",
+                                "WAIT for the user to confirm they have approved the server.",
+                                "Only after user confirmation, call ccos_register_server with approval_id to finalize registration."
+                            ]
+                        }));
+                    }
+                }
+
                 let mut capabilities: Vec<serde_json::Value> = Vec::new();
                 let mut discovery_source = "mcp";
                 let mut auth_config: Option<serde_json::Value> = None;
-
-                // Step 2.1: MCP Introspection
-                let mcp_config = MCPServerConfig {
-                    name: server_name.clone(),
-                    endpoint: endpoint.to_string(),
-                    auth_token: auth_env_var.as_ref().and_then(|var| std::env::var(var).ok()),
-                    timeout_seconds: 30,
-                    protocol_version: "2024-11-05".to_string(),
-                };
-
-                let provider_res = MCPDiscoveryProvider::new_with_rtfs_host_factory(mcp_config, mp.get_rtfs_host_factory());
-                if let Ok(provider) = provider_res {
-                    let options = ccos::mcp::types::DiscoveryOptions {
-                        export_to_rtfs: true,
-                        export_directory: Some(pending_dir.to_string_lossy().to_string()),
-                        ..Default::default()
-                    };
-                    if let Ok(caps) = provider.discover_tools_with_options(&options).await {
-                        capabilities = caps.into_iter().map(|c| json!({
-                            "id": c.id,
-                            "name": c.name,
-                            "description": c.description
-                        })).collect();
-                        discovery_source = "mcp";
-                        eprintln!("[CCOS] Saved {} MCP RTFS capabilities to: {}", capabilities.len(), pending_dir.display());
-                    }
-                }
 
                 if capabilities.is_empty() {
                     // Step 2.2: Browser Discovery (Robust Swagger UI/SPA detection)
@@ -3221,7 +2980,8 @@ fn register_ccos_tools(
 
                 // 2.5: Generate RTFS capability files for cascade-discovered capabilities
                 // Use the same format as OpenAPI introspection for consistency
-                let _ = std::fs::create_dir_all(&pending_dir);
+                let openapi_dir = pending_dir.join("openapi");
+                let _ = std::fs::create_dir_all(&openapi_dir);
                 let module_name = server_name.to_lowercase()
                     .replace(" ", "_")
                     .replace("-", "_")
@@ -3239,7 +2999,7 @@ fn register_ccos_tools(
                             .replace('/', "_")
                             .replace(' ', "_");
                         let cap_id = format!("{}.{}", module_name, cap_name);
-                        let cap_file = pending_dir.join(format!("{}.rtfs", ccos::utils::fs::sanitize_filename(&cap_name)));
+                        let cap_file = openapi_dir.join(format!("{}.rtfs", ccos::utils::fs::sanitize_filename(&cap_name)));
 
                         let method = cap.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
                         let path = cap.get("path").and_then(|v| v.as_str()).unwrap_or("");
@@ -3308,29 +3068,49 @@ fn register_ccos_tools(
 
                         if std::fs::write(&cap_file, rtfs_content).is_ok() {
                             generated_files += 1;
-                            capability_file_list.push(cap_file.to_string_lossy().to_string());
+                            capability_file_list.push(format!("openapi/{}.rtfs", ccos::utils::fs::sanitize_filename(&cap_name)));
                         }
                     }
                 }
 
-                // Create server.json for consistency with OpenAPI introspection
+                // Create server.rtfs for consistency with new RTFS-first approach
                 if generated_files > 0 {
-                    let server_json = json!({
-                        "source": {
-                            "type": discovery_source,
-                            "spec_url": endpoint
-                        },
-                        "server_info": {
-                            "name": server_name,
-                            "endpoint": endpoint,
-                            "description": format!("Discovered {} capabilities via {}", capabilities.len(), discovery_source)
-                        },
-                        "capability_files": capability_file_list,
-                        "api_info": {
-                            "endpoints_count": capabilities.len()
-                        }
-                    });
-                    let _ = std::fs::write(pending_dir.join("server.json"), serde_json::to_string_pretty(&server_json).unwrap_or_default());
+                    // Helper to format string list for RTFS
+                    let files_rtfs = capability_file_list.iter()
+                        .map(|f| format!("\"{}\"", f))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+
+                    let server_rtfs = format!(
+                        r#";; Server Manifest: {}
+(server
+  :source {{
+    :type "{}"
+    :spec_url "{}"
+  }}
+  :server_info {{
+    :name "{}"
+    :endpoint "{}"
+    :description "Discovered {} capabilities via {}"
+  }}
+  :api_info {{
+    :endpoints_count {}
+  }}
+  :capability_files [{}]
+)
+"#,
+                        server_name,
+                        discovery_source,
+                        endpoint,
+                        server_name,
+                        endpoint,
+                        capabilities.len(),
+                        discovery_source,
+                        capabilities.len(),
+                        files_rtfs
+                    );
+
+                    let _ = std::fs::write(pending_dir.join("server.rtfs"), server_rtfs);
                     eprintln!("[CCOS] Generated {} RTFS capabilities to: {}", generated_files, pending_dir.display());
                 }
 
@@ -3342,6 +3122,7 @@ fn register_ccos_tools(
                     auth_env_var: auth_env_var.clone(),
                     capabilities_path: None,
                     alternative_endpoints: vec![],
+                    capability_files: Some(capability_file_list.clone()),
                 };
 
                 let approval_id = match aq.add_server_discovery(
@@ -3578,147 +3359,23 @@ fn register_ccos_tools(
                     }));
                 }
 
-                // Get the approval request
-                let request = match aq.get(approval_id).await {
-                    Ok(Some(req)) => req,
-                    Ok(None) => {
-                        return Ok(json!({
-                            "success": false,
-                            "error": "Approval request not found",
-                            "hint": "The approval may have expired or the ID is incorrect"
-                        }));
-                    }
-                    Err(e) => {
-                        return Ok(json!({
-                            "success": false,
-                            "error": format!("Failed to get approval request: {}", e)
-                        }));
-                    }
-                };
-
-                // Check if approved
-                if !matches!(request.status, ccos::approval::types::ApprovalStatus::Approved { .. }) {
-                    return Ok(json!({
+                match ccos::ops::server::register_approved_server(
+                    approval_id.to_string(),
+                    &aq,
+                    &mp,
+                ).await {
+                    Ok(count) => {
+                        Ok(json!({
+                            "success": true,
+                            "message": format!("Successfully registered {} tools", count),
+                            "tools_count": count
+                        }))
+                    },
+                    Err(e) => Ok(json!({
                         "success": false,
-                        "error": "Server has not been approved yet",
-                        "status": format!("{:?}", request.status),
-                        "hint": "The server must be approved before its tools can be registered. Check the approvals UI."
-                    }));
+                        "error": format!("Failed to register server: {}", e)
+                    }))
                 }
-
-                // Extract server info
-                let (server_name, endpoint, auth_env_var) = match &request.category {
-                    ApprovalCategory::ServerDiscovery { server_info, .. } => {
-                        (server_info.name.clone(), server_info.endpoint.clone(), server_info.auth_env_var.clone())
-                    }
-                    _ => {
-                        return Ok(json!({
-                            "success": false,
-                            "error": "Approval is not for a server discovery"
-                        }));
-                    }
-                };
-
-                // Check for RTFS files in pending or approved directories
-                let server_id = ccos::utils::fs::sanitize_filename(&server_name);
-                let workspace_root = ccos::utils::fs::get_workspace_root();
-                let pending_dir = workspace_root.join("capabilities/servers/pending").join(&server_id);
-                let approved_dir = workspace_root.join("capabilities/servers/approved").join(&server_id);
-                
-                // If files exist in pending, move them to approved (since we're now approved)
-                if pending_dir.exists() && !approved_dir.exists() {
-                    eprintln!("[ccos-mcp] Moving RTFS files from pending to approved for {}", server_name);
-                    let _ = std::fs::create_dir_all(&approved_dir);
-                    if let Ok(entries) = std::fs::read_dir(&pending_dir) {
-                        for entry in entries.flatten() {
-                            let src = entry.path();
-                            let dst = approved_dir.join(entry.file_name());
-                            let _ = std::fs::copy(&src, &dst);
-                        }
-                    }
-                    // Remove pending dir after move
-                    let _ = std::fs::remove_dir_all(&pending_dir);
-                }
-
-                if approved_dir.exists() {
-                     eprintln!("[ccos-mcp] Dynamically loading approved RTFS capabilities for {}", server_name);
-                     
-                     match mp.import_capabilities_from_rtfs_dir_recursive(&approved_dir).await {
-                         Ok(loaded_count) => {
-                             return Ok(json!({
-                                "success": true,
-                                "server_name": server_name,
-                                "registered_count": loaded_count,
-                                "total_discovered": loaded_count,
-                                "agent_guidance": format!(
-                                    "Successfully loaded {} RTFS capabilities from '{}'. They are now available via ccos_search_tools and ccos_execute_capability.",
-                                    loaded_count, server_name
-                                )
-                            }));
-                         }
-                         Err(e) => {
-                             return Ok(json!({
-                                "success": false,
-                                "error": format!("Failed to load capabilities: {}", e)
-                            }));
-                         }
-                     }
-                }
-
-                // Fallback: Original MCP discovery for native MCP servers
-                let config = MCPServerConfig {
-                    name: server_name.clone(),
-                    endpoint: endpoint.clone(),
-                    auth_token: auth_env_var.as_ref().and_then(|var| std::env::var(var).ok()),
-                    timeout_seconds: 30,
-                    protocol_version: "2024-11-05".to_string(),
-                };
-
-                let capabilities = match MCPDiscoveryProvider::new_with_rtfs_host_factory(
-                    config,
-                    mp.get_rtfs_host_factory(),
-                ) {
-                    Ok(provider) => {
-                        match provider.discover_tools().await {
-                            Ok(caps) => caps,
-
-                            Err(e) => {
-                                return Ok(json!({
-                                    "success": false,
-                                    "error": format!("Failed to rediscover server capabilities: {}", e)
-                                }));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        return Ok(json!({
-                            "success": false,
-                            "error": format!("Failed to create discovery provider: {}", e)
-                        }));
-                    }
-                };
-
-                // Register each capability in the marketplace
-                let mut registered_count = 0;
-                for cap in &capabilities {
-                    if let Err(e) = mp.register_capability_manifest(cap.clone()).await {
-                        eprintln!("[ccos-mcp] Warning: Failed to register capability {}: {}", cap.id, e);
-                    } else {
-                        registered_count += 1;
-                    }
-                }
-
-
-                Ok(json!({
-                    "success": true,
-                    "server_name": server_name,
-                    "registered_count": registered_count,
-                    "total_discovered": capabilities.len(),
-                    "agent_guidance": format!(
-                        "Successfully registered {} tools from '{}'. They are now available via ccos_search_tools and ccos_execute_capability.",
-                        registered_count, server_name
-                    )
-                }))
             })
         }),
     );
@@ -3815,7 +3472,10 @@ fn register_ccos_tools(
         Box::new(move |params| {
             Box::pin(async move {
                 let code = params.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                let show_ast = params.get("show_ast").and_then(|v| v.as_bool()).unwrap_or(false);
+                let show_ast = params
+                    .get("show_ast")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
 
                 if code.is_empty() {
                     return Ok(json!({
@@ -3838,15 +3498,13 @@ fn register_ccos_tools(
 
                         Ok(result)
                     }
-                    Err(parse_error) => {
-                        Ok(json!({
-                            "success": false,
-                            "error": {
-                                "message": format!("{:?}", parse_error)
-                            },
-                            "code_preview": code.chars().take(100).collect::<String>()
-                        }))
-                    }
+                    Err(parse_error) => Ok(json!({
+                        "success": false,
+                        "error": {
+                            "message": format!("{:?}", parse_error)
+                        },
+                        "code_preview": code.chars().take(100).collect::<String>()
+                    })),
                 }
             })
         }),
@@ -4012,7 +3670,14 @@ fn get_samples_for_category(category: &str) -> Vec<serde_json::Value> {
         ],
         "all" | _ => {
             let mut all = vec![];
-            for cat in ["basic", "bindings", "control_flow", "functions", "capabilities", "types"] {
+            for cat in [
+                "basic",
+                "bindings",
+                "control_flow",
+                "functions",
+                "capabilities",
+                "types",
+            ] {
                 all.extend(get_samples_for_category(cat));
             }
             all
@@ -4024,73 +3689,74 @@ fn get_samples_for_category(category: &str) -> Vec<serde_json::Value> {
 fn explain_rtfs_error(error: &str, code: Option<&str>) -> serde_json::Value {
     let error_lower = error.to_lowercase();
 
-    let (explanation, common_causes, fix_suggestions) = if error_lower.contains("expected") && error_lower.contains("expression") {
-        (
-            "The parser expected an expression but found something else.",
-            vec![
-                "Unbalanced parentheses - missing opening or closing paren",
-                "Empty list without proper content",
-                "Incomplete expression at end of input"
-            ],
-            vec![
-                "Check that all ( have matching )",
-                "Ensure lists have at least an operator: (+ 1 2) not ()",
-                "Complete any unfinished expressions"
-            ]
-        )
-    } else if error_lower.contains("unexpected") && error_lower.contains("token") {
-        (
-            "The parser encountered a token it didn't expect in this position.",
-            vec![
-                "Wrong syntax for the construct being used",
-                "Missing required elements",
-                "Extra tokens that don't belong"
-            ],
-            vec![
-                "Review the syntax for the form you're using",
-                "Check for typos in keywords",
-                "Ensure proper ordering of elements"
-            ]
-        )
-    } else if error_lower.contains("unbalanced") || error_lower.contains("unclosed") {
-        (
-            "There are mismatched brackets in the code.",
-            vec![
-                "Missing closing ) ] or }",
-                "Extra opening ( [ or {",
-                "Brackets of wrong type used"
-            ],
-            vec![
-                "Count opening and closing brackets",
-                "Use an editor with bracket matching",
-                "Remember: () for calls, [] for vectors/bindings, {} for maps"
-            ]
-        )
-    } else if error_lower.contains("undefined") || error_lower.contains("not found") {
-        (
-            "A symbol or function was referenced but not defined.",
-            vec![
-                "Typo in function or variable name",
-                "Using a variable before it's defined",
-                "Missing import or require"
-            ],
-            vec![
-                "Check spelling of the symbol",
-                "Ensure definitions come before usage",
-                "Use :keys in let bindings for map destructuring"
-            ]
-        )
-    } else {
-        (
-            "This error indicates a problem with the RTFS code.",
-            vec!["Syntax error", "Semantic error"],
-            vec![
-                "Review the code structure",
-                "Compare with working examples",
-                "Use rtfs_get_samples to see correct syntax"
-            ]
-        )
-    };
+    let (explanation, common_causes, fix_suggestions) =
+        if error_lower.contains("expected") && error_lower.contains("expression") {
+            (
+                "The parser expected an expression but found something else.",
+                vec![
+                    "Unbalanced parentheses - missing opening or closing paren",
+                    "Empty list without proper content",
+                    "Incomplete expression at end of input",
+                ],
+                vec![
+                    "Check that all ( have matching )",
+                    "Ensure lists have at least an operator: (+ 1 2) not ()",
+                    "Complete any unfinished expressions",
+                ],
+            )
+        } else if error_lower.contains("unexpected") && error_lower.contains("token") {
+            (
+                "The parser encountered a token it didn't expect in this position.",
+                vec![
+                    "Wrong syntax for the construct being used",
+                    "Missing required elements",
+                    "Extra tokens that don't belong",
+                ],
+                vec![
+                    "Review the syntax for the form you're using",
+                    "Check for typos in keywords",
+                    "Ensure proper ordering of elements",
+                ],
+            )
+        } else if error_lower.contains("unbalanced") || error_lower.contains("unclosed") {
+            (
+                "There are mismatched brackets in the code.",
+                vec![
+                    "Missing closing ) ] or }",
+                    "Extra opening ( [ or {",
+                    "Brackets of wrong type used",
+                ],
+                vec![
+                    "Count opening and closing brackets",
+                    "Use an editor with bracket matching",
+                    "Remember: () for calls, [] for vectors/bindings, {} for maps",
+                ],
+            )
+        } else if error_lower.contains("undefined") || error_lower.contains("not found") {
+            (
+                "A symbol or function was referenced but not defined.",
+                vec![
+                    "Typo in function or variable name",
+                    "Using a variable before it's defined",
+                    "Missing import or require",
+                ],
+                vec![
+                    "Check spelling of the symbol",
+                    "Ensure definitions come before usage",
+                    "Use :keys in let bindings for map destructuring",
+                ],
+            )
+        } else {
+            (
+                "This error indicates a problem with the RTFS code.",
+                vec!["Syntax error", "Semantic error"],
+                vec![
+                    "Review the code structure",
+                    "Compare with working examples",
+                    "Use rtfs_get_samples to see correct syntax",
+                ],
+            )
+        };
 
     let mut result = json!({
         "error": error,
@@ -4109,13 +3775,22 @@ fn explain_rtfs_error(error: &str, code: Option<&str>) -> serde_json::Value {
 
         let mut issues = vec![];
         if open_parens != close_parens {
-            issues.push(format!("Paren mismatch: {} '(' vs {} ')'", open_parens, close_parens));
+            issues.push(format!(
+                "Paren mismatch: {} '(' vs {} ')'",
+                open_parens, close_parens
+            ));
         }
         if open_brackets != close_brackets {
-            issues.push(format!("Bracket mismatch: {} '[' vs {} ']'", open_brackets, close_brackets));
+            issues.push(format!(
+                "Bracket mismatch: {} '[' vs {} ']'",
+                open_brackets, close_brackets
+            ));
         }
         if open_braces != close_braces {
-            issues.push(format!("Brace mismatch: {} '{{' vs {} '}}'", open_braces, close_braces));
+            issues.push(format!(
+                "Brace mismatch: {} '{{' vs {} '}}'",
+                open_braces, close_braces
+            ));
         }
 
         if !issues.is_empty() {
@@ -4183,7 +3858,10 @@ fn repair_rtfs_code(code: &str) -> serde_json::Value {
     }
 
     let best_repair = if let Some(first) = suggestions.first() {
-        first.get("repaired_code").and_then(|v| v.as_str()).map(String::from)
+        first
+            .get("repaired_code")
+            .and_then(|v| v.as_str())
+            .map(String::from)
     } else {
         None
     };
@@ -4206,8 +3884,10 @@ fn repair_rtfs_code(code: &str) -> serde_json::Value {
 /// LLM-based repair using comprehensive prompt templates from assets/prompts/arbiter/auto_repair/v1/
 /// This provides better repairs than heuristics for complex syntax/semantic errors.
 async fn repair_rtfs_code_with_llm(code: &str, error_message: Option<&str>) -> serde_json::Value {
-    use ccos::synthesis::validation::llm_validator::{ValidationConfig, ValidationError, ValidationErrorType, auto_repair_plan};
-    
+    use ccos::synthesis::validation::llm_validator::{
+        auto_repair_plan, ValidationConfig, ValidationError, ValidationErrorType,
+    };
+
     // Convert error message to validation errors for the template
     let errors = if let Some(err) = error_message {
         vec![ValidationError {
@@ -4228,7 +3908,7 @@ async fn repair_rtfs_code_with_llm(code: &str, error_message: Option<&str>) -> s
             }],
         }
     };
-    
+
     if errors.is_empty() {
         return json!({
             "success": true,
@@ -4237,9 +3917,9 @@ async fn repair_rtfs_code_with_llm(code: &str, error_message: Option<&str>) -> s
             "repaired_code": null
         });
     }
-    
+
     let config = ValidationConfig::default();
-    
+
     match auto_repair_plan(code, &errors, 1, &config).await {
         Ok(Some(repaired)) => {
             let repair_valid = rtfs::parser::parse(&repaired).is_ok();
@@ -4278,29 +3958,29 @@ async fn repair_rtfs_code_with_llm(code: &str, error_message: Option<&str>) -> s
 /// Returns a list of potential OpenAPI spec URLs found
 async fn search_for_openapi_spec(api_name: &str) -> Vec<String> {
     use ccos::synthesis::runtime::web_search_discovery::WebSearchDiscovery;
-    
+
     let mut results = Vec::new();
-    
+
     // Check if web search is enabled
     if !ccos::discovery::registry_search::RegistrySearcher::is_web_search_enabled() {
         eprintln!("[CCOS] Web search disabled, skipping OpenAPI spec search");
         return results;
     }
-    
+
     eprintln!("[CCOS] Searching for OpenAPI spec for: {}", api_name);
-    
+
     // Use search_for_api_specs which includes OpenAPI spec searches
     let mut web_searcher = WebSearchDiscovery::new("auto".to_string());
-    
+
     if let Ok(search_results) = web_searcher.search_for_api_specs(api_name).await {
         for result in search_results {
             let url_lower = result.url.to_lowercase();
             // Filter for likely OpenAPI spec URLs
-            if url_lower.ends_with(".json") 
-                || url_lower.ends_with(".yaml") 
+            if url_lower.ends_with(".json")
+                || url_lower.ends_with(".yaml")
                 || url_lower.ends_with(".yml")
                 || url_lower.contains("openapi")
-                || url_lower.contains("swagger") 
+                || url_lower.contains("swagger")
             {
                 if !results.contains(&result.url) {
                     eprintln!("[CCOS] Found potential OpenAPI spec: {}", result.url);
@@ -4309,7 +3989,7 @@ async fn search_for_openapi_spec(api_name: &str) -> Vec<String> {
             }
         }
     }
-    
+
     results.into_iter().take(3).collect() // Return at most 3 URLs
 }
 
@@ -4342,10 +4022,10 @@ fn extract_sub_intents_from_goal(
     analysis: &ccos::discovery::llm_discovery::IntentAnalysis,
 ) -> Vec<SubIntent> {
     let mut sub_intents = Vec::new();
-    
+
     // Strategy: Break goal into semantic units based on conjunctions and implied steps
     // This is a simplified decomposition - in production would use LLM
-    
+
     // First, try to detect explicit conjunctions in the goal
     let goal_lower = goal.to_lowercase();
     let parts: Vec<&str> = if goal_lower.contains(" and ") {
@@ -4366,7 +4046,7 @@ fn extract_sub_intents_from_goal(
 
         // Infer intent type from keywords
         let intent_type = infer_intent_type(part_trimmed);
-        
+
         // Dependencies: each subsequent step depends on previous
         let depends_on = if i > 0 { vec![i - 1] } else { vec![] };
 
@@ -4392,10 +4072,18 @@ fn extract_sub_intents_from_goal(
 /// Infer the type of intent from the text
 fn infer_intent_type(text: &str) -> String {
     let lower = text.to_lowercase();
-    
-    if lower.contains("get") || lower.contains("fetch") || lower.contains("retrieve") || lower.contains("find") {
+
+    if lower.contains("get")
+        || lower.contains("fetch")
+        || lower.contains("retrieve")
+        || lower.contains("find")
+    {
         "retrieve".to_string()
-    } else if lower.contains("send") || lower.contains("email") || lower.contains("notify") || lower.contains("alert") {
+    } else if lower.contains("send")
+        || lower.contains("email")
+        || lower.contains("notify")
+        || lower.contains("alert")
+    {
         "communicate".to_string()
     } else if lower.contains("create") || lower.contains("make") || lower.contains("generate") {
         "create".to_string()
@@ -4413,33 +4101,50 @@ fn infer_intent_type(text: &str) -> String {
 /// Infer an API search query from an intent description
 fn infer_api_query_from_intent(intent: &str) -> String {
     let lower = intent.to_lowercase();
-    
+
     // Extract key domain words and action words
     let domain_keywords: Vec<&str> = vec![
-        "weather", "email", "calendar", "file", "database", "github", "slack",
-        "twitter", "notification", "payment", "user", "auth", "api", "http",
-        "message", "document", "image", "video", "audio", "data", "report",
+        "weather",
+        "email",
+        "calendar",
+        "file",
+        "database",
+        "github",
+        "slack",
+        "twitter",
+        "notification",
+        "payment",
+        "user",
+        "auth",
+        "api",
+        "http",
+        "message",
+        "document",
+        "image",
+        "video",
+        "audio",
+        "data",
+        "report",
     ];
-    
+
     let mut found_domains: Vec<&str> = domain_keywords
         .iter()
         .filter(|kw| lower.contains(*kw))
         .copied()
         .collect();
-    
+
     // If no specific domain found, extract key nouns
     if found_domains.is_empty() {
         // Simple heuristic: take meaningful words
-        let words: Vec<&str> = intent.split_whitespace()
+        let words: Vec<&str> = intent
+            .split_whitespace()
             .filter(|w| w.len() > 3)
             .take(3)
             .collect();
         return words.join(" ") + " API";
     }
-    
+
     // Build query from found domains
     found_domains.truncate(2);
     found_domains.join(" ") + " API service"
 }
-
-

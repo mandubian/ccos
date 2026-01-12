@@ -24,6 +24,4 @@ pub use missing_capability_resolver::{
 };
 pub use missing_capability_strategies::MissingCapabilityStrategy;
 pub use schema_serializer::type_expr_to_rtfs_compact;
-pub use synthesized_capability_storage::{
-    SynthesizedCapability, SynthesizedCapabilityStorage,
-};
+pub use synthesized_capability_storage::{SynthesizedCapability, SynthesizedCapabilityStorage};

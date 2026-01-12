@@ -23,6 +23,7 @@ pub mod http_transport;
 pub mod rate_limiter;
 pub mod registry;
 pub mod server;
+pub mod session;
 pub mod stdio_client;
 pub mod types;
 
