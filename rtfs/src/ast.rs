@@ -508,7 +508,10 @@ impl std::fmt::Display for TypeExpr {
                     .collect();
                 write!(f, "[:enum {}]", value_strs.join(" "))
             }
-            TypeExpr::ParametricMap { key_type, value_type } => {
+            TypeExpr::ParametricMap {
+                key_type,
+                value_type,
+            } => {
                 write!(f, "[:map-of {} {}]", key_type, value_type)
             }
             TypeExpr::Refined {

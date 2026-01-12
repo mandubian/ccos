@@ -200,6 +200,7 @@ pub fn demonstrate_ir_pipeline() {
 }
 
 /// Create an example AST for demonstration
+#[allow(dead_code)]
 fn create_example_ast() -> Expression {
     Expression::Let(LetExpr {
         bindings: vec![
@@ -241,6 +242,7 @@ fn create_example_ast() -> Expression {
 }
 
 /// Print a simplified representation of the AST
+#[allow(dead_code)]
 fn print_ast_simplified(expr: &Expression) {
     match expr {
         Expression::Let(let_expr) => {

@@ -1,9 +1,9 @@
 //! Tests for enhanced MicroVM functionality with program execution and capability permissions
 
 use super::*;
+use crate::ast::MapKey;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::values::Value;
-use crate::ast::MapKey;
 use crate::runtime::{RuntimeError, RuntimeResult};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -941,7 +941,10 @@ else:
 "#;
 
     let mut input_map = HashMap::new();
-    input_map.insert(MapKey::String("key1".to_string()), Value::String("value1".to_string()));
+    input_map.insert(
+        MapKey::String("key1".to_string()),
+        Value::String("value1".to_string()),
+    );
     input_map.insert(MapKey::String("key2".to_string()), Value::Integer(42));
     let input_val = Value::Map(input_map);
 
@@ -959,7 +962,7 @@ else:
     };
 
     let result = provider.execute_program(context).unwrap();
-    
+
     // The result should be a Map equal to input_val
     assert_eq!(result.value, input_val);
 }
@@ -995,7 +998,7 @@ fn test_detect_from_source_javascript_import_not_python() {
 #[test]
 fn test_firecracker_large_payload_and_json_return() {
     let mut factory = MicroVMFactory::new();
-    
+
     // Only run this test if firecracker is available
     if !factory.get_available_providers().contains(&"firecracker") {
         println!("Skipping firecracker test - provider not available");
@@ -1030,7 +1033,10 @@ else:
 "#;
 
     let mut input_map = HashMap::new();
-    input_map.insert(MapKey::String("key1".to_string()), Value::String("value1".to_string()));
+    input_map.insert(
+        MapKey::String("key1".to_string()),
+        Value::String("value1".to_string()),
+    );
     input_map.insert(MapKey::String("key2".to_string()), Value::Integer(42));
     let input_val = Value::Map(input_map);
 
@@ -1077,11 +1083,9 @@ fn test_wasm_execution() {
     //   (export "_start" (func $_start))
     // )
     let wasm_bytes = vec![
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 
-        0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 
-        0x03, 0x02, 0x01, 0x00, 
-        0x07, 0x0a, 0x01, 0x06, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x00, 0x00, 
-        0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03,
+        0x02, 0x01, 0x00, 0x07, 0x0a, 0x01, 0x06, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x00, 0x00,
+        0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
     ];
 
     let context = ExecutionContext {

@@ -29,7 +29,7 @@ pub enum IrType {
     Symbol,
     Any,
     Never,
-    TypeVar(String),  // Type variables for generic types (α, β, γ, ...)
+    TypeVar(String), // Type variables for generic types (α, β, γ, ...)
 
     // Collection types
     Vector(Box<IrType>),
@@ -42,7 +42,7 @@ pub enum IrType {
 
     // Parametric map types (dictionary semantics for generic programming)
     ParametricMap {
-        key_type: Box<IrType>,   // Type of keys (restricted to String/Keyword/Union/Any by converter)
+        key_type: Box<IrType>, // Type of keys (restricted to String/Keyword/Union/Any by converter)
         value_type: Box<IrType>, // Type of values
     },
 

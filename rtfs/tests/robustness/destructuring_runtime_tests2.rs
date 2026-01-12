@@ -71,5 +71,3 @@ fn test_vector_destructuring_rest_binding_in_let() {
         other => panic!("Expected 3, got {:?}", other),
     }
 }
-
-

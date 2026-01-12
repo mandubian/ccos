@@ -1965,7 +1965,8 @@ impl<'a> IrConverter<'a> {
                 .transpose()?;
             let inferred_type = init_expr.ir_type().cloned().unwrap_or(IrType::Any);
             let binding_type = type_annotation_ir.clone().unwrap_or(inferred_type);
-            let pattern_node = self.convert_pattern(binding.pattern, binding_id, binding_type.clone())?;
+            let pattern_node =
+                self.convert_pattern(binding.pattern, binding_id, binding_type.clone())?;
 
             // Add all symbols from the pattern to scope after converting init expression
             let pattern_symbols = self.extract_pattern_symbols(&pattern_clone);
@@ -3033,10 +3034,13 @@ impl<'a> IrConverter<'a> {
                 // TODO: Implement proper array type support in IR
                 Ok(IrType::Any)
             }
-            TypeExpr::ParametricMap { key_type, value_type } => {
+            TypeExpr::ParametricMap {
+                key_type,
+                value_type,
+            } => {
                 // Convert parametric map to IR parametric map
                 let ir_key_type = self.convert_type_annotation(*key_type)?;
-                
+
                 // Enforce: parametric map keys must be String/Keyword (or a union of them)
                 fn is_valid_parametric_key_type(t: &IrType) -> bool {
                     match t {
@@ -3056,7 +3060,7 @@ impl<'a> IrConverter<'a> {
                         location: None,
                     });
                 }
-                
+
                 let ir_value_type = self.convert_type_annotation(*value_type)?;
                 Ok(IrType::ParametricMap {
                     key_type: Box::new(ir_key_type),

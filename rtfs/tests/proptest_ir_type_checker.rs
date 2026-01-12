@@ -27,39 +27,28 @@ fn arb_ir_type() -> impl Strategy<Value = IrType> {
     ];
 
     leaf.prop_recursive(
-        4,   // depth
-        64,  // max size
-        8,   // items per collection
+        4,  // depth
+        64, // max size
+        8,  // items per collection
         |inner| {
             prop_oneof![
-                inner
-                    .clone()
-                    .prop_map(|t| IrType::Vector(Box::new(t))),
-                inner
-                    .clone()
-                    .prop_map(|t| IrType::List(Box::new(t))),
+                inner.clone().prop_map(|t| IrType::Vector(Box::new(t))),
+                inner.clone().prop_map(|t| IrType::List(Box::new(t))),
                 prop::collection::vec(inner.clone(), 0..=3).prop_map(IrType::Tuple),
                 // Unions/intersections (small, non-empty)
                 prop::collection::vec(inner.clone(), 1..=3).prop_map(IrType::Union),
                 prop::collection::vec(inner.clone(), 1..=3).prop_map(IrType::Intersection),
                 // Simple first-order functions (fixed arity, no variadic) to keep tests tractable
-                (
-                    prop::collection::vec(inner.clone(), 0..=3),
-                    inner.clone()
-                )
-                    .prop_map(|(params, ret)| IrType::Function {
+                (prop::collection::vec(inner.clone(), 0..=3), inner.clone()).prop_map(
+                    |(params, ret)| IrType::Function {
                         param_types: params,
                         variadic_param_type: None,
                         return_type: Box::new(ret),
-                    }),
+                    }
+                ),
                 // Structural record maps (keyword fields)
-                (
-                    prop::collection::vec(
-                        (0u8..=8u8, inner.clone(), any::<bool>()),
-                        0..=4
-                    )
-                )
-                    .prop_map(|entries| {
+                (prop::collection::vec((0u8..=8u8, inner.clone(), any::<bool>()), 0..=4)).prop_map(
+                    |entries| {
                         let mut map_entries = Vec::new();
                         for (k, t, optional) in entries {
                             map_entries.push(IrMapTypeEntry {
@@ -72,7 +61,8 @@ fn arb_ir_type() -> impl Strategy<Value = IrType> {
                             entries: map_entries,
                             wildcard: None,
                         }
-                    }),
+                    }
+                ),
                 // Parametric dictionary maps
                 (arb_key_type(), inner.clone()).prop_map(|(k, v)| IrType::ParametricMap {
                     key_type: Box::new(k),
@@ -144,4 +134,3 @@ proptest! {
         prop_assert!(is_subtype(&b, &j));
     }
 }
-

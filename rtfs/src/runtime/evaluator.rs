@@ -13,8 +13,8 @@ use crate::runtime::module_runtime::ModuleRegistry;
 use crate::runtime::security::IsolationLevel;
 use crate::runtime::security::RuntimeContext;
 use crate::runtime::stubs::{
-    ConflictResolution, ExecutionResultStruct, SimpleAgentCard,
-    SimpleDiscoveryOptions, SimpleDiscoveryQuery,
+    ConflictResolution, ExecutionResultStruct, SimpleAgentCard, SimpleDiscoveryOptions,
+    SimpleDiscoveryQuery,
 };
 use crate::runtime::type_validator::{
     TypeCheckingConfig, TypeValidator, ValidationLevel, VerificationContext,

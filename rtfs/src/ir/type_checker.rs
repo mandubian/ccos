@@ -49,92 +49,92 @@
 //! This is modeled via the Number = Int | Float union with subtyping.
 //!
 //! ## 5. Intersection Types
-//! 
+//!
 //! Intersection types represent values that satisfy multiple type constraints simultaneously:
-//! 
+//!
 //! ### Syntax and Semantics
 //! - **Syntax**: `T1 & T2` (represented as `[:and T1 T2]` in RTFS)
 //! - **Semantics**: A value of type `T1 & T2` must satisfy both `T1` and `T2`
 //! - **Example**: `Int & Float` represents values that are both integers and floats (empty set)
 //! - **Example**: `(Int → Float) & (Float → Int)` represents functions with both signatures
-//! 
+//!
 //! ### Subtyping Rules
-//! 
+//!
 //! The type checker implements two key subtyping rules for intersections:
-//! 
+//!
 //! ```text
 //! (S-Intersection-L1) (T1 & T2) ≤ T1
 //! (S-Intersection-L2) (T1 & T2) ≤ T2
 //! (S-Intersection-R)  T ≤ T1 ∧ T ≤ T2  ⊢  T ≤ (T1 & T2)
 //! ```
-//! 
+//!
 //! - **(S-Intersection-L1/L2)**: An intersection can be used wherever either component is expected
 //! - **(S-Intersection-R)**: T is a subtype of an intersection if it is a subtype of all intersection components
-//! 
+//!
 //! ### Type Operations
-//! 
+//!
 //! The system provides fundamental operations for intersection types:
-//! 
+//!
 //! - **Type Meet** (`type_meet`): Computes the greatest lower bound (intersection) of two types
 //!   - `meet(Int, Float) = Int & Float`
 //!   - `meet(Int, Int) = Int`
 //!   - `meet(Int, Any) = Int`
 //!   - `meet(Int, Never) = Never`
-//! 
+//!
 //! - **Type Join** (`type_join`): Computes the least upper bound (union) of two types
 //!   - `join(Int, Float) = Int | Float`
 //!   - `join(Int, Int) = Int`
 //!   - `join(Int, Any) = Any`
-//! 
+//!
 //! - **Simplification** (`simplify_intersection`): Removes redundant components and flattens nested intersections
 //!   - Flattens: `(Int & (Float & String)) → (Int & Float & String)`
 //!   - Removes duplicates: `(Int & Int & Float) → (Int & Float)`
 //!   - Eliminates Any: `(Int & Any & Float) → (Int & Float)`
 //!   - Simplifies single: `(Int) → Int`
-//! 
+//!
 //! ### Satisfiability Checking
-//! 
+//!
 //! Intersection types may be unsatisfiable (represent empty sets):
 //! - `Int & Bool` is unsatisfiable (no value can be both int and bool)
 //! - `Int & Never` is unsatisfiable (Never makes any intersection empty)
 //! - Note: the current IR checker does not attempt a full satisfiability analysis;
 //!   intersections are handled syntactically unless they contain `Never`.
-//! 
+//!
 //! ### Use Cases in RTFS
-//! 
+//!
 //! 1. **Function Overloading**: Represent functions with multiple signatures
 //!    ```rtfs
 //!    ([:and (→ Int Float) (→ Float Int)])
 //!    ```
-//! 
+//!
 //! 2. **Precise Type Constraints**: Express complex type requirements
 //!    ```rtfs
 //!    ([:and HasName HasId HasTimestamp])
 //!    ```
-//! 
+//!
 //! 3. **Type Safety**: Enforce multiple interface contracts
 //!    ```rtfs
 //!    ([:and Serializable Cloneable])
 //!    ```
-//! 
+//!
 //! 4. **LLM-Generated Code**: Provide flexible type constraints for AI-generated functions
-//! 
+//!
 //! ### Implementation Notes
-//! 
+//!
 //! - **Storage**: Represented as `IrType::Intersection(Vec<IrType>)` in IR
 //! - **Validation**: Runtime validation checks that values satisfy all intersection components
 //! - **Inference**: Type meet operations enable intersection type inference during type checking
 //! - **Performance**: Subtyping checks use memoization to avoid redundant computations
-//! 
+//!
 //! ### Examples from the Test Suite
-//! 
+//!
 //! ```text
 //! // Basic intersection subtyping
 //! Int & Float ≤ Number  (where Number = Int | Float)
-//! 
+//!
 //! // Intersection with collections
 //! Vector<Int & Float> ≤ Vector<Number>
-//! 
+//!
 //! // Type meet operations
 //! meet(Int, Float) = Int & Float
 //! meet(Int, Int) = Int
@@ -392,14 +392,14 @@ pub fn type_meet(t1: &IrType, t2: &IrType) -> IrType {
     match (t1, t2) {
         // If types are equal, return either
         _ if t1 == t2 => t1.clone(),
-        
+
         // If one type is Never, return Never (bottom type)
         (IrType::Never, _) | (_, IrType::Never) => IrType::Never,
-        
+
         // If one type is Any, return the other type
         (IrType::Any, t) => t.clone(),
         (t, IrType::Any) => t.clone(),
-        
+
         // For intersection types, compute the intersection of all components
         (IrType::Intersection(components1), IrType::Intersection(components2)) => {
             let mut all_components = components1.clone();
@@ -411,7 +411,7 @@ pub fn type_meet(t1: &IrType, t2: &IrType) -> IrType {
             all_components.push(t.clone());
             IrType::Intersection(all_components)
         }
-        
+
         // For other types, create an intersection
         (t1, t2) => IrType::Intersection(vec![t1.clone(), t2.clone()]),
     }
@@ -423,10 +423,10 @@ pub fn type_join(t1: &IrType, t2: &IrType) -> IrType {
     match (t1, t2) {
         // If types are equal, return either
         _ if t1 == t2 => t1.clone(),
-        
+
         // If one type is Any, return Any (top type)
         (IrType::Any, _) | (_, IrType::Any) => IrType::Any,
-        
+
         // If one type is Never, return the other type
         (IrType::Never, t) => t.clone(),
         (t, IrType::Never) => t.clone(),
@@ -434,7 +434,7 @@ pub fn type_join(t1: &IrType, t2: &IrType) -> IrType {
         // If one is already a subtype of the other, the supertype is the join (LUB)
         (a, b) if is_subtype(a, b) => b.clone(),
         (a, b) if is_subtype(b, a) => a.clone(),
-        
+
         // For other types, create a union (which is the standard join)
         (t1, t2) => IrType::Union(vec![t1.clone(), t2.clone()]),
     }
@@ -1189,12 +1189,18 @@ mod tests {
         let vec_number = IrType::Vector(Box::new(number.clone()));
         assert!(is_subtype(&IrType::Int, &number));
         assert!(is_subtype(&IrType::Float, &number));
-        assert!(is_subtype(&vec_number, &IrType::Vector(Box::new(IrType::Any))));
+        assert!(is_subtype(
+            &vec_number,
+            &IrType::Vector(Box::new(IrType::Any))
+        ));
 
         // [[1 2] [3 4]] → Vector<Vector<Int>>
         let vec_vec_int = IrType::Vector(Box::new(vec_int.clone()));
         assert!(is_subtype(&vec_int, &vec_int));
-        assert!(is_subtype(&vec_vec_int, &IrType::Vector(Box::new(IrType::Any))));
+        assert!(is_subtype(
+            &vec_vec_int,
+            &IrType::Vector(Box::new(IrType::Any))
+        ));
     }
 
     #[test]
@@ -1285,7 +1291,10 @@ mod tests {
         assert!(is_subtype(&IrType::Float, &number));
 
         // Therefore: Vector<Number> is sound for [1, 2.5]
-        assert!(is_subtype(&vec_number, &IrType::Vector(Box::new(IrType::Any))));
+        assert!(is_subtype(
+            &vec_number,
+            &IrType::Vector(Box::new(IrType::Any))
+        ));
     }
 
     // =========================================================================
@@ -1391,11 +1400,11 @@ mod tests {
     #[test]
     fn test_s_intersection_l_basic() {
         // (S-Intersection-L1/L2): (T1 & T2) ≤ T1 and (T1 & T2) ≤ T2
-        
+
         // Basic case: (Int & Float) ≤ Number where Number = Int | Float
         let number = IrType::Union(vec![IrType::Int, IrType::Float]);
         let int_float_intersection = IrType::Intersection(vec![IrType::Int, IrType::Float]);
-        
+
         // (Int & Float) ≤ Int and Int ≤ Number, so (Int & Float) ≤ Number
         assert!(is_subtype(&int_float_intersection, &number));
     }
@@ -1407,9 +1416,9 @@ mod tests {
         let vec_int = IrType::Vector(Box::new(IrType::Int));
         let vec_float = IrType::Vector(Box::new(IrType::Float));
         let vec_number = IrType::Vector(Box::new(number.clone()));
-        
+
         let vec_int_float_intersection = IrType::Intersection(vec![vec_int, vec_float]);
-        
+
         // Vector<Int> ≤ Vector<Number> and Vector<Float> ≤ Vector<Number>
         // So (Vector<Int> & Vector<Float>) ≤ Vector<Number>
         assert!(is_subtype(&vec_int_float_intersection, &vec_number));
@@ -1418,11 +1427,11 @@ mod tests {
     #[test]
     fn test_s_intersection_r_basic() {
         // (S-Intersection-R): T ≤ (T1 & T2)  iff  T ≤ T1 ∧ T ≤ T2
-        
+
         // Int ≤ (Int & Any) because Int ≤ Int and Int ≤ Any
         let int_any_intersection = IrType::Intersection(vec![IrType::Int, IrType::Any]);
         assert!(is_subtype(&IrType::Int, &int_any_intersection));
-        
+
         // Int ≤ (Any & Int) because Int ≤ Any and Int ≤ Int
         let any_int_intersection = IrType::Intersection(vec![IrType::Any, IrType::Int]);
         assert!(is_subtype(&IrType::Int, &any_int_intersection));
@@ -1440,7 +1449,7 @@ mod tests {
         // (Never & T) ≤ T for any T (Never is bottom)
         let int_never_intersection = IrType::Intersection(vec![IrType::Int, IrType::Never]);
         assert!(is_subtype(&int_never_intersection, &IrType::Int));
-        
+
         // T ≤ (Never & T) only if T ≤ Never, which is only true if T = Never
         assert!(is_subtype(&IrType::Never, &int_never_intersection));
         assert!(!is_subtype(&IrType::Int, &int_never_intersection));
@@ -1451,13 +1460,13 @@ mod tests {
         // (Int & Any) ≤ Any because Int ≤ Any
         let int_any_intersection = IrType::Intersection(vec![IrType::Int, IrType::Any]);
         assert!(is_subtype(&int_any_intersection, &IrType::Any));
-        
+
         // Int ≤ (Int & Any) because Int ≤ Int and Int ≤ Any
         assert!(is_subtype(&IrType::Int, &int_any_intersection));
-        
+
         // But String ⊈ (Int & Any) because String ⊈ Int
         assert!(!is_subtype(&IrType::String, &int_any_intersection));
-        
+
         // (Any & Any) = Any
         let any_any_intersection = IrType::Intersection(vec![IrType::Any, IrType::Any]);
         assert!(is_subtype(&any_any_intersection, &IrType::Any));
@@ -1471,13 +1480,13 @@ mod tests {
         // Test transitivity with intersection types
         let int_float_intersection = IrType::Intersection(vec![IrType::Int, IrType::Float]);
         let number = IrType::Union(vec![IrType::Int, IrType::Float]);
-        
+
         // (Int & Float) ≤ Number (from S-Intersection-L)
         assert!(is_subtype(&int_float_intersection, &number));
-        
+
         // Number ≤ Any (from S-Union-L)
         assert!(is_subtype(&number, &IrType::Any));
-        
+
         // Therefore (Int & Float) ≤ Any by transitivity
         assert!(is_subtype(&int_float_intersection, &IrType::Any));
     }
@@ -1485,19 +1494,19 @@ mod tests {
     #[test]
     fn test_type_meet_basic() {
         // Test meet operation (greatest lower bound)
-        
+
         // meet(Int, Float) = Int & Float
         let result = type_meet(&IrType::Int, &IrType::Float);
         assert!(matches!(result, IrType::Intersection(components) if components.len() == 2));
-        
+
         // meet(Int, Int) = Int
         let result = type_meet(&IrType::Int, &IrType::Int);
         assert_eq!(result, IrType::Int);
-        
+
         // meet(Int, Any) = Int
         let result = type_meet(&IrType::Int, &IrType::Any);
         assert_eq!(result, IrType::Int);
-        
+
         // meet(Int, Never) = Never
         let result = type_meet(&IrType::Int, &IrType::Never);
         assert_eq!(result, IrType::Never);
@@ -1506,19 +1515,19 @@ mod tests {
     #[test]
     fn test_type_join_basic() {
         // Test join operation (least upper bound)
-        
+
         // join(Int, Float) = Int | Float (union)
         let result = type_join(&IrType::Int, &IrType::Float);
         assert!(matches!(result, IrType::Union(components) if components.len() == 2));
-        
+
         // join(Int, Int) = Int
         let result = type_join(&IrType::Int, &IrType::Int);
         assert_eq!(result, IrType::Int);
-        
+
         // join(Int, Any) = Any
         let result = type_join(&IrType::Int, &IrType::Any);
         assert_eq!(result, IrType::Any);
-        
+
         // join(Int, Never) = Int
         let result = type_join(&IrType::Int, &IrType::Never);
         assert_eq!(result, IrType::Int);
@@ -1527,7 +1536,7 @@ mod tests {
     #[test]
     fn test_simplify_intersection() {
         // Test intersection simplification
-        
+
         // Remove duplicates
         let components = vec![IrType::Int, IrType::Int, IrType::Float];
         let simplified = simplify_intersection(components);
@@ -1537,19 +1546,19 @@ mod tests {
         let components = vec![IrType::Int, IrType::Float, IrType::Int];
         let simplified = simplify_intersection(components);
         assert_eq!(simplified.len(), 2);
-        
+
         // Remove Any
         let components = vec![IrType::Int, IrType::Any, IrType::Float];
         let simplified = simplify_intersection(components);
         assert_eq!(simplified.len(), 2);
         assert!(simplified.iter().all(|t| !matches!(t, IrType::Any)));
-        
+
         // Handle Never
         let components = vec![IrType::Int, IrType::Never, IrType::Float];
         let simplified = simplify_intersection(components);
         assert_eq!(simplified.len(), 1);
         assert_eq!(simplified[0], IrType::Never);
-        
+
         // Flatten nested intersections
         let nested = IrType::Intersection(vec![IrType::Int, IrType::Float]);
         let components = vec![nested, IrType::String];
@@ -1560,36 +1569,36 @@ mod tests {
     #[test]
     fn test_intersection_function_types() {
         // Test intersection with function types
-        
+
         // Test a simpler case: (Int → Int) & (Int → Float) ≤ (Int → Number)
         let number = IrType::Union(vec![IrType::Int, IrType::Float]);
-        
+
         let int_to_int = IrType::Function {
             param_types: vec![IrType::Int],
             variadic_param_type: None,
             return_type: Box::new(IrType::Int),
         };
-        
+
         let int_to_float = IrType::Function {
             param_types: vec![IrType::Int],
             variadic_param_type: None,
             return_type: Box::new(IrType::Float),
         };
-        
+
         let int_to_number = IrType::Function {
             param_types: vec![IrType::Int],
             variadic_param_type: None,
             return_type: Box::new(number.clone()),
         };
-        
+
         let intersection = IrType::Intersection(vec![int_to_int, int_to_float]);
-        
+
         // (Int → Int) & (Int → Float) ≤ (Int → Number) should be true
         // because (Int → Int) ≤ (Int → Number) and (Int → Float) ≤ (Int → Number)
         // For (Int → Int) ≤ (Int → Number): Int ≤ Int (contravariant) and Int ≤ Number (covariant) → true
         // For (Int → Float) ≤ (Int → Number): Int ≤ Int (contravariant) and Float ≤ Number (covariant) → true
         assert!(is_subtype(&intersection, &int_to_number));
-        
+
         // Test that the intersection is also a subtype of Any
         assert!(is_subtype(&intersection, &IrType::Any));
     }
@@ -1597,21 +1606,21 @@ mod tests {
     #[test]
     fn test_intersection_collection_types() {
         // Test intersection with collection types
-        
+
         // Vector<Int> & Vector<Float> ≤ Vector<Number>
         let number = IrType::Union(vec![IrType::Int, IrType::Float]);
         let vec_int = IrType::Vector(Box::new(IrType::Int));
         let vec_float = IrType::Vector(Box::new(IrType::Float));
         let vec_number = IrType::Vector(Box::new(number));
-        
+
         let intersection = IrType::Intersection(vec![vec_int, vec_float]);
         assert!(is_subtype(&intersection, &vec_number));
-        
+
         // List<String> & List<Keyword> ≤ List<Any>
         let list_string = IrType::List(Box::new(IrType::String));
         let list_keyword = IrType::List(Box::new(IrType::Keyword));
         let list_any = IrType::List(Box::new(IrType::Any));
-        
+
         let intersection = IrType::Intersection(vec![list_string, list_keyword]);
         assert!(is_subtype(&intersection, &list_any));
     }
@@ -1697,10 +1706,10 @@ mod tests {
         // Every intersection type should be a subtype of itself
         let intersection = IrType::Intersection(vec![IrType::Int, IrType::Float]);
         assert!(is_subtype(&intersection, &intersection));
-        
+
         let nested = IrType::Intersection(vec![
             IrType::Int,
-            IrType::Intersection(vec![IrType::Float, IrType::String])
+            IrType::Intersection(vec![IrType::Float, IrType::String]),
         ]);
         assert!(is_subtype(&nested, &nested));
     }
@@ -1710,19 +1719,19 @@ mod tests {
         // Test a complex intersection scenario
         let number = IrType::Union(vec![IrType::Int, IrType::Float]);
         let int_float_intersection = IrType::Intersection(vec![IrType::Int, IrType::Float]);
-        
+
         // (Int & Float) ≤ Number should be true
         assert!(is_subtype(&int_float_intersection, &number));
-        
+
         // Test nested intersections and unions
         let complex_type = IrType::Intersection(vec![
             IrType::Union(vec![IrType::Int, IrType::String]),
-            IrType::Union(vec![IrType::Int, IrType::Bool])
+            IrType::Union(vec![IrType::Int, IrType::Bool]),
         ]);
-        
+
         // Int should be a subtype of this complex type
         assert!(is_subtype(&IrType::Int, &complex_type));
-        
+
         // The complex type should be a subtype of Any
         assert!(is_subtype(&complex_type, &IrType::Any));
     }

@@ -10,7 +10,11 @@ fn test_formatted_error_has_header_file_and_context() {
     let err = parse_with_enhanced_errors(source, Some("format.rtfs")).unwrap_err();
     let formatted = err.format_with_context();
 
-    assert!(formatted.starts_with("❌ Parse Error:"), "missing header:\n{}", formatted);
+    assert!(
+        formatted.starts_with("❌ Parse Error:"),
+        "missing header:\n{}",
+        formatted
+    );
     assert!(
         formatted.contains("📁 File: format.rtfs"),
         "missing file path:\n{}",
@@ -50,5 +54,3 @@ fn test_delimiter_mismatch_includes_delimiter_analysis_section() {
     assert!(formatted.contains("Brackets: [ ... ]"));
     assert!(formatted.contains("Braces: { ... }"));
 }
-
-

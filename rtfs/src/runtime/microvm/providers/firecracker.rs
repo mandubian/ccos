@@ -463,9 +463,11 @@ impl FirecrackerVM {
     /// Configure VM via Firecracker API with enhanced features
     fn configure_vm(&mut self) -> RuntimeResult<()> {
         // Configure boot source (kernel and rootfs)
-        let boot_args = self.config.boot_args.clone().unwrap_or_else(|| {
-            "console=ttyS0 reboot=k panic=1 pci=off".to_string()
-        });
+        let boot_args = self
+            .config
+            .boot_args
+            .clone()
+            .unwrap_or_else(|| "console=ttyS0 reboot=k panic=1 pci=off".to_string());
 
         let boot_source = json!({
             "kernel_image_path": self.config.kernel_path.to_string_lossy(),
@@ -881,9 +883,8 @@ impl FirecrackerMicroVMProvider {
         // Create the script file with appropriate extension
         let script_filename = format!("rtfs_script.{}", language.file_extension());
         let script_path = work_dir.join(&script_filename);
-        fs::write(&script_path, script_source).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to write script: {}", e))
-        })?;
+        fs::write(&script_path, script_source)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write script: {}", e)))?;
 
         // Create the input.json file for large payloads
         let input_json = if let Some(first_arg) = args.first() {
@@ -895,15 +896,15 @@ impl FirecrackerMicroVMProvider {
         let input_json_str = serde_json::to_string(&input_json)
             .map_err(|e| RuntimeError::Generic(format!("Failed to stringify input: {}", e)))?;
         let input_path = work_dir.join("input.json");
-        fs::write(&input_path, &input_json_str).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to write input.json: {}", e))
-        })?;
+        fs::write(&input_path, &input_json_str)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write input.json: {}", e)))?;
 
         // Build interpreter detection logic for the init script
         let interpreter_checks = self.build_interpreter_checks(language, &script_filename, args);
-        
+
         // Create an init script that runs our code and shuts down
-        let init_script = format!(r#"#!/bin/sh
+        let init_script = format!(
+            r#"#!/bin/sh
 # RTFS One-shot execution init
 # Mount essential filesystems
 mount -t proc proc /proc 2>/dev/null
@@ -929,29 +930,31 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
             exit = Self::EXIT_CODE_MARKER,
             interpreter_checks = interpreter_checks,
         );
-        
+
         let init_path = work_dir.join("rtfs_init");
-        fs::write(&init_path, &init_script).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to write init script: {}", e))
-        })?;
-        
+        fs::write(&init_path, &init_script)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write init script: {}", e)))?;
+
         // Make the init script executable on the host BEFORE debugfs injection
         // debugfs write command preserves source file permissions
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = fs::metadata(&init_path)
-                .map_err(|e| RuntimeError::Generic(format!("Failed to get init permissions: {}", e)))?
+                .map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to get init permissions: {}", e))
+                })?
                 .permissions();
             perms.set_mode(0o755);
-            fs::set_permissions(&init_path, perms)
-                .map_err(|e| RuntimeError::Generic(format!("Failed to set init permissions: {}", e)))?;
+            fs::set_permissions(&init_path, perms).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to set init permissions: {}", e))
+            })?;
         }
-        
+
         // Copy the base rootfs to create a writable version
         let overlay_rootfs = work_dir.join("rootfs.ext4");
         eprintln!("[Firecracker] Copying rootfs to overlay...");
-        
+
         let output = Command::new("cp")
             .args([
                 &self.config.rootfs_path.to_string_lossy().to_string(),
@@ -959,14 +962,14 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
             ])
             .output()
             .map_err(|e| RuntimeError::Generic(format!("Failed to copy rootfs: {}", e)))?;
-        
+
         if !output.status.success() {
             return Err(RuntimeError::Generic(format!(
                 "Failed to copy rootfs: {}",
                 String::from_utf8_lossy(&output.stderr)
             )));
         }
-        
+
         // Use debugfs to inject the script
         eprintln!("[Firecracker] Injecting script into rootfs...");
         let output = Command::new("debugfs")
@@ -978,14 +981,14 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
             ])
             .output()
             .map_err(|e| RuntimeError::Generic(format!("Failed to inject script: {}", e)))?;
-        
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if !stderr.is_empty() && !stderr.contains("Operation not permitted") {
                 eprintln!("[Firecracker] debugfs warning: {}", stderr);
             }
         }
-        
+
         // Inject the init script
         eprintln!("[Firecracker] Injecting init script into rootfs...");
         let output = Command::new("debugfs")
@@ -997,7 +1000,7 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
             ])
             .output()
             .map_err(|e| RuntimeError::Generic(format!("Failed to inject init: {}", e)))?;
-        
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if !stderr.is_empty() {
@@ -1023,11 +1026,11 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 eprintln!("[Firecracker] debugfs input.json warning: {}", stderr);
             }
         }
-        
+
         // Note: debugfs write command preserves source file permissions,
         // so we don't need to call set_inode_field - the 0755 perms from
         // the host file are already copied.
-        
+
         Ok(overlay_rootfs)
     }
 
@@ -1051,7 +1054,10 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
 
         if alternatives.is_empty() {
             // For languages without alternatives, use direct execution
-            return format!("RTFS_INPUT_FILE=/input.json /{} {} 2>&1", script_filename, args_str);
+            return format!(
+                "RTFS_INPUT_FILE=/input.json /{} {} 2>&1",
+                script_filename, args_str
+            );
         }
 
         let mut checks = String::new();
@@ -1101,29 +1107,29 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
 
         // Create overlay rootfs with our script injected
         let overlay_rootfs = self.create_overlay_rootfs(&vm_id, language, script_source, args)?;
-        
+
         // Configure VM with custom boot args to use our init script
         // Use init= for ext4 rootfs (not rdinit which is for initramfs)
         let boot_args = "console=ttyS0 reboot=k panic=1 pci=off init=/rtfs_init";
-        
+
         eprintln!("[Firecracker] Starting one-shot VM with init=/rtfs_init");
-        
+
         let socket_path = PathBuf::from(format!("/tmp/fc-{}.sock", vm_id));
-        
+
         // Clean up any existing socket
         let _ = fs::remove_file(&socket_path);
-        
+
         // Start Firecracker - serial console output goes to stdout by default
         let mut cmd = Command::new("firecracker");
         cmd.arg("--api-sock")
             .arg(&socket_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        
+
         let mut child = cmd
             .spawn()
             .map_err(|e| RuntimeError::Generic(format!("Failed to start Firecracker: {}", e)))?;
-        
+
         // Wait for socket to be created
         let socket_timeout = Duration::from_secs(5);
         let start = Instant::now();
@@ -1138,19 +1144,22 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        
+
         // Give socket a moment to be ready
         std::thread::sleep(Duration::from_millis(100));
-        
+
         // Helper to make API calls
-        let api_call = |method: &str, path: &str, data: &serde_json::Value| -> RuntimeResult<String> {
+        let api_call = |method: &str,
+                        path: &str,
+                        data: &serde_json::Value|
+         -> RuntimeResult<String> {
             let mut stream = UnixStream::connect(&socket_path).map_err(|e| {
                 RuntimeError::Generic(format!("Failed to connect to Firecracker API: {}", e))
             })?;
-            
+
             stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
             stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
-            
+
             let body = data.to_string();
             // Add Connection: close to ensure server closes connection after response
             let request = format!(
@@ -1160,11 +1169,11 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 body.len(),
                 body
             );
-            
+
             stream.write_all(request.as_bytes()).map_err(|e| {
                 RuntimeError::Generic(format!("Failed to write to Firecracker API: {}", e))
             })?;
-            
+
             // Read response - with Connection: close, server will close after response
             let mut response = Vec::new();
             let mut buf = [0u8; 4096];
@@ -1177,8 +1186,10 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                         let partial = String::from_utf8_lossy(&response);
                         if partial.contains("\r\n\r\n") {
                             // We have headers at least, check for body
-                            if partial.starts_with("HTTP/1.1 204") || 
-                               partial.starts_with("HTTP/1.1 2") && partial.ends_with("\r\n\r\n") {
+                            if partial.starts_with("HTTP/1.1 204")
+                                || partial.starts_with("HTTP/1.1 2")
+                                    && partial.ends_with("\r\n\r\n")
+                            {
                                 break; // 204 No Content or empty body
                             }
                         }
@@ -1193,9 +1204,9 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                     }
                 }
             }
-            
+
             let response_str = String::from_utf8_lossy(&response).to_string();
-            
+
             if response_str.starts_with("HTTP/1.1 2") {
                 Ok(response_str)
             } else {
@@ -1206,7 +1217,7 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 )))
             }
         };
-        
+
         // Configure boot source
         eprintln!("[Firecracker] Configuring boot source...");
         api_call(
@@ -1217,7 +1228,7 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 "boot_args": boot_args
             }),
         )?;
-        
+
         // Configure root drive
         eprintln!("[Firecracker] Configuring root drive...");
         api_call(
@@ -1230,7 +1241,7 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 "is_read_only": false
             }),
         )?;
-        
+
         // Configure machine
         eprintln!("[Firecracker] Configuring machine...");
         api_call(
@@ -1242,39 +1253,39 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 "smt": false
             }),
         )?;
-        
+
         // Start the VM
         eprintln!("[Firecracker] Starting VM instance...");
         api_call("PUT", "/actions", &json!({"action_type": "InstanceStart"}))?;
-        
+
         // Read stdout (serial console) until we see the end marker or timeout
         let execution_timeout = Duration::from_secs(30);
         let start = Instant::now();
         let mut stdout_data = Vec::new();
-        
+
         eprintln!("[Firecracker] Waiting for execution (max 30s)...");
-        
+
         // Take stdout for reading
         let mut stdout_handle = child.stdout.take();
-        
+
         if let Some(ref mut stdout) = stdout_handle {
             use std::os::unix::io::AsRawFd;
-            
+
             // Set non-blocking mode on stdout
             let fd = stdout.as_raw_fd();
             unsafe {
                 let flags = libc::fcntl(fd, libc::F_GETFL);
                 libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
             }
-            
+
             let mut buf = [0u8; 4096];
-            
+
             loop {
                 if start.elapsed() > execution_timeout {
                     eprintln!("[Firecracker] Execution timed out after 30s");
                     break;
                 }
-                
+
                 // Check if process has exited
                 match child.try_wait() {
                     Ok(Some(status)) => {
@@ -1295,7 +1306,7 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                         break;
                     }
                 }
-                
+
                 // Try to read data
                 match stdout.read(&mut buf) {
                     Ok(0) => {
@@ -1305,7 +1316,7 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                     Ok(n) => {
                         stdout_data.extend_from_slice(&buf[..n]);
                         let output = String::from_utf8_lossy(&stdout_data);
-                        
+
                         // Check if we have the end marker
                         if output.contains(Self::OUTPUT_END_MARKER) {
                             eprintln!("[Firecracker] Found output end marker");
@@ -1332,14 +1343,14 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 }
             }
         }
-        
+
         // Kill process FIRST before reading stderr (to avoid blocking)
         if child.try_wait().ok().flatten().is_none() {
             eprintln!("[Firecracker] Killing VM process...");
             let _ = child.kill();
             let _ = child.wait();
         }
-        
+
         // Read stderr (now safe since process is dead)
         let mut stderr_data = Vec::new();
         if let Some(ref mut stderr) = child.stderr {
@@ -1366,25 +1377,25 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 let _ = stderr.read_to_end(&mut stderr_data);
             }
         }
-        
+
         // Cleanup
         let work_dir = overlay_rootfs.parent().unwrap().to_path_buf();
         let _ = fs::remove_file(&socket_path);
         let _ = fs::remove_dir_all(&work_dir);
-        
+
         let stdout_str = String::from_utf8_lossy(&stdout_data).to_string();
         let stderr_str = String::from_utf8_lossy(&stderr_data).to_string();
-        
+
         eprintln!(
             "[Firecracker] Captured {} bytes stdout, {} bytes stderr",
             stdout_data.len(),
             stderr_data.len()
         );
-        
+
         let parsed_output = self.parse_vm_output(&stdout_str, &stderr_str);
-        
+
         eprintln!("[Firecracker] Execution complete.");
-        
+
         Ok(parsed_output)
     }
 
@@ -1396,21 +1407,29 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
             if let Some(end_offset) = stdout[after_start..].find(Self::OUTPUT_END_MARKER) {
                 let end_idx = after_start + end_offset;
                 let script_output = &stdout[after_start..end_idx];
-                
+
                 // Filter out kernel logs from script output (lines starting with [ timestamp ])
-                let filtered_output: String = script_output.lines()
+                let filtered_output: String = script_output
+                    .lines()
                     .filter(|line| {
                         let trimmed = line.trim();
-                        if trimmed.is_empty() { return true; }
+                        if trimmed.is_empty() {
+                            return true;
+                        }
                         // Kernel logs usually start with [    0.123456]
-                        !(trimmed.starts_with('[') && trimmed.contains(']') && 
-                          trimmed.split(']').next().map(|s| s.chars().any(|c| c.is_numeric())).unwrap_or(false))
+                        !(trimmed.starts_with('[')
+                            && trimmed.contains(']')
+                            && trimmed
+                                .split(']')
+                                .next()
+                                .map(|s| s.chars().any(|c| c.is_numeric()))
+                                .unwrap_or(false))
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                
+
                 let final_output = filtered_output.trim().to_string();
-                
+
                 // Extract exit code if present
                 if let Some(exit_idx) = stdout.find(Self::EXIT_CODE_MARKER) {
                     let after_exit = exit_idx + Self::EXIT_CODE_MARKER.len() + 1;
@@ -1420,29 +1439,28 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                             .next()
                             .unwrap_or("0");
                         if code_str != "0" {
-                            return format!(
-                                "{}\n[Exit code: {}]",
-                                final_output,
-                                code_str
-                            );
+                            return format!("{}\n[Exit code: {}]", final_output, code_str);
                         }
                     }
                 }
                 return final_output;
             }
         }
-        
+
         // If no markers found, try to extract useful output
         let mut result = String::new();
-        
+
         if !stdout.is_empty() {
             // Filter out kernel boot messages, keep only relevant output
             let lines: Vec<&str> = stdout.lines().collect();
             let mut capture = false;
             for line in &lines {
                 // Start capturing after kernel finishes or when we see shell output
-                if line.contains("init") || line.contains("python") || line.contains("Python")
-                   || line.contains("#") || line.contains("$")
+                if line.contains("init")
+                    || line.contains("python")
+                    || line.contains("Python")
+                    || line.contains("#")
+                    || line.contains("$")
                 {
                     capture = true;
                 }
@@ -1451,23 +1469,23 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                     result.push('\n');
                 }
             }
-            
+
             if result.is_empty() {
                 // Just use the last portion of output
                 let last_lines: Vec<&str> = lines.iter().rev().take(20).rev().cloned().collect();
                 result = last_lines.join("\n");
             }
         }
-        
+
         if !stderr.is_empty() {
             result.push_str("\n[stderr]: ");
             result.push_str(stderr);
         }
-        
+
         if result.is_empty() {
             result = "[No output captured from VM]".to_string();
         }
-        
+
         result
     }
 
@@ -1508,13 +1526,20 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                     .map_err(|e| RuntimeError::Generic(format!("Execution failed: {}", e)))?;
 
                 if output.status.success() {
-                    Ok(Value::String(String::from_utf8_lossy(&output.stdout).to_string()))
+                    Ok(Value::String(
+                        String::from_utf8_lossy(&output.stdout).to_string(),
+                    ))
                 } else {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    Err(RuntimeError::Generic(format!("Execution error: {}", stderr)))
+                    Err(RuntimeError::Generic(format!(
+                        "Execution error: {}",
+                        stderr
+                    )))
                 }
             }
-            _ => Ok(Value::String("Direct execution for this program type not supported".to_string())),
+            _ => Ok(Value::String(
+                "Direct execution for this program type not supported".to_string(),
+            )),
         }
     }
 
@@ -1536,7 +1561,9 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
         let output = Command::new(interpreter)
             .args(&cmd_args)
             .output()
-            .map_err(|e| RuntimeError::Generic(format!("{:?} execution failed: {}", language, e)))?;
+            .map_err(|e| {
+                RuntimeError::Generic(format!("{:?} execution failed: {}", language, e))
+            })?;
 
         if output.status.success() {
             Ok(Value::String(
@@ -1579,7 +1606,7 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                     let output = self.execute_script_in_vm(vm, &detected_lang, source, args)?;
                     return Ok(Value::String(output));
                 }
-                
+
                 // Simulate RTFS execution in VM with security monitoring
                 if source.contains("(+") {
                     // Extract numbers from simple arithmetic expressions
@@ -1599,7 +1626,10 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                     source
                 )))
             }
-            Program::ExternalProgram { path, args: prog_args } => {
+            Program::ExternalProgram {
+                path,
+                args: prog_args,
+            } => {
                 // Detect language from external program path
                 let lang = if path == "python" || path == "python3" || path == "python2" {
                     Some(ScriptLanguage::Python)
@@ -1614,7 +1644,7 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                 } else {
                     None
                 };
-                
+
                 // Execute script languages in VM
                 if let Some(language) = lang {
                     // Find the -c or -e argument for inline code
@@ -1625,18 +1655,23 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                         }
                     }
                 }
-                
+
                 // For other external programs, execute directly
                 let output = Command::new(path)
                     .args(prog_args)
                     .output()
                     .map_err(|e| RuntimeError::Generic(format!("Execution failed: {}", e)))?;
-                
+
                 if output.status.success() {
-                    Ok(Value::String(String::from_utf8_lossy(&output.stdout).to_string()))
+                    Ok(Value::String(
+                        String::from_utf8_lossy(&output.stdout).to_string(),
+                    ))
                 } else {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    Err(RuntimeError::Generic(format!("Execution error: {}", stderr)))
+                    Err(RuntimeError::Generic(format!(
+                        "Execution error: {}",
+                        stderr
+                    )))
                 }
             }
             Program::NativeFunction(_) => {
@@ -1657,11 +1692,9 @@ poweroff -f 2>/dev/null || reboot -f 2>/dev/null || halt -f 2>/dev/null
                     "RTFS AST executed in Firecracker VM".to_string(),
                 ))
             }
-            Program::Binary { .. } => {
-                Err(RuntimeError::Generic(
-                    "Binary execution not supported in Firecracker provider yet".to_string(),
-                ))
-            }
+            Program::Binary { .. } => Err(RuntimeError::Generic(
+                "Binary execution not supported in Firecracker provider yet".to_string(),
+            )),
         };
 
         // Post-execution monitoring
@@ -1969,16 +2002,13 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
                 Program::ScriptSource { language, source } => {
                     // Explicit language - use VM execution
                     let mut dummy_vm = FirecrackerVM::new(self.config.clone());
-                    match self.execute_script_in_vm(
-                        &mut dummy_vm,
-                        language,
-                        source,
-                        &context.args,
-                    ) {
+                    match self.execute_script_in_vm(&mut dummy_vm, language, source, &context.args)
+                    {
                         Ok(output) => {
                             let trimmed = output.trim();
                             // Try to parse as JSON first (for complex return values)
-                            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(trimmed)
+                            {
                                 if let Ok(rtfs_val) = crate::utils::json_to_rtfs_value(&json_val) {
                                     rtfs_val
                                 } else {
@@ -2031,7 +2061,7 @@ impl MicroVMProvider for FirecrackerMicroVMProvider {
                     } else {
                         None
                     };
-                    
+
                     if let Some(language) = lang {
                         if let Some(pos) = args.iter().position(|a| a == "-c" || a == "-e") {
                             if let Some(code) = args.get(pos + 1) {

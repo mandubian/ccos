@@ -30,8 +30,12 @@ fn test_mismatched_brackets() {
     let formatted = error.format_with_context();
 
     // Should indicate some kind of error (might not specifically say "mismatch")
-    assert!(formatted.contains("Expected") || formatted.contains("mismatch") || 
-           formatted.contains("error") || formatted.contains("Error"));
+    assert!(
+        formatted.contains("Expected")
+            || formatted.contains("mismatch")
+            || formatted.contains("error")
+            || formatted.contains("Error")
+    );
     println!("Mismatched brackets error:\n{}", formatted);
 }
 
@@ -64,8 +68,12 @@ fn test_incomplete_function_call() {
     let formatted = error.format_with_context();
 
     // Should suggest proper function call syntax
-    assert!(formatted.contains("function") || formatted.contains("call") || 
-           formatted.contains("Expected") || formatted.contains("close"));
+    assert!(
+        formatted.contains("function")
+            || formatted.contains("call")
+            || formatted.contains("Expected")
+            || formatted.contains("close")
+    );
     println!("Incomplete function call error:\n{}", formatted);
 }
 
@@ -94,8 +102,11 @@ fn test_invalid_let_syntax() {
     let formatted = error.format_with_context();
 
     // Should be specific to let syntax
-    assert!(formatted.contains("let") || formatted.contains("binding") || 
-           formatted.contains("Expected"));
+    assert!(
+        formatted.contains("let")
+            || formatted.contains("binding")
+            || formatted.contains("Expected")
+    );
     println!("Invalid let syntax error:\n{}", formatted);
 }
 

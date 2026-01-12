@@ -4,10 +4,10 @@ use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::microvm::core::{ExecutionContext, ExecutionMetadata, ExecutionResult};
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::values::Value;
-use std::io::{Cursor};
+use std::io::Cursor;
 use std::time::Instant;
 use wasmtime::*;
-use wasmtime_wasi::sync::{WasiCtxBuilder};
+use wasmtime_wasi::sync::WasiCtxBuilder;
 use wasmtime_wasi::WasiCtx;
 
 struct HostState {
@@ -25,7 +25,7 @@ impl WasmMicroVMProvider {
         let mut config = Config::new();
         config.wasm_component_model(true);
         let engine = Engine::new(&config).unwrap_or_else(|_| Engine::default());
-        
+
         Self {
             initialized: false,
             engine,
@@ -68,27 +68,33 @@ impl WasmMicroVMProvider {
 
         let output_bytes = {
             let mut store = Store::new(&self.engine, HostState { wasi });
-            
-            let instance = linker.instantiate(&mut store, &module)
+
+            let instance = linker
+                .instantiate(&mut store, &module)
                 .map_err(|e| RuntimeError::Generic(format!("Failed to instantiate WASM: {}", e)))?;
 
             // Call _start (standard WASI entry point)
-            let start = instance.get_typed_func::<(), ()>(&mut store, "_start")
-                .map_err(|e| RuntimeError::Generic(format!("Failed to find _start in WASM: {}", e)))?;
-            
-            start.call(&mut store, ())
+            let start = instance
+                .get_typed_func::<(), ()>(&mut store, "_start")
+                .map_err(|e| {
+                    RuntimeError::Generic(format!("Failed to find _start in WASM: {}", e))
+                })?;
+
+            start
+                .call(&mut store, ())
                 .map_err(|e| RuntimeError::Generic(format!("WASM execution failed: {}", e)))?;
-            
+
             // Store is about to be dropped
             drop(store);
-            
-            stdout_pipe.try_into_inner()
+
+            stdout_pipe
+                .try_into_inner()
                 .map_err(|_| RuntimeError::Generic("Failed to get WASM output".to_string()))?
         };
-        
+
         let output_str = String::from_utf8_lossy(&output_bytes).to_string();
         let trimmed_output = output_str.trim();
-        
+
         if trimmed_output.is_empty() {
             return Ok(Value::Nil);
         }
@@ -198,9 +204,10 @@ impl MicroVMProvider for WasmMicroVMProvider {
                     if *language == crate::runtime::microvm::core::ScriptLanguage::Wasm {
                         self.execute_wasm_binary(source, &context)?
                     } else {
-                        return Err(RuntimeError::Generic(
-                            format!("WASM provider does not support binary language: {:?}", language),
-                        ));
+                        return Err(RuntimeError::Generic(format!(
+                            "WASM provider does not support binary language: {:?}",
+                            language
+                        )));
                     }
                 }
             },

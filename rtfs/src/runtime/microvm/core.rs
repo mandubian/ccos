@@ -23,7 +23,10 @@ pub enum ScriptLanguage {
     /// WebAssembly
     Wasm,
     /// Custom language with interpreter path
-    Custom { interpreter: String, file_ext: String },
+    Custom {
+        interpreter: String,
+        file_ext: String,
+    },
 }
 
 impl ScriptLanguage {
@@ -72,7 +75,9 @@ impl ScriptLanguage {
     /// Alternative interpreter paths to try in order
     pub fn interpreter_alternatives(&self) -> Vec<&str> {
         match self {
-            ScriptLanguage::Python => vec!["/usr/bin/python", "/usr/bin/python3", "/usr/bin/python2"],
+            ScriptLanguage::Python => {
+                vec!["/usr/bin/python", "/usr/bin/python3", "/usr/bin/python2"]
+            }
             ScriptLanguage::JavaScript => vec!["/usr/bin/node", "/usr/local/bin/node"],
             ScriptLanguage::Shell => vec!["/bin/sh", "/bin/bash"],
             ScriptLanguage::Ruby => vec!["/usr/bin/ruby"],
@@ -86,7 +91,7 @@ impl ScriptLanguage {
     /// Detect language from source code heuristics
     pub fn detect_from_source(source: &str) -> Option<ScriptLanguage> {
         let trimmed = source.trim();
-        
+
         // Check shebang first
         if let Some(first_line) = trimmed.lines().next() {
             if first_line.starts_with("#!") {
@@ -103,7 +108,7 @@ impl ScriptLanguage {
                 }
             }
         }
-        
+
         // Heuristic detection based on syntax patterns
         //
         // IMPORTANT: Order matters. Some languages share keywords (e.g. Ruby and Python both use `def`).
@@ -133,7 +138,7 @@ impl ScriptLanguage {
         if source.contains("import ") || python_has_def || source.contains("print(") {
             return Some(ScriptLanguage::Python);
         }
-        
+
         None
     }
 }
@@ -152,9 +157,15 @@ pub enum Program {
     /// RTFS source code to parse and execute (legacy, prefer ScriptSource)
     RtfsSource(String),
     /// Script source with explicit language tag for sandboxed execution
-    ScriptSource { language: ScriptLanguage, source: String },
+    ScriptSource {
+        language: ScriptLanguage,
+        source: String,
+    },
     /// Binary source (e.g. WASM) with explicit language tag
-    Binary { language: ScriptLanguage, source: Vec<u8> },
+    Binary {
+        language: ScriptLanguage,
+        source: Vec<u8>,
+    },
 }
 
 impl Program {
@@ -219,7 +230,10 @@ impl Program {
         match self {
             Program::RtfsSource(source) => {
                 if let Some(lang) = ScriptLanguage::detect_from_source(&source) {
-                    Program::ScriptSource { language: lang, source }
+                    Program::ScriptSource {
+                        language: lang,
+                        source,
+                    }
                 } else {
                     Program::RtfsSource(source)
                 }

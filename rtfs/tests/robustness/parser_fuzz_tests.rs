@@ -13,9 +13,38 @@ fn xorshift64(mut x: u64) -> u64 {
 
 fn gen_case(seed: u64, max_len: usize) -> String {
     let tokens: [&str; 32] = [
-        "(", ")", "[", "]", "{", "}", " ", "\n", "\t", "\"", ":", ";", "let", "if", "fn", "def",
-        "defn", "match", "try", "catch", "resource:ref", "nil", "true", "false", "0", "1", "42",
-        "+", "-", "*", "/", "x",
+        "(",
+        ")",
+        "[",
+        "]",
+        "{",
+        "}",
+        " ",
+        "\n",
+        "\t",
+        "\"",
+        ":",
+        ";",
+        "let",
+        "if",
+        "fn",
+        "def",
+        "defn",
+        "match",
+        "try",
+        "catch",
+        "resource:ref",
+        "nil",
+        "true",
+        "false",
+        "0",
+        "1",
+        "42",
+        "+",
+        "-",
+        "*",
+        "/",
+        "x",
     ];
 
     let mut out = String::new();
@@ -40,7 +69,8 @@ fn test_parser_never_panics_on_generated_inputs() {
         let input = gen_case(seed, MAX_LEN);
 
         // Parsing should never panic.
-        let parse_result = std::panic::catch_unwind(|| parse_with_enhanced_errors(&input, Some("fuzz.rtfs")));
+        let parse_result =
+            std::panic::catch_unwind(|| parse_with_enhanced_errors(&input, Some("fuzz.rtfs")));
         assert!(
             parse_result.is_ok(),
             "parse_with_enhanced_errors panicked for seed {} input {:?}",
@@ -66,5 +96,3 @@ fn test_parser_never_panics_on_generated_inputs() {
         }
     }
 }
-
-
