@@ -13,6 +13,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
+use serde::Serialize;
+
 use crate::cognitive_engine::DelegatingCognitiveEngine;
 
 use rtfs::runtime::error::RuntimeResult;
@@ -27,14 +29,14 @@ use super::types::{ExecutionResult, Plan, PlanBody, StorableIntent};
 use rtfs::runtime::error::RuntimeError;
 
 /// Action to take when a rule matches
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum RuleAction {
     Allow,
     Deny(String), // Reason
     RequireHumanApproval,
+    RequireGuardianApproval,
 }
 
-/// Risk priority level for capability synthesis authorization.
 /// Used by GovernanceKernel to gate external capability synthesis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SynthesisRisk {
@@ -148,7 +150,7 @@ impl SynthesisRiskAssessment {
 }
 
 /// A rule in the Constitution
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ConstitutionRule {
     pub id: String,
     pub description: String,
@@ -158,8 +160,9 @@ pub struct ConstitutionRule {
 
 /// Represents the system's constitution, a set of human-authored rules.
 // TODO: This should be loaded from a secure, signed configuration file.
+#[derive(Debug, Serialize)]
 pub struct Constitution {
-    rules: Vec<ConstitutionRule>,
+    pub rules: Vec<ConstitutionRule>,
     /// Execution hint policy limits
     pub hint_policies: ExecutionHintPolicies,
     /// Semantic judge configuration
@@ -167,7 +170,7 @@ pub struct Constitution {
 }
 
 /// Policy for the semantic plan judge
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SemanticJudgePolicy {
     /// Whether the semantic judge is enabled
     pub enabled: bool,
@@ -188,7 +191,7 @@ impl Default for SemanticJudgePolicy {
 }
 
 /// Policy limits for execution hints
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExecutionHintPolicies {
     /// Maximum allowed retry attempts (prevents DoS via infinite retries)
     pub max_retries: u32,
@@ -281,6 +284,11 @@ impl GovernanceKernel {
         if let Ok(mut guard) = self.delegating_arbiter.write() {
             *guard = Some(arbiter);
         }
+    }
+
+    /// Access the system Constitution.
+    pub fn get_rules(&self) -> &Constitution {
+        &self.constitution
     }
 
     /// Check authorization for synthesizing an external capability.
@@ -542,7 +550,11 @@ impl GovernanceKernel {
             }
         };
 
-        let goal = intent.map(|i| i.goal.as_str()).unwrap_or("Unknown goal");
+        let goal = intent
+            .map(|i| i.goal.as_str())
+            .or_else(|| plan.annotations.get("goal").and_then(|v| v.as_string()))
+            .or_else(|| plan.metadata.get("goal").and_then(|v| v.as_string()))
+            .unwrap_or("Unknown goal");
 
         // For now, we don't have a full resolution map in the Plan struct,
         // but the PlanJudge can still evaluate the RTFS code against the goal.
@@ -998,7 +1010,7 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
                                 rule.id, reason
                             )));
                         }
-                        RuleAction::RequireHumanApproval => {
+                        RuleAction::RequireHumanApproval | RuleAction::RequireGuardianApproval => {
                             // If rule requires approval, execution mode must support it
                             // Modes "require-approval", "safe-only" (if deemed unsafe), and "dry-run" are acceptable.
                             // "full" mode is rejected if approval is required.
