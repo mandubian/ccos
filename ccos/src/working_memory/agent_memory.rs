@@ -7,6 +7,7 @@ use crate::working_memory::backend::{QueryParams, WorkingMemoryError};
 use crate::working_memory::facade::WorkingMemory;
 use crate::working_memory::types::{WorkingMemoryEntry, WorkingMemoryMeta};
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
@@ -183,8 +184,16 @@ impl AgentMemory {
         Ok(result.entries)
     }
 
-    /// Store a learned pattern.
+    /// Store a learned pattern and index it in working memory.
     pub fn store_learned_pattern(&mut self, pattern: LearnedPattern) {
+        // Index into WorkingMemory for recall using interior mutability
+        let tags = vec!["learned-pattern", "learning"];
+        let _ = self.store(
+            format!("Pattern: {}", pattern.description),
+            serde_json::to_string(&pattern).unwrap_or_default(),
+            &tags,
+        );
+
         // Avoid duplicates by pattern_id
         self.learned_patterns
             .retain(|p| p.pattern_id != pattern.pattern_id);
@@ -220,14 +229,40 @@ impl AgentMemory {
             .collect()
     }
 
-    /// Serialize learned patterns to JSON for persistence.
-    pub fn serialize_patterns(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(&self.learned_patterns)
+    /// Helper to serialize learned patterns.
+    fn serialize_patterns(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let json = serde_json::to_string_pretty(&self.learned_patterns)?;
+        Ok(json)
     }
 
-    /// Load learned patterns from JSON.
-    pub fn load_patterns(&mut self, json: &str) -> Result<(), serde_json::Error> {
-        self.learned_patterns = serde_json::from_str(json)?;
+    /// Helper to load learned patterns from JSON string.
+    fn load_patterns(&mut self, json_str: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let patterns: Vec<LearnedPattern> = serde_json::from_str(json_str)?;
+        for pattern in patterns {
+            self.store_learned_pattern(pattern);
+        }
+        Ok(())
+    }
+
+    /// Save learned patterns to a JSON file.
+    pub fn save_to_disk(&self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = self.serialize_patterns()?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// Load learned patterns from a JSON file.
+    pub fn load_from_disk(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if path.exists() {
+            let json = std::fs::read_to_string(path)?;
+            self.load_patterns(&json)?;
+        }
         Ok(())
     }
 }
