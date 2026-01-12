@@ -3,12 +3,18 @@
 //! This provides persistent storage for approval requests using the filesystem.
 //! Each approval request is stored as a JSON file in a designated directory.
 
-use super::types::{ApprovalCategory, ApprovalFilter, ApprovalRequest, ApprovalStorage};
+use super::types::{
+    ApprovalCategory, ApprovalFilter, ApprovalRequest, ApprovalStorage, DiscoverySource,
+    RiskAssessment, RiskLevel, ServerInfo,
+};
 use async_trait::async_trait;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
+
+use crate::utils::value_conversion::rtfs_value_to_json;
+use rtfs::ast::{Expression, TopLevel, TypeExpr};
 
 /// File-based implementation of ApprovalStorage.
 ///
@@ -137,17 +143,41 @@ impl FileApprovalStorage {
             if let Ok(entries) = std::fs::read_dir(&status_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().map_or(false, |ext| ext == "json") {
-                        match self.load_request_from_file(&path) {
+
+                    // Case 1: Legacy JSON file (e.g. {id}.json)
+                    if path.is_file() && path.extension().map_or(false, |ext| ext == "json") {
+                        match self.load_request_from_json(&path) {
                             Ok(request) => {
                                 cache.insert(request.id.clone(), request);
                             }
                             Err(e) => {
                                 eprintln!(
-                                    "[APPROVAL_STORAGE] Failed to load {}: {}",
+                                    "[APPROVAL_STORAGE] Failed to load JSON {}: {}",
                                     path.display(),
                                     e
                                 );
+                            }
+                        }
+                    }
+                    // Case 2: Directory containing server.rtfs (e.g. {id}/server.rtfs)
+                    else if path.is_dir() {
+                        let rtfs_path = path.join("server.rtfs");
+                        if rtfs_path.exists() {
+                            let id = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown");
+                            match self.load_request_from_rtfs(&rtfs_path, id, status) {
+                                Ok(request) => {
+                                    cache.insert(request.id.clone(), request);
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "[APPROVAL_STORAGE] Failed to load RTFS {}: {}",
+                                        rtfs_path.display(),
+                                        e
+                                    );
+                                }
                             }
                         }
                     }
@@ -158,8 +188,8 @@ impl FileApprovalStorage {
         Ok(())
     }
 
-    /// Load a single request from a file
-    fn load_request_from_file(&self, path: &PathBuf) -> RuntimeResult<ApprovalRequest> {
+    /// Load a single request from a JSON file
+    fn load_request_from_json(&self, path: &PathBuf) -> RuntimeResult<ApprovalRequest> {
         let content = std::fs::read_to_string(path).map_err(|e| {
             RuntimeError::IoError(format!(
                 "Failed to read approval file {}: {}",
@@ -174,6 +204,210 @@ impl FileApprovalStorage {
                 path.display(),
                 e
             ))
+        })
+    }
+
+    // Kept for backward compatibility if called directly
+    fn load_request_from_file(&self, path: &PathBuf) -> RuntimeResult<ApprovalRequest> {
+        self.load_request_from_json(path)
+    }
+
+    /// Load a request from server.rtfs
+    fn load_request_from_rtfs(
+        &self,
+        path: &PathBuf,
+        id: &str,
+        status_str: &str,
+    ) -> RuntimeResult<ApprovalRequest> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| RuntimeError::IoError(format!("Failed to read RTFS file: {}", e)))?;
+
+        // Parse RTFS
+        let top_levels = rtfs::parser::parse(&content)
+            .map_err(|e| RuntimeError::Generic(format!("RTFS parse error: {}", e)))?;
+
+        // Find (server ...) expression
+        let server_args: &[Expression] = top_levels
+            .iter()
+            .find_map(|item| {
+                if let rtfs::ast::TopLevel::Expression(expr) = item {
+                    match expr {
+                        Expression::FunctionCall { callee, arguments } => {
+                            if let Expression::Symbol(sym) = &**callee {
+                                if sym.0 == "server" {
+                                    return Some(arguments.as_slice());
+                                }
+                            }
+                            None
+                        }
+                        Expression::List(list) => {
+                            // Legacy lookup if it was a list
+                            match list.first() {
+                                Some(Expression::Symbol(sym)) if sym.0 == "server" => {
+                                    return Some(&list[1..])
+                                }
+                                Some(Expression::Literal(rtfs::ast::Literal::Symbol(sym)))
+                                    if sym.0 == "server" =>
+                                {
+                                    return Some(&list[1..])
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+            .ok_or(RuntimeError::Generic(
+                "No (server ...) form found in server.rtfs".into(),
+            ))?;
+
+        // Convert list to map for easier access
+        let mut properties = HashMap::new();
+        for i in (0..server_args.len()).step_by(2) {
+            if i + 1 >= server_args.len() {
+                continue;
+            }
+            if let Expression::Literal(rtfs::ast::Literal::Keyword(key)) = &server_args[i] {
+                properties.insert(key.0.clone(), &server_args[i + 1]);
+            } else if let Expression::Literal(rtfs::ast::Literal::Symbol(sym)) = &server_args[i] {
+                // Support :symbol style if parsed as symbol (though unlikely for keywords)
+                if sym.0.starts_with(':') {
+                    properties.insert(sym.0[1..].to_string(), &server_args[i + 1]);
+                }
+            }
+        }
+
+        // Extract fields
+        let server_info_expr = properties
+            .get("server_info")
+            .ok_or(RuntimeError::Generic("Missing :server_info".into()))?;
+        let source_expr = properties
+            .get("source")
+            .ok_or(RuntimeError::Generic("Missing :source".into()))?;
+        let capability_files_expr = properties.get("capability_files");
+
+        // Helper to extract string from map
+        let extract_str = |map_expr: &Expression, key: &str| -> Option<String> {
+            if let Expression::Map(entries) = map_expr {
+                for (k, v) in entries {
+                    if let rtfs::ast::MapKey::Keyword(kw) = k {
+                        if kw.0 == key {
+                            if let Expression::Literal(rtfs::ast::Literal::String(s)) = v {
+                                return Some(s.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        };
+
+        let extract_str_option = |map_expr: &Expression, key: &str| -> Option<Option<String>> {
+            if let Expression::Map(entries) = map_expr {
+                for (k, v) in entries {
+                    if let rtfs::ast::MapKey::Keyword(kw) = k {
+                        if kw.0 == key {
+                            match v {
+                                Expression::Literal(rtfs::ast::Literal::String(s)) => {
+                                    return Some(Some(s.clone()))
+                                }
+                                Expression::Literal(rtfs::ast::Literal::Nil) => return Some(None),
+                                _ => return Some(None),
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        };
+
+        let name = extract_str(server_info_expr, "name").unwrap_or_else(|| "Unknown".to_string());
+        let endpoint = extract_str(server_info_expr, "endpoint").unwrap_or_default();
+        let description = extract_str_option(server_info_expr, "description").flatten();
+        let auth_env_var = extract_str_option(server_info_expr, "auth_env_var").flatten();
+
+        // Parse source
+        let source_type = extract_str(source_expr, "type").unwrap_or_else(|| "Unknown".to_string());
+        let source_url = extract_str(source_expr, "spec_url").unwrap_or_default();
+
+        let discovery_source = match source_type.as_str() {
+            "OpenApi" => DiscoverySource::OpenApi { url: source_url },
+            "Browser" => DiscoverySource::HtmlDocs { url: source_url },
+            "MCP" | "Mcp" => DiscoverySource::Mcp {
+                endpoint: endpoint.clone(),
+            },
+            _ => DiscoverySource::Manual {
+                user: "unknown".into(),
+            },
+        };
+
+        // Parse capability files
+        let capability_files = if let Some(Expression::Vector(files)) = capability_files_expr {
+            let paths: Vec<String> = files
+                .iter()
+                .filter_map(|e| {
+                    if let Expression::Literal(rtfs::ast::Literal::String(s)) = e {
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            Some(paths)
+        } else {
+            None
+        };
+
+        let server_info = ServerInfo {
+            name,
+            endpoint,
+            description,
+            auth_env_var,
+            capabilities_path: None,
+            alternative_endpoints: vec![],
+            capability_files: capability_files.clone(),
+        };
+
+        let status = match status_str {
+            "pending" => super::types::ApprovalStatus::Pending,
+            "approved" => super::types::ApprovalStatus::Approved {
+                at: chrono::Utc::now(), // Inexact but acceptable for loading
+                by: crate::approval::queue::ApprovalAuthority::Auto,
+                reason: Some("Loaded from disk".into()),
+            },
+            "rejected" => super::types::ApprovalStatus::Rejected {
+                at: chrono::Utc::now(),
+                by: crate::approval::queue::ApprovalAuthority::Auto,
+                reason: "Loaded from disk".into(),
+            },
+            "expired" => super::types::ApprovalStatus::Expired {
+                at: chrono::Utc::now(),
+            },
+            _ => super::types::ApprovalStatus::Pending,
+        };
+
+        Ok(ApprovalRequest {
+            id: id.to_string(),
+            category: ApprovalCategory::ServerDiscovery {
+                source: discovery_source.clone(),
+                server_info,
+                domain_match: vec![],
+                requesting_goal: None,
+                health: None,
+                capability_files: capability_files,
+            },
+            status,
+            // created_at removed
+            requested_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+            risk_assessment: RiskAssessment {
+                level: RiskLevel::Low,
+                reasons: vec!["Loaded from filesystem".into()],
+            },
+            context: None,
         })
     }
 
@@ -395,6 +629,7 @@ mod tests {
                     auth_env_var: None,
                     capabilities_path: None,
                     alternative_endpoints: vec![],
+                    capability_files: None,
                 },
                 domain_match: vec!["test".to_string()],
                 requesting_goal: None,

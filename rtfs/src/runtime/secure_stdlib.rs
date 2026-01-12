@@ -196,7 +196,52 @@ impl SecureStandardLibrary {
                 func: Arc::new(Self::pow),
             })),
         );
+
+        // Parse integer from string
+        // (parse-int "123") -> 123, (parse-int "abc") -> nil
+        env.define(
+            &Symbol("parse-int".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "parse-int".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::parse_int),
+            })),
+        );
+
+        // Parse float from string
+        // (parse-float "3.14") -> 3.14, (parse-float "abc") -> nil
+        env.define(
+            &Symbol("parse-float".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "parse-float".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::parse_float),
+            })),
+        );
+
+        // Coerce to integer
+        // (int "42") -> 42, (int 3.7) -> 3, (int true) -> 1
+        env.define(
+            &Symbol("int".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "int".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::to_int),
+            })),
+        );
+
+        // Coerce to float
+        // (float "3.14") -> 3.14, (float 42) -> 42.0, (float true) -> 1.0
+        env.define(
+            &Symbol("float".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "float".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::to_float),
+            })),
+        );
     }
+
 
     pub(crate) fn load_comparison_functions(env: &mut Environment) {
         // Comparison functions (safe, pure)
@@ -858,6 +903,16 @@ impl SecureStandardLibrary {
                 name: "conj".to_string(),
                 arity: Arity::Variadic(2),
                 func: Arc::new(Self::conj),
+            })),
+        );
+
+        // Group-by: group items by a key-fn
+        env.define(
+            &Symbol("group-by".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "group-by".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(|args, evaluator, env| Self::group_by(args, evaluator, env)),
             })),
         );
     }
@@ -2037,6 +2092,231 @@ impl SecureStandardLibrary {
             });
         }
         Ok(Value::Boolean(matches!(args[0], Value::Function(_))))
+    }
+
+    /// Group a collection by a key function
+    /// (group-by :type [{:type 1} {:type 2} {:type 1}]) -> {1 [{:type 1} {:type 1}] 2 [{:type 2}]}
+    fn group_by(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "group-by".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let key_fn = &args[0];
+        let collection = &args[1];
+
+        let collection_vec = match collection {
+            Value::Vector(v) => v.clone(),
+            Value::List(l) => l.clone(),
+            Value::Nil => Vec::new(),
+            other => {
+                return Err(RuntimeError::TypeError {
+                    expected: "collection".to_string(),
+                    actual: other.type_name().to_string(),
+                    operation: "group-by".to_string(),
+                })
+            }
+        };
+
+        let mut groups: std::collections::HashMap<MapKey, Vec<Value>> =
+            std::collections::HashMap::new();
+
+        for item in collection_vec {
+            // Apply key-fn to get the grouping key
+            let key_value = match key_fn {
+                Value::Function(Function::Builtin(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    (builtin_func.func)(func_args)?
+                }
+                Value::Function(Function::BuiltinWithContext(builtin_func)) => {
+                    let func_args = vec![item.clone()];
+                    (builtin_func.func)(func_args, evaluator, env)?
+                }
+                Value::Function(Function::Closure(closure)) => {
+                    if closure.params.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            function: "group-by key-fn".to_string(),
+                            expected: "1".to_string(),
+                            actual: 0,
+                        });
+                    }
+                    let mut func_env = Environment::with_parent(closure.env.clone());
+                    func_env.define(&closure.params[0], item.clone());
+                    match evaluator.eval_expr(&closure.body, &mut func_env)? {
+                        ExecutionOutcome::Complete(v) => v,
+                        ExecutionOutcome::RequiresHost(_) => {
+                            #[cfg(feature = "effect-boundary")]
+                            let msg = "Host effect required in group-by key function".to_string();
+                            #[cfg(not(feature = "effect-boundary"))]
+                            let msg = "Host call required in group-by key function".to_string();
+                            return Err(RuntimeError::Generic(msg))
+                        }
+                    }
+                }
+                // Also support keywords as key-fn: (group-by :state issues)
+                Value::Keyword(kw) => match &item {
+                    Value::Map(m) => {
+                        let map_key = MapKey::Keyword(kw.clone());
+                        m.get(&map_key).cloned().unwrap_or(Value::Nil)
+                    }
+                    _ => Value::Nil,
+                },
+                _ => {
+                    return Err(RuntimeError::TypeError {
+                        expected: "function or keyword".to_string(),
+                        actual: key_fn.type_name().to_string(),
+                        operation: "group-by".to_string(),
+                    });
+                }
+            };
+
+            // Convert key_value to MapKey (permissive - converts unsupported types to strings)
+            let map_key = Self::group_key_to_map_key(&key_value);
+
+            // Add item to the appropriate group
+            groups.entry(map_key).or_default().push(item);
+        }
+
+        // Convert HashMap to Value::Map
+        let result_map: std::collections::HashMap<MapKey, Value> = groups
+            .into_iter()
+            .map(|(k, v)| (k, Value::Vector(v)))
+            .collect();
+
+        Ok(Value::Map(result_map))
+    }
+
+    /// Convert a Value to a MapKey for use as a grouping key (group-by specific)
+    /// More permissive than value_to_map_key - converts unsupported types to strings
+    fn group_key_to_map_key(value: &Value) -> MapKey {
+        match value {
+            Value::String(s) => MapKey::String(s.clone()),
+            Value::Keyword(kw) => MapKey::Keyword(kw.clone()),
+            Value::Integer(n) => MapKey::Integer(*n),
+            // Convert other types to string keys
+            Value::Symbol(sym) => MapKey::String(sym.0.clone()),
+            Value::Float(f) => MapKey::String(f.to_string()),
+            Value::Boolean(b) => MapKey::String(b.to_string()),
+            Value::Nil => MapKey::String("nil".to_string()),
+            other => MapKey::String(format!("{:?}", other)),
+        }
+    }
+
+    /// Parse a string to an integer, returning nil on failure
+    /// (parse-int "123") -> 123
+    /// (parse-int "abc") -> nil
+    fn parse_int(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "parse-int".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::String(s) => {
+                match s.trim().parse::<i64>() {
+                    Ok(n) => Ok(Value::Integer(n)),
+                    Err(_) => Ok(Value::Nil), // Return nil for invalid input
+                }
+            }
+            Value::Integer(n) => Ok(Value::Integer(*n)), // Identity for integers
+            Value::Float(f) => Ok(Value::Integer(*f as i64)), // Truncate floats
+            _ => Ok(Value::Nil),                         // Return nil for other types
+        }
+    }
+
+    /// Parse a string to a float, returning nil on failure
+    /// (parse-float "3.14") -> 3.14
+    /// (parse-float "abc") -> nil
+    fn parse_float(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "parse-float".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        match &args[0] {
+            Value::String(s) => {
+                match s.trim().parse::<f64>() {
+                    Ok(f) => Ok(Value::Float(f)),
+                    Err(_) => Ok(Value::Nil), // Return nil for invalid input
+                }
+            }
+            Value::Float(f) => Ok(Value::Float(*f)), // Identity for floats
+            Value::Integer(n) => Ok(Value::Float(*n as f64)), // Convert integers
+            _ => Ok(Value::Nil),                     // Return nil for other types
+        }
+    }
+
+    /// Coerce any value to an integer (returns 0 on failure)
+    /// (int "42") -> 42
+    /// (int 3.7) -> 3
+    /// (int true) -> 1
+    fn to_int(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "int".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let result = match &args[0] {
+            Value::Integer(n) => *n,
+            Value::Float(f) => *f as i64,
+            Value::String(s) => s.trim().parse::<i64>().unwrap_or(0),
+            Value::Boolean(b) => {
+                if *b {
+                    1
+                } else {
+                    0
+                }
+            }
+            Value::Nil => 0,
+            _ => 0,
+        };
+        Ok(Value::Integer(result))
+    }
+
+    /// Coerce any value to a float (returns 0.0 on failure)
+    /// (float "3.14") -> 3.14
+    /// (float 42) -> 42.0
+    /// (float true) -> 1.0
+    fn to_float(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "float".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let result = match &args[0] {
+            Value::Float(f) => *f,
+            Value::Integer(n) => *n as f64,
+            Value::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
+            Value::Boolean(b) => {
+                if *b {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Value::Nil => 0.0,
+            _ => 0.0,
+        };
+        Ok(Value::Float(result))
     }
 
     fn map_with_context(

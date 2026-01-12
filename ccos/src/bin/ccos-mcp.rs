@@ -518,6 +518,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
+    let browser_discovery = Arc::new(ccos::ops::browser_discovery::BrowserDiscoveryService::new());
     let mcp_discovery = Arc::new(MCPDiscoveryService::new().with_marketplace(marketplace.clone()));
 
     // Create shared approval queue for both executor and HTTP UI
@@ -564,6 +565,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         causal_chain,
         llm_discovery,
         mcp_discovery,
+        browser_discovery,
         session_store,
         approval_queue.clone(),
         agent_memory.clone(), // Pass AgentMemory
@@ -678,12 +680,11 @@ fn register_ccos_tools(
     causal_chain: Arc<StdMutex<CausalChain>>,
     discovery_service: Arc<LlmDiscoveryService>,
     mcp_discovery_service: Arc<MCPDiscoveryService>,
+    browser_discovery_service: Arc<ccos::ops::browser_discovery::BrowserDiscoveryService>,
     session_store: SessionStore,
     approval_queue: UnifiedApprovalQueue<ccos::approval::storage_file::FileApprovalStorage>,
     agent_memory: Arc<RwLock<AgentMemory>>,
 ) {
-    // ccos/discover_capabilities
-    let mp = marketplace.clone();
     // ccos_search
     let mp = marketplace.clone();
     let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
@@ -2679,6 +2680,7 @@ fn register_ccos_tools(
     let aq_introspect = approval_queue.clone();
     let ds_introspect = discovery_service.clone(); 
     let mcp_ds_introspect = mcp_discovery_service.clone();
+    let browser_ds_introspect = browser_discovery_service.clone();
     server.register_tool(
         "ccos_introspect_remote_api",
         "Introspect an external server (MCP, OpenAPI, or HTML documentation) to discover its capabilities. Works with MCP endpoints, OpenAPI specs, and API documentation pages. Creates an approval request for the server.",
@@ -2704,6 +2706,7 @@ fn register_ccos_tools(
             let aq = aq_introspect.clone();
             let ds = ds_introspect.clone();
             let mcp_ds = mcp_ds_introspect.clone();
+            let browser_ds = browser_ds_introspect.clone();
             Box::pin(async move {
                 let endpoint = params.get("endpoint").and_then(|v| v.as_str()).unwrap_or("");
                 let name = params.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -2742,439 +2745,100 @@ fn register_ccos_tools(
                 let workspace_root = ccos::utils::fs::get_workspace_root();
                 let pending_dir = workspace_root.join("capabilities/servers/pending").join(&server_id);
 
-                let introspection_service = ccos::ops::introspection_service::IntrospectionService::new(mcp_ds.clone(), ds.clone(), aq.clone());
+                let introspection_service = ccos::ops::introspection_service::IntrospectionService::new(
+                    mcp_ds.clone(), 
+                    ds.clone(), 
+                    browser_ds.clone(),
+                    aq.clone()
+                );
 
-                // 1. OpenAPI Fast Path
-                if ccos::ops::introspection_service::IntrospectionService::is_openapi_url(endpoint) {
-                    if let Ok(result) = introspection_service.introspect_openapi(endpoint, &server_name).await {
-                        if result.success {
-                            let api_result = result.api_result.as_ref().unwrap();
-                            match introspection_service.generate_rtfs_files(&result, &pending_dir, endpoint) {
-                                Ok(gen_result) => {
-                                    let approval_id = match introspection_service.create_approval_request(
-                                        &result, 
-                                        endpoint, 
-                                        &aq, 
-                                        Some(gen_result.capability_files.clone()),
-                                        24 * 7
-                                    ).await {
-                                        Ok(id) => id,
-                                        Err(e) => return Ok(json!({"success": false, "error": format!("Failed to create approval request: {}", e)}))
-                                    };
-
-                                    let endpoint_previews: Vec<_> = api_result.endpoints.iter().take(10).map(|ep| {
-                                        json!({"id": ep.endpoint_id, "name": ep.name, "method": ep.method, "path": ep.path, "description": ep.description})
-                                    }).collect();
-
-                                    return Ok(json!({
-                                        "success": true,
-                                        "approval_id": approval_id,
-                                        "server_name": server_name,
-                                        "source": "openapi",
-                                        "api_title": api_result.api_title,
-                                        "api_version": api_result.api_version,
-                                        "base_url": api_result.base_url,
-                                        "discovered_endpoints_count": api_result.endpoints.len(),
-                                        "capability_files_count": gen_result.capability_files.len(),
-                                        "endpoint_previews": endpoint_previews,
-                                        "auth_type": api_result.auth_requirements.auth_type,
-                                        "agent_guidance": format!("OpenAPI spec '{}' introspected. MANDATORY: You must now ask the user to manually approve this server at the /approvals UI. DO NOT call ccos_register_server until the user confirms approval.", api_result.api_title),
-                                        "next_steps": [
-                                            "Notify the user that introspection is complete.",
-                                            "Tell the user to go to the CCOS Control Center at /approvals to approve the new capabilities.",
-                                            "WAIT for the user to confirm they have approved the server.",
-                                            "Only after user confirmation, call ccos_register_server with approval_id to finalize registration."
-                                        ]
-                                    }));
-                                }
-                                Err(e) => return Ok(json!({"success": false, "source": "openapi", "error": format!("Failed to generate RTFS files: {}", e)}))
-                            }
-                        }
-                    }
-                }
-
-                // Step 2.1: Unified MCP & Discovery
-                if let Ok(result) = introspection_service.introspect_mcp(
-                    endpoint, 
-                    name.clone(), 
-                    auth_env_var.clone(),
-                    &*mcp_ds,
-                    &pending_dir,
-                ).await {
-                    if !result.manifests.is_empty() {
-                         let endpoint_previews: Vec<_> = result.manifests.iter().take(10).map(|m| {
-                             json!({"id": m.id, "name": m.name, "description": m.description})
-                         }).collect();
-
-                         return Ok(json!({
-                            "success": true,
-                            "approval_id": result.approval_id,
-                            "server_name": server_name,
-                            "source": "mcp",
-                            "discovered_capabilities_count": result.manifests.len(),
-                            "endpoint_previews": endpoint_previews,
-                            "agent_guidance": format!("Server '{}' discovered via MCP. MANDATORY: You must now ask the user to manually approve this server at the /approvals UI. DO NOT call ccos_register_server until the user confirms approval.", server_name),
-                            "next_steps": [
-                                "Notify the user that introspection is complete.",
-                                "Tell the user to go to the CCOS Control Center at /approvals to approve the new capabilities.",
-                                "WAIT for the user to confirm they have approved the server.",
-                                "Only after user confirmation, call ccos_register_server with approval_id to finalize registration."
-                            ]
-                        }));
-                    }
-                }
-
-                let mut capabilities: Vec<serde_json::Value> = Vec::new();
-                let mut discovery_source = "mcp";
-                let mut auth_config: Option<serde_json::Value> = None;
-
-                if capabilities.is_empty() {
-                    // Step 2.2: Browser Discovery (Robust Swagger UI/SPA detection)
-                    eprintln!("[CCOS] MCP failed, trying browser extraction for SPAs...");
-                    let browser_service = ccos::ops::browser_discovery::BrowserDiscoveryService::new();
+                // Step 2: Unified Introspection (MCP -> Browser -> Fallback)
+                let result = if ccos::ops::introspection_service::IntrospectionService::is_openapi_url(endpoint) {
+                    introspection_service.introspect_openapi(endpoint, &server_name).await?
+                } else {
+                    // Try MCP first
+                    let mcp_res = introspection_service.introspect_mcp(
+                        endpoint, 
+                        name.clone(), 
+                        auth_env_var.clone(),
+                        &*mcp_ds,
+                        &pending_dir,
+                    ).await?;
                     
-                    async fn try_browse(
-                        url: &str, 
-                        service: &ccos::ops::browser_discovery::BrowserDiscoveryService,
-                        llm_service: &ccos::discovery::llm_discovery::LlmDiscoveryService
-                    ) -> Option<serde_json::Value> {
-                        if let Ok(res) = service.extract_with_llm_analysis(url, llm_service).await {
-                            if res.success {
-                                if let Some(spec_url) = res.spec_url {
-                                    return Some(json!({
-                                        "success": false,
-                                        "source": "browser_extraction",
-                                        "message": format!("Found OpenAPI spec URL via Swagger UI at: {}", spec_url),
-                                        "spec_url": spec_url,
-                                        "next_action": {
-                                            "tool": "ccos_introspect_remote_api",
-                                            "args": { "endpoint": spec_url },
-                                            "reason": "Introspect the OpenAPI spec discovered from Swagger UI"
-                                        }
-                                    }));
-                                }
-                                
-                                if !res.found_openapi_urls.is_empty() {
-                                    return Some(json!({
-                                        "success": false,
-                                        "source": "browser_extraction",
-                                        "error": format!("Could not introspect {} directly, but found OpenAPI spec links via browser", url),
-                                        "found_specs": res.found_openapi_urls,
-                                        "next_action": {
-                                            "tool": "ccos_introspect_remote_api",
-                                            "args": { "endpoint": res.found_openapi_urls[0] },
-                                            "reason": "Try introspecting the discovered OpenAPI spec URL"
-                                        }
-                                    }));
-                                }
-                                
-                                if !res.discovered_endpoints.is_empty() {
-                                    let caps: Vec<_> = res.discovered_endpoints.iter().map(|ep| {
-                                        let id = format!("{}_{}", ep.method, ep.path.replace('/', "_"));
-                                        json!({
-                                            "id": id,
-                                            "name": id,
-                                            "description": ep.description,
-                                            "method": ep.method,
-                                            "path": ep.path
-                                        })
-                                    }).collect();
-                                    return Some(json!({ 
-                                        "capabilities": caps, 
-                                        "source": "browser_extraction",
-                                        "auth": res.auth
-                                    }));
-                                }
-                            }
-                        }
-                        None
-                    }
-
-                    if let Some(res) = try_browse(endpoint, &browser_service, &ds).await {
-                        if res.get("capabilities").is_some() {
-                            capabilities = res["capabilities"].as_array().unwrap().clone();
-                            discovery_source = "browser_extraction";
-                            auth_config = res.get("auth").cloned();
-                        } else if let Some(next_action) = res.get("next_action") {
-                            // Loop detection: don't return next_action if it's the same URL we just tried
-                            let next_endpoint = next_action.get("args")
-                                .and_then(|a| a.get("endpoint"))
-                                .and_then(|e| e.as_str())
-                                .unwrap_or("");
-                            if next_endpoint != endpoint && !next_endpoint.is_empty() {
-                                return Ok(res);
-                            } else {
-                                eprintln!("[CCOS] Skipping next_action - same URL as input (loop prevention)");
-                            }
-                        }
+                    if mcp_res.success && !mcp_res.manifests.is_empty() {
+                        mcp_res
                     } else {
-                        // If specific endpoint failed, try the base domain as fallback
-                        if let Ok(url) = url::Url::parse(endpoint) {
-                            if let Some(host) = url.host_str() {
-                                let base_url = format!("{}://{}", url.scheme(), host);
-                                if base_url != endpoint {
-                                    eprintln!("[CCOS] Browser failed on {}, fallback to base domain: {}", endpoint, base_url);
-                                    if let Some(res) = try_browse(&base_url, &browser_service, &ds).await {
-                                        if res.get("capabilities").is_some() {
-                                            capabilities = res["capabilities"].as_array().unwrap().clone();
-                                            discovery_source = "browser_extraction";
-                                            auth_config = res.get("auth").cloned();
-                                        } else if let Some(next_action) = res.get("next_action") {
-                                            // Loop detection for base domain fallback too
-                                            let next_endpoint = next_action.get("args")
-                                                .and_then(|a| a.get("endpoint"))
-                                                .and_then(|e| e.as_str())
-                                                .unwrap_or("");
-                                            if next_endpoint != endpoint && next_endpoint != &base_url && !next_endpoint.is_empty() {
-                                                return Ok(res);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        // Fallback to Browser
+                        introspection_service.introspect_browser(endpoint, &server_name).await?
                     }
-                }
-
-                if capabilities.is_empty() {
-                    // Step 2.3: Web Search Fallback
-                    eprintln!("[CCOS] Browser discovery failed, searching for OpenAPI spec...");
-                    let found_specs = search_for_openapi_spec(&search_name).await;
-                    if !found_specs.is_empty() {
-                        return Ok(json!({
-                            "success": false,
-                            "source": "web_search",
-                            "error": format!("Could not introspect {}, but found potential OpenAPI specs via web search", endpoint),
-                            "found_specs": found_specs,
-                            "next_action": {
-                                "tool": "ccos_introspect_remote_api",
-                                "args": { "endpoint": found_specs[0] },
-                                "reason": "Try introspecting the discovered OpenAPI spec URL"
-                            }
-                        }));
-                    }
-                    
-                    // Step 2.4: HTML Docs Metadata (Final Fallback)
-                    eprintln!("[CCOS] Web search failed, trying HTML docs metadata fallback...");
-                    if let Ok(apis) = ds.search_external_apis(&search_name, Some(endpoint)).await {
-                        if !apis.is_empty() {
-                            capabilities = apis.into_iter().map(|res| json!({
-                                "id": res.name,
-                                "name": res.name,
-                                "description": res.description
-                            })).collect();
-                            discovery_source = "html_docs";
-                        }
-                    }
-                }
-
-
-                if capabilities.is_empty() {
-                    return Ok(json!({
-                        "success": false,
-                        "error": format!("Could not introspect API from {}", endpoint),
-                        "attempts": ["openapi_fast_path", "mcp_introspection", "browser_extraction", "web_search", "html_docs_metadata"],
-                        "ask_user": generate_introspection_failure_suggestions(&server_name, endpoint)
-                    }));
-                }
-
-                // 2.5: Generate RTFS capability files for cascade-discovered capabilities
-                // Use the same format as OpenAPI introspection for consistency
-                let openapi_dir = pending_dir.join("openapi");
-                let _ = std::fs::create_dir_all(&openapi_dir);
-                let module_name = server_name.to_lowercase()
-                    .replace(" ", "_")
-                    .replace("-", "_")
-                    .chars()
-                    .filter(|c| c.is_alphanumeric() || *c == '_')
-                    .collect::<String>();
-
-                let mut generated_files = 0;
-                let mut capability_file_list = Vec::new();
-                for cap in &capabilities {
-                    if let Some(id) = cap.get("id").and_then(|v| v.as_str()) {
-                        let desc = cap.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                        let cap_name = id.to_lowercase()
-                            .replace('.', "_")
-                            .replace('/', "_")
-                            .replace(' ', "_");
-                        let cap_id = format!("{}.{}", module_name, cap_name);
-                        let cap_file = openapi_dir.join(format!("{}.rtfs", ccos::utils::fs::sanitize_filename(&cap_name)));
-
-                        let method = cap.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
-                        let path = cap.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                        let effects = match method.to_uppercase().as_str() {
-                            "GET" => "[:network_request]",
-                            "POST" | "PUT" | "PATCH" => "[:network_request :state_write]",
-                            "DELETE" => "[:network_request :state_delete]",
-                            _ => "[:network_request]",
-                        };
-
-                        let mut auth_rtfs = String::new();
-                        if let Some(auth) = &auth_config {
-                            let auth_type = auth.get("auth_type").and_then(|t| t.as_str()).unwrap_or("api_key");
-                            let auth_location = if auth.get("in_header").and_then(|b| b.as_bool()).unwrap_or(true) { "header" } else { "query" };
-                            let auth_env_var = auth.get("env_var").and_then(|v| v.as_str()).unwrap_or("API_KEY");
-                            let header_name = auth.get("header_name").and_then(|v| v.as_str());
-                            let header_prefix = auth.get("header_prefix").and_then(|v| v.as_str());
-                            
-                            let mut auth_parts = vec![
-                                format!(":type :{}", auth_type.to_lowercase()),
-                                format!(":location :{}", auth_location.to_lowercase()),
-                                format!(":env_var \"{}\"", auth_env_var),
-                            ];
-                            
-                            if let Some(name) = header_name {
-                                auth_parts.push(format!(":name \"{}\"", name));
-                            }
-                            if let Some(prefix) = header_prefix {
-                                auth_parts.push(format!(":prefix \"{}\"", prefix));
-                            }
-                            
-                            auth_rtfs = format!("\n      :auth {{ {} }}", auth_parts.join(" "));
-                        }
-
-                        let rtfs_content = format!(
-                            r#";; Capability: {}
-;; {} API
-;; Source: {} discovery
-;; Endpoint: {} {}
-
-(capability "{}"
-  :name "{}"
-  :version "1.0.0"
-  :description "{}"
-  :provider "{}"
-  :permissions [:network.http]
-  :effects {}
-  :metadata {{
-    :endpoint {{
-      :base_url "{}"
-      :method "{}"
-      :path "{}"{}}}
-    :discovery {{
-      :method "{}_discovery"
-      :source_url "{}"
-    }}
-  }}
-  :input-schema :any
-  :output-schema :any
-)
-"#,
-                            id, server_name, discovery_source, method, path,
-                            cap_id, id.replace('"', "\\\""), desc.replace('"', "\\\""), server_name.replace('"', "\\\""),
-                            effects, endpoint, method, path, auth_rtfs, discovery_source, endpoint
-                        );
-
-                        if std::fs::write(&cap_file, rtfs_content).is_ok() {
-                            generated_files += 1;
-                            capability_file_list.push(format!("openapi/{}.rtfs", ccos::utils::fs::sanitize_filename(&cap_name)));
-                        }
-                    }
-                }
-
-                // Create server.rtfs for consistency with new RTFS-first approach
-                if generated_files > 0 {
-                    // Helper to format string list for RTFS
-                    let files_rtfs = capability_file_list.iter()
-                        .map(|f| format!("\"{}\"", f))
-                        .collect::<Vec<_>>()
-                        .join(" ");
-
-                    let server_rtfs = format!(
-                        r#";; Server Manifest: {}
-(server
-  :source {{
-    :type "{}"
-    :spec_url "{}"
-  }}
-  :server_info {{
-    :name "{}"
-    :endpoint "{}"
-    :description "Discovered {} capabilities via {}"
-  }}
-  :api_info {{
-    :endpoints_count {}
-  }}
-  :capability_files [{}]
-)
-"#,
-                        server_name,
-                        discovery_source,
-                        endpoint,
-                        server_name,
-                        endpoint,
-                        capabilities.len(),
-                        discovery_source,
-                        capabilities.len(),
-                        files_rtfs
-                    );
-
-                    let _ = std::fs::write(pending_dir.join("server.rtfs"), server_rtfs);
-                    eprintln!("[CCOS] Generated {} RTFS capabilities to: {}", generated_files, pending_dir.display());
-                }
-
-                // 3. Create ServerInfo and Approval Request
-                let server_info = ccos::approval::queue::ServerInfo {
-                    name: server_name.clone(),
-                    endpoint: endpoint.to_string(),
-                    description: Some(format!("Discovered {} capabilities via {}", capabilities.len(), discovery_source)),
-                    auth_env_var: auth_env_var.clone(),
-                    capabilities_path: None,
-                    alternative_endpoints: vec![],
-                    capability_files: Some(capability_file_list.clone()),
                 };
 
-                let approval_id = match aq.add_server_discovery(
-                    ccos::approval::queue::DiscoverySource::Manual { user: "agent".to_string() },
-                    server_info,
-                    vec!["dynamic".to_string()],
-                    RiskAssessment {
-                        level: RiskLevel::Medium,
-                        reasons: vec![format!("Dynamically discovered server via {}", discovery_source)],
-                    },
-                    Some("Agent requested introspection".to_string()),
-                    24, // expires in 24 hours
-                ).await {
-                    Ok(id) => id,
-                    Err(e) => return Ok(json!({"success": false, "error": format!("Failed to create approval request: {}", e)}))
-                };
+                if result.success {
+                    // Generate RTFS files
+                    match introspection_service.generate_rtfs_files(&result, &pending_dir, endpoint) {
+                        Ok(gen_result) => {
+                            // Create approval request
+                            let approval_id = match introspection_service.create_approval_request(
+                                &result, 
+                                endpoint, 
+                                &aq, 
+                                Some(gen_result.capability_files.clone()),
+                                24 * 7
+                            ).await {
+                                Ok(id) => id,
+                                Err(e) => return Ok(json!({"success": false, "error": format!("Failed to create approval request: {}", e)}))
+                            };
 
-                // If auth is required, check if secret exists and queue if missing
-                if let Some(auth_var) = &auth_env_var {
-                     let store = SecretStore::new(Some(get_workspace_root()))
-                        .unwrap_or_else(|_| SecretStore::new(None).unwrap_or_else(|_| panic!("Failed to create SecretStore")));
+                            let mut response = json!({
+                                "success": true,
+                                "approval_id": approval_id,
+                                "server_name": server_name,
+                                "source": format!("{:?}", result.source).to_lowercase(),
+                                "capability_files_count": gen_result.capability_files.len(),
+                                "agent_guidance": format!("Server '{}' introspected. MANDATORY: You must now ask the user to manually approve this server at the /approvals UI. DO NOT call ccos_register_server until the user confirms approval.", server_name),
+                                "next_steps": [
+                                    "Notify the user that introspection is complete.",
+                                    "Tell the user to go to the CCOS Control Center at /approvals to approve the new capabilities.",
+                                    "WAIT for the user to confirm they have approved the server.",
+                                    "Only after user confirmation, call ccos_register_server with approval_id to finalize registration."
+                                ]
+                            });
 
-                    if !store.has(auth_var) {
-                        let _ = aq.add_secret_approval(
-                            format!("{}.introspect", server_name),
-                            auth_var.clone(),
-                            format!("API Key for {} discovered during introspection", server_name),
-                            24,
-                        ).await;
+                            // Add previews
+                            if let Some(api) = &result.api_result {
+                                response["discovered_endpoints_count"] = json!(api.endpoints.len());
+                                response["endpoint_previews"] = json!(api.endpoints.iter().take(10).map(|ep| {
+                                    json!({"id": ep.endpoint_id, "name": ep.name, "method": ep.method, "path": ep.path})
+                                }).collect::<Vec<_>>());
+                            } else if let Some(browser) = &result.browser_result {
+                                response["discovered_endpoints_count"] = json!(browser.discovered_endpoints.len());
+                                response["endpoint_previews"] = json!(browser.discovered_endpoints.iter().take(10).map(|ep| {
+                                    json!({"id": format!("{}_{}", ep.method, ep.path), "name": format!("{} {}", ep.method, ep.path)})
+                                }).collect::<Vec<_>>());
+                            } else if !result.manifests.is_empty() {
+                                response["discovered_endpoints_count"] = json!(result.manifests.len());
+                                response["endpoint_previews"] = json!(result.manifests.iter().take(10).map(|m| {
+                                    json!({"id": m.id, "name": m.name})
+                                }).collect::<Vec<_>>());
+                            }
+
+                            return Ok(response);
+                        }
+                        Err(e) => return Ok(json!({"success": false, "error": format!("Failed to generate RTFS files: {}", e)}))
                     }
                 }
 
-                let tool_previews: Vec<_> = capabilities.iter().take(10).cloned().collect();
-
+                // If all fails, return error with suggestions
                 Ok(json!({
-                    "success": true,
-                    "approval_id": approval_id,
-                    "server_name": server_name,
-                    "source": discovery_source,
-                    "discovered_tools_count": capabilities.len(),
-                    "tool_previews": tool_previews,
-                    "agent_guidance": format!("Server '{}' discovered via {}. MANDATORY: You must now ask the user to manually approve this server at the /approvals UI. DO NOT call ccos_register_server until the user confirms approval.", server_name, discovery_source),
-                    "next_steps": [
-                        "Notify the user that server discovery is complete.",
-                        "Tell the user to go to the CCOS Control Center at /approvals to approve the new capabilities.",
-                        "WAIT for the user to confirm they have approved the server.",
-                        "Only after user confirmation, call ccos_register_server with approval_id to finalize registration."
-                    ]
+                    "success": false,
+                    "error": result.error.unwrap_or_else(|| format!("Could not introspect API from {}", endpoint)),
+                    "ask_user": generate_introspection_failure_suggestions(&server_name, endpoint)
                 }))
             })
         }),
     );
+
+
 
     // ccos_list_approvals - List all approvals with optional status filter
     let aq_list = approval_queue.clone();
