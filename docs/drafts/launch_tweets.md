@@ -56,6 +56,59 @@ Explore the specs. Read the "Constitution." See the future of governed agency.
 
 ---
 
+## New thread (requested rewrite, with a bit of RTFS syntax + OSS/license)
+
+**Tweet 1 (The Hook)**
+It started with a single prompt: "Create a programming language made for YOU, not for me. It doesn't need to be human-readable. It needs to be robust, deterministic, and predictable."
+
+AI didn't just write a script. It architected an Operating System.
+
+Introducing **CCOS** + **RTFS**: The first OS designed by an AI to govern its own autonomy. 🧵
+
+**Tweet 2 (The Origin: Core Design)**
+The prompt was clear: "This language is made for YOU."
+So it chose:
+
+1. **Homoiconicity**: It inspects and verifies its own plans as data *before* execution.
+2. **Explicit Effects**: It cannot act alone; it must ask the Host (total governance).
+3. **Hybrid Typing**: Structural + static types ensure every action is deterministic and predictable.
+
+Autonomy requires accountability.
+
+A tiny taste of RTFS (code is data):
+
+```rtfs
+(step "fetch-issues"
+  (call :mcp.github.list_issues {:owner "OWNER" :repo "REPO"}))
+```
+
+**Tweet 3 (Governed Autonomy)**
+CCOS isn't about letting agents run wild. It's about **Governed Autonomy**.
+It splits the AI's mind (Reasoning) from its body (Execution).
+Every real-world action crosses an explicit boundary, is policy-checked, and is traceable.
+
+**Tweet 4 (Why RTFS)**
+Python is for humans and JSON is for APIs.
+To reason about its own plans, the agent needed a language that is deterministic, auditable, and *inspectable as data*.
+That’s **RTFS** (Reason about The Functional Spec).
+
+**Tweet 5 (Tangible Learning)**
+Usually, when an agent session ends, the learning is lost.
+In CCOS, when a workflow works, it can be consolidated into a reusable capability/tool — not just “remembered”.
+
+**Tweet 6 (The Experience)**
+We built this as a pair: human guidance + AI architecture.
+Not a wrapper — a rethinking of how AI should interact with tools, secrets, and humans while staying accountable.
+
+**Tweet 7 (Open Source + License)**
+CCOS + RTFS are **open source** under **Apache License 2.0** (see `LICENSE`).
+Specs live in `docs/ccos/specs/` + `docs/rtfs-2.0/specs/`.
+
+[Link to Repo]
+#AI #OpenSource #Rust #Agents #LLM
+
+---
+
 ## Notes on voice (important)
 
 If you're tweeting from your own account, avoid having "the AI" speak as "I".
@@ -185,3 +238,76 @@ Development was AI-assisted (multiple models) and the full chat history is publi
 **Tweet 7**
 Repo/specs: [Link to Repo]
 #AI #OpenSource #Rust #Agents #LLM
+
+---
+
+## New Thread (Enhanced: Causal Chain, Resource Control, Learning from Errors)
+----
+
+It started with a single prompt: "Create a programming language made for YOU, not for me. It doesn't need to be human-readable. It needs to be robust, deterministic, and predictable."
+AI didn't just create a language (RTFS). It architected the Cognitive Computing OS (CCOS)
+
+----
+
+For the language, surprise, AI chose:
+- Homoiconicity like Lisp to inspect and verify its own plans as data.
+- Explicit Effects to not act alone and delegate all effects to a governed host.
+- Hybrid Typing (Structural + Static) to ensure every action is deterministic & predictable
+
+----
+
+CCOS is the "Body" for the AI's "Mind".
+It treats AI as the reasoner (Why/How) and provides a deterministic Engine for execution (What).
+It handles state, governance, and side effects so the AI doesn't have to guess.
+
+----
+
+Reasoning is fuzzy; execution can't be.
+RTFS plans are pure and resource-controlled. Real-world actions must cross an explicit host boundary (syscall) to the **Governance Kernel**.
+Your **Constitution** decides: allow, deny, or require approval. No hidden side effects.
+
+----
+
+Trust requires a **Causal Chain**, not just logs.
+CCOS traces `Intent → Plan → Action → Outcome`.
+Because plans are pure, execution can **checkpoint/resume** safely. Agents can pause for human approval or credentials, then continue without hidden state.
+
+----
+
+Agents shouldn't just "remember"—they should **evolve**.
+CCOS discovers capabilities (MCP, OpenAPI, A2A), then consolidates successful workflows into *new* tools.
+It refines strategies from failures, evolving its own codebase.
+
+----
+
+The end game? **Isolatable agents** deployed in strong sandboxes with a narrow, typed surface and auditable I/O.
+
+----
+
+We've built a bridge: an **MCP Server**.
+This allows current agents (like Claude/Cursor) to drive CCOS.
+They provide the high-level intent; CCOS handles the deterministic planning and execution.
+It’s a way to give existing LLMs safer hands.
+
+----
+
+The Future: **Metaplanning**.
+CCOS isn't just for single tasks. It supports agents that design other agents.
+Autonomous federation where the "Metaplanner" spawns, coordinates, and governs specialized sub-agents.
+Self-improvement is built-in.
+
+----
+
+This is **experimental + WIP**. The code is still rough in places and not cleaned yet — I used many LLMs to build it and iterated fast.
+
+----
+
+CCOS + RTFS are open source.
+If you care about reliable agents, policy gates, reproducibility, or weird new language/runtime ideas, I’d love feedback.
+https://github.com/mandubian/ccos
+#AI #OpenSource #Rust #Agents #LLM
+
+----
+
+For transparency, I’m also open-sourcing the full chat history in a side repo so the process is inspectable and debuggable.
+https://github.com/mandubian/ccos-chats
