@@ -370,8 +370,10 @@ impl BrowserDiscoveryService {
         let mut result = self.extract_from_url(url).await?;
 
         // If heuristic extraction failed to find endpoints or spec URL, or if we need auth info, fallback to LLM analysis
+        // Also force LLM if we haven't determined a distinct base URL (source_url is same as input doc URL)
         let needs_llm = (result.discovered_endpoints.is_empty() && result.spec_url.is_none())
-            || (result.auth.is_none() && result.spec_url.is_none());
+            || (result.auth.is_none() && result.spec_url.is_none())
+            || (result.source_url == url && result.spec_url.is_none());
 
         // If we got HTML content and need deeper analysis
         if let Some(ref html) = result.extracted_html {

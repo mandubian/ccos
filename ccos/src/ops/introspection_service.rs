@@ -8,6 +8,7 @@ use crate::approval::{
     storage_file::FileApprovalStorage,
     UnifiedApprovalQueue,
 };
+use crate::capability_marketplace::types::CapabilityManifest;
 use crate::secrets::SecretStore;
 use crate::synthesis::core::schema_serializer::type_expr_to_rtfs_compact;
 use crate::synthesis::introspection::api_introspector::{
@@ -18,6 +19,7 @@ use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Result of an introspection operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +32,11 @@ pub struct IntrospectionResult {
     pub server_name: String,
     /// API introspection result (if OpenAPI)
     pub api_result: Option<APIIntrospectionResult>,
+    /// Discovered manifests (for MCP)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manifests: Vec<CapabilityManifest>,
+    /// Optional approval ID if queued
+    pub approval_id: Option<String>,
     /// Error message if failed
     pub error: Option<String>,
 }
@@ -59,20 +66,40 @@ pub struct RtfsGenerationResult {
 /// Introspection Service for discovering and generating capabilities
 pub struct IntrospectionService {
     introspector: APIIntrospector,
+    mcp_discovery: Option<Arc<crate::mcp::core::MCPDiscoveryService>>,
+    llm_discovery: Option<Arc<crate::discovery::llm_discovery::LlmDiscoveryService>>,
+    approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
 }
 
 impl Default for IntrospectionService {
     fn default() -> Self {
-        Self::new()
+        Self {
+            introspector: APIIntrospector::new(),
+            mcp_discovery: None,
+            llm_discovery: None,
+            approval_queue: None,
+        }
     }
 }
 
 impl IntrospectionService {
     /// Create a new introspection service
-    pub fn new() -> Self {
+    pub fn new(
+        mcp_discovery: Arc<crate::mcp::core::MCPDiscoveryService>,
+        llm_discovery: Arc<crate::discovery::llm_discovery::LlmDiscoveryService>,
+        approval_queue: UnifiedApprovalQueue<FileApprovalStorage>,
+    ) -> Self {
         Self {
             introspector: APIIntrospector::new(),
+            mcp_discovery: Some(mcp_discovery),
+            llm_discovery: Some(llm_discovery),
+            approval_queue: Some(approval_queue),
         }
+    }
+
+    /// Create a new empty introspection service
+    pub fn empty() -> Self {
+        Self::default()
     }
 
     /// Introspect an OpenAPI spec URL
@@ -91,6 +118,8 @@ impl IntrospectionService {
                 source: IntrospectionSource::OpenApi,
                 server_name: server_name.to_string(),
                 api_result: Some(api_result),
+                manifests: Vec::new(),
+                approval_id: None,
                 error: None,
             }),
             Err(e) => Ok(IntrospectionResult {
@@ -98,6 +127,68 @@ impl IntrospectionService {
                 source: IntrospectionSource::OpenApi,
                 server_name: server_name.to_string(),
                 api_result: None,
+                manifests: Vec::new(),
+                approval_id: None,
+                error: Some(e.to_string()),
+            }),
+        }
+    }
+
+    /// Introspect an MCP server
+    pub async fn introspect_mcp(
+        &self,
+        endpoint: &str,
+        name: Option<String>,
+        auth_token: Option<String>,
+        discovery_service: &crate::mcp::core::MCPDiscoveryService,
+        output_dir: &Path,
+    ) -> RuntimeResult<IntrospectionResult> {
+        let server_name = name.clone().unwrap_or_else(|| {
+            if let Ok(url) = url::Url::parse(endpoint) {
+                url.host_str()
+                    .map(|h| h.replace(".", "_"))
+                    .unwrap_or_else(|| endpoint.split('/').last().unwrap_or("unknown").to_string())
+            } else {
+                endpoint.split('/').last().unwrap_or("unknown").to_string()
+            }
+        });
+
+        let server_config = crate::capability_marketplace::mcp_discovery::MCPServerConfig {
+            name: server_name.clone(),
+            endpoint: endpoint.to_string(),
+            auth_token,
+            timeout_seconds: 30,
+            protocol_version: "2024-11-05".to_string(),
+        };
+
+        let options = crate::mcp::types::DiscoveryOptions {
+            export_to_rtfs: true,
+            export_directory: Some(output_dir.to_string_lossy().to_string()),
+            register_in_marketplace: false,
+            create_approval_request: true,
+            ..Default::default()
+        };
+
+        match discovery_service
+            .discover_and_export_tools(&server_config, &options)
+            .await
+        {
+            Ok((manifests, approval_id)) => Ok(IntrospectionResult {
+                success: true,
+                source: IntrospectionSource::Mcp,
+                server_name,
+                api_result: None,
+                manifests,
+                approval_id,
+                error: None,
+            }),
+            Err(e) => Ok(IntrospectionResult {
+                success: false,
+                source: IntrospectionSource::Mcp,
+                server_name,
+                api_result: None,
+                manifests: Vec::new(),
+                approval_id: None,
                 error: Some(e.to_string()),
             }),
         }
@@ -159,48 +250,65 @@ impl IntrospectionService {
 
                 let cap_file = tag_dir.join(format!("{}.rtfs", cap_name));
                 if std::fs::write(&cap_file, &rtfs_content).is_ok() {
-                    capability_files
-                        .push(format!("{}/openapi/{}/{}.rtfs", server_id, tag, cap_name));
+                    capability_files.push(format!("openapi/{}/{}.rtfs", tag, cap_name));
                 }
             }
         }
 
-        // Create server.json
-        let server_json = json!({
-            "source": {
-                "type": "OpenAPI",
-                "spec_url": spec_url
-            },
-            "server_info": {
-                "name": result.server_name,
-                "endpoint": api_result.base_url,
-                "description": format!("{} v{}", api_result.api_title, api_result.api_version),
-                "auth_env_var": if api_result.auth_requirements.auth_type.is_empty() {
-                    None
-                } else {
-                    Some(format!("{}_API_KEY", module_name.to_uppercase()))
-                }
-            },
-            "capability_files": capability_files.clone(),
-            "api_info": {
-                "title": api_result.api_title,
-                "version": api_result.api_version,
-                "base_url": api_result.base_url,
-                "endpoints_count": api_result.endpoints.len()
-            }
-        });
+        // Create server.rtfs
+        let files_rtfs = capability_files
+            .iter()
+            .map(|f| format!("\"{}\"", f))
+            .collect::<Vec<_>>()
+            .join(" ");
 
-        let server_json_path = output_dir.join("server.json");
-        std::fs::write(
-            &server_json_path,
-            serde_json::to_string_pretty(&server_json).unwrap_or_default(),
-        )
-        .map_err(|e| RuntimeError::Generic(format!("Failed to write server.json: {}", e)))?;
+        let server_rtfs = format!(
+            r#";; Server Manifest: {}
+(server
+  :source {{
+    :type "OpenAPI"
+    :spec_url "{}"
+  }}
+  :server_info {{
+    :name "{}"
+    :endpoint "{}"
+    :description "{}"
+    :auth_env_var {}
+  }}
+  :api_info {{
+    :title "{}"
+    :version "{}"
+    :base_url "{}"
+    :endpoints_count {}
+  }}
+  :capability_files [{}]
+)
+"#,
+            result.server_name,
+            spec_url,
+            result.server_name,
+            api_result.base_url,
+            format!("{} v{}", api_result.api_title, api_result.api_version),
+            if api_result.auth_requirements.auth_type.is_empty() {
+                "nil".to_string()
+            } else {
+                format!("\"{}\"", format!("{}_API_KEY", module_name.to_uppercase()))
+            },
+            api_result.api_title,
+            api_result.api_version,
+            api_result.base_url,
+            api_result.endpoints.len(),
+            files_rtfs
+        );
+
+        let server_rtfs_path = output_dir.join("server.rtfs");
+        std::fs::write(&server_rtfs_path, &server_rtfs)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write server.rtfs: {}", e)))?;
 
         Ok(RtfsGenerationResult {
             output_dir: output_dir.to_path_buf(),
             capability_files,
-            server_json_path,
+            server_json_path: server_rtfs_path, // Returning path to rtfs in legacy field name for now
         })
     }
 
@@ -314,6 +422,7 @@ impl IntrospectionService {
         result: &IntrospectionResult,
         spec_url: &str,
         approval_queue: &UnifiedApprovalQueue<FileApprovalStorage>,
+        capability_files: Option<Vec<String>>,
         expiry_hours: i64,
     ) -> RuntimeResult<String> {
         let api_result = result
@@ -343,6 +452,7 @@ impl IntrospectionService {
             },
             capabilities_path: None,
             alternative_endpoints: vec![],
+            capability_files,
         };
 
         let approval_id = approval_queue
