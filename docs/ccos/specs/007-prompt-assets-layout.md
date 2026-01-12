@@ -15,7 +15,7 @@ Subdirectories group functional prompt families (intent, RTFS intent, plan gener
 The `PromptManager` assembles these sections in a deterministic order.
 
 ## Removed Nested Copy
-A previous duplicate at `rtfs_compiler/assets/` was removed to avoid divergence. Runtime resolution logic in `DelegatingArbiter::new` prefers `../assets/prompts/arbiter` when executed from the `rtfs_compiler` crate directory; otherwise it falls back to `assets/prompts/arbiter`.
+Runtime resolution logic in `DelegatingArbiter::new` prefers `../assets/prompts/arbiter` when executed from the `ccos` crate directory; otherwise it falls back to `assets/prompts/arbiter`.
 
 ## Adding / Updating Prompts
 1. Create or copy a version directory: `assets/prompts/arbiter/<family>/v<N+1>/`.

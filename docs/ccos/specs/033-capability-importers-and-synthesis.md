@@ -924,7 +924,87 @@ impl RTFSCodeGenerator {
 
 ---
 
+## 9. Trace-to-Agent Synthesis (Consolidation)
+
+> [!NOTE]
+> This section addresses the conversion of linear execution traces (Sessions) into autonomous Agent Capabilities.
+
+### 9.1 Overview
+
+When a user or external agent completes a successful session in Interactive Mode, the linear log of steps (the **Trace**) can be synthesized into a reusable **Agent Capability**.
+Unlike a simple composite capability (which replays steps exactly), an **Agent Capability** includes:
+- **Autonomy**: Ability to adapt to new inputs using the original trace as a "Plan Template".
+- **Governance**: Explicit `AgentMetadata` for risk control.
+- **Effects**: Declared side-effects extracted from the trace.
+
+### 9.2 The `planner.synthesize_agent_from_trace` Capability
+
+This privileged capability is used to perform the consolidation.
+
+```clojure
+(capability :planner.synthesize_agent_from_trace
+  :version "1.0.0"
+  :description "Consolidate a session trace into a governed Agent Capability"
+  
+  :input-schema [:map
+    [:session_trace_id :string]
+    [:agent_name :string]
+    [:description {:optional true} :string]
+    [:generalize {:optional true} :bool]] ; If true, replace literals with parameters
+    
+  :output-schema [:map
+    [:agent_id :string]
+    [:manifest :any]
+    [:validation_report :any]]
+    
+  :effects [:write :synthesize :configure])
+```
+
+### 9.3 Synthesis Process
+
+1.  **Trace Analysis**:
+    - The linear session is analyzed to identify input dependencies (where step N uses output of step M).
+    - Side-effects (e.g., file writes, API calls) are aggregated.
+    
+2.  **Manifest Generation**:
+    - **`:kind :agent`**: The artifact is marked as an Agent.
+    - **`:planning true`**: Enabling the agent to use the Arbiter if generalization is requested.
+    - **`:effects [...]`**: Populated from the trace.
+    
+3.  **Governance Coupling**:
+    - The new Agent ID is registered in the Governance Kernel.
+    - Usage policies (e.g., "Requires Human Approval") are attached if the original trace involved high-risk actions.
+
+### 9.4 Example: "Staging Deploy" Agent
+
+**Source Trace**:
+1. `(call :git.checkout {:branch "staging"})`
+2. `(call :cargo.build {:profile "release"})`
+3. `(call :aws.s3.upload {:bucket "builds" :file "target/release/app"})`
+
+**Synthesized Agent Artifact**:
+```rtfs
+(capability :agent.deploy.staging.v1
+  :description "Deploy to staging (Synthesized from Session #12345)"
+  :parameters {:branch :string :bucket :string} ; Generalized from literals
+  :metadata {
+    :kind :agent
+    :planning false    ; Strict replay for reliability
+    :stateful false
+    :source_session "session_12345"
+  }
+  :effects [:git_write :fs_read :network_write]
+  :implementation
+    (do
+      (call :git.checkout {:branch branch})
+      (call :cargo.build {:profile "release"})
+      (call :aws.s3.upload {:bucket bucket :file "target/release/app"})))
+```
+
+---
+
 ## 10. Schema Serialization
+
 
 ### 10.1 Type Expression to RTFS String
 

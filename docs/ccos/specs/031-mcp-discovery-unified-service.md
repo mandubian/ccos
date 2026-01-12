@@ -398,7 +398,7 @@ Discovered tools can be exported as RTFS capability definitions:
 ```rust
 let options = DiscoveryOptions {
     export_to_rtfs: true,
-    export_directory: Some("capabilities/discovered/mcp".to_string()),
+    export_directory: Some("capabilities/servers/pending".to_string()),
     ..Default::default()
 };
 ```
@@ -406,14 +406,24 @@ let options = DiscoveryOptions {
 ### 11.2 Generated File Structure
 
 ```
-capabilities/discovered/mcp/
+capabilities/servers/pending/
 └── github/
     ├── list_issues.rtfs
     ├── create_issue.rtfs
     └── search_code.rtfs
 ```
 
-### 11.3 RTFS Format
+### 11.3 Approval and Promotion
+
+Discovered capabilities are stored in the `pending` directory and are **not** loaded by the marketplace by default. To activate them, they must go through the approval process:
+
+1. **Introspection**: `ccos_introspect_remote_api` discovers tools and creates an approval request.
+2. **Review**: The user reviews the generated RTFS files in `pending/`.
+3. **Approval**: Upon approval, the `ccos_register_server` tool is invoked.
+4. **Promotion**: The service moves the RTFS files from `capabilities/servers/pending/` to `capabilities/servers/approved/`.
+5. **Registration**: The promoted capabilities are registered in the marketplace.
+
+### 11.4 RTFS Format
 
 ```clojure
 (capability :mcp.github.list_issues
@@ -503,7 +513,7 @@ DiscoveryOptions {
     use_cache: false,                   // Must be explicitly enabled
     register_in_marketplace: false,     // Auto-register discovered tools
     export_to_rtfs: false,              // Persist to files
-    export_directory: None,             // Default: capabilities/discovered
+    export_directory: None,             // Default: capabilities/servers/pending
     auth_headers: None,                 // Override server auth
     retry_policy: RetryPolicy::default(),
     rate_limit: RateLimitConfig::default(),

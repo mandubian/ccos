@@ -30,8 +30,8 @@ This document specifies the separation of concerns between RTFS (runtime + langu
 - KV helpers: `kv/assoc!`, `kv/dissoc!`, `kv/conj!` implemented as host `get` → pure transform → host `put`
 
 ## Wiring
-- `rtfs_compiler/src/ccos/mod.rs` exposes `pub mod prelude;`
-- `rtfs_compiler/src/ccos/orchestrator.rs` invokes `crate::ccos::prelude::load_prelude(&mut evaluator.env)` right after creating the `Evaluator`, both in fresh execution and resume paths.
+- `ccos/src/mod.rs` (or `ccos/src/lib.rs`) exposes `pub mod prelude;`
+- `ccos/src/orchestrator.rs` invokes `crate::prelude::load_prelude(&mut evaluator.env)` right after creating the `Evaluator`, both in fresh execution and resume paths.
 
 ## Rationale
 - Purity makes RTFS portable, testable, and secure. All I/O goes through CCOS governance and capability marketplace.
