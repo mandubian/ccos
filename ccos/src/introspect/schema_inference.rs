@@ -77,7 +77,10 @@ fn ir_to_type_expr(ir: &rtfs::ir::core::IrType) -> TypeExpr {
                 .collect(),
             wildcard: wildcard.as_ref().map(|w| Box::new(ir_to_type_expr(w))),
         },
-        IT::ParametricMap { key_type, value_type } => TypeExpr::ParametricMap {
+        IT::ParametricMap {
+            key_type,
+            value_type,
+        } => TypeExpr::ParametricMap {
             key_type: Box::new(ir_to_type_expr(key_type)),
             value_type: Box::new(ir_to_type_expr(value_type)),
         },
@@ -104,4 +107,3 @@ fn ir_to_type_expr(ir: &rtfs::ir::core::IrType) -> TypeExpr {
         IT::LiteralValue(lit) => TypeExpr::Literal(lit.clone()),
     }
 }
-

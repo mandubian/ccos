@@ -89,7 +89,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut m = HashMap::new();
         m.insert(
             MapKey::Keyword(Keyword("args".to_string())),
-            Value::Vector(vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)]),
+            Value::Vector(vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+            ]),
         );
         Value::Map(m)
     };
@@ -125,7 +129,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )
     .await?;
-    println!("capability_graph (observed): {}", rtfs_value_to_json(&graph)?);
+    println!(
+        "capability_graph (observed): {}",
+        rtfs_value_to_json(&graph)?
+    );
 
     // 2) Plan trace (success)
     let trace = build_plan_trace(
@@ -203,9 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn register_real_capabilities(
-    marketplace: &CapabilityMarketplace,
-) -> RuntimeResult<()> {
+async fn register_real_capabilities(marketplace: &CapabilityMarketplace) -> RuntimeResult<()> {
     let map_any = TypeExpr::Map {
         entries: vec![],
         wildcard: Some(Box::new(TypeExpr::Any)),
@@ -317,10 +322,7 @@ fn execute_missing_and_log(
         .map_err(|e| RuntimeError::Generic(format!("append error: {}", e)))?;
 
     let mut meta = HashMap::new();
-    meta.insert(
-        "error".to_string(),
-        Value::String(message.to_string()),
-    );
+    meta.insert("error".to_string(), Value::String(message.to_string()));
     meta.insert(
         "error_category".to_string(),
         Value::String(category.to_string()),
@@ -338,4 +340,3 @@ fn execute_missing_and_log(
 
     Ok(())
 }
-

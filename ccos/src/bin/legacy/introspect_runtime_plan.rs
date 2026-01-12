@@ -58,7 +58,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )
     .await?;
-    println!("capability_graph (observed): {}", rtfs_value_to_json(&graph)?);
+    println!(
+        "capability_graph (observed): {}",
+        rtfs_value_to_json(&graph)?
+    );
 
     let trace = build_plan_trace(
         &chain,
@@ -201,9 +204,7 @@ fn collect_calls(expr: &Expression, out: &mut Vec<String>) {
                 collect_calls(e, out);
             }
         }
-        Expression::FunctionCall { callee, arguments }
-            if matches!(**callee, Expression::Symbol(ref s) if s.0 == "call") =>
-        {
+        Expression::FunctionCall { callee, arguments } if matches!(**callee, Expression::Symbol(ref s) if s.0 == "call") => {
             if let Some(cap_id) = parse_cap_id(arguments) {
                 out.push(cap_id);
             }
@@ -248,7 +249,9 @@ async fn execute_and_log(
         .append(&action)
         .map_err(|e| RuntimeError::Generic(format!("append error: {}", e)))?;
 
-    let exec = marketplace.execute_capability_enhanced(capability_id, &args, None).await;
+    let exec = marketplace
+        .execute_capability_enhanced(capability_id, &args, None)
+        .await;
 
     match exec {
         Ok(value) => {
@@ -266,10 +269,7 @@ async fn execute_and_log(
         }
         Err(e) => {
             let mut meta = HashMap::new();
-            meta.insert(
-                "error".to_string(),
-                Value::String(format!("{}", e)),
-            );
+            meta.insert("error".to_string(), Value::String(format!("{}", e)));
             meta.insert(
                 "error_category".to_string(),
                 Value::String("ExecutionError".to_string()),
@@ -288,4 +288,3 @@ async fn execute_and_log(
         }
     }
 }
-

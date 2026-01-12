@@ -58,8 +58,6 @@ registry_paths = []
 [storage]
 # Base directory for all capabilities
 capabilities_dir = "capabilities"
-# Subdirectory for discovered capabilities
-discovered_subdir = "discovered"
 # Subdirectory for generated/synthesized capabilities  
 generated_subdir = "generated"
 # Subdirectory for approved server capabilities
@@ -120,7 +118,7 @@ register_in_marketplace = true
 # Export discovered tools to RTFS files
 export_to_rtfs = true
 # Directory for exported RTFS files (relative to workspace root)
-export_directory = "capabilities/discovered"
+export_directory = "capabilities/servers/pending"
 
 # Rate limiting configuration (token bucket algorithm)
 [mcp_discovery.rate_limit]

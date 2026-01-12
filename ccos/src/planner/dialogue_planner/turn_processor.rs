@@ -414,6 +414,7 @@ impl TurnProcessor {
                                                             auth_env_var: parse_result.auth.as_ref().map(|a| a.env_var_suggestion.clone()),
                                                             capabilities_path: None, // We don't save extracted capabilities to file yet
                                                             alternative_endpoints: vec![parse_result.base_url.clone()],
+                                                            capability_files: None,
                                                         },
                                                         match_score: 0.9,
                                                         alternative_endpoints: vec![],
@@ -472,6 +473,7 @@ impl TurnProcessor {
                                                             alternative_endpoints: vec![api_result
                                                                 .base_url
                                                                 .clone()],
+                                                            capability_files: None,
                                                         },
                                                         match_score: 1.0,
                                                         alternative_endpoints: vec![],
@@ -534,6 +536,7 @@ impl TurnProcessor {
                                                 auth_env_var: None,
                                                 capabilities_path: None,
                                                 alternative_endpoints: vec![],
+                                                capability_files: None,
                                             },
                                             match_score: 0.8, // Slightly lower score for raw links
                                             alternative_endpoints: vec![],

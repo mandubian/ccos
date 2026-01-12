@@ -235,10 +235,7 @@ impl SchemaBridge {
                 format!("(get {} :{})", input_var, field)
             }
             AdapterKind::McpContentExtract => {
-                format!(
-                    "(get (first (get {} :content)) :text)",
-                    input_var
-                )
+                format!("(get (first (get {} :content)) :text)", input_var)
             }
             AdapterKind::McpContentExtractAndParse => {
                 format!(
@@ -249,8 +246,7 @@ impl SchemaBridge {
             AdapterKind::McpContentExtractParseField { field } => {
                 format!(
                     "(get (parse-json (get (first (get {} :content)) :text)) :{})",
-                    input_var,
-                    field
+                    input_var, field
                 )
             }
             AdapterKind::ArrayWrap => {

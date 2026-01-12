@@ -22,28 +22,31 @@ pub async fn register_introspect_capabilities(
         .register_native_capability(
             "introspect.capability_graph".to_string(),
             "Introspect Capability Graph".to_string(),
-            "Observed capability call graph from the causal chain (or static from RTFS)".to_string(),
-            Arc::new(move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-                let chain = Arc::clone(&chain_for_graph);
-                let archive = Arc::clone(&archive_for_graph);
-                let parsed: RuntimeResult<CapabilityGraphInput> = parse_input(args);
-                async move {
-                    let chain = Arc::clone(&chain);
-                    let archive = Arc::clone(&archive);
-                    let input = parsed?;
-                    let mode = input.mode.as_deref().unwrap_or("observed");
+            "Observed capability call graph from the causal chain (or static from RTFS)"
+                .to_string(),
+            Arc::new(
+                move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+                    let chain = Arc::clone(&chain_for_graph);
+                    let archive = Arc::clone(&archive_for_graph);
+                    let parsed: RuntimeResult<CapabilityGraphInput> = parse_input(args);
+                    async move {
+                        let chain = Arc::clone(&chain);
+                        let archive = Arc::clone(&archive);
+                        let input = parsed?;
+                        let mode = input.mode.as_deref().unwrap_or("observed");
 
-                    match mode {
-                        "observed" => build_observed_capability_graph(&chain, input).await,
-                        "static_plan" => build_static_plan_graph(&archive, input).await,
-                        _ => Err(RuntimeError::Generic(format!(
-                            "Unsupported mode '{}'. Use 'observed' or 'static_plan'.",
-                            mode
-                        ))),
+                        match mode {
+                            "observed" => build_observed_capability_graph(&chain, input).await,
+                            "static_plan" => build_static_plan_graph(&archive, input).await,
+                            _ => Err(RuntimeError::Generic(format!(
+                                "Unsupported mode '{}'. Use 'observed' or 'static_plan'.",
+                                mode
+                            ))),
+                        }
                     }
-                }
-                .boxed()
-            }),
+                    .boxed()
+                },
+            ),
             "low".to_string(),
         )
         .await?;
@@ -54,16 +57,18 @@ pub async fn register_introspect_capabilities(
             "introspect.plan_trace".to_string(),
             "Introspect Plan Trace".to_string(),
             "Step-by-step execution trace for a plan from the causal chain".to_string(),
-            Arc::new(move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-                let chain = Arc::clone(&chain_for_trace);
-                let parsed: RuntimeResult<PlanTraceInput> = parse_input(args);
-                async move {
-                    let chain = Arc::clone(&chain);
-                    let input = parsed?;
-                    build_plan_trace(&chain, &input).await
-                }
-                .boxed()
-            }),
+            Arc::new(
+                move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+                    let chain = Arc::clone(&chain_for_trace);
+                    let parsed: RuntimeResult<PlanTraceInput> = parse_input(args);
+                    async move {
+                        let chain = Arc::clone(&chain);
+                        let input = parsed?;
+                        build_plan_trace(&chain, &input).await
+                    }
+                    .boxed()
+                },
+            ),
             "low".to_string(),
         )
         .await?;
@@ -75,18 +80,20 @@ pub async fn register_introspect_capabilities(
             "introspect.type_analysis".to_string(),
             "Introspect Type Analysis".to_string(),
             "Best-effort type analysis for a plan (schema checks; static-only)".to_string(),
-            Arc::new(move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-                let archive = Arc::clone(&archive_for_type);
-                let marketplace = Arc::clone(&marketplace_for_type);
-                let parsed: RuntimeResult<TypeAnalysisInput> = parse_input(args);
-                async move {
-                    let archive = Arc::clone(&archive);
-                    let marketplace = Arc::clone(&marketplace);
-                    let input = parsed?;
-                    run_type_analysis(&archive, &marketplace, &input).await
-                }
-                .boxed()
-            }),
+            Arc::new(
+                move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+                    let archive = Arc::clone(&archive_for_type);
+                    let marketplace = Arc::clone(&marketplace_for_type);
+                    let parsed: RuntimeResult<TypeAnalysisInput> = parse_input(args);
+                    async move {
+                        let archive = Arc::clone(&archive);
+                        let marketplace = Arc::clone(&marketplace);
+                        let input = parsed?;
+                        run_type_analysis(&archive, &marketplace, &input).await
+                    }
+                    .boxed()
+                },
+            ),
             "low".to_string(),
         )
         .await?;
@@ -97,16 +104,18 @@ pub async fn register_introspect_capabilities(
             "introspect.causal_chain".to_string(),
             "Introspect Causal Chain".to_string(),
             "Query causal chain actions with filters".to_string(),
-            Arc::new(move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
-                let chain = Arc::clone(&chain_for_query);
-                let parsed: RuntimeResult<CausalChainInput> = parse_input(args);
-                async move {
-                    let chain = Arc::clone(&chain);
-                    let input = parsed?;
-                    query_causal_chain(&chain, &input).await
-                }
-                .boxed()
-            }),
+            Arc::new(
+                move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
+                    let chain = Arc::clone(&chain_for_query);
+                    let parsed: RuntimeResult<CausalChainInput> = parse_input(args);
+                    async move {
+                        let chain = Arc::clone(&chain);
+                        let input = parsed?;
+                        query_causal_chain(&chain, &input).await
+                    }
+                    .boxed()
+                },
+            ),
             "low".to_string(),
         )
         .await?;
@@ -330,9 +339,10 @@ pub async fn build_static_plan_graph(
     plan_archive: &Arc<PlanArchive>,
     input: CapabilityGraphInput,
 ) -> RuntimeResult<Value> {
-    let plan_id = input.plan_id.as_ref().ok_or_else(|| {
-        RuntimeError::Generic("static_plan mode requires plan_id".to_string())
-    })?;
+    let plan_id = input
+        .plan_id
+        .as_ref()
+        .ok_or_else(|| RuntimeError::Generic("static_plan mode requires plan_id".to_string()))?;
 
     let Some(plan) = plan_archive.get_plan_by_id(plan_id) else {
         return Err(RuntimeError::Generic(format!(
@@ -548,11 +558,7 @@ pub async fn query_causal_chain(
             .map_err(|_| RuntimeError::Generic("Failed to lock causal chain".to_string()))?;
         let mut actions = guard.query_actions(&query);
         actions.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-        actions
-            .into_iter()
-            .take(limit)
-            .cloned()
-            .collect::<Vec<_>>()
+        actions.into_iter().take(limit).cloned().collect::<Vec<_>>()
     };
 
     let mut out = Vec::new();
@@ -883,14 +889,18 @@ mod tests {
         let plan_id = "plan-trace".to_string();
         let intent_id = "intent-trace".to_string();
 
-        let action = Action::new(ActionType::CapabilityCall, plan_id.clone(), intent_id.clone())
-            .with_name("cap.trace")
-            .with_args(vec![Value::Nil])
-            .with_result(ExecutionResult {
-                success: true,
-                value: Value::Nil,
-                metadata: HashMap::new(),
-            });
+        let action = Action::new(
+            ActionType::CapabilityCall,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_name("cap.trace")
+        .with_args(vec![Value::Nil])
+        .with_result(ExecutionResult {
+            success: true,
+            value: Value::Nil,
+            metadata: HashMap::new(),
+        });
         chain.append(&action)?;
         let chain = Arc::new(Mutex::new(chain));
 
@@ -917,7 +927,10 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(args.len(), 1);
         let result_obj = first.get("result").cloned().unwrap_or_default();
-        assert_eq!(result_obj.get("success"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(
+            result_obj.get("success"),
+            Some(&serde_json::Value::Bool(true))
+        );
         Ok(())
     }
 
@@ -969,10 +982,18 @@ mod tests {
 
         let start = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
         chain.append(&start)?;
-        let call = Action::new(ActionType::CapabilityCall, plan_id.clone(), intent_id.clone())
-            .with_name("cap.query");
+        let call = Action::new(
+            ActionType::CapabilityCall,
+            plan_id.clone(),
+            intent_id.clone(),
+        )
+        .with_name("cap.query");
         chain.append(&call)?;
-        let completed = Action::new(ActionType::PlanCompleted, plan_id.clone(), intent_id.clone());
+        let completed = Action::new(
+            ActionType::PlanCompleted,
+            plan_id.clone(),
+            intent_id.clone(),
+        );
         chain.append(&completed)?;
 
         let chain = Arc::new(Mutex::new(chain));
@@ -1001,4 +1022,3 @@ mod tests {
         Ok(())
     }
 }
-

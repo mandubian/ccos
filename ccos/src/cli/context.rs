@@ -4,8 +4,8 @@ use crate::arbiter::llm_provider::{
     LlmProvider, LlmProviderConfig, LlmProviderFactory, LlmProviderType,
 };
 use crate::capability_marketplace::CapabilityMarketplace;
-use crate::mcp::core::MCPDiscoveryService;
 use crate::config::types::AgentConfig;
+use crate::mcp::core::MCPDiscoveryService;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::path::PathBuf;
 use std::sync::Arc;

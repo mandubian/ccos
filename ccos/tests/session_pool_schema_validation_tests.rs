@@ -43,9 +43,7 @@ async fn session_managed_capability_enforces_output_schema() {
     // Install a session pool with a mock "mcp" handler.
     let mut pool = SessionPoolManager::new();
     pool.register_handler("mcp", Arc::new(MockSessionHandler));
-    marketplace
-        .set_session_pool(Arc::new(pool))
-        .await;
+    marketplace.set_session_pool(Arc::new(pool)).await;
 
     // Register a manifest that triggers session management via metadata.
     let mut manifest = CapabilityManifest::new(
@@ -62,8 +60,12 @@ async fn session_managed_capability_enforces_output_schema() {
     manifest.input_schema = Some(TypeExpr::Primitive(PrimitiveType::Int));
     manifest.output_schema = Some(TypeExpr::Primitive(PrimitiveType::Int));
     // Ensure SessionPoolManager can detect provider type and session is required.
-    manifest.metadata.insert("mcp_server_url".to_string(), "http://example".to_string());
-    manifest.metadata.insert("mcp_requires_session".to_string(), "true".to_string());
+    manifest
+        .metadata
+        .insert("mcp_server_url".to_string(), "http://example".to_string());
+    manifest
+        .metadata
+        .insert("mcp_requires_session".to_string(), "true".to_string());
 
     marketplace
         .register_capability_manifest(manifest)
@@ -91,9 +93,7 @@ async fn session_managed_capability_enforces_input_schema_before_execution() {
     // Install a session pool with a mock "mcp" handler.
     let mut pool = SessionPoolManager::new();
     pool.register_handler("mcp", Arc::new(MockSessionHandler));
-    marketplace
-        .set_session_pool(Arc::new(pool))
-        .await;
+    marketplace.set_session_pool(Arc::new(pool)).await;
 
     let mut manifest = CapabilityManifest::new(
         "mcp.test.bad_input".to_string(),
@@ -106,8 +106,12 @@ async fn session_managed_capability_enforces_input_schema_before_execution() {
     );
     manifest.input_schema = Some(TypeExpr::Primitive(PrimitiveType::Int));
     manifest.output_schema = Some(TypeExpr::Primitive(PrimitiveType::Int));
-    manifest.metadata.insert("mcp_server_url".to_string(), "http://example".to_string());
-    manifest.metadata.insert("mcp_requires_session".to_string(), "true".to_string());
+    manifest
+        .metadata
+        .insert("mcp_server_url".to_string(), "http://example".to_string());
+    manifest
+        .metadata
+        .insert("mcp_requires_session".to_string(), "true".to_string());
 
     marketplace
         .register_capability_manifest(manifest)
@@ -125,4 +129,3 @@ async fn session_managed_capability_enforces_input_schema_before_execution() {
         msg
     );
 }
-

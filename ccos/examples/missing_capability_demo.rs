@@ -147,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Check if file exists
-    let path = std::path::Path::new("capabilities/discovered/mcp/github/list_issues.rtfs");
+    let path = std::path::Path::new("capabilities/servers/approved/github/list_issues.rtfs");
     if path.exists() {
         println!("✅ File recreated: {:?}", path);
     } else {

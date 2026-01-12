@@ -7,4 +7,7 @@
     "github.copilot.chat.agent.thinkingTool": true,
     "chat.tools.autoApprove": true,
     "terminal.integrated.env.linux": {},
+    "chat.tools.terminal.autoApprove": {
+        "diff": true
+    },
 }

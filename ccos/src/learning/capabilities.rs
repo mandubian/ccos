@@ -933,7 +933,8 @@ pub async fn register_pattern_extraction_capabilities(
         .register_native_capability(
             "learning.recall_for_capability".to_string(),
             "Recall for Capability".to_string(),
-            "Pre-execution hook: retrieve relevant learned patterns before running a capability".to_string(),
+            "Pre-execution hook: retrieve relevant learned patterns before running a capability"
+                .to_string(),
             Arc::new({
                 let wm = wm_clone2;
                 move |args: &Value| -> BoxFuture<'static, RuntimeResult<Value>> {
@@ -942,38 +943,45 @@ pub async fn register_pattern_extraction_capabilities(
                     async move {
                         let input: RecallForCapabilityInput = parse_input(&args_clone)?;
                         let capability_id = input.capability_id;
-                        
+
                         let mut patterns: Vec<ExtractedPattern> = Vec::new();
                         let mut suggested_modifications: Vec<String> = Vec::new();
-                        
+
                         // Query WorkingMemory for patterns related to this capability
                         if let Ok(wm_guard) = wm.lock() {
-                            let tag_set: std::collections::HashSet<String> = [
-                                "learned-pattern".to_string(),
-                            ].into_iter().collect();
-                            
-                            let params = crate::working_memory::backend::QueryParams::with_tags(tag_set)
-                                .with_limit(Some(20));
-                            
+                            let tag_set: std::collections::HashSet<String> =
+                                ["learned-pattern".to_string()].into_iter().collect();
+
+                            let params =
+                                crate::working_memory::backend::QueryParams::with_tags(tag_set)
+                                    .with_limit(Some(20));
+
                             if let Ok(result) = wm_guard.query(&params) {
                                 for entry in result.entries {
                                     // Check if pattern relates to our capability
                                     if entry.tags.iter().any(|t| t.contains(&capability_id)) {
-                                        if let Ok(pattern) = serde_json::from_str::<ExtractedPattern>(&entry.content) {
+                                        if let Ok(pattern) =
+                                            serde_json::from_str::<ExtractedPattern>(&entry.content)
+                                        {
                                             // Generate suggested modifications based on pattern
                                             if pattern.occurrence_count >= 3 {
                                                 match pattern.error_category.as_str() {
                                                     "TimeoutError" => {
-                                                        suggested_modifications.push("add_timeout_buffer".to_string());
+                                                        suggested_modifications
+                                                            .push("add_timeout_buffer".to_string());
                                                     }
                                                     "NetworkError" => {
-                                                        suggested_modifications.push("add_retry_step".to_string());
+                                                        suggested_modifications
+                                                            .push("add_retry_step".to_string());
                                                     }
                                                     "SchemaError" => {
-                                                        suggested_modifications.push("add_input_validation".to_string());
+                                                        suggested_modifications.push(
+                                                            "add_input_validation".to_string(),
+                                                        );
                                                     }
                                                     "MissingCapability" => {
-                                                        suggested_modifications.push("trigger_synthesis".to_string());
+                                                        suggested_modifications
+                                                            .push("trigger_synthesis".to_string());
                                                     }
                                                     _ => {}
                                                 }
@@ -984,12 +992,12 @@ pub async fn register_pattern_extraction_capabilities(
                                 }
                             }
                         }
-                        
+
                         let output = RecallForCapabilityOutput {
                             patterns,
                             suggested_plan_modifications: suggested_modifications,
                         };
-                        
+
                         to_value(&output)
                     }
                     .boxed()

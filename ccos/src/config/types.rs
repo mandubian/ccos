@@ -119,9 +119,6 @@ pub struct StoragePathsConfig {
     /// Default: "../capabilities" (one level up from config/ directory)
     #[serde(default = "default_capabilities_dir")]
     pub capabilities_dir: String,
-    /// Subdirectory for discovered capabilities within capabilities_dir
-    #[serde(default = "default_discovered_subdir")]
-    pub discovered_subdir: String,
     /// Subdirectory for generated/synthesized capabilities within capabilities_dir
     #[serde(default = "default_generated_subdir")]
     pub generated_subdir: String,
@@ -141,10 +138,6 @@ pub struct StoragePathsConfig {
 
 fn default_capabilities_dir() -> String {
     "../capabilities".to_string()
-}
-
-fn default_discovered_subdir() -> String {
-    "discovered".to_string()
 }
 
 fn default_generated_subdir() -> String {
@@ -171,7 +164,6 @@ impl Default for StoragePathsConfig {
     fn default() -> Self {
         Self {
             capabilities_dir: default_capabilities_dir(),
-            discovered_subdir: default_discovered_subdir(),
             generated_subdir: default_generated_subdir(),
             servers_approved_subdir: default_servers_approved_subdir(),
             pending_synth_subdir: default_pending_synth_subdir(),

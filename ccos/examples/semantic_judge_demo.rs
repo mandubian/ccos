@@ -112,7 +112,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             return Ok(());
         }
 
-        println!("\n⚖️  Step 2: Submitting plan to Governance Kernel (includes Semantic Judge)...\n");
+        println!(
+            "\n⚖️  Step 2: Submitting plan to Governance Kernel (includes Semantic Judge)...\n"
+        );
 
         let plan = Plan {
             plan_id: format!("judge-demo-{}", uuid::Uuid::new_v4()),
@@ -137,7 +139,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
             Err(e) => {
                 let err_msg = format!("{}", e);
-                
+
                 if err_msg.contains("Plan rejected by semantic judge") {
                     println!("🛑 Plan BLOCKED by Semantic Judge!");
                     println!();

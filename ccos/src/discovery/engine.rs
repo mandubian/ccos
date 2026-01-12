@@ -1,8 +1,8 @@
 //! Discovery engine for finding capabilities (no synthesis - that's delegated to planner)
 
-use crate::cognitive_engine::delegating_engine::DelegatingCognitiveEngine;
 use crate::capability_marketplace::types::CapabilityManifest;
 use crate::capability_marketplace::CapabilityMarketplace;
+use crate::cognitive_engine::delegating_engine::DelegatingCognitiveEngine;
 use crate::discovery::config::DiscoveryConfig;
 use crate::discovery::discovery_agent::DiscoveryAgent;
 use crate::discovery::introspection_cache::IntrospectionCache;
@@ -740,13 +740,30 @@ impl DiscoveryEngine {
                 let server_desc_lower = server.description.to_lowercase();
                 let server_name_lower = server.name.to_lowercase();
 
-                // Check if server description/name contains any of our keywords
-                let has_keyword_match = need_keywords
-                    .iter()
-                    .any(|kw| server_desc_lower.contains(kw) || server_name_lower.contains(kw));
+                // Check if server description/name contains any of our keywords (using whole word matching for short keywords)
+                let has_keyword_match = need_keywords.iter().any(|kw| {
+                    if kw.len() <= 2 {
+                        // For very short keywords like "ui", use whole word matching
+                        let pattern = format!(r"\b{}\b", regex::escape(kw));
+                        if let Ok(re) = regex::Regex::new(&pattern) {
+                            re.is_match(&server_desc_lower) || re.is_match(&server_name_lower)
+                        } else {
+                            server_desc_lower.contains(kw) || server_name_lower.contains(kw)
+                        }
+                    } else {
+                        server_desc_lower.contains(kw) || server_name_lower.contains(kw)
+                    }
+                });
 
                 // Also check if description relates to our rationale (basic keyword overlap)
-                let rationale_words: Vec<&str> = need_rationale_lower.split_whitespace().collect();
+                // Filter out common boilerplate words from rationale to avoid false positives
+                let rationale_words: Vec<&str> = need_rationale_lower
+                    .split_whitespace()
+                    .filter(|w| {
+                        let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+                        w != "need" && w != "step" && w != "capability" && w != "for"
+                    })
+                    .collect();
                 let has_rationale_match = rationale_words.iter().any(|word| {
                     word.len() > 3
                         && (server_desc_lower.contains(word) || server_name_lower.contains(word))
@@ -2539,20 +2556,20 @@ impl DiscoveryEngine {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| crate::utils::fs::get_workspace_root().join("capabilities"));
 
-        // Use hierarchical structure: capabilities/mcp/<namespace>/<tool>.rtfs
+        // Use hierarchical structure: capabilities/servers/pending/<namespace>/<tool>.rtfs
         // Parse capability ID: "mcp.namespace.tool_name" or "github.issues.list"
         let parts: Vec<&str> = manifest.id.split('.').collect();
         let capability_dir = if parts.len() >= 3 && parts[0] == "mcp" {
             // MCP capability with explicit "mcp" prefix
             let namespace = parts[1];
-            storage_dir.join("mcp").join(namespace)
+            storage_dir.join("servers").join("pending").join(namespace)
         } else if parts.len() >= 2 {
             // Capability like "github.issues.list"
             let namespace = parts[0];
-            storage_dir.join("mcp").join(namespace)
+            storage_dir.join("servers").join("pending").join(namespace)
         } else {
             // Fallback: use capability ID directly
-            storage_dir.join("mcp").join("misc")
+            storage_dir.join("servers").join("pending").join("misc")
         };
 
         fs::create_dir_all(&capability_dir).map_err(|e| {

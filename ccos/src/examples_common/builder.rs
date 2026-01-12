@@ -569,7 +569,7 @@ pub fn load_agent_config(config_path: &str) -> Result<AgentConfig, Box<dyn Error
     // Set workspace root to the PARENT of config file's directory
     // Config file is at <workspace>/config/agent_config.toml
     // So config_dir is <workspace>/config/, and we want <workspace>/
-    // This makes paths like "capabilities/discovered" resolve to <workspace>/capabilities/discovered
+    // This makes paths like "capabilities/servers/approved" resolve to <workspace>/capabilities/servers/approved
     if let Some(config_dir) = actual_path.parent() {
         let workspace_root = if let Some(parent) = config_dir.parent() {
             // Go up one level from config/ to get actual workspace root

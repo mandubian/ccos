@@ -76,20 +76,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("allow")
-                .long("allow")
-                .help("Allow specific capabilities")
-                .num_args(1..)
-                .action(clap::ArgAction::Append),
-        )
-        .arg(
-            Arg::new("deny")
-                .long("deny")
-                .help("Deny specific capabilities")
-                .num_args(1..)
-                .action(clap::ArgAction::Append),
-        )
-        .arg(
             Arg::new("http-real")
                 .long("http-real")
                 .help("Use the real HTTP provider instead of the mock")
@@ -142,20 +128,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(cat) = cat {
                 builder = builder.disable_category(cat);
             }
-        }
-    }
-
-    // Handle allowed capabilities
-    if let Some(allowed) = matches.get_many::<String>("allow") {
-        for capability in allowed {
-            builder = builder.allow_capability(capability);
-        }
-    }
-
-    // Handle denied capabilities
-    if let Some(denied) = matches.get_many::<String>("deny") {
-        for capability in denied {
-            builder = builder.deny_capability(capability);
         }
     }
 

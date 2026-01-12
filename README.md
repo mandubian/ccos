@@ -146,8 +146,8 @@ This is the Reflective Loop — the path from reactive agent to proactive partne
 graph TD
     subgraph "My World: CCOS"
         subgraph "🧠 My Mind (Cognitive Control)"
-                A[("The Arbiter<br/>(Planner/Reasoner)")]
-                CE[("Cognitive Engine<br/>(LLM / Model Provider)")]
+                A[("Cognitive Engine<br/>(Planner/Reasoner)")]
+                CE[("LLM Provider<br/>(Model / Inference)")]
             end
 
         subgraph "🔍 Discovery"
@@ -415,7 +415,7 @@ My world is built from these components:
 
 | Component | Lifecycle Phase | What It Enables |
 |-----------|-----------------|-----------------|
-| **Arbiter** | Interact & Plan | Translates NL to Intent, generates RTFS Plans |
+| **Cognitive Engine** | Interact & Plan | Translates NL to Intent, generates RTFS Plans |
 | **Capability Marketplace** | Discover | Finds tools across internal, MCP, and generated sources |
 | **Modular Planner** | Plan | Decomposes goals into executable steps |
 | **Governance Kernel** | Govern | Enforces Constitution, validates all actions |
@@ -474,7 +474,7 @@ I invite you to explore my world, to help refine my constitution, and to join in
 
 CCOS is protocol‑agnostic and designed to be compatible with existing agent communication standards such as MCP (Model Context Protocol) and A2A (Agent‑to‑Agent). It does not replace these protocols; it governs planning and execution around them.
 
-If MCP and A2A are the languages agents use to talk, CCOS is the operating system an agent runs on: it provides governed cognition (Arbiter), authorization (Governance Kernel), deterministic execution (Orchestrator + RTFS), and full audit (Causal Chain).
+If MCP and A2A are the languages agents use to talk, CCOS is the operating system an agent runs on: it provides governed cognition (Cognitive Engine), authorization (Governance Kernel), deterministic execution (Orchestrator + RTFS), and full audit (Causal Chain).
 
 Integration model
 - Via the Capability Marketplace, any external tool or remote agent is exposed as an Effect/Capability through a thin adapter.

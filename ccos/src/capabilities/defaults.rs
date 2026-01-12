@@ -60,11 +60,11 @@ fn cardinality_hint_impl(input: &Value) -> RuntimeResult<Value> {
     // - :source_rtfs_schema (string)
     // - :consumer_schema (json schema as map or stringified json)
     // - :param (string)
-    let source_schema = get_map_string(map, "source_rtfs_schema")
-        .or_else(|| get_map_string(map, "source_schema"));
+    let source_schema =
+        get_map_string(map, "source_rtfs_schema").or_else(|| get_map_string(map, "source_schema"));
     let param = get_map_string(map, "param").or_else(|| get_map_string(map, "param_name"));
-    let consumer_schema_val = get_map_value(map, "consumer_schema")
-        .or_else(|| get_map_value(map, "target_schema"));
+    let consumer_schema_val =
+        get_map_value(map, "consumer_schema").or_else(|| get_map_value(map, "target_schema"));
 
     let Some(source_schema) = source_schema else {
         return Ok(mk_hint(
@@ -74,18 +74,10 @@ fn cardinality_hint_impl(input: &Value) -> RuntimeResult<Value> {
         ));
     };
     let Some(param) = param else {
-        return Ok(mk_hint(
-            "unknown",
-            "Missing :param",
-            None,
-        ));
+        return Ok(mk_hint("unknown", "Missing :param", None));
     };
     let Some(consumer_schema_val) = consumer_schema_val else {
-        return Ok(mk_hint(
-            "unknown",
-            "Missing :consumer_schema",
-            Some(&param),
-        ));
+        return Ok(mk_hint("unknown", "Missing :consumer_schema", Some(&param)));
     };
 
     let consumer_schema_json = match consumer_schema_val {
@@ -109,7 +101,11 @@ fn cardinality_hint_impl(input: &Value) -> RuntimeResult<Value> {
         CardinalityAction::Pass => {
             if source_is_collection {
                 if param_expects_array == Some(true) {
-                    Ok(mk_hint("pass", "Target param expects an array", Some(&param)))
+                    Ok(mk_hint(
+                        "pass",
+                        "Target param expects an array",
+                        Some(&param),
+                    ))
                 } else {
                     Ok(mk_hint("pass", "Source is not a collection", Some(&param)))
                 }
