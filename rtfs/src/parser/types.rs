@@ -244,10 +244,10 @@ pub fn build_type_expr(pair: Pair<Rule>) -> Result<TypeExpr, PestParseError> {
                 token: "expected value type in [:map-of ...] type".to_string(),
                 span: None,
             })?;
-            
+
             let key_type = build_type_expr(key_type_pair)?;
             let value_type = build_type_expr(value_type_pair)?;
-            
+
             Ok(TypeExpr::ParametricMap {
                 key_type: Box::new(key_type),
                 value_type: Box::new(value_type),

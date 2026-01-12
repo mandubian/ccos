@@ -2,8 +2,8 @@
 
 use crate::runtime::error::{RuntimeError, RuntimeResult};
 use crate::runtime::microvm::config::{FileSystemPolicy, NetworkPolicy};
-use crate::runtime::microvm::core::{ExecutionContext, ExecutionMetadata, ExecutionResult};
 use crate::runtime::microvm::core::ScriptLanguage;
+use crate::runtime::microvm::core::{ExecutionContext, ExecutionMetadata, ExecutionResult};
 use crate::runtime::microvm::providers::MicroVMProvider;
 use crate::runtime::values::Value;
 use std::path::Path;
@@ -243,13 +243,14 @@ impl ProcessMicroVMProvider {
                 .map_err(|e| RuntimeError::Generic(format!("Failed to serialize input: {}", e)))?;
             let json_str = serde_json::to_string(&json_val)
                 .map_err(|e| RuntimeError::Generic(format!("Failed to stringify input: {}", e)))?;
-            
+
             let mut temp_file = tempfile::NamedTempFile::new()
                 .map_err(|e| RuntimeError::Generic(format!("Failed to create temp file: {}", e)))?;
             use std::io::Write;
-            temp_file.write_all(json_str.as_bytes())
+            temp_file
+                .write_all(json_str.as_bytes())
                 .map_err(|e| RuntimeError::Generic(format!("Failed to write temp file: {}", e)))?;
-            
+
             let path = temp_file.path().to_path_buf();
             command.env("RTFS_INPUT_FILE", &path);
             _temp_input_file = Some(temp_file);
@@ -389,7 +390,8 @@ impl MicroVMProvider for ProcessMicroVMProvider {
 
                     let mut args = vec![flag.to_string(), source.clone()];
                     for arg in &context.args {
-                        let json_val = crate::utils::rtfs_value_to_json(arg).unwrap_or(serde_json::Value::Null);
+                        let json_val = crate::utils::rtfs_value_to_json(arg)
+                            .unwrap_or(serde_json::Value::Null);
                         args.push(serde_json::to_string(&json_val).unwrap_or_default());
                     }
 
@@ -438,7 +440,10 @@ impl MicroVMProvider for ProcessMicroVMProvider {
                             Err(e) => Value::String(format!("Process WASM execution error: {}", e)),
                         }
                     } else {
-                        Value::String(format!("Binary execution for {:?} not supported in process provider", language))
+                        Value::String(format!(
+                            "Binary execution for {:?} not supported in process provider",
+                            language
+                        ))
                     }
                 }
             },

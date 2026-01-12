@@ -80,51 +80,51 @@ impl RuntimeErrorTestRunner {
 
     fn run_division_by_zero_test(&mut self) -> Result<(), String> {
         println!("Testing division by zero...");
-        
+
         // Test simple division by zero
         self.run_error_test("(/ 1 0)", "DivisionByZero")?;
-        
+
         // Test division by zero in expression
         self.run_error_test("(/ (+ 5 3) 0)", "DivisionByZero")?;
-        
+
         // Test division by zero with floats
         self.run_error_test("(/ 1.0 0.0)", "DivisionByZero")?;
-        
+
         println!("✓ Division by zero tests passed!");
         Ok(())
     }
 
     fn run_undefined_symbol_tests(&mut self) -> Result<(), String> {
         println!("Testing undefined symbol errors...");
-        
+
         // Test simple undefined symbol
         self.run_error_test("undefined-symbol", "UndefinedSymbol")?;
-        
+
         // Test undefined symbol in expression
         self.run_error_test("(+ x 1)", "UndefinedSymbol")?;
-        
+
         // Test undefined symbol in function call
         self.run_error_test("(undefined-function 1 2)", "UndefinedSymbol")?;
-        
+
         println!("✓ Undefined symbol tests passed!");
         Ok(())
     }
 
     fn run_type_error_tests(&mut self) -> Result<(), String> {
         println!("Testing type mismatch errors...");
-        
+
         // Test arithmetic type mismatch
         self.run_error_test("(+ 1 \"hello\")", "TypeError")?;
-        
+
         // Test collection access type mismatch
         self.run_error_test("(get [1 2 3] \"key\")", "TypeError")?;
-        
+
         // Test function call type mismatch
         self.run_error_test("(+ true false)", "TypeError")?;
-        
+
         // Test comparison type mismatch
         self.run_error_test("(> \"hello\" 5)", "TypeError")?;
-        
+
         println!("✓ Type error tests passed!");
         Ok(())
     }
@@ -138,21 +138,21 @@ impl RuntimeErrorTestRunner {
         // Strings are not indexable via `get` in RTFS; this is a type error.
         self.run_error_test("(get \"hello\" 10)", "TypeError")?;
         self.run_success_test("(get [] 0)", rtfs::runtime::values::Value::Nil)?;
-        
+
         println!("✓ Index out of bounds tests passed!");
         Ok(())
     }
 
     fn run_arity_mismatch_tests(&mut self) -> Result<(), String> {
         println!("Testing arity mismatch errors...");
-        
+
         // Test too few arguments
         self.run_error_test("(+)", "ArityMismatch")?;
-        
+
         // Test too many arguments for some functions
         // Note: Some functions like + can take variable arguments, so we need specific cases
         self.run_error_test("(inc 1 2)", "ArityMismatch")?;
-        
+
         println!("✓ Arity mismatch tests passed!");
         Ok(())
     }
@@ -162,8 +162,11 @@ impl RuntimeErrorTestRunner {
 
         // RTFS design: safe-by-default map access returns nil for missing keys.
         self.run_success_test("(get {:a 1} :b)", rtfs::runtime::values::Value::Nil)?;
-        self.run_success_test("(get (get {:a {:b 1}} :a) :c)", rtfs::runtime::values::Value::Nil)?;
-        
+        self.run_success_test(
+            "(get (get {:a {:b 1}} :a) :c)",
+            rtfs::runtime::values::Value::Nil,
+        )?;
+
         println!("✓ Key not found tests passed!");
         Ok(())
     }
@@ -176,68 +179,59 @@ impl RuntimeErrorTestRunner {
             "(resource:ref \"invalid://uri\")",
             rtfs::runtime::values::Value::String("@invalid://uri".to_string()),
         )?;
-        
+
         println!("✓ Resource error tests passed!");
         Ok(())
     }
 
     fn run_complex_error_scenarios(&mut self) -> Result<(), String> {
         println!("Testing complex error scenarios...");
-        
+
         // Test nested errors
-        self.run_error_test(
-            "(let [x (/ 1 0)] (+ x 1))",
-            "DivisionByZero"
-        )?;
-        
+        self.run_error_test("(let [x (/ 1 0)] (+ x 1))", "DivisionByZero")?;
+
         // Test error in function application
-        self.run_error_test(
-            "((fn [x] (/ x 0)) 5)",
-            "DivisionByZero"
-        )?;
-        
+        self.run_error_test("((fn [x] (/ x 0)) 5)", "DivisionByZero")?;
+
         // Test error in conditional
-        self.run_error_test(
-            "(if true (/ 1 0) 42)",
-            "DivisionByZero"
-        )?;
-        
+        self.run_error_test("(if true (/ 1 0) 42)", "DivisionByZero")?;
+
         println!("✓ Complex error scenario tests passed!");
         Ok(())
     }
 
     fn run_error_recovery_tests(&mut self) -> Result<(), String> {
         println!("Testing error recovery mechanisms...");
-        
+
         // Test try-catch with division by zero
         let source = "(try (/ 1 0) (catch DivisionByZero e 42))";
-        
+
         self.run_success_test(source, rtfs::runtime::values::Value::Integer(42))?;
-        
+
         // Test try-catch with undefined symbol
         let source = "(try undefined-symbol (catch UndefinedSymbol e \"recovered\"))";
         self.run_success_test(
             source,
             rtfs::runtime::values::Value::String("recovered".to_string()),
         )?;
-        
+
         println!("✓ Error recovery tests passed!");
         Ok(())
     }
 
     fn run_error_propagation_tests(&mut self) -> Result<(), String> {
         println!("Testing error propagation...");
-        
+
         // Test error propagation through function calls
         let source = "(do (defn failing-function [] (/ 1 0)) (failing-function))";
-        
+
         self.run_error_test(source, "DivisionByZero")?;
-        
+
         // Test error propagation through nested calls
         let source = "(do (defn failing-function [] (/ 1 0)) (defn outer [] (let [result (failing-function)] (+ result 1))) (outer))";
-        
+
         self.run_error_test(source, "DivisionByZero")?;
-        
+
         println!("✓ Error propagation tests passed!");
         Ok(())
     }
@@ -247,7 +241,9 @@ impl RuntimeErrorTestRunner {
 #[test]
 fn test_division_by_zero_errors() {
     let mut runner = RuntimeErrorTestRunner::new();
-    runner.run_division_by_zero_test().expect("division by zero tests");
+    runner
+        .run_division_by_zero_test()
+        .expect("division by zero tests");
 }
 
 /// Test undefined symbol errors
@@ -288,7 +284,9 @@ fn test_arity_mismatch_errors() {
 #[test]
 fn test_key_not_found_errors() {
     let mut runner = RuntimeErrorTestRunner::new();
-    runner.run_key_not_found_tests().expect("key not found tests");
+    runner
+        .run_key_not_found_tests()
+        .expect("key not found tests");
 }
 
 /// Test resource errors
@@ -331,9 +329,13 @@ fn test_error_propagation() {
 #[test]
 fn test_all_runtime_errors() {
     let mut runner = RuntimeErrorTestRunner::new();
-    
-    runner.run_division_by_zero_test().expect("division by zero");
-    runner.run_undefined_symbol_tests().expect("undefined symbols");
+
+    runner
+        .run_division_by_zero_test()
+        .expect("division by zero");
+    runner
+        .run_undefined_symbol_tests()
+        .expect("undefined symbols");
     runner.run_type_error_tests().expect("type errors");
     runner
         .run_index_out_of_bounds_tests()
@@ -346,6 +348,6 @@ fn test_all_runtime_errors() {
         .expect("complex scenarios");
     runner.run_error_recovery_tests().expect("recovery");
     runner.run_error_propagation_tests().expect("propagation");
-    
+
     println!("✓ All runtime error tests passed!");
 }

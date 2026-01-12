@@ -17,8 +17,7 @@ fn test_join_vector_of_strings() {
         rtfs::compiler::expander::MacroExpander::default(),
     );
 
-    let expr = parse_expression("(join \" \" [\"a\" \"b\" \"c\"])"
-    ).expect("Parse failed");
+    let expr = parse_expression("(join \" \" [\"a\" \"b\" \"c\"])").expect("Parse failed");
 
     let result = evaluator.evaluate(&expr).expect("Evaluation failed");
     match result {

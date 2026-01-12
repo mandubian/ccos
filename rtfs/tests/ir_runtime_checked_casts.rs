@@ -10,13 +10,20 @@ use std::sync::Arc;
 struct StubHost;
 
 impl HostInterface for StubHost {
-    fn execute_capability(&self, name: &str, _args: &[Value]) -> rtfs::runtime::error::RuntimeResult<Value> {
+    fn execute_capability(
+        &self,
+        name: &str,
+        _args: &[Value],
+    ) -> rtfs::runtime::error::RuntimeResult<Value> {
         match name {
             "cap.good-int" => Ok(Value::Integer(42)),
             "cap.bad-int" => Ok(Value::String("not-an-int".to_string())),
             "cap.good-map" => {
                 let mut m = std::collections::HashMap::new();
-                m.insert(rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword::new("a")), Value::Integer(1));
+                m.insert(
+                    rtfs::ast::MapKey::Keyword(rtfs::ast::Keyword::new("a")),
+                    Value::Integer(1),
+                );
                 Ok(Value::Map(m))
             }
             _ => Ok(Value::Nil),
@@ -35,11 +42,21 @@ impl HostInterface for StubHost {
         Ok(())
     }
 
-    fn notify_step_failed(&self, _step_action_id: &str, _error: &str) -> rtfs::runtime::error::RuntimeResult<()> {
+    fn notify_step_failed(
+        &self,
+        _step_action_id: &str,
+        _error: &str,
+    ) -> rtfs::runtime::error::RuntimeResult<()> {
         Ok(())
     }
 
-    fn set_execution_context(&self, _plan_id: String, _intent_ids: Vec<String>, _parent_action_id: String) {}
+    fn set_execution_context(
+        &self,
+        _plan_id: String,
+        _intent_ids: Vec<String>,
+        _parent_action_id: String,
+    ) {
+    }
     fn clear_execution_context(&self) {}
     fn set_step_exposure_override(&self, _expose: bool, _context_keys: Option<Vec<String>>) {}
     fn clear_step_exposure_override(&self) {}
@@ -48,7 +65,10 @@ impl HostInterface for StubHost {
     }
 }
 
-fn run_ir_expr(code: &str, host: Arc<dyn HostInterface>) -> Result<Value, rtfs::runtime::error::RuntimeError> {
+fn run_ir_expr(
+    code: &str,
+    host: Arc<dyn HostInterface>,
+) -> Result<Value, rtfs::runtime::error::RuntimeError> {
     let parsed = parser::parse(code).expect("Should parse successfully");
     let expr = match &parsed[0] {
         TopLevel::Expression(expr) => expr.clone(),
@@ -59,7 +79,9 @@ fn run_ir_expr(code: &str, host: Arc<dyn HostInterface>) -> Result<Value, rtfs::
     rtfs::runtime::stdlib::load_stdlib(&module_registry).expect("Should load stdlib");
 
     let mut converter = rtfs::ir::converter::IrConverter::new();
-    let ir_node = converter.convert_expression(expr).expect("IR conversion should succeed");
+    let ir_node = converter
+        .convert_expression(expr)
+        .expect("IR conversion should succeed");
 
     let security_context = RuntimeContext::pure();
     let mut runtime = IrRuntime::new(host, security_context);
@@ -91,7 +113,9 @@ fn ir_runtime_let_annotation_checked_cast_failure() {
     let err = run_ir_expr(r#"(let [x :Int (call :cap.bad-int)] x)"#, host).unwrap_err();
     let msg = format!("{}", err);
     assert!(
-        msg.contains("Type mismatch") || msg.contains("TypeValidationError") || msg.contains("let x"),
+        msg.contains("Type mismatch")
+            || msg.contains("TypeValidationError")
+            || msg.contains("let x"),
         "unexpected error message: {}",
         msg
     );
@@ -109,4 +133,3 @@ fn ir_runtime_let_annotation_structural_map_checked() {
         other => panic!("Expected map, got {:?}", other),
     }
 }
-

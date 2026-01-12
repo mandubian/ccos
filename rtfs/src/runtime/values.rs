@@ -64,7 +64,7 @@ impl fmt::Display for Value {
             }
             Value::Map(m) => {
                 let items: Vec<String> = m.iter().map(|(k, v)| format!("{} {}", k, v)).collect();
-                write!(f, "{{{}}}", items.join(", "))
+                write!(f, "{{{}}}", items.join(" "))
             }
             Value::Function(_) => write!(f, "#<function>"),
             Value::FunctionPlaceholder(_) => write!(f, "#<function-placeholder>"),

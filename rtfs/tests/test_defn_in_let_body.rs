@@ -52,27 +52,27 @@ fn test_defn_in_let_body_ir_runtime() {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
-    
+
     // Load stdlib module for IR runtime
     rtfs::runtime::stdlib::load_stdlib(&module_registry).expect("Should load stdlib");
-    
+
     // Convert to IR
     let expr = match &parsed[0] {
         TopLevel::Expression(expr) => expr,
         _ => panic!("Expected expression"),
     };
-    
+
     let mut converter = rtfs::ir::converter::IrConverter::new();
-    
+
     let ir_node = converter
         .convert_expression(expr.clone())
         .expect("IR conversion should succeed");
-    
+
     // Execute with IR runtime
     let mut ir_runtime = IrRuntime::new(host, security_context);
     let mut env = rtfs::runtime::environment::IrEnvironment::with_stdlib(&module_registry)
         .expect("Should create environment with stdlib");
-    
+
     let outcome = ir_runtime
         .execute_node(&ir_node, &mut env, false, &module_registry)
         .expect("IR execution should succeed");
@@ -291,27 +291,27 @@ fn test_defn_in_let_body_ir_runtime_complex() {
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = rtfs::runtime::security::RuntimeContext::pure();
     let host = create_pure_host();
-    
+
     // Load stdlib module for IR runtime
     rtfs::runtime::stdlib::load_stdlib(&module_registry).expect("Should load stdlib");
-    
+
     // Convert to IR
     let expr = match &parsed[0] {
         TopLevel::Expression(expr) => expr,
         _ => panic!("Expected expression"),
     };
-    
+
     let mut converter = rtfs::ir::converter::IrConverter::new();
-    
+
     let ir_node = converter
         .convert_expression(expr.clone())
         .expect("IR conversion should succeed");
-    
+
     // Execute with IR runtime
     let mut ir_runtime = IrRuntime::new(host, security_context);
     let mut env = rtfs::runtime::environment::IrEnvironment::with_stdlib(&module_registry)
         .expect("Should create environment with stdlib");
-    
+
     let outcome = ir_runtime
         .execute_node(&ir_node, &mut env, false, &module_registry)
         .expect("IR execution should succeed");
@@ -408,10 +408,10 @@ fn test_mutual_recursion_ir_runtime() {
     // Expected: [true, false, false, true] for (is-even 4), (is-odd 4), (is-even 7), (is-odd 7)
     if let rtfs::runtime::values::Value::Vector(vec) = result {
         assert_eq!(vec.len(), 4);
-        assert_eq!(vec[0], rtfs::runtime::values::Value::Boolean(true));  // is-even 4
+        assert_eq!(vec[0], rtfs::runtime::values::Value::Boolean(true)); // is-even 4
         assert_eq!(vec[1], rtfs::runtime::values::Value::Boolean(false)); // is-odd 4
         assert_eq!(vec[2], rtfs::runtime::values::Value::Boolean(false)); // is-even 7
-        assert_eq!(vec[3], rtfs::runtime::values::Value::Boolean(true));  // is-odd 7
+        assert_eq!(vec[3], rtfs::runtime::values::Value::Boolean(true)); // is-odd 7
     } else {
         panic!("Expected vector result, got: {:?}", result);
     }
