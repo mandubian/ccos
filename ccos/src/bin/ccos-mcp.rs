@@ -3565,7 +3565,7 @@ fn repair_rtfs_code(code: &str) -> serde_json::Value {
     })
 }
 
-/// LLM-based repair using comprehensive prompt templates from assets/prompts/arbiter/auto_repair/v1/
+/// LLM-based repair using comprehensive prompt templates from assets/prompts/cognitive_engine/auto_repair/v1/
 /// This provides better repairs than heuristics for complex syntax/semantic errors.
 async fn repair_rtfs_code_with_llm(code: &str, error_message: Option<&str>) -> serde_json::Value {
     use ccos::synthesis::validation::llm_validator::{

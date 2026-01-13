@@ -93,7 +93,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .ok_or("delegating arbiter unavailable (check config/profile)")?;
 
     let fixtures = select_fixtures(args.fixture);
-    let prompt_base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/arbiter");
+    let prompt_base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/cognitive_engine");
     let prompt_manager = PromptManager::new(FilePromptStore::new(&prompt_base_dir));
     let repair_options = PlanAutoRepairOptions::default();
     println!("Running {} RTFS repair fixture(s)...\n", fixtures.len());

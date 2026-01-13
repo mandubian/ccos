@@ -107,7 +107,7 @@ static DEFAULT_REPAIR_GRAMMAR_HINTS: Lazy<Vec<String>> = Lazy::new(|| {
 });
 
 fn load_grammar_hints_from_prompt_store() -> Result<Vec<String>, String> {
-    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/arbiter");
+    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/cognitive_engine");
     let store = FilePromptStore::new(&base_dir);
     let template = store
         .get_template(AUTO_REPAIR_PROMPT_ID, AUTO_REPAIR_PROMPT_VERSION)

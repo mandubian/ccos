@@ -480,10 +480,10 @@ impl OpenAILlmProvider {
             .map_err(|e| RuntimeError::Generic(format!("Failed to create HTTP client: {}", e)))?;
 
         // Assets are at workspace root, so try ../assets first, then assets (for when run from workspace root)
-        let prompt_path = if std::path::Path::new("../assets/prompts/arbiter").exists() {
-            "../assets/prompts/arbiter"
+        let prompt_path = if std::path::Path::new("../assets/prompts/cognitive_engine").exists() {
+            "../assets/prompts/cognitive_engine"
         } else {
-            "assets/prompts/arbiter"
+            "assets/prompts/cognitive_engine"
         };
         let prompt_store = FilePromptStore::new(prompt_path);
         let prompt_manager = PromptManager::new(prompt_store);
@@ -2033,10 +2033,10 @@ impl AnthropicLlmProvider {
             .map_err(|e| RuntimeError::Generic(format!("Failed to create HTTP client: {}", e)))?;
 
         // Assets are at workspace root, so try ../assets first, then assets (for when run from workspace root)
-        let prompt_path = if std::path::Path::new("../assets/prompts/arbiter").exists() {
-            "../assets/prompts/arbiter"
+        let prompt_path = if std::path::Path::new("../assets/prompts/cognitive_engine").exists() {
+            "../assets/prompts/cognitive_engine"
         } else {
-            "assets/prompts/arbiter"
+            "assets/prompts/cognitive_engine"
         };
         let prompt_store = FilePromptStore::new(prompt_path);
         let prompt_manager = PromptManager::new(prompt_store);

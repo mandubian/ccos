@@ -57,7 +57,7 @@ use uuid::Uuid;
 use ccos::planner_viz_common::{load_agent_config, print_architecture_summary};
 
 static PLAN_CONVERSION_PROMPT_MANAGER: Lazy<PromptManager<FilePromptStore>> = Lazy::new(|| {
-    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/arbiter");
+    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/cognitive_engine");
     PromptManager::new(FilePromptStore::new(&base_dir))
 });
 

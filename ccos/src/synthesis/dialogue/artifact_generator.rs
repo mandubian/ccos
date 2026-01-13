@@ -412,16 +412,16 @@ pub fn generate_planner_via_arbiter(
     };
 
     // Load RTFS grammar and anti-patterns to steer the LLM output toward valid RTFS
-    let grammar = std::fs::read_to_string("assets/prompts/arbiter/plan_generation/v1/grammar.md")
+    let grammar = std::fs::read_to_string("assets/prompts/cognitive_engine/plan_generation/v1/grammar.md")
         .or_else(|_| {
-            std::fs::read_to_string("../assets/prompts/arbiter/plan_generation/v1/grammar.md")
+            std::fs::read_to_string("../assets/prompts/cognitive_engine/plan_generation/v1/grammar.md")
         })
         .unwrap_or_else(|_| "(grammar unavailable)".to_string());
     let anti_patterns =
-        std::fs::read_to_string("assets/prompts/arbiter/plan_generation_full/v1/anti_patterns.md")
+        std::fs::read_to_string("assets/prompts/cognitive_engine/plan_generation_full/v1/anti_patterns.md")
             .or_else(|_| {
                 std::fs::read_to_string(
-                    "../assets/prompts/arbiter/plan_generation_full/v1/anti_patterns.md",
+                    "../assets/prompts/cognitive_engine/plan_generation_full/v1/anti_patterns.md",
                 )
             })
             .unwrap_or_else(|_| "(anti-patterns unavailable)".to_string());

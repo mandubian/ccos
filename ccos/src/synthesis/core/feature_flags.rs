@@ -126,7 +126,7 @@ impl MissingCapabilityFeatureFlags {
 pub struct ToolSelectionConfig {
     /// Enable LLM-assisted tool selection when discovery heuristics fail
     pub enabled: bool,
-    /// Prompt bundle identifier (folder name under assets/prompts/arbiter)
+    /// Prompt bundle identifier (folder name under assets/prompts/cognitive_engine)
     pub prompt_id: String,
     /// Prompt bundle version
     pub prompt_version: String,

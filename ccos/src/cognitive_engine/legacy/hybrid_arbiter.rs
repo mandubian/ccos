@@ -451,7 +451,7 @@ impl HybridArbiter {
         context: Option<HashMap<String, Value>>,
     ) -> String {
         let prompt_cfg: PromptConfig = PromptConfig::default();
-        let store = FilePromptStore::new("assets/prompts/arbiter");
+        let store = FilePromptStore::new("assets/prompts/cognitive_engine");
         let manager = PromptManager::new(store);
         let mut vars = std::collections::HashMap::new();
         vars.insert("natural_language".to_string(), natural_language.to_string());

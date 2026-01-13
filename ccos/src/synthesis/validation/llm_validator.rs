@@ -356,7 +356,7 @@ Respond with ONLY the JSON, no additional text."#,
 
 /// Try to auto-repair a plan based on validation errors.
 ///
-/// Uses the comprehensive prompt templates from `assets/prompts/arbiter/auto_repair/v1/`
+/// Uses the comprehensive prompt templates from `assets/prompts/cognitive_engine/auto_repair/v1/`
 /// which include grammar hints, repair strategy, and anti-patterns for better LLM guidance.
 ///
 /// # Arguments
@@ -387,11 +387,14 @@ pub async fn auto_repair_plan(
     };
 
     // Load prompt templates at compile time for comprehensive repair guidance
-    let grammar_hints = include_str!("../../../assets/prompts/arbiter/auto_repair/v1/grammar.md");
-    let strategy = include_str!("../../../assets/prompts/arbiter/auto_repair/v1/strategy.md");
+    let grammar_hints =
+        include_str!("../../../../assets/prompts/cognitive_engine/auto_repair/v1/grammar.md");
+    let strategy =
+        include_str!("../../../../assets/prompts/cognitive_engine/auto_repair/v1/strategy.md");
     let anti_patterns =
-        include_str!("../../../assets/prompts/arbiter/auto_repair/v1/anti_patterns.md");
-    let task_template = include_str!("../../../assets/prompts/arbiter/auto_repair/v1/task.md");
+        include_str!("../../../../assets/prompts/cognitive_engine/auto_repair/v1/anti_patterns.md");
+    let task_template =
+        include_str!("../../../../assets/prompts/cognitive_engine/auto_repair/v1/task.md");
 
     // Format diagnostics from validation errors
     let diagnostics = errors
