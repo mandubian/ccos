@@ -31,8 +31,8 @@ const CAPABILITY_PROMPT_ID: &str = "capability_synthesis";
 const CAPABILITY_PROMPT_VERSION: &str = "v1";
 
 static CAPABILITY_PROMPT_MANAGER: Lazy<PromptManager<FilePromptStore>> = Lazy::new(|| {
-    // CARGO_MANIFEST_DIR points to ccos/ccos; prompts live at ../assets/prompts/arbiter
-    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/prompts/arbiter");
+    // CARGO_MANIFEST_DIR points to ccos/ccos; prompts live at ../assets/prompts/cognitive_engine
+    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/prompts/cognitive_engine");
     PromptManager::new(FilePromptStore::new(base_dir))
 });
 

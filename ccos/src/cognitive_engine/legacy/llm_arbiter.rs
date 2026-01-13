@@ -268,7 +268,7 @@ impl LlmArbiter {
             .as_ref()
             .and_then(|c| c.prompts.clone())
             .unwrap_or_default();
-        let store = FilePromptStore::new("assets/prompts/arbiter");
+        let store = FilePromptStore::new("assets/prompts/cognitive_engine");
         let manager = PromptManager::new(store);
         let context_str =
             serde_json::to_string(&context).unwrap_or_else(|_| format!("{:?}", context));

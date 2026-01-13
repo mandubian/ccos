@@ -61,9 +61,9 @@ pub struct GroundedLlmDecomposition {
 }
 
 impl GroundedLlmDecomposition {
-    /// Create with default prompt directory (assets/prompts/arbiter)
+    /// Create with default prompt directory (assets/prompts/cognitive_engine)
     pub fn new(llm_provider: Arc<dyn LlmProvider>) -> Self {
-        Self::new_with_prompt_dir(llm_provider, PathBuf::from("ccos/assets/prompts/arbiter"))
+        Self::new_with_prompt_dir(llm_provider, PathBuf::from("ccos/assets/prompts/cognitive_engine"))
     }
 
     /// Create with custom prompt directory
