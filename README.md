@@ -62,6 +62,28 @@ flowchart LR
   GK --> AQ[Approvals + Secrets]
 ```
 
+## Feature map (honest snapshot)
+
+CCOS is a full “agent operating environment”. Here’s the high-level map, with an explicit maturity signal:
+
+- **Core loop**
+  - **Explicit effects boundary (RTFS host calls)**: ✅ Implemented
+  - **Plan → governance → deterministic execution** (Orchestrator + RTFS runtime): ✅ Implemented
+  - **Checkpoint / resume**: ⚠️ Partial (core mechanisms exist; workflows are still evolving)
+  - **Causal Chain (audit trail)**: ⚠️ Partial (exists; end-to-end coverage is still being completed)
+
+- **Governance & safety**
+  - **Governance kernel + constitution/policies**: ⚠️ Partial (present, not “done”)
+  - **Approvals + secrets** (never reveal secret values to agents): ✅ Implemented
+  - **Isolation / sandboxing** (e.g., MicroVM for untrusted capabilities): 🚧 Evolving
+
+- **Tooling & extensibility**
+  - **Capability marketplace** (local catalog + providers): ✅ Implemented
+  - **MCP server (CCOS as MCP tools for any agent)**: ✅ Implemented
+  - **Discovery & onboarding** (MCP/OpenAPI/docs introspection → approve → register): ⚠️ Partial (works; still being hardened)
+  - **Capability synthesis & RTFS repair** (LLM + compiler hints loop): ⚠️ Partial (usable; improving)
+  - **Interoperability** (MCP today; A2A/OpenAPI integration paths): ⚠️ Partial
+
 ## RTFS vs JSON/Python (why a new language)
 
 JSON can describe steps, but it’s not executable logic; Python is executable logic, but it’s not safely governable by default.
