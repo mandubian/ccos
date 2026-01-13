@@ -13,12 +13,12 @@ Provide a precise, minimal, operational distinction between a capability and an 
 
 - Agent
   - A goal-directed controller that plans/chooses which capabilities to call, possibly iteratively, and adapts to outcomes.
-  - May use Arbiter/Delegation, ask the user (human-in-loop), checkpoint/resume, learn or synthesize new capabilities.
+  - May use Cognitive Engine/Delegation, ask the user (human-in-loop), checkpoint/resume, learn or synthesize new capabilities.
   - Stateful across steps (working memory, context horizon), and can be long-lived.
 
 ## Rule of Thumb (Decider)
-- Capability if: single deterministic pipeline (even if calling other capabilities), no runtime selection/search/looping, no Arbiter/Delegation control flow.
-- Agent if: selects among capabilities dynamically, loops/branches based on results, uses human-in-loop, Arbiter/Delegation, or maintains state/checkpoints.
+- Capability if: single deterministic pipeline (even if calling other capabilities), no runtime selection/search/looping, no Cognitive Engine/Delegation control flow.
+- Agent if: selects among capabilities dynamically, loops/branches based on results, uses human-in-loop, Cognitive Engine/Delegation, or maintains state/checkpoints.
 
 This keeps the surface minimal while mapping cleanly to orchestration responsibilities.
 
@@ -31,7 +31,7 @@ Both capabilities and agents use the same artifact form (capability spec) in the
   :parameters {...}
   :metadata {
     :kind :primitive | :composite | :agent
-    :planning false | true          ; uses Arbiter/Delegation/market discovery
+    :planning false | true          ; uses Cognitive Engine/Delegation/market discovery
     :stateful false | true          ; uses working memory / checkpoints
     :interactive false | true       ; uses ccos.user.ask / human gates
   }
@@ -46,17 +46,17 @@ Both capabilities and agents use the same artifact form (capability spec) in the
 ### Implementation Status
 ✅ **CapabilityMarketplace** registers all artifacts (capabilities and agents)  
 ✅ **CapabilityQuery** filters by `:kind`, `:planning`, `:stateful`, `:interactive`  
-✅ **DelegatingArbiter** queries marketplace instead of separate AgentRegistry  
+✅ **DelegatingEngine** queries marketplace instead of a separate agent registry  
 ✅ **AgentMetadata** struct extends CapabilityManifest with agent-specific fields
 
 ## Governance and Security Gates
 - Capabilities (non-agent)
   - Must declare `:effects`, resource `:limits`, and optional input/output schemas.
-  - No Arbiter usage; single-shot bounded execution.
+  - No Cognitive Engine usage; single-shot bounded execution.
   - Attestation focuses on inputs/outputs/effects; strict resource enforcement.
 
 - Agents
-  - Allowed to use Arbiter/Delegation, working memory, checkpoint/resume, human gates.
+  - Allowed to use Cognitive Engine/Delegation, working memory, checkpoint/resume, human gates.
   - Governance policies cover: marketplace selection, provider attestation, user-data handling, continuations, and long-running control loops.
   - Additional audit requirements: causal chain linking plan → actions → outcomes.
 
@@ -107,7 +107,7 @@ Both capabilities and agents use the same artifact form (capability spec) in the
   :implementation
     (do
       (let providers (call :market.discover {:capability :travel.flights :constraints {:budget budget}}))
-      (let chosen    (call :arbiter.select {:options providers :criteria {:price_weight 0.6 :reliability 0.4}}))
+      (let chosen    (call :cognitive engine.select {:options providers :criteria {:price_weight 0.6 :reliability 0.4}}))
       (let clarify   (call :ccos.user.ask "Any stopovers acceptable?"))
       (let flights   (call :provider.flights/search {:provider chosen :destination destination :budget budget :prefs clarify}))
       (let hotels    (call :provider.hotels/search  {:destination destination :duration duration :budget budget}))
@@ -126,7 +126,7 @@ Both capabilities and agents use the same artifact form (capability spec) in the
 The agent unification is **complete** for core functionality:
 - ✅ Single registry (CapabilityMarketplace) for all artifacts
 - ✅ Unified metadata model with agent-specific flags
-- ✅ Arbiter/Delegation queries marketplace with filters
+- ✅ Cognitive Engine/Delegation queries marketplace with filters
 - ✅ Backward compatibility maintained during transition
 - ✅ AgentRegistryShim provides marketplace-backed compatibility
 - ✅ Deprecated types marked with deprecation warnings

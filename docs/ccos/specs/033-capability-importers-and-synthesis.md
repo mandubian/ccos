@@ -968,7 +968,7 @@ This privileged capability is used to perform the consolidation.
     
 2.  **Manifest Generation**:
     - **`:kind :agent`**: The artifact is marked as an Agent.
-    - **`:planning true`**: Enabling the agent to use the Arbiter if generalization is requested.
+    - **`:planning true`**: Enabling the agent to use the Cognitive Engine if generalization is requested.
     - **`:effects [...]`**: Populated from the trace.
     
 3.  **Governance Coupling**:

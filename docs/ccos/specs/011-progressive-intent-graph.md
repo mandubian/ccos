@@ -6,7 +6,7 @@ Owner: TBD
 Last Updated: 2025-10-02
 
 ## 0. Executive Summary
-We introduce a progressive, arbiter-managed Intent Graph that evolves as a user iteratively states, refines, or pivots goals. The system automatically infers semantic relationships between intents (refinement, decomposition, alternative, follow-up, exploratory, pivot) to reduce cognitive load and enable analytical + replay capabilities. Explicit user commands (e.g. manual branching) become optional overrides rather than mandatory controls.
+We introduce a progressive, cognitive engine-managed Intent Graph that evolves as a user iteratively states, refines, or pivots goals. The system automatically infers semantic relationships between intents (refinement, decomposition, alternative, follow-up, exploratory, pivot) to reduce cognitive load and enable analytical + replay capabilities. Explicit user commands (e.g. manual branching) become optional overrides rather than mandatory controls.
 
 Primary deliverables:
 - Automatic intent relationship classifier (heuristics + optional LLM fallback).
@@ -191,7 +191,7 @@ Nondeterministic replay | Capability purity tagging + simulation mode
 
 ### Phase 2: Core Classification
 - (T6) Heuristic feature extraction & rule engine
-- Add metadata population in intent creation path (arbiter hook)
+- Add metadata population in intent creation path (cognitive engine hook)
 
 ### Phase 3: LLM Backstop & Decomposition
 - LLM fallback integration (config gate)
@@ -220,7 +220,7 @@ ID | Title | Phase | Status
 4 | Summarize approach & next steps | 1 | pending
 5 | Design semantic relation inference | 2 | done (spec) 
 6 | Prototype relation classifier | 2 | pending
-7 | Integrate classifier into arbiter | 2 | pending
+7 | Integrate classifier into cognitive engine | 2 | pending
 8 | Evaluation & metrics | 5 | pending
 9 | Fallback & override UX | 5/6 | pending
 10 | Persist spec file | 1 | in-progress

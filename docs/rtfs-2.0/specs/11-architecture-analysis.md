@@ -1,4 +1,89 @@
-# RTFS 2.0 Architecture Analysis: LLM-Driven Task Execution
+# RTFS 2.0 Architecture Overview & Analysis
+
+## Architectural Specification (Precise View)
+
+This section gives a precise, implementation-grounded view of RTFS 2.0, focusing on runtime architecture, purity, and the Host interaction that mediates all effects and mutations.
+
+### Core components
+
+- **Parser and Grammar**: Produces a well-typed AST for S-expressions, symbols, literals, lists, maps, lambdas, and capability calls.
+- **AST and Values**: Canonical representation of parsed RTFS forms and runtime values (`Value`).
+- **Type System**: Structural typing with refinement predicates and bidirectional checking.
+- **Evaluator**: Pure evaluator that reduces expressions and yields to Host for side effects.
+- **Environment/Scopes**: Lexically scoped frames for symbol resolution with immutable evaluation.
+- **Standard Libraries**: Secure (pure) and extended libraries.
+- **Host Boundary**: Strict interface gatekept by Governance + Marketplace for all effects.
+
+### Runtime Component Diagram
+
+```mermaid
+flowchart LR
+    subgraph RTFS_Runtime[RTFS Runtime]
+        Parser[Parser] --> AST[AST]
+        AST --> Evaluator[Evaluator]
+        Evaluator --> Env[Environment/Scopes]
+        Evaluator --> PureStdlib[Pure Stdlib]
+        Evaluator -->|yields| Outcome{ExecutionOutcome}
+    end
+
+    Outcome -- RequiresHost(call) --> Host[Host Interface]
+    Host --> Governance[Governance Kernel]
+    Governance --> Marketplace[Capability Marketplace]
+    Marketplace --> Providers[Providers:<br/>OpenAPI, MCP, Local, Stream]
+    Providers --> External[External Systems]
+    External --> Providers
+    Providers --> Host
+    Host --> Evaluator
+```
+
+### Execution Flow (Sequence)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Dev as RTFS Program/Plan
+    participant Eval as Evaluator
+    participant Host as Host Interface
+    participant Gov as Governance Kernel
+    participant Mkt as Capability Marketplace
+    participant Prov as Provider (OpenAPI/MCP/Local)
+    participant Ext as External System
+
+    Dev->>Eval: Evaluate expression
+    Eval-->>Eval: Reduce pure subexpressions
+    Eval->>Host: RequiresHost(CapabilityCall, RuntimeContext)
+    Host->>Gov: Authorize(RuntimeContext, Capability, Inputs)
+    Gov-->>Host: Permit/Deny (+ policy rewrites)
+    alt permitted
+        Host->>Mkt: Resolve(capability_id)
+        Mkt-->>Host: Executor + IO schema
+        Host->>Prov: Execute(inputs, context)
+        Prov->>Ext: Perform side effect
+        Ext-->>Prov: Result/Stream events
+        Prov-->>Host: Value or Stream handle
+        Host-->>Eval: ExecutionOutcome::Complete(Value)
+        Eval-->>Dev: Continue reduction with returned Value
+    else denied
+        Host-->>Eval: Error(RuntimeError::Security/Governance)
+        Eval-->>Dev: Propagate error
+    end
+```
+
+### Effect and Mutation Discipline
+
+- **Purity**: RTFS evaluation is referentially transparent. No hidden I/O; all effects are explicit Host requests.
+- **Mutations**: Language-level mutations use persistent data structures. External mutations (disk, network) are Host-only and governed.
+- **State**: Ephemeral evaluation state is in environments; long-lived state is managed by capabilities.
+
+### Contracts, Streaming, and Errors
+
+- **Schemas**: Capabilities declare `input_schema`/`output_schema` for runtime validation.
+- **Streaming**: Host mediates progress, cancellation, and backpressure for stream-capable providers.
+- **Error Semantics**: Errors short-circuit evaluation and are returned as structured data by the Host.
+
+---
+
+## Architecture Analysis: LLM-Driven Task Execution
 
 ## Implementation Status
 

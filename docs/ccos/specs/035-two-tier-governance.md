@@ -11,7 +11,7 @@ CCOS implements a two-tier governance model for execution hints:
 ### Direction 1: Top-Down (CCOS → RTFS)
 
 ```
-User Intent → Arbiter.intent_to_plan()
+User Intent → Cognitive Engine.intent_to_plan()
     ↓
 Plan with ^{:runtime.learning.retry ...} metadata
     ↓
@@ -58,7 +58,7 @@ CapabilityMarketplace.execute_capability_enhanced()
 ## Hint Flow
 
 ```
-Arbiter generates: ^{:runtime.learning.retry {:max-retries 3}}
+Cognitive Engine generates: ^{:runtime.learning.retry {:max-retries 3}}
                     ↓
 Evaluator extracts: host.set_execution_hint("runtime.learning.retry", value)
                     ↓

@@ -3,11 +3,11 @@
 **Status:** Draft for Review  
 **Version:** 1.0  
 **Date:** 2025-09-20  
-**Related:** [000: Architecture](./000-ccos-architecture-new.md), [001: Intent Graph](./001-intent-graph-new.md), [006: Arbiter](./006-arbiter-and-cognitive-control-new.md), [010: Ethical Governance](./010-ethical-governance-new.md)  
+**Related:** [000: Architecture](./000-ccos-architecture-new.md), [001: Intent Graph](./001-intent-graph-new.md), [006: Cognitive Engine](./006-cognitive-engine-and-cognitive-control.md), [010: Ethical Governance](./010-ethical-governance-new.md)  
 
 ## Introduction: Defending Against Prompt Injection
 
-Intent Sanitization protects the Arbiter from adversarial inputs: Scans natural language goals and LLM-generated intents/plans for injections (e.g., "ignore rules and..."), using rule-based and ML detectors. In RTFS 2.0, sanitization yields to capabilities like `:sanitize.text`, producing pure, safe RTFS structures for graph storage or plan gen. Kernel enforces as pre-step.
+Intent Sanitization protects the Cognitive Engine from adversarial inputs: Scans natural language goals and LLM-generated intents/plans for injections (e.g., "ignore rules and..."), using rule-based and ML detectors. In RTFS 2.0, sanitization yields to capabilities like `:sanitize.text`, producing pure, safe RTFS structures for graph storage or plan gen. Kernel enforces as pre-step.
 
 Why crucial? LLMs are vulnerable; sanitization ensures intents lead to aligned RTFS. Reentrancy: Re-scan on resume if context changes.
 
@@ -31,7 +31,7 @@ Multi-layer: Lexical (patterns), Semantic (embedding mismatch), Structural (RTFS
 ```
 Result: `{:cleaned \"Analyze reviews.\", :flags [:suspicious], :score 0.8}` → Block if > threshold.
 
-### 2. Workflow in Arbiter
+### 2. Workflow in Cognitive Engine
 1. User goal → Pre-sanitize (lexical).
 2. LLM to Intent → Post-sanitize (semantic on output).
 3. Intent to Plan → Structural check (parse RTFS source for anomalies).
@@ -40,7 +40,7 @@ Result: `{:cleaned \"Analyze reviews.\", :flags [:suspicious], :score 0.8}` → 
 ```mermaid
 graph TD
     User[User Goal Text] --> Lex[Lexical Scan<br/>(Patterns: 'ignore', 'jailbreak')]
-    Lex --> LLM[Arbiter LLM<br/>Generate Intent/Plan]
+    Lex --> LLM[Cognitive Engine LLM<br/>Generate Intent/Plan]
     LLM --> Sem[Semantic Scan<br/>(Embedding vs. Benign Corpus)]
     Sem --> Str[Structural Parse<br/>(RTFS Validity + Anomaly)]
     Str --> Clean[Clean RTFS Output<br/>(Intent or Plan Source)]

@@ -7,7 +7,7 @@
 
 ## Introduction: Queryable Index for System Memory
 
-Working Memory (WM) is CCOS's high-performance layer over the Causal Chain: An indexed, searchable cache for actions, intents, and outcomes. Supports vector/keyword queries via yields, enabling fast recall for Arbiter context or plan adaptation. In RTFS 2.0, WM queries return pure data for local transforms, with ingestion as async host capability.
+Working Memory (WM) is CCOS's high-performance layer over the Causal Chain: An indexed, searchable cache for actions, intents, and outcomes. Supports vector/keyword queries via yields, enabling fast recall for Cognitive Engine context or plan adaptation. In RTFS 2.0, WM queries return pure data for local transforms, with ingestion as async host capability.
 
 Why key? Chain is immutable/append-only; WM adds speed/relevance (e.g., embeddings for semantic search). Reentrancy: Incremental updates on resume.
 
@@ -236,7 +236,7 @@ pub enum ReductionStrategy {
 ### 2. API via Yields
 Host capabilities for interaction.
 
-**Sample Query** (RTFS in Plan/Arbiter):
+**Sample Query** (RTFS in Plan/Cognitive Engine):
 ```
 (call :wm.search
       {:query {:intent :123 :type :failure :limit 10}
@@ -254,7 +254,7 @@ graph TD
     Query[RTFS Yield: :wm.search<br/>(Intent/Type)]
     Search[Search: Keyword + Vector<br/>(e.g., Cosine Sim)]
     Results[Pure List<Map><br/>Summaries/Docs]
-    Results --> Horizon[Feed to Context Horizon] or Arbiter[Direct Use]
+    Results --> Horizon[Feed to Context Horizon] or Cognitive Engine[Direct Use]
 
     Chain --> Ingest
     Ingest --> WM
@@ -293,7 +293,7 @@ graph TD
        :summarize true})
 ```
 
-This keeps WM up-to-date for Horizon/Arbiter queries without coupling plans to ingestion details.
+This keeps WM up-to-date for Horizon/Cognitive Engine queries without coupling plans to ingestion details.
 
 ### 3. Integration with RTFS 2.0 Reentrancy
 - **Incremental**: On resume, query deltas (`:since-action :act-100`) → Pure merge with prior memory.
@@ -303,7 +303,7 @@ This keeps WM up-to-date for Horizon/Arbiter queries without coupling plans to i
 **Reentrant Example**:
 - Session: Query WM for context → Plan executes.
 - Pause → New actions ingested.
-- Resume: Query since last → Updated results → Arbiter adapts without full re-scan.
+- Resume: Query since last → Updated results → Cognitive Engine adapts without full re-scan.
 
 ### 4. Governance and Pruning
 Kernel ACLs on queries (e.g., no sensitive actions). Prune old entries (TTL policy, logged).

@@ -70,7 +70,7 @@ Steps provide semantic and operational boundaries inside a plan. They scope logg
 
 - `:timeout-ms`: Max wall-time for the step. Kernel enforces; exceeding triggers failure action.
 - `:retries`: Policy for transient yield failures; idempotent keys required.
-- `:on-fail`: Strategy (abort, retry, delegate to Arbiter).
+- `:on-fail`: Strategy (abort, retry, delegate to Cognitive Engine).
 - `:metadata`: Free-form annotations; reflected in chain actions.
 
 Steps map to hierarchical actions in the Causal Chain (StepStarted/Completed/Failed). Each step boundary is a natural checkpoint location.
@@ -370,8 +370,8 @@ sequenceDiagram
 - **Why Pure?** Enables static analysis; reentrancy without races (no shared mutable state).
 
 ### 4. Error Handling and Adaptation
-- Local Errors: Pure (e.g., type mismatch) → Abort step, log, notify Arbiter.
-- Yield Errors: Host failure → Retry (idempotent) or escalate to Arbiter for new plan.
+- Local Errors: Pure (e.g., type mismatch) → Abort step, log, notify Cognitive Engine.
+- Yield Errors: Host failure → Retry (idempotent) or escalate to Cognitive Engine for new plan.
 - Reentrancy: Failed resumes roll back to last chain checkpoint, preserving purity.
 
 Plans + Orchestrator form CCOS's 'how': Declarative, safe execution where RTFS computes, CCOS acts.

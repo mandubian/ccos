@@ -56,13 +56,13 @@ RTFS provides interoperability with external systems through the host boundary, 
 
 ```rtfs
 ;; File system operations through host
-(host-call :fs.read {:path "/file.txt"})
+(call :ccos.io.read-file "file.txt")
 
 ;; Network operations through host
-(host-call :net.http.get {:url "https://api.example.com"})
+(call :ccos.network.http-fetch "https://api.example.com")
 
 ;; System operations through host
-(host-call :sys.time {})
+(call :ccos.system.current-time)
 ```
 
 ### Data Exchange Formats
@@ -89,25 +89,19 @@ RTFS uses structured data for host communication:
 
 ```rtfs
 ;; Reading external data
-(def file-data (host-call :fs.read {:path "data.json"}))
-(def parsed (parse-json file-data))  ; If JSON parsing exists
+(let [file-data (call :ccos.io.read-file "data.json")]
+  (parse-json file-data))
 
 ;; Writing data
-(host-call :fs.write {:path "output.txt" :content "data"})
+(call :ccos.io.write-file "output.txt" "data")
 ```
 
 ### Structured Communication
 
 ```rtfs
 ;; HTTP requests
-(def response (host-call :net.http.get
-  {:url "https://api.example.com/users"
-   :headers {"Accept" "application/json"}}))
-
-;; Response handling
-(if (= (:status response) :success)
-  (process-data (:body response))
-  (handle-error (:error response)))
+(let [response (call :ccos.network.http-fetch "https://api.example.com/users")]
+  (process-data response))
 ```
 
 This interoperability approach ensures secure, controlled interaction with external systems through the host boundary while maintaining RTFS's functional and security guarantees.

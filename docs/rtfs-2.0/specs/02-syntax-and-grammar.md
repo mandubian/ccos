@@ -300,9 +300,19 @@ Functions can create and return other functions (higher-order functions):
 
 ## Metadata
 
-Expressions can include metadata:
+Expressions can include metadata using the `^{...}` syntax.
+
+**Implementation Note:**
+- **Runtime Hints (`^{:runtime.* ...}`):** ✅ **Supported**. Metadata on expressions (especially `call`) keys starting with `runtime.` (e.g., `:runtime.timeout`) are successfully parsed and propagated to the CCOS Host as `CallMetadata`.
+- **Definition Metadata (`defn ^{...}`):** ⚠️ **Partial/Dropped**. While the parser accepts metadata on definitions (like `:doc` or `:private`), the current IR compiler **drops** this metadata, meaning it is not available at runtime or for introspection.
 
 ```clojure
+;; ✅ SUPPORTED: Runtime hints propagated to Host
+^{:runtime.timeout 500
+  :runtime.idempotent true}
+(call "http.get" {:url "..."})
+
+;; ⚠️ PARTIAL: Parsed but currently dropped by compiler
 ^{:doc "A simple function"
   :author "Alice"}
 (defn greet [name]

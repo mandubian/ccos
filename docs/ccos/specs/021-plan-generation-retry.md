@@ -254,7 +254,7 @@ Configure `max_retries=2` as a reasonable balance between reliability and latenc
 
 ## Implementation Checklist
 
-- [ ] Add `RetryConfig` struct to arbiter configuration
+- [ ] Add `RetryConfig` struct to cognitive engine configuration
 - [ ] Implement `generate_plan_with_retry` wrapper
 - [ ] Create `create_retry_prompt_with_feedback` helper
 - [ ] Add retry attempt logging/metrics

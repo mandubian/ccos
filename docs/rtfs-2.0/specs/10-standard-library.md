@@ -1,75 +1,75 @@
 # RTFS 2.0 Standard Library
 
-**Implementation Status**: ✅ **Mostly Implemented** (verified against codebase)
+**Implementation Status**: ✅ **Fully Implemented** (verified against `rtfs` crate)
 
-This document provides a comprehensive reference for the RTFS 2.0 standard library, which contains **only pure, deterministic functions** with **no side effects**.
+This document provides a comprehensive reference for the RTFS 2.0 standard library. The standard library is divided into two layers:
+
+1.  **Secure Standard Library (`secure_stdlib.rs`)**: A minimal, pure, deterministic core that can be executed in any context.
+2.  **Extended Standard Library (`stdlib.rs`)**: Includes the secure core plus additional pure utilities (JSON, complex collection helpers) and the `call` interface for host capabilities.
 
 ## Implementation Verification
 
-The functions listed below have been **verified** against the actual implementation in `rtfs/src/runtime/secure_stdlib.rs`:
+The functions listed below have been **fully verified** against the implementation in `rtfs/src/runtime/secure_stdlib.rs` and `rtfs/src/runtime/stdlib.rs`:
 
 | Category | Status | Notes |
 |----------|--------|-------|
-| **Arithmetic** | ✅ **Implemented** | All listed functions implemented |
-| **Comparison** | ✅ **Implemented** | All listed functions implemented (includes `!=` and `not=`) |
-| **Boolean Logic** | ✅ **Implemented** | All listed functions implemented |
-| **String Functions** | ✅ **Implemented** | All listed functions implemented, plus regex (`re-matches`, `re-find`, `re-seq`) |
-| **Collection Functions** | ✅ **Implemented** | Most functions implemented; some listed in spec but may have different names |
-| **Type Predicates** | ✅ **Implemented** | All listed functions implemented |
-
-**Additional Functions in Implementation** (not listed in spec tables):
-- `parse-int`, `parse-float` - String to number conversion
-- `factorial`, `abs`, `sqrt`, `pow` - Additional math functions
-- `starts-with?`, `string-join`, `string-upper`, `string-lower`, `string-trim` - Additional string functions
-- `re-matches`, `re-find`, `re-seq` - Regex functions
-- `group-by`, `apply`, `assoc`, `dissoc`, `conj` - Additional collection functions
-- `int`, `float` - Type coercion functions
-
-**Functions Listed in Spec but Not Implemented**:
-- `map-indexed`, `sort-by`, `distinct`, `frequencies`, `get-in`, `range`, `numbers`, `remove`, `update`
+| **Arithmetic** | ✅ **Implemented** | Includes `+`, `-`, `*`, `/`, `inc`, `dec`, `max`, `min`, `factorial`, `abs`, `sqrt`, `pow`, etc. |
+| **Comparison** | ✅ **Implemented** | Includes `=`, `!=`, `>`, `<`, `>=`, `<=` |
+| **Boolean Logic** | ✅ **Implemented** | Includes `and`, `or`, `not` |
+| **String Functions** | ✅ **Implemented** | Includes `str`, `length`, `substring`, `contains?`, `starts-with?`, `string-join`, `upper`, `lower`, `trim`, and full Regex support |
+| **Collection Functions** | ✅ **Implemented** | `map`, `filter`, `reduce`, `apply`, `sort`, `sort-by`, `distinct`, `frequencies`, `get`, `get-in`, `assoc`, `dissoc`, `conj`, `first`, `rest`, `nth`, `count`, `empty?`, `range`, `numbers`, `take`, `drop`, `last`, `reverse`, `group-by`, `keys`, `vals` |
+| **Type Predicates** | ✅ **Implemented** | `nil?`, `bool?`, `int?`, `float?`, `number?`, `string?`, `fn?`, `symbol?`, `keyword?`, `vector?`, `map?`, `type-name` |
+| **JSON Support** | ✅ **Implemented** | `parse-json`, `serialize-json` (pure functions) |
+| **Host Interface** | ✅ **Implemented** | `call` function for CCOS capabilities |
 
 ## 1. Core Philosophy
 
 The standard library is designed with the following principles in mind:
 
-- **Pure Functions Only:** All functions are pure and referentially transparent, making them safe and predictable.
-- **No Effects:** RTFS is a no-effect language - all effects must be delegated to the host through capabilities.
-- **Immutable Data:** All data structures are immutable - no mutation functions are provided.
-- **Consistency:** The library provides a consistent and idiomatic set of functions for common tasks.
-- **Extensibility:** The library is designed to be extensible with custom functions and capabilities.
+- **Pure Functions Only:** All functions (except `call`) are pure and referentially transparent.
+- **No Effects:** RTFS kernel is an effect-free language. All side effects must be explicitly delegated via `(call :capability ...)`.
+- **Layered Security:** The `SecureStandardLibrary` provides a "safe mode" that excludes even host-delegation (`call`).
+- **Immutable Data:** All operations on collections return new immutable values.
+- **Consistency:** Provides an idiomatic set of functions familiar to Clojure/Lisp developers.
 
-## 2. Function Categories
+## 2. Library Layers
 
-The standard library is organized into the following categories:
+### 2.1 Secure Standard Library (Core)
+The **Secure Standard Library** (`rtfs/src/runtime/secure_stdlib.rs`) is the foundation of the RTFS environment. It contains only functions that are guaranteed to:
+- Have no external dependencies.
+- Be perfectly deterministic.
+- Have no path to effect delegation.
 
-- **Arithmetic:** Functions for mathematical operations.
-- **Comparison:** Functions for comparing values.
-- **Boolean Logic:** Functions for logical operations.
-- **String Manipulation:** Functions for working with strings.
-- **Collection Manipulation:** Functions for working with vectors, lists, and maps (read-only operations).
-- **Type Predicates:** Functions for checking the type of a value.
-- **CCOS Capabilities:** Functions for interacting with the CCOS through the host boundary.
+### 2.2 Standard Library (Full Environment)
+The **Standard Library** (`rtfs/src/runtime/stdlib.rs`) is the default environment provided to RTFS plans. It composes the Secure core with:
+- **`call`**: The gateway to CCOS capabilities.
+- **JSON Utilities**: `parse-json` and `serialize-json`.
+- **Complex Helpers**: Functions like `map-indexed`, `frequencies`, and `sort-by` which may use evaluator context.
 
-**Note:** All effectful operations (I/O, file system, network, state mutation) are **not** part of the standard library. These must be accessed through CCOS capabilities using the `(call :capability ...)` syntax.
+---
 
 ## 3. Arithmetic Functions
 
 | Function | Signature | Description |
 |---|---|---|
-| `+` | `(-> :int :int ... :int)` | Adds two or more numbers. |
-| `-` | `(-> :int :int :int)` | Subtracts two numbers. |
-| `*` | `(-> :int :int ... :int)` | Multiplies two or more numbers. |
-| `/` | `(-> :int :int :int)` | Divides two numbers. |
-| `mod` | `(-> :int :int :int)` | Returns the remainder of a division. |
-| `inc` | `(-> :int :int)` | Increments a number by 1. |
-| `dec` | `(-> :int :int)` | Decrements a number by 1. |
-| `max` | `(-> :any ... :any)` | Returns the largest of one or more numbers. |
-| `min` | `(-> :any ... :any)` | Returns the smallest of one or more numbers. |
-| `even?` | `(-> :int :bool)` | Returns `true` if a number is even. |
-| `odd?` | `(-> :int :bool)` | Returns `true` if a number is odd. |
-| `zero?` | `(-> :int :bool)` | Returns `true` if a number is zero. |
-| `pos?` | `(-> :int :bool)` | Returns `true` if a number is positive. |
-| `neg?` | `(-> :int :bool)` | Returns `true` if a number is negative. |
+| `+` | `(-> :number ... :number)` | Adds numbers. |
+| `-` | `(-> :number ... :number)` | Subtracts numbers. |
+| `*` | `(-> :number ... :number)` | Multiplies numbers. |
+| `/` | `(-> :number :number :number)` | Divides numbers. |
+| `mod` | `(-> :int :int :int)` | Returns the remainder of division. |
+| `inc` | `(-> :number :number)` | Increments by 1. |
+| `dec` | `(-> :number :number)` | Decrements by 1. |
+| `max` | `(-> :number ... :number)` | Returns the largest number. |
+| `min` | `(-> :number ... :number)` | Returns the smallest number. |
+| `abs` | `(-> :number :number)` | Returns absolute value. |
+| `sqrt` | `(-> :number :float)` | Returns square root. |
+| `pow` | `(-> :number :number :number)` | Returns base raised to power. |
+| `factorial` | `(-> :int :int)` | Returns factorial of n. |
+| `even?` | `(-> :int :bool)` | `true` if even. |
+| `odd?` | `(-> :int :bool)` | `true` if odd. |
+| `zero?` | `(-> :number :bool)` | `true` if zero. |
+| `pos?` | `(-> :number :bool)` | `true` if positive. |
+| `neg?` | `(-> :number :bool)` | `true` if negative. |
 
 ## 4. Comparison Functions
 
@@ -96,8 +96,20 @@ The standard library is organized into the following categories:
 |---|---|---|
 | `str` | `(-> :any ... :string)` | Concatenates all arguments into a string. |
 | `string-length` | `(-> :string :int)` | Returns the length of a string. |
-| `substring` | `(-> :string :int :string)` | Returns a substring of a string. |
-| `string-contains` | `(-> :string :string :bool)` | Returns `true` if a string contains another string. |
+| `substring` | `(-> :string :int :int :string)` | Returns a substring of a string (start, end). |
+| `string-contains?` | `(-> :string :string :bool)` | Returns `true` if a string contains another string. |
+| `starts-with?` | `(-> :string :string :bool)` | Returns `true` if string starts with prefix. |
+| `string-join` | `(-> :string :vector :string)` | Joins vector of strings with separator. |
+| `string-upper` | `(-> :string :string)` | Converts string to uppercase. |
+| `string-lower` | `(-> :string :string)` | Converts string to lowercase. |
+| `string-trim` | `(-> :string :string)` | Trims whitespace from start/end. |
+| `re-matches` | `(-> :string :string :any)` | Returns full match or nil. |
+| `re-find` | `(-> :string :string :any)` | Returns first match or nil. |
+| `re-seq` | `(-> :string :string :vector)` | Returns vector of all matches. |
+| `parse-int` | `(-> :string :int)` | Parses string to integer. |
+| `parse-float` | `(-> :string :float)` | Parses string to float. |
+| `int` | `(-> :any :int)` | Coerces value to integer. |
+| `float` | `(-> :any :float)` | Coerces value to float. |
 
 ## 7. Collection Manipulation Functions
 
@@ -106,147 +118,96 @@ The standard library is organized into the following categories:
 | Function | Signature | Description |
 |---|---|---|
 | `vector` | `(-> ... :vector)` | Creates a new vector. |
-| `map` | `(-> :function :collection :collection)` | Applies a function to each element of a collection. |
-| `map-indexed` | `(-> :function :collection :collection)` | ❌ Not Implemented | Applies a function to each element of a collection, with the index. |
-| `filter` | `(-> :function :collection :collection)` | Returns a new collection with only the elements that satisfy a predicate. |
-| `reduce` | `(-> :function :collection :any)` | Reduces a collection to a single value using a function. |
-| `sort` | `(-> :collection :collection)` | Sorts a collection. |
-| `sort-by` | `(-> :function :collection :collection)` | ❌ Not Implemented | Sorts a collection by a key function. |
-| `distinct` | `(-> :collection :collection)` | ❌ Not Implemented | Returns a new collection with duplicate values removed. |
-| `frequencies` | `(-> :collection :map)` | ❌ Not Implemented | Returns a map of the frequencies of the elements in a collection. |
-| `contains?` | `(-> :collection :any :bool)` | Returns `true` if a collection contains an element. |
-| `keys` | `(-> :map :vector)` | Returns a vector of the keys in a map. |
-| `vals` | `(-> :map :vector)` | Returns a vector of the values in a map. |
-| `get` | `(-> :map :any :any)` | Returns the value for a key in a map, or a default value. |
-| `get-in` | `(-> :map :vector :any)` | ❌ Not Implemented | Returns the value at a nested path in a map. |
-| `assoc` | `(-> :collection :any ... :collection)` | Returns new map/vector with key-value pairs associated. |
-| `dissoc` | `(-> :map :keyword ... :map)` | Returns new map with specified keys removed. |
-| `cons` | `(-> :any :collection :collection)` | Adds an element to the beginning of a collection. |
-| `concat` | `(-> ... :collection)` | Concatenates two or more collections. |
-| `conj` | `(-> :collection :any ... :collection)` | Appends elements to a vector (returns new vector). |
-| `first` | `(-> :collection :any)` | Returns the first element of a collection. |
-| `rest` | `(-> :collection :collection)` | Returns all but the first element of a collection. |
-| `nth` | `(-> :collection :int :any)` | Returns the element at a given index in a collection. |
-| `count` | `(-> :collection :int)` | Returns the number of elements in a collection. |
-| `empty?` | `(-> :collection :bool)` | Returns `true` if a collection is empty. |
-| `range` | `(-> :int :int :int :vector)` | ❌ Not Implemented | Returns a vector of numbers in a given range. |
 | `hash-map` | `(-> ... :map)` | Creates a new map. |
-| `take` | `(-> :int :collection :collection)` | Returns the first n elements of a collection. |
-| `drop` | `(-> :int :collection :collection)` | Returns all but the first n elements of a collection. |
-| `last` | `(-> :collection :any)` | Returns the last element of a collection. |
-| `reverse` | `(-> :collection :collection)` | Returns a new collection with elements in reverse order. |
-| `numbers` | `(-> :int :int :vector)` | ❌ Not Implemented | Returns a vector of numbers from start to end. |
-
-**Pure Immutable Operations:** The following functions return new collections without mutating the original:
-- `assoc` - Returns new map or vector with key-value pairs associated
-- `dissoc` - Returns new map with specified keys removed
-- `conj` - Returns new vector with elements appended
-
-**Not Implemented Functions:** The following functions are not in the current implementation:
-- `remove`, `update`
-
-For data structure mutations, use CCOS capabilities like `(call :ccos.state.kv/put ...)` or other appropriate state management capabilities.
+| `map` | `(-> :function :collection :collection)` | Applies a function to each element. |
+| `map-indexed` | `(-> :function :collection :collection)` | Applies function to index and element. |
+| `filter` | `(-> :function :collection :collection)` | Returns elements satisfying predicate. |
+| `reduce` | `(-> :function :any? :collection :any)` | Reduces collection to single value. |
+| `apply` | `(-> :function :any* :vector :any)` | Calls function with arguments. |
+| `sort` | `(-> :collection :collection)` | Sorts a collection. |
+| `sort-by` | `(-> :function :collection :collection)` | Sorts collection by key function. |
+| `distinct` | `(-> :collection :collection)` | Removes duplicate values. |
+| `frequencies` | `(-> :collection :map)` | Returns map of element frequencies. |
+| `group-by` | `(-> :function :collection :map)` | Groups elements by key function. |
+| `contains?` | `(-> :collection :any :bool)` | `true` if collection contains element. |
+| `keys` | `(-> :map :vector)` | Returns vector of map keys. |
+| `vals` | `(-> :map :vector)` | Returns vector of map values. |
+| `get` | `(-> :any :any :any?)` | Returns value for key, or optional default. |
+| `get-in` | `(-> :any :vector :any?)` | Returns value at nested path. |
+| `assoc` | `(-> :collection :any ... :collection)` | Returns new collection with associations. |
+| `dissoc` | `(-> :map :keyword ... :map)` | Returns new map with keys removed. |
+| `update` | `(-> :map :any :fn ... :map)` | Updates value at key by applying function. |
+| `remove` | `(-> :fn :collection :collection)` | Returns elements NOT satisfying predicate. |
+| `cons` | `(-> :any :collection :collection)` | Adds element to beginning. |
+| `conj` | `(-> :collection :any ... :collection)` | Appends elements to collection (vector-optimized). |
+| `concat` | `(-> ... :collection)` | Concatenates collections. |
+| `first` | `(-> :collection :any)` | Returns first element. |
+| `rest` | `(-> :collection :collection)` | Returns all but first element. |
+| `last` | `(-> :collection :any)` | Returns last element. |
+| `nth` | `(-> :collection :int :any)` | Returns element at index. |
+| `count` | `(-> :collection :int)` | Returns number of elements. |
+| `empty?` | `(-> :collection :bool)` | `true` if collection is empty. |
+| `range` | `(-> :int? :int :int? :vector)` | Returns range of numbers (start, end, step). |
+| `numbers` | `(-> :int :int :vector)` | Returns numbers from start to end (inclusive). |
+| `take` | `(-> :int :collection :collection)` | Returns first n elements. |
+| `drop` | `(-> :int :collection :collection)` | Returns all but first n elements. |
+| `reverse` | `(-> :collection :collection)` | Returns elements in reverse order. |
+| `merge` | `(-> :map ... :map)` | Merges multiple maps. |
+| `find` | `(-> :map :any :any)` | Returns [key value] pair or nil. |
 
 ## 8. Type Predicate Functions
 
 | Function | Signature | Description |
 |---|---|---|
-| `nil?` | `(-> :any :bool)` | Returns `true` if a value is `nil`. |
-| `bool?` | `(-> :any :bool)` | Returns `true` if a value is a boolean. |
-| `int?` | `(-> :any :bool)` | Returns `true` if a value is an integer. |
-| `float?` | `(-> :any :bool)` | Returns `true` if a value is a float. |
-| `number?` | `(-> :any :bool)` | Returns `true` if a value is a number. |
-| `string?` | `(-> :any :bool)` | Returns `true` if a value is a string. |
-| `fn?` | `(-> :any :bool)` | Returns `true` if a value is a function. |
-| `symbol?` | `(-> :any :bool)` | Returns `true` if a value is a symbol. |
-| `keyword?` | `(-> :any :bool)` | Returns `true` if a value is a keyword. |
-| `vector?` | `(-> :any :bool)` | Returns `true` if a value is a vector. |
-| `map?` | `(-> :any :bool)` | Returns `true` if a value is a map. |
-| `type-name` | `(-> :any :string)` | Returns the type of a value as a string. |
+| `nil?` | `(-> :any :bool)` | `true` if value is `nil`. |
+| `bool?` | `(-> :any :bool)` | `true` if value is a boolean. |
+| `int?` | `(-> :any :bool)` | `true` if value is an integer. |
+| `float?` | `(-> :any :bool)` | `true` if value is a float. |
+| `number?` | `(-> :any :bool)` | `true` if value is a number (int or float). |
+| `string?` | `(-> :any :bool)` | `true` if value is a string. |
+| `fn?` | `(-> :any :bool)` | `true` if value is a function/lambda. |
+| `symbol?` | `(-> :any :bool)` | `true` if value is a symbol. |
+| `keyword?` | `(-> :any :bool)` | `true` if value is a keyword. |
+| `vector?` | `(-> :any :bool)` | `true` if value is a vector. |
+| `map?` | `(-> :any :bool)` | `true` if value is a map. |
+| `type-name` | `(-> :any :string)` | Returns type name as string (e.g., ":int", ":vector"). |
 
-## 9. Effectful Operations (Not in Standard Library)
+## 9. JSON & Data Functions
 
-**Important:** RTFS 2.0 standard library contains **no effectful functions**. All operations that interact with the outside world must be accessed through CCOS capabilities.
-
-### Common Effectful Operations via Capabilities
-
-| Operation | Capability Call | Description |
-|---|---|---|
-| File I/O | `(call :ccos.io.file-exists "path")` | Check if file exists |
-| | `(call :ccos.io.read-file "path")` | Read entire file contents |
-| | `(call :ccos.io.write-file "path" "content")` | Write string to file |
-| | `(call :ccos.io.delete-file "path")` | Delete file |
-| | `(call :ccos.io.open-file "path")` | Open file for streaming |
-| | `(call :ccos.io.read-line file-handle)` | Read line from file |
-| | `(call :ccos.io.write-line file-handle "content")` | Write line to file |
-| | `(call :ccos.io.close-file file-handle)` | Close file |
-| HTTP Requests | `(call :ccos.network.http-fetch "url")` | Fetch content from URL |
-| Logging | `(call :ccos.io.log "message")` | Log message |
-| | `(call :ccos.io.print "message")` | Print without newline |
-| | `(call :ccos.io.println "message")` | Print with newline |
-| System Info | `(call :ccos.system.get-env "VAR")` | Get environment variable |
-| | `(call :ccos.system.current-time)` | Get current time |
-| | `(call :ccos.system.current-timestamp-ms)` | Get current timestamp |
-| Data Serialization | `(call :ccos.json.parse "json-string")` | Parse JSON string |
-| | `(call :ccos.json.stringify value)` | Serialize to JSON |
-| | `(call :ccos.json.stringify-pretty value)` | Serialize to pretty JSON |
-| | `(call :ccos.data.parse-json "json-string")` | Legacy alias for JSON parse |
-| | `(call :ccos.data.serialize-json value)` | Legacy alias for JSON stringify |
-| State Management | `(call :ccos.state.kv/get "key")` | Get value from key-value store |
-| | `(call :ccos.state.kv/put "key" value)` | Put value in key-value store |
-| | `(call :ccos.state.counter/inc "counter")` | Increment counter |
-| | `(call :ccos.state.event/append "stream" event)` | Append to event stream |
-| Human Interaction | `(call :ccos.agent.ask-human "prompt")` | Ask human for input |
-
-### Why No Effectful Functions in Standard Library?
-
-1. **Purity**: RTFS remains a pure functional language
-2. **Security**: All effects are mediated through CCOS governance
-3. **Auditability**: Every effect is tracked in the causal chain
-4. **Testability**: Pure functions are easily testable
-5. **Composability**: Pure functions can be safely combined
-
-## 10. CCOS Capability Functions
-
-The only way to perform effectful operations in RTFS is through the `call` function, which delegates to CCOS capabilities.
+These functions are part of the **Standard Library** (not the Secure Core) but are **pure**.
 
 | Function | Signature | Description |
 |---|---|---|
-| `call` | `(-> :keyword ... :any)` | Calls a CCOS capability. This is the **only** way to perform effectful operations. |
+| `parse-json` | `(-> :string :any)` | Parses JSON string to RTFS value. |
+| `serialize-json` | `(-> :any :string)` | Serializes RTFS value to JSON string. |
 
-### Capability Call Examples
+---
+
+## 10. Host Delegation & Capabilities
+
+RTFS kernel is strictly effect-free. All side effects (I/O, network, state, etc.) are performed via the `call` function.
+
+| Function | Signature | Description |
+|---|---|---|
+| `call` | `(-> :keyword ... :any)` | Invokes a CCOS capability. |
+
+### Why `call`?
+1. **Governance:** CCOS intercepts every `call` to check permissions and budgets.
+2. **Auditability:** Every host interaction is recorded in the Causal Chain.
+3. **Homoiconicity:** Plans remain pure data; only their *execution* in a CCOS host produces effects.
+4. **Abstraction:** RTFS code doesn't care if a capability is provided by a local tool, a remote agent, or a MicroVM.
+
+### Common Capability Examples
 
 ```clojure
-;; System operations
-(call :ccos.system.get-env "PATH")
-(call :ccos.system.current-time)
+;; I/O
+(call :ccos.io.log "Message")
+(call :ccos.io.read-file "data.txt")
 
-;; I/O operations  
-(call :ccos.io.log "Processing data...")
-(call :ccos.io.file-exists "/path/to/file")
+;; Network
+(call :ccos.network.http-fetch "url")
 
-;; Network operations
-(call :ccos.network.http-fetch "https://api.example.com/data")
-
-;; State management
-(call :ccos.state.kv/get "user:123")
-(call :ccos.state.kv/put "user:123" user-data)
-
-;; Agent operations
-(call :ccos.agent.discover-agents {:capabilities ["database" "api"]})
-(call :ccos.agent.ask-human "Please confirm the operation")
-
-;; Data operations
-(call :ccos.json.parse json-string)
-(call :ccos.json.stringify data)
+;; JSON (Alternative to pure helpers for symmetry)
+(call :ccos.json.parse json-str)
+(call :ccos.json.stringify val)
 ```
-
-### Capability Execution Flow
-
-1. **RTFS Evaluation**: `(call :capability args...)` is evaluated
-2. **Host Call Generation**: Creates `HostCall` with capability ID and arguments
-3. **CCOS Governance**: Security validation, policy enforcement, audit logging
-4. **Provider Execution**: Capability is executed by appropriate provider
-5. **Result Return**: Result is returned to RTFS for continuation
-
-This architecture ensures RTFS remains **pure** while enabling **secure, auditable** interaction with the external world.

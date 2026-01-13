@@ -7,7 +7,7 @@
 
 ## Introduction: The "Body" without the "Brain"
 
-While the core CCOS specifications describe an **Autonomous Mode**—where CCOS maintains the Intent Graph, acts as the Arbiter, and drives execution via the Orchestrator—implementation reality often requires a "Human-in-the-Loop" or "External-Agent-in-the-Loop" approach.
+While the core CCOS specifications describe an **Autonomous Mode**—where CCOS maintains the Intent Graph, acts as the Cognitive Engine, and drives execution via the Orchestrator—implementation reality often requires a "Human-in-the-Loop" or "External-Agent-in-the-Loop" approach.
 
 This is **Interactive Mode**, primarily exposed via the **Model Context Protocol (MCP)** server.
 
@@ -19,7 +19,7 @@ In Interactive Mode, CCOS acts as the **Body** (Capabilities, Memory, Tools) and
 
 | Feature | Autonomous Mode (Target) | Interactive Mode (Current MCP) |
 | :--- | :--- | :--- |
-| **Driver** | CCOS Internal Arbiter | External Agent (MCP Client) |
+| **Driver** | CCOS Internal Cognitive Engine | External Agent (MCP Client) |
 | **Intent Source** | Intent Graph (Persistent) | Chat Context / User Prompt |
 | **Execution Unit** | RTFS Plan (Compiled IR) | `Session` (Linear Steps) |
 | **State Management**| Orchestrator (Reentrant) | Session Manager (Step-by-Step) |
@@ -65,7 +65,7 @@ Despite the simpler flow, Interactive Mode adheres to CCOS core principles:
 
 1.  **Capabilities**: All actions are routed through the same Capability Marketplace. The MCP Server is just a protocol adapter exposing these capabilities.
 2.  **Purity (Local)**: Each step is effectively a discrete "Unit of Work". The `Session` logic generates a valid RTFS snippet for each step (`(call "tool" inputs)`), enabling the session to be replayed or exported as a valid RTFS Plan later.
-3.  **Causal Chain**: Every tool execution is logged to the Causal Chain, ensuring auditability regardless of who is driving (Internal Arbiter or External Agent).
+3.  **Causal Chain**: Every tool execution is logged to the Causal Chain, ensuring auditability regardless of who is driving (Internal Cognitive Engine or External Agent).
 
 ### 5. Security & Governance
 
@@ -132,7 +132,7 @@ Interactive agents are expected to use these tools to "teach" the system:
 
 Interactive Mode serves as the **Training Ground** for Autonomous Mode:
 *   It allows us to test Capabilities and the Causal Chain in isolation.
-*   It accumulates "Gold Standard" execution traces (Sessions) that can be used to fine-tune the Internal Arbiter's planning logic.
+*   It accumulates "Gold Standard" execution traces (Sessions) that can be used to fine-tune the Internal Cognitive Engine's planning logic.
 *   It provides immediate utility to users (Code Assistant backends) while the complex autonomous subsystems are being matured.
 
 ---

@@ -42,7 +42,7 @@ Pattern decomposition is **fast and deterministic**, but it must know its limits
 The architecture supports iterative decomposition:
 1. **Granularity Check**: After decomposition, verify each intent is truly atomic (maps to ONE capability)
 2. **Recursive Decomposition**: If an intent is too coarse, decompose it further
-3. **Validation Loop**: Present plan to user/arbiter for confirmation; refine with hints if rejected
+3. **Validation Loop**: Present plan to user/cognitive engine for confirmation; refine with hints if rejected
 
 ```
                     Goal
@@ -60,7 +60,7 @@ The architecture supports iterative decomposition:
                       │ YES
                       ▼
               ┌──────────────┐         ┌─────────────────┐
-              │ Confidence   │───LOW──▶│ Ask Arbiter/    │
+              │ Confidence   │───LOW──▶│ Ask Cognitive Engine/    │
               │ Check        │         │ User/Judge LLM  │
               └──────────────┘         └────────┬────────┘
                       │ HIGH                    │
@@ -190,7 +190,7 @@ After RTFS plan generation, an optional **Verification** step checks for consist
                           ▼
                 ┌─────────────────┐
                 │ Verification    │
-                │ (Arbiter/Judge) │
+                │ (Cognitive Engine/Judge) │
                 └─────────────────┘
                           │
             ┌─────────────┼─────────────┐
@@ -205,7 +205,7 @@ After RTFS plan generation, an optional **Verification** step checks for consist
     - **Data Flow**: Are all dependencies correctly wired?
     - **Goal Coverage**: Does the plan address all parts of the goal?
     - **Semantic Clarity**: Are user prompts understandable?
-*   **`LlmVerifier`** (optional, thorough): Uses an Arbiter/Judge LLM to analyze the plan
+*   **`LlmVerifier`** (optional, thorough): Uses an Cognitive Engine/Judge LLM to analyze the plan
 *   **`CompositeVerifier`**: Runs rule-based first, optionally LLM for deeper analysis
 
 ### Prompt Humanization

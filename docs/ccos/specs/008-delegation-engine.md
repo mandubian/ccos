@@ -3,7 +3,7 @@
 **Status:** Deprecated  
 **Version:** 1.1  
 **Date:** 2025-01-10  
-**Related:** [000: Architecture](./000-ccos-architecture.md), [006: Arbiter](./006-arbiter-and-cognitive-control.md), [030: Capability System](./030-capability-system-architecture.md)
+**Related:** [000: Architecture](./000-ccos-architecture.md), [006: Cognitive Engine](./006-cognitive-engine-and-cognitive-control.md), [030: Capability System](./030-capability-system-architecture.md)
 
 ---
 
@@ -11,7 +11,7 @@
 
 This specification describes a **simplified Delegation Engine** that has been **superseded** by the more sophisticated **StaticDelegationEngine** architecture.
 
-**Replaced by:** Section 3.b in [006: Arbiter and Cognitive Control](./006-arbiter-and-cognitive-control.md)
+**Replaced by:** Section 3.b in [006: Cognitive Engine and Cognitive Control](./006-cognitive-engine-and-cognitive-control.md)
 
 ---
 
@@ -121,7 +121,7 @@ The simple Delegation Engine described in this specification evolved into a more
 
 ### Migration Checklist
 
-- [x] Read [006: Arbiter and Cognitive Control](./006-arbiter-and-cognitive-control.md) Section 3.b for StaticDelegationEngine
+- [x] Read [006: Cognitive Engine and Cognitive Control](./006-cognitive-engine-and-cognitive-control.md) Section 3.b for StaticDelegationEngine
 - [x] Update implementations to use StaticDelegationEngine instead of simple DE
 - [x] Configure L1 cache parameters (max entries, TTL)
 - [x] Register ModelProviders via ModelRegistry
@@ -160,13 +160,13 @@ match target {
 
 ## See Also
 
-- **[006: Arbiter and Cognitive Control](./006-arbiter-and-cognitive-control.md)** - Section 3.b documents the StaticDelegationEngine architecture that replaces this spec
+- **[006: Cognitive Engine and Cognitive Control](./006-cognitive-engine-and-cognitive-control.md)** - Section 3.b documents the StaticDelegationEngine architecture that replaces this spec
 - **[030: Capability System Architecture](./030-capability-system-architecture.md)** - Capability marketplace and lifecycle management
 - **[000: Architecture](./000-ccos-architecture.md)** - Overall system architecture
 
 ---
 
-**Note:** This spec is maintained for historical reference but should not be used for new implementation. All new code should reference the StaticDelegationEngine architecture in [006: Arbiter and Cognitive Control](./006-arbiter-and-cognitive-control.md).  
+**Note:** This spec is maintained for historical reference but should not be used for new implementation. All new code should reference the StaticDelegationEngine architecture in [006: Cognitive Engine and Cognitive Control](./006-cognitive-engine-and-cognitive-control.md).  
 
 ## Introduction: Policy-Driven Provider Selection
 

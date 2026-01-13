@@ -3,13 +3,13 @@
 **Status:** Draft for Review (Enhanced)
 **Version:** 1.1
 **Date:** 2025-01-10
-**Related:** [000: Architecture](./000-ccos-architecture-new.md), [001: Intent Graph](./001-intent-graph-new.md), [003: Causal Chain](./003-causal-chain.md), [013: Working Memory](./013-working-memory.md), [006: Arbiter](./006-arbiter-and-cognitive-control.md)  
+**Related:** [000: Architecture](./000-ccos-architecture-new.md), [001: Intent Graph](./001-intent-graph-new.md), [003: Causal Chain](./003-causal-chain.md), [013: Working Memory](./013-working-memory.md), [006: Cognitive Engine](./006-cognitive-engine-and-cognitive-control.md)  
 
 ## Introduction: Compact, Queryable Context for LLM Inputs
 
 Context Horizon provides compact, queryable context bundles optimized for Large Language Model (LLM) inputs. Unlike Working Memory (which is persistent and global), Horizons are ephemeral, task-specific snapshots constructed on-demand.
 
-Why essential? LLMs have finite token budgets; Context Horizon intelligently compresses relevant execution history, intent structure, and domain knowledge into a coherent RTFS structure. This enables Arbiter to reason with full context without exceeding model capacity.
+Why essential? LLMs have finite token budgets; Context Horizon intelligently compresses relevant execution history, intent structure, and domain knowledge into a coherent RTFS structure. This enables Cognitive Engine to reason with full context without exceeding model capacity.
 
 **Key Characteristics**:
 - Ephemeral: Built per-task, not persisted
@@ -33,7 +33,7 @@ Why essential? LLMs have finite token budgets; Context Horizon intelligently com
 ## Core Concepts
 
 ### 1. Horizon Structure
-- **Input**: Query spec (e.g., {:for :arbiter, :intent :123, :max-tokens 4000, :focus :failures}).
+- **Input**: Query spec (e.g., {:for :cognitive engine, :intent :123, :max-tokens 4000, :focus :failures}).
 - **Sources**: Intent Graph (goals), Chain (history), WM (indexed summaries).
 - **Processing**: Rank/relevance (e.g., TF-IDF or embedding match), summarize (pure RTFS functions), truncate.
 - **Output**: Structured payload (RTFS Map) for LLM prompt.
@@ -123,7 +123,7 @@ Result Payload (RTFS Map):
 ```
 
 ### 2. Workflow
-1. Arbiter requests context (yield or direct).
+1. Cognitive Engine requests context (yield or direct).
 2. Horizon queries sources (e.g., `:wm.search` for chain).
 3. Pure RTFS processing: Filter/map/summarize (e.g., `(reduce summarize recent-actions)`).
 4. Assemble payload; yield to LLM cap if needed (e.g., `:llm.summarize` for further compression).
@@ -151,7 +151,7 @@ When limits are exceeded:
 **Diagram: Context Building**:
 ```mermaid
  graph TD
-     Req[Arbiter Request<br/>:intent-123 + Focus]
+     Req[Cognitive Engine Request<br/>:intent-123 + Focus]
      H[Context Horizon]
      IG[Intent Graph<br/>Query Subtree]
      CC[Causal Chain<br/>Query Actions]
@@ -165,12 +165,12 @@ When limits are exceeded:
      IG & CC & WM --> Pure
      Pure --> LLM
      LLM --> Payload
-     Payload --> Arbiter[Resume Arbiter]
+     Payload --> Cognitive Engine[Resume Cognitive Engine]
  ```
 
 ### 3. RTFS Integration
 
-Arbiter builds horizons via RTFS yields:
+Cognitive Engine builds horizons via RTFS yields:
 
 ```
 (call :horizon.build
@@ -199,7 +199,7 @@ Returns RTFS struct:
 
 ### 3.1 LLM Prompt Integration
 
-Arbiter includes horizon in LLM prompts as structured RTFS:
+Cognitive Engine includes horizon in LLM prompts as structured RTFS:
 
 ```
 [Context Horizon]
@@ -286,7 +286,7 @@ Complete horizon for log analysis intent:
 **Reentrant Example**:
 - Session 1: Build context for plan gen → 2000 tokens.
 - Pause → Chain advances.
-- Resume: Horizon diffs (`recent-since :act-100`) → New payload + prior summary → Arbiter continues with updated view.
+- Resume: Horizon diffs (`recent-since :act-100`) → New payload + prior summary → Cognitive Engine continues with updated view.
 
 ### 6. Governance and Limits
 Kernel enforces query quotas (e.g., no full-chain access). Policies: Redact sensitive data in payloads.
@@ -318,5 +318,5 @@ Horizon bridges data to cognition: Vast history → Focused context, enabling sm
 - [001: Intent Graph](./001-intent-graph-new.md) - Intent structure and relationships
 - [003: Causal Chain](./003-causal-chain.md) - Action logging and provenance
 - [013: Working Memory](./013-working-memory.md) - Persistent knowledge store
-- [006: Arbiter](./006-arbiter-and-cognitive-control.md) - LLM integration and prompting
+- [006: Cognitive Engine](./006-cognitive-engine-and-cognitive-control.md) - LLM integration and prompting
 Next: Ethical Governance in 010.

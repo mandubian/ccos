@@ -1,4 +1,4 @@
-# CCOS Specification 006: Arbiter and Cognitive Control (RTFS 2.0 Edition)
+# CCOS Specification 006: Cognitive Engine and Cognitive Control (RTFS 2.0 Edition)
 
 **Status:** Draft for Review (Enhanced)
 **Version:** 1.1
@@ -7,13 +7,13 @@
 
 ## Introduction: The AI Mind in a Governed System
 
-The Arbiter is CCOS's cognitive core: An AI (LLM or federation) that reasons over intents, generates pure RTFS plans, and adapts from outcomes. Sandboxed—no direct effects; proposes to Kernel. In RTFS 2.0, it targets pure code, yielding for actions, enabling safe, reentrant cognition.
+The Cognitive Engine is CCOS's cognitive core: An AI (LLM or federation) that reasons over intents, generates pure RTFS plans, and adapts from outcomes. Sandboxed—no direct effects; proposes to Kernel. In RTFS 2.0, it targets pure code, yielding for actions, enabling safe, reentrant cognition.
 
-Why central? Handles non-determinism (creativity, exceptions) while Orchestrator does determinism. Reentrancy: Arbiters can pause debates, resume with chain context.
+Why central? Handles non-determinism (creativity, exceptions) while Orchestrator does determinism. Reentrancy: Cognitive Engines can pause debates, resume with chain context.
 
 ## Core Concepts
 
-### 1. Arbiter Role and Lifecycle
+### 1. Cognitive Engine Role and Lifecycle
 - **Intent Formulation**: Parse user input → Structured intent in graph.
 - **Plan Generation**: Query graph/chain → Output RTFS source (pure + yields).
 - **Exception Handling**: On Orchestrator failure → Analyze chain → New plan or abort.
@@ -21,7 +21,7 @@ Why central? Handles non-determinism (creativity, exceptions) while Orchestrator
 
 Runs in low-privilege sandbox; Kernel approves proposals.
 
-**Sample Arbiter Workflow** (Pseudo-prompt for LLM):
+**Sample Cognitive Engine Workflow** (Pseudo-prompt for LLM):
 ```
 Context: Intent Graph subtree + Chain summary (last 5 actions).
 Task: Generate RTFS plan for :intent-123 (analyze sentiment).
@@ -32,19 +32,19 @@ Output: Valid RTFS source + metadata.
 Generated Plan: As in 002 sample.
 
 ### 2. Federation: Collaborative Reasoning
-Single Arbiter → Multiple specialists (e.g., Strategy, Ethics) for robustness.
+Single Cognitive Engine → Multiple specialists (e.g., Strategy, Ethics) for robustness.
 
 - **Roles**: Strategy: Long-term plans; Ethics: Constitution check; Logic: Optimize yields.
-- **Debate**: Primary Arbiter coordinates: Propose plan → Subs critique (via RTFS queries to chain) → Vote/consensus.
+- **Debate**: Primary Cognitive Engine coordinates: Propose plan → Subs critique (via RTFS queries to chain) → Vote/consensus.
 - **Recording**: Each sub-response as chain action, hierarchical.
 
 **Federation Diagram**:
 ```mermaid
 graph TD
-    Primary[Primary Arbiter<br/>Coordinates]
-    Strat[Strategy Arbiter<br/>Generates Plan]
-    Eth[Ethics Arbiter<br/>Validates Rules]
-    Log[Logic Arbiter<br/>Optimizes Yields]
+    Primary[Primary Cognitive Engine<br/>Coordinates]
+    Strat[Strategy Cognitive Engine<br/>Generates Plan]
+    Eth[Ethics Cognitive Engine<br/>Validates Rules]
+    Log[Logic Cognitive Engine<br/>Optimizes Yields]
     
     User[Input] --> Primary
     Primary --> Strat
@@ -62,7 +62,7 @@ graph TD
 ```
 
 ### 3. Integration with RTFS 2.0 Reentrancy
-Arbiters generate/use pure RTFS:
+Cognitive Engines generate/use pure RTFS:
 - **Generation**: Output source → Compile/verify before Orchestrator.
 - **Querying**: Use RTFS for analysis, e.g., `(call :chain.query {:intent :123})` → Yield for context.
 - **Reentrant Cognition**: Complex decisions: Pause mid-debate (yield for external data) → Resume with injected results.
@@ -75,11 +75,11 @@ Arbiters generate/use pure RTFS:
 5. Chain: Debate as sub-actions under failure action.
 
 ### 3.a LLM Execution Bridge (Prompting, Tools, Budgets)
-Arbiters interface with LLMs via a bridge that standardizes prompting, token budgeting, and tool-use. The bridge is host-side (pure RTFS yields), keeping Arbiter logic declarative and safe.
+Cognitive Engines interface with LLMs via a bridge that standardizes prompting, token budgeting, and tool-use. The bridge is host-side (pure RTFS yields), keeping Cognitive Engine logic declarative and safe.
 
 - **Prompt Construction**: Uses Context Horizon payload (009) and Intent Graph snapshots. Prompts are templates with slotted fields (intent, constraints, recent chain events).
 - **Token Budgets**: Enforced via Runtime Context quotas; bridge truncates/summarizes inputs to meet limits.
-- **Tool Use**: LLM suggests actions in a constrained schema; bridge maps them to RTFS constructs (e.g., capability calls) or requests Arbiter to generate RTFS source directly.
+- **Tool Use**: LLM suggests actions in a constrained schema; bridge maps them to RTFS constructs (e.g., capability calls) or requests Cognitive Engine to generate RTFS source directly.
 
 **Sample Bridge Yield**:
 ```
@@ -103,7 +103,7 @@ The Delegation Engine determines where RTFS function calls are executed:
 pub enum ExecTarget {
     LocalPure,                    // Run directly in deterministic evaluator
     LocalModel(String),             // Call on-device model (e.g., "phi-mini", "rule-engine")
-    RemoteModel(String),            // Delegate to remote model via Arbiter RPC
+    RemoteModel(String),            // Delegate to remote model via Cognitive Engine RPC
     L4CacheHit {                 // Execute pre-compiled RTFS from content-addressable cache
         storage_pointer: String,    // S3 object key or blob storage pointer
         signature: String,          // Cryptographic signature for verification
@@ -172,7 +172,7 @@ pub trait ModelProvider: Send + Sync + Debug {
 
 **Built-in Providers**:
 - `LocalEchoModel`: Echoes input with prefix (testing only)
-- `RemoteArbiterModel`: Delegates to remote Arbiter via RPC (production)
+- `RemoteArbiterModel`: Delegates to remote Cognitive Engine via RPC (production)
 - `DeterministicStubModel`: Returns predictable JSON/RTFS (CI/tests)
 - `LocalLlamaModel`: Quantized on-device transformer (optional, requires `RTFS_LOCAL_MODEL_PATH`)
 
@@ -350,17 +350,17 @@ Agents are now managed as capabilities with `:kind :agent` rather than separate 
 
 **Governance**: Data boundary redaction for lower-trust agents; revocation of active delegation if trust drops; full audit via chain events (GovernanceApprovalRequested/Granted/Denied).
 
-This keeps Arbiter modular: local reasoning when appropriate, agent delegation when beneficial—both consistent with RTFS purity and host-governed effects.
+This keeps Cognitive Engine modular: local reasoning when appropriate, agent delegation when beneficial—both consistent with RTFS purity and host-governed effects.
 
 ### 4. Constraints and Safety
 
 ### 4. Constraints and Safety
-- Sandbox: Arbiters yield for all effects; no mutation in their RTFS.
+- Sandbox: Cognitive Engines yield for all effects; no mutation in their RTFS.
 - Feedback Loop: Chain outcomes update graph → Better future generations.
 - Delegation Governance: All delegation decisions logged to Causal Chain with provenance.
 - Cache Validation: L1 cache entries validated against current policies on hit.
 
-Arbiter + RTFS + StaticDelegationEngine = Aligned cognition: Creative but governed, reentrant for long-running reasoning.
+Cognitive Engine + RTFS + StaticDelegationEngine = Aligned cognition: Creative but governed, reentrant for long-running reasoning.
 
 ---
 

@@ -35,7 +35,7 @@ rules:
 ```
 
 **Validation Example**:
-- Plan yield :storage.write {:data :user-pii} → Kernel: Matches privacy rule? No → Deny, log `Action {:type :GovernanceDenial}` → Arbiter adapts.
+- Plan yield :storage.write {:data :user-pii} → Kernel: Matches privacy rule? No → Deny, log `Action {:type :GovernanceDenial}` → Cognitive Engine adapts.
 
 ### 2. Runtime Context: Scoped Constraints
 Per-execution env: Injected into RTFS, enforced by Orchestrator. Immutable Map, updated on resume.
@@ -71,7 +71,7 @@ Practical note: For plan execution, initialize the context ACL from `plan.capabi
 3. Pause → Resume: Load context from chain → Yield 2 allowed; Yield 3 denied → Safe, no escalation.
 
 ### 4. Auditing and Recovery
-All denials/decisions logged to chain with rule ID. Recovery: Arbiter queries chain for context, proposes compliant plan.
+All denials/decisions logged to chain with rule ID. Recovery: Cognitive Engine queries chain for context, proposes compliant plan.
 
 RTFS purity + Kernel = Bulletproof: Effects explicit, governed; reentrancy contained.
 
@@ -86,4 +86,4 @@ Security posture is largely configuration-driven. Keep it simple, auditable, and
 
 **Config Provenance**: Kernel logs config hashes at start and on reload to the Causal Chain to ensure future audits can reproduce decisions.
 
-Next: Arbiter in 006.
+Next: Cognitive Engine in 006.
