@@ -4,49 +4,53 @@ This directory contains the **rewritten RTFS 2.0 language specifications** based
 
 ## Purpose
 
-The original specifications in `../specs/` were written before the decoupling and did not accurately reflect the final architecture. These new specifications are derived from:
+The original specifications in `./specs/` were written before the decoupling and did not accurately reflect the final architecture. These new specifications are derived from:
 
 - **Codebase Analysis**: Direct examination of AST, runtime, and grammar files
 - **Architectural Clarity**: Understanding gained from CCOS-RTFS decoupling
 - **Implementation Truth**: Specifications match what was actually built
 
-## Documentation Status
+## Status Legend
 
 **⚠️ IMPORTANT**: This documentation is being cleaned up to ensure accuracy. Some specifications describe design targets or aspirational features that are not yet fully implemented. Each specification file now includes an "Implementation Status" section indicating what is implemented versus planned.
 
-**Key Documentation Updates**:
+**Legend**:
 - ✅ **Implemented**: Features fully implemented and tested
 - ⚠️ **Partial**: Partially implemented or basic support exists
 - 🚧 **Design**: Design specification; implementation in progress or planned
 - ❌ **Not Implemented**: Described but not yet implemented
 
-**Verification Status**: Examples in this documentation are being validated against the actual implementation. Check the [Implementation Status Guide](../guides/implementation-status.md) for detailed feature-by-feature tracking.
+**Verification Status**: Examples in this documentation are being validated against the actual implementation. The [Implementation Status Guide](../guides/implementation-status.md) is a work-in-progress tracker; when in doubt, treat the RTFS source (`rtfs/src/`) as the ground truth.
 
-## Philosophy
+## Specifications Index
 
-RTFS 2.0 is a **pure functional language** designed to be securely hosted by a governing runtime like CCOS. It operates on a principle of a **strict host boundary**:
+Below is the complete list of RTFS 2.0 specifications. Each document focuses on a specific aspect of the language or its runtime environment.
 
-- **Pure Kernel**: All RTFS code is referentially transparent. It computes values and has no direct access to the outside world.
-- **Host Interaction**: Side effects and external actions are handled by the host (e.g., CCOS) through a formal `ExecutionOutcome::RequiresHost` mechanism. RTFS yields control, and the host executes the requested action.
-- **Governed Execution**: The host is responsible for security, governance, and auditing of all external effects requested by RTFS code.
-- **Minimal & Extensible**: The language has a small core, but its homoiconic nature allows it to be extended with powerful metaprogramming features.
+| # | Specification | Description & Focus |
+|---|---------------|---------------------|
+| 00 | [Philosophy](00-philosophy.md) | Core tenets: Purity, LLM-Native, Governance |
+| 01 | [Language Overview](01-language-overview.md) | High-level summary of language features and syntax |
+| 02 | [Syntax & Grammar](02-syntax-and-grammar.md) | Formal EBNF and S-expression structure |
+| 03 | [Core Syntax & Data Types](03-core-syntax-data-types.md) | Literals, Lists, Vectors, Maps, Keywords |
+| 04 | [Evaluation & Runtime](04-evaluation-and-runtime.md) | Scopes, Closures, TCO, Jump-based execution |
+| 04b| [Host Boundary](04-host-boundary.md) | `ExecutionOutcome`, Requests, and Responses |
+| 05 | [Pattern Matching](05-pattern-matching-destructuring.md) | Destructuring and `match` expression |
+| 07 | [Module System](07-module-system.md) | `module`, `import`, exports, module registry |
+| 08 | [Macro System](08-macro-system.md) | Metaprogramming, `defmacro`, Quasiquotation |
+| 09 | [Streaming Capabilities](09-streaming-capabilities.md) | Streaming outcomes and host-mediated streams |
+| 10 | [Standard Library](10-standard-library.md) | Comprehensive function reference for pure operations |
+| 11 | [Architecture Overview](11-architecture-analysis.md) | System components, diagrams, and LLM-fit analysis |
+| 12 | [IR & Compilation](12-ir-and-compilation.md) | Lowering to S-Expression IR and Bytecode |
+| 13 | [Type System](13-type-system.md) | Formal typing rules, Subtyping, and Validation |
+| 14 | [Concurrency Model](14-concurrency-model.md) | Step orchestration and host-mediated parallelism |
+| 15 | [Error Handling](15-error-handling-recovery.md) | `try/catch/finally` and error propagation |
+| 16 | [Security Model](16-security-model.md) | Sandboxing, Capabilities, and Governance |
+| 17 | [Performance](17-performance-optimization.md) | Memory management and IR optimizations |
+| 18 | [Interoperability](18-interoperability.md) | JSON, MCP Tools, and Host Integration |
 
-## Design Purpose: LLM-Native Task Execution
+---
 
-RTFS 2.0 is architected as a **language designed for LLMs to generate data structures and execution logic** that represents **task fulfillment workflows for user intents**:
-
-### LLM-Driven Code Generation
-- **Pure Kernel**: Safe environment for LLM-generated logic without side effect concerns
-- **S-Expression Syntax**: Uniform, programmable structure that LLMs can reliably parse and generate
-- **Type System**: Safety guardrails that catch LLM generation errors while remaining optional
-- **Homoiconic Design**: Code-as-data enables LLMs to analyze and transform their own outputs
-
-### Enabling Governed Task Execution
-RTFS is designed to be a safe execution target for LLM-generated code. Its architecture enables a host system like CCOS to provide:
-- **Clear Host Boundary**: A formal separation between pure computation (RTFS) and external actions (host).
-- **Governed Capabilities**: RTFS code requests actions from the host, which is responsible for governing access to external services.
-- **Auditable Execution**: The host can build a complete audit trail (like CCOS's Causal Chain) of the workflow, as every effectful step is an explicit request from RTFS.
-- **Security Validation**: The host can validate every requested action against security policies before execution.
+## Technical Architecture Overview
 
 ### Human-LLM-System Synergy
 - **Humans Specify**: High-level intents in natural language
@@ -56,168 +60,34 @@ RTFS is designed to be a safe execution target for LLM-generated code. Its archi
 
 This creates a **conversational programming paradigm** where LLMs can be "programmed by conversation" to generate trustworthy, autonomous task execution logic.
 
-## Specification Structure
-
-### 00-philosophy.md
-Core principles and architectural foundations of RTFS 2.0.
-
-### 01-language-overview.md
-Complete syntax reference, grammar rules, and language constructs.
-
-### 02-syntax-and-grammar.md
-Detailed grammar and syntax rules.
-
-### 03-core-syntax-data-types.md
-Core data types and structures.
-
-### 04-evaluation-and-runtime.md
-Evaluation model, scoping rules, and runtime architecture.
-
-### 04-host-boundary.md
-Host interaction mechanisms and the formal model for requesting external actions.
-
-### 05-pattern-matching-destructuring.md
-Pattern matching and destructuring capabilities.
-
-### 07-module-system.md
-Module system design and implementation.
-
-### 08-macro-system.md
-Compile-time metaprogramming, quasiquote, and hygienic macros.
-
-### 09-streaming-capabilities.md
-Streaming and reactive programming support.
-
-### 10-standard-library.md
-Comprehensive function reference for pure and impure operations.
-
-### 11-architecture-analysis.md
-Critical analysis of strengths, weaknesses, and future directions.
-
-### 12-ir-and-compilation.md
-Intermediate Representation (IR) and compilation process.
-
-### 13-type-system.md (UPDATED - Formal Specification)
-**Complete formal type system** with subtyping, bidirectional type checking, soundness proofs, and theoretical foundations. Includes:
-- Formal type grammar and inference rules
-- Subtyping relation with 12 axioms
-- Progress and Preservation theorems
-- Algorithmic type checking specification
-- References to Pierce, Cardelli, Davies & Pfenning
-
-### 14-concurrency-model.md
-Concurrency model and host-mediated parallelism.
-
-### 15-error-handling-recovery.md
-Error handling and recovery mechanisms.
-
-### 16-security-model.md
-Security model and sandboxing.
-
-### 17-performance-optimization.md
-Performance optimization strategies.
-
-### 18-interoperability.md
-Interoperability with host systems and external services.
-
-## Key Architectural Insights
-
-### Pure Kernel Design
-RTFS maintains **referential transparency** by yielding control to CCOS for all side effects. This enables:
-- Deterministic testing and reasoning
-- Safe composition of pure and effectful code
-- Mandatory security governance
-
-### LLM-Native Architecture
-The design prioritizes **LLM comprehension and generation**:
-- **S-Expression Syntax**: Reduces generation errors through uniform structure
-- **Host Boundary Clarity**: Makes intent fulfillment logic explicit and auditable
-- **Type System Safety**: Provides guardrails for LLM-generated code
-- **Macro Extensibility**: Enables LLMs to create domain-specific constructs
-
-### Host Boundary Mechanism
-The `ExecutionOutcome` enum implements **control flow inversion**:
-- `Complete(value)`: Pure computation finished
-- `RequiresHost(call)`: Host intervention needed
-
-### Security by Design
-Every host call includes:
-- **Capability ID**: Fully qualified operation identifier
-- **Security Context**: Agent, intent, and permission information
-- **Causal Context**: Audit trail for governance
-- **Metadata**: Performance and reliability hints
-
-### Type System Approach
-**Structural typing** with **runtime validation**:
-- Optional type annotations
-- Refinement types with logical predicates
-- Union/intersection types for composition
-- Gradual adoption without breaking changes
-
-## Relationship to CCOS
-
-RTFS serves as CCOS's **computational substrate**:
-
-- **Pure Logic Layer**: Deterministic computation
-- **Capability Marketplace**: Service discovery and invocation
-- **Governance Kernel**: Security and audit infrastructure
-- **Causal Chain**: Immutable audit trails
-
 ## Implementation Status
 
-These specifications document both **implemented features** and **design targets** for RTFS 2.0. The table below shows the current implementation status of each component:
+These specifications document both **implemented features** and **design targets** for RTFS 2.0. The table below shows the current implementation status of each core engine component:
 
 | Component | Status | Notes |
 |-----------|--------|-------|
 | **AST** | ✅ **Implemented** | Comprehensive expression types |
 | **Parser** | ✅ **Implemented** | Pest grammar with full S-expression support |
 | **Runtime** | ✅ **Implemented** | Yield-based host boundary with `ExecutionOutcome::RequiresHost` |
-| **Type System** | ⚠️ **Partial** | Basic structural type checking with predicates, but lacks formal subtyping system and advanced inference |
+| **Type System** | ⚠️ **Partial** | Strong runtime validation + IR type checker exists; inference/refinement coverage is still evolving |
 | **Standard Library** | ✅ **Implemented** | Pure functions only; effectful operations via capabilities |
 | **Host Integration** | ✅ **Implemented** | CCOS capability invocation with security context |
-| **Module System** | ⚠️ **Partial** | Module registry exists but syntax support limited |
-| **Macro System** | ✅ **Implemented** | Full implementation with `defmacro`, quasiquote, unquote, unquote-splicing via `MacroExpander` |
+| **Module System** | ✅ **Implemented** | `module` + `import` + `(:exports [...])` supported; docstrings/versioning/tooling are still partial |
+| **Macro System** | ✅ **Implemented** | Full implementation with `defmacro`, quasiquote |
 | **Pattern Matching** | ✅ **Implemented** | Comprehensive destructuring in AST and runtime |
-| **Error Handling** | ✅ **Implemented** | `try/catch/finally` special forms |
-| **Streaming** | ⚠️ **Via Capabilities** | Host-mediated through capability system |
-| **Concurrency** | ⚠️ **Via Capabilities** | Host-mediated parallelism |
-| **Performance Optimization** | ✅ **Implemented** | IR compilation, MicroVM, bytecode support |
-| **Security Model** | ✅ **Implemented** | Runtime context, capability-based security |
-
-### Detailed Status by Specification
-
-| Specification | Implementation Status | Key Features |
-|---------------|----------------------|--------------|
-| **00-philosophy.md** | ✅ **Accurate** | Core principles match implementation |
-| **01-language-overview.md** | ⚠️ **Mostly Accurate** | Some examples may need verification |
-| **02-syntax-and-grammar.md** | ✅ **Accurate** | Grammar matches parser implementation |
-| **03-core-syntax-data-types.md** | ✅ **Accurate** | Data types match AST implementation |
-| **04-evaluation-and-runtime.md** | ✅ **Accurate** | Evaluation model correctly documented |
-| **04-host-boundary.md** | ✅ **Accurate** | Host interaction model implemented |
-| **05-pattern-matching-destructuring.md** | ✅ **Accurate** | Pattern matching fully implemented |
-| **07-module-system.md** | ⚠️ **Partial** | Module registry exists; syntax TBD |
-| **08-macro-system.md** | ✅ **Accurate** | Fully implemented macro system |
-| **09-streaming-capabilities.md** | ⚠️ **Via Capabilities** | Streaming through host-mediated capabilities |
-| **10-standard-library.md** | ✅ **Mostly Accurate** | Pure functions implemented; verify completeness |
-| **11-architecture-analysis.md** | ✅ **Accurate** | Architectural analysis valid |
-| **12-ir-and-compilation.md** | ✅ **Accurate** | IR compilation implemented |
-| **13-type-system.md** | ⚠️ **Formal Spec/Partial Impl** | Formal specification; implementation lacks formal proofs |
-| **14-concurrency-model.md** | ⚠️ **Via Capabilities** | Host-mediated concurrency |
-| **15-error-handling-recovery.md** | ✅ **Accurate** | Error handling implemented |
-| **16-security-model.md** | ✅ **Accurate** | Security model implemented |
-| **17-performance-optimization.md** | ✅ **Accurate** | Optimization strategies implemented |
-| **18-interoperability.md** | ✅ **Accurate** | Host integration implemented |
-
-> **Note**: Specifications marked with ⚠️ or 🚧 may describe design targets or partially implemented features. See individual specification files for detailed implementation notes.
+| **Concurrency / Steps** | ⚠️ **Partial** | `step-parallel` exists, but evaluator execution is currently sequential with deterministic aggregation; host-mediated parallelism is still being fleshed out |
+| **Streaming** | ⚠️ **Partial** | Primarily host-mediated via capabilities; native streaming operators are not yet part of the core language |
+| **Metadata Support** | ⚠️ **Partial** | `^{:runtime.* ...}` hints propagate to Host; general metadata is not preserved as a runtime value / through IR compilation |
 
 ## Future Directions & Implementation Gaps
 
 The following areas represent future work or partially implemented features. These gaps are being addressed in ongoing development:
 
 ### Core Language Features
-- **Macro System Enhancement**: Advanced hygiene mechanisms and macro documentation
-- **Module System Syntax**: Complete module definition and import/export syntax
-- **Type System Enhancement**: Formal subtyping proofs, advanced inference, full union/intersection types
+- **Macro System Enhancement**: Advanced hygiene mechanisms, debugging tools, and macro documentation
+- **Module System Ergonomics**: Better module metadata (docstrings, versions), dependency tooling, packaging/registry conventions, and stronger import/export ergonomics
+- **Type System Enhancement**: More complete refinement predicates, inference improvements, and clearer “compile-time vs runtime validation” boundaries
+- **Concurrency Semantics**: Host-mediated parallel execution semantics beyond sequential evaluation (scheduling, determinism, merge policies, error aggregation)
 - **Streaming Primitives**: Native streaming operators (currently host-mediated via capabilities)
 
 ### LLM-Driven Development Priorities
@@ -272,205 +142,3 @@ RTFS 2.0 represents a significant evolution:
 - **Simplicity**: Reduced core language with host extensibility
 
 Migration tools and compatibility layers should be developed to ease transition.
-
-## RTFS 2.0 architecture (precise view)
-
-This section gives a precise, implementation-grounded view of RTFS 2.0, focusing on runtime architecture, purity, and the Host interaction that mediates all effects and mutations.
-
-### Core components
-
-- Parser and Grammar
-	- Grammar: `rtfs_compiler/src/rtfs.pest`
-	- Produces a well-typed AST for S-expressions, symbols, literals, lists, maps, lambdas, application, conditionals, and capability calls.
-- AST and Values
-	- AST: canonical representation of parsed RTFS forms
-	- Values: runtime representation (`rtfs::runtime::values::Value`) for numbers, strings, lists, maps, closures, and typed records
-- Type System (optional, structural)
-	- Type expressions (`rtfs::ast::TypeExpr`) annotate inputs/outputs (capabilities, plans)
-	- Bidirectional checking; runtime guards for safety when annotations are present
-- Evaluator
-	- Pure evaluator that reduces expressions to values
-	- Does not perform side effects; yields to Host via control values
-- Environment/Scopes
-	- Lexically scoped frames for symbol resolution
-	- Immutable-by-default evaluation; definitions introduce bindings without mutating external systems
-- Standard Libraries
-	- Secure stdlib: pure, deterministic functions (math, logic, data)
-	- Insecure/effectful ops are not executed by the evaluator directly; they route through Host
-- Host Boundary
-	- A strict interface that performs all effects on behalf of RTFS (I/O, network, filesystem, capability calls, state)
-	- Gatekept by Governance + Marketplace
-
-### Runtime component diagram
-
-```mermaid
-flowchart LR
-		subgraph RTFS_Runtime[RTFS Runtime]
-			Parser[Parser] --> AST[AST]
-			AST --> Evaluator[Evaluator]
-			Evaluator --> Env[Environment/Scopes]
-			Evaluator --> PureStdlib[Pure Stdlib]
-			Evaluator -->|yields| Outcome{ExecutionOutcome}
-		end
-
-		Outcome -- RequiresHost(call) --> Host[Host Interface]
-		Host --> Governance[Governance Kernel]
-		Governance --> Marketplace[Capability Marketplace]
-		Marketplace --> Providers[Providers:<br/>OpenAPI, MCP, Local, Stream]
-		Providers --> External[External Systems]
-		External --> Providers
-		Providers --> Host
-		Host --> Evaluator
-```
-
-Key property: the evaluator is pure. Any effectful intent (HTTP call, file write, model inference, tool use, long-running stream) is represented as an explicit Host request. The Host performs the action under policy and feeds results back into evaluation.
-
-### Execution flow (sequence)
-
-```mermaid
-sequenceDiagram
-		autonumber
-		actor Dev as RTFS Program/Plan
-		participant Eval as Evaluator
-		participant Host as Host Interface
-		participant Gov as Governance Kernel
-		participant Mkt as Capability Marketplace
-		participant Prov as Provider (OpenAPI/MCP/Local)
-		participant Ext as External System
-
-		Dev->>Eval: Evaluate expression
-		Eval-->>Eval: Reduce pure subexpressions
-		Eval->>Host: RequiresHost(CapabilityCall, RuntimeContext)
-		Host->>Gov: Authorize(RuntimeContext, Capability, Inputs)
-		Gov-->>Host: Permit/Deny (+ policy rewrites)
-		alt permitted
-			Host->>Mkt: Resolve(capability_id)
-			Mkt-->>Host: Executor + IO schema
-			Host->>Prov: Execute(inputs, context)
-			Prov->>Ext: Perform side effect
-			Ext-->>Prov: Result/Stream events
-			Prov-->>Host: Value or Stream handle
-			Host-->>Eval: ExecutionOutcome::Complete(Value)
-			Eval-->>Dev: Continue reduction with returned Value
-		else denied
-			Host-->>Eval: Error(RuntimeError::Security/Governance)
-			Eval-->>Dev: Propagate error
-		end
-```
-
-### Effect and mutation discipline
-
-- Purity
-	- RTFS evaluation is referentially transparent: given the same inputs, pure computation yields the same outputs.
-	- No hidden I/O or mutation; effects are first-class requests to the Host.
-- Mutations
-	- Language-level mutations (e.g., updating a map, building a new list) create new values; original values remain unchanged (persistent data structures).
-	- External mutations (filesystem, network, databases, agent state) are performed only by the Host after governance approval.
-- State
-	- Long-lived or cross-invocation state is hosted by capabilities (e.g., a stateful agent or session) and accessed through governed Host calls.
-	- The evaluator itself holds only ephemeral evaluation state (environments/frames).
-
-### Contracts: input/output schemas
-
-- Capabilities and plans may declare `input_schema`/`output_schema` using `TypeExpr`.
-- At runtime, the Host and/or executor can validate inputs/outputs, providing strong contracts for tool use and safety.
-
-### Streaming, progress, cancellation
-
-- RTFS supports streaming capabilities via the marketplace (duplex/bidirectional configs).
-- The Host mediates:
-	- Progress events: surfaced to the orchestrator/UI
-	- Cancellation: propagated to providers safely
-	- Backpressure and resource limits
-
-### Error semantics (concise)
-
-- Categories
-	- Parse/Type errors (compile-time)
-	- Runtime errors (arith, arity, unknown symbol)
-	- Governance denials (policy/security)
-	- Provider errors (network, protocol)
-- Behavior
-	- Errors are values that short-circuit to the caller unless captured
-	- Host returns structured errors; evaluator preserves purity by not partially applying effects
-
-### Minimal examples
-
-Pure computation:
-
-```clojure
-;; Add two numbers
-(+ 1 2) ;=> 3
-```
-
-Capability definition (conceptual RTFS form):
-
-```clojure
-(capability "http/example.get"
-	:name "Example GET"
-	:input-schema {:url :string}
-	:output-schema {:status :int :body :string}
-	:implementation
-	(fn [input] (host/call :http.get {:url (. input :url)})))
-```
-
-Invocation:
-
-```clojure
-(http/example.get {:url "https://example.com"})
-; Evaluator yields RequiresHost(capability_call)
-; Host authorizes and calls provider; returns {:status 200 :body "..."}
-```
-
-Plan-as-capability (using `:implementation` plan body):
-
-```clojure
-(capability "demo/pipeline"
-	:name "Demo pipeline"
-	:input-schema {:x :int}
-	:output-schema :int
-	:implementation
-	(fn [input]
-		(let [a (+ (. input :x) 1)
-			  b (* a 2)]
-			b)))
-```
-
-This registers a local capability whose handler evaluates the pure RTFS plan body with an `input` binding; any effects inside would route through the Host.
-
-### Security and governance
-
-- Every Host call is accompanied by a `RuntimeContext` (agent identity, intent, plan, permissions, provenance) used by the Governance Kernel.
-- Policies can:
-	- Allow/deny
-	- Require human approval (interactive)
-	- Rewrite/limit inputs (rate limits, redactions)
-	- Elevate only under attestation
-- The Causal Chain records capability calls/results for audit.
-
-### Practical implications
-
-- Deterministic core enables reliable testing and replay of LLM-generated programs.
-- Capability contracts (schemas) and governance policies form strong guardrails for autonomous workflows.
-- The Host boundary creates a clean seam to integrate new providers (OpenAPI, MCP, A2A, streaming) without changing the language core.
-
-### Performance trade-offs and mitigations
-
-Introducing the Host boundary adds deliberate indirections (value marshaling, authorization checks, marketplace resolution, provider dispatch, and often an external network hop). This increases latency compared to calling an effect directly from the evaluator. We accept this overhead to prioritize auditability, security, reproducibility, and centralized policy control. The result is a runtime where every effect is observable, governable, and attributable in the Causal Chain.
-
-Mitigations (when performance matters):
-- Reduce crossings: fuse pure logic on the evaluator side; group related effects into a single capability; prefer bulk endpoints.
-- Stream instead of polling: use streaming providers to reduce round-trips and enable backpressure-aware progress.
-- Cache smartly: cache capability discovery and policy decisions with short TTLs; reuse authenticated sessions/clients.
-- Co-locate components: run Host and providers in-process for low-latency paths; minimize (de)serialization where safe.
-- Push down filters: move filtering/aggregation to providers when permissible to shrink payloads.
-- Asynchrony and batching: pipeline independent host calls; batch small calls into a single governed action.
-
----
-
-If you want deeper internals, see also:
-- `rtfs_compiler/src/runtime/secure_stdlib.rs` (pure functions)
-- `rtfs_compiler/src/runtime/stdlib.rs` (extended library)
-- `rtfs_compiler/src/runtime/security.rs` (RuntimeContext)
-- `ccos/src/capability_marketplace/types.rs` (providers, streaming)
-- `ccos/src/environment.rs` (plan-to-capability registration and Host wiring)
