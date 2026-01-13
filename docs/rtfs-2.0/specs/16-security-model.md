@@ -85,12 +85,9 @@ RTFS implements a security model based on capability-based security, where acces
 ### Host Calls
 
 ```rtfs
-;; Secure host call
-(def result (host-call :fs.read {:path "/file.txt"}))
-
-;; Host call with capability
-(with-capability fs-cap
-  (host-call :fs.write {:path "/file.txt" :content "data"}))
+;; Secure host call using the 'call' interface
+(let [result (call :ccos.io.read-file "file.txt")]
+  (call :ccos.io.log (str "Read result: " result)))
 ```
 
 ### Host Interface Definition

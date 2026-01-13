@@ -12,7 +12,11 @@ You can choose the theory you want to build this this language. But I want the c
 
 Remember that this language is made for YOU, not for me.
 
+
+
 ---
+> This shows the first response to design a language called ACL that would become RTFS
+
 
 ## Project Plan: AI-Centric Language (ACL)
 

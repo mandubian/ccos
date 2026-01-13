@@ -3,7 +3,7 @@
 **Status:** Draft for Review  
 **Version:** 1.1  
 **Date:** 2025-01-10  
-**Related:** [000: Architecture](./000-ccos-architecture-new.md), [002: Plans](./002-plans-and-orchestration-new.md), [006: Arbiter](./006-arbiter-and-cognitive-control.md), [030: Capabilities](./030-capability-system-architecture.md), [035: Two-Tier Governance](./035-two-tier-governance.md)  
+**Related:** [000: Architecture](./000-ccos-architecture-new.md), [002: Plans](./002-plans-and-orchestration-new.md), [006: Cognitive Engine](./006-cognitive-engine-and-cognitive-control.md), [030: Capabilities](./030-capability-system-architecture.md), [035: Two-Tier Governance](./035-two-tier-governance.md)  
 
 ## Introduction: The Immutable Audit Backbone
 
@@ -89,7 +89,7 @@ Orchestrator logs automatically:
 1. Execution to A4 yield → Pause (e.g., error in :nlp).
 2. Chain: Up to A4, with env snapshot (immutable results so far).
 3. Resume: Verify chain hash → Replay pure A1/A3 (deterministic, fast) → Re-issue yield (idempotent key prevents dupes) → Continue to A5.
-4. Learning: Query chain (`:chain.query {:intent :123 :type :YieldFailed}`) → Arbiter generates optimized plan (e.g., batch smaller).
+4. Learning: Query chain (`:chain.query {:intent :123 :type :YieldFailed}`) → Cognitive Engine generates optimized plan (e.g., batch smaller).
 
 ### 4. API and Verifiability
 Host capabilities:
@@ -129,7 +129,7 @@ Minimal example entries (under the failed yield at `A4` from the tree above):
 {:action-id :act-701
  :parent-action-id :act-700
  :type :DelegationApproved
- :provenance {:arbiter :primary
+ :provenance {:cognitive engine :primary
               :kernel-decision :budget-ok
               :attestation-id :agent-sig-abc}}
 

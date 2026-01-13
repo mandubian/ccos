@@ -82,4 +82,4 @@ The behavior of the judge is controlled by the `SemanticJudgePolicy` in the `Con
 
 ## Integration with Repair Loop
 
-When a plan is rejected by the Semantic Judge, the reasoning is fed back to the `Arbiter` or `IterativePlanner`. This allows the system to automatically repair the plan by providing the specific semantic error as context for the next generation attempt.
+When a plan is rejected by the Semantic Judge, the reasoning is fed back to the `Cognitive Engine` or `IterativePlanner`. This allows the system to automatically repair the plan by providing the specific semantic error as context for the next generation attempt.

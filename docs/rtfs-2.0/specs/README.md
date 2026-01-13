@@ -38,7 +38,7 @@ Below is the complete list of RTFS 2.0 specifications. Each document focuses on 
 | 07 | [Module System](07-module-system.md) | `module`, `import`, exports, module registry |
 | 08 | [Macro System](08-macro-system.md) | Metaprogramming, `defmacro`, Quasiquotation |
 | 09 | [Streaming Capabilities](09-streaming-capabilities.md) | Streaming outcomes and host-mediated streams |
-| 10 | [Standard Library](10-standard-library.md) | Comprehensive function reference for pure operations |
+| 10 | [Standard Library](10-standard-library.md) | Pure Core (Secure) and Host-Interface (Extended) libraries |
 | 11 | [Architecture Overview](11-architecture-analysis.md) | System components, diagrams, and LLM-fit analysis |
 | 12 | [IR & Compilation](12-ir-and-compilation.md) | Lowering to S-Expression IR and Bytecode |
 | 13 | [Type System](13-type-system.md) | Formal typing rules, Subtyping, and Validation |
@@ -70,7 +70,7 @@ These specifications document both **implemented features** and **design targets
 | **Parser** | ✅ **Implemented** | Pest grammar with full S-expression support |
 | **Runtime** | ✅ **Implemented** | Yield-based host boundary with `ExecutionOutcome::RequiresHost` |
 | **Type System** | ⚠️ **Partial** | Strong runtime validation + IR type checker exists; inference/refinement coverage is still evolving |
-| **Standard Library** | ✅ **Implemented** | Pure functions only; effectful operations via capabilities |
+| **Standard Library** | ✅ **Implemented** | Layered design: Secure Core (pure) + Extended (host-interface) |
 | **Host Integration** | ✅ **Implemented** | CCOS capability invocation with security context |
 | **Module System** | ✅ **Implemented** | `module` + `import` + `(:exports [...])` supported; docstrings/versioning/tooling are still partial |
 | **Macro System** | ✅ **Implemented** | Full implementation with `defmacro`, quasiquote |
@@ -115,9 +115,10 @@ For new readers:
 1. Start with **00-philosophy.md** for conceptual foundation
 2. Read **01-language-overview.md** for language basics
 3. Study **04-evaluation-and-runtime.md** for execution model
-4. Read **13-type-system.md** for the formal type system specification
-5. Explore **04-host-boundary.md** for CCOS integration
-6. Review **11-architecture-analysis.md** for LLM-driven development insights
+4. Review **10-standard-library.md** for available pure and host operations
+5. Read **13-type-system.md** for the formal type system specification
+6. Explore **04-host-boundary.md** for CCOS integration
+7. Review **11-architecture-analysis.md** for LLM-driven development insights
 
 For LLM developers:
 - Focus on **02-syntax-and-grammar.md** for generation patterns

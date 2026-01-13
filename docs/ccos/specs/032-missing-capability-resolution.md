@@ -785,7 +785,7 @@ The synthesis prompts include explicit warnings about Clojure syntax that is NOT
 | Regex literals | `#"pattern"` | String functions |
 | `cons` | `(cons x list)` | `(conj coll x)` |
 
-These warnings are documented in `assets/prompts/arbiter/capability_synthesis/v1/anti_patterns.md`.
+These warnings are documented in `assets/prompts/cognitive_engine/capability_synthesis/v1/anti_patterns.md`.
 
 ---
 

@@ -4,6 +4,9 @@
 
 This guide explains how to **use** MCP (Model Context Protocol) capabilities in CCOS, including session management, authentication, and calling MCP tools from RTFS code.
 
+> If you’re looking to **run CCOS as an MCP server** (so Cursor/Claude/any MCP client can call CCOS tools), see:
+> - [`ccos-mcp-server.md`](ccos-mcp-server.md)
+
 ## Quick Start
 
 ### Prerequisites

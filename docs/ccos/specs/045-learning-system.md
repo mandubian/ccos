@@ -58,7 +58,7 @@ let patterns = working_memory.recall_patterns(capability_id).await;
 
 ### 3. Pattern Recall
 
-During plan generation, `DelegatingArbiter` recalls relevant patterns:
+During plan generation, the delegating cognitive engine recalls relevant patterns:
 
 ```rust
 async fn recall_patterns_for_intent(&self, intent: &Intent) -> Vec<PlanModification> {
@@ -73,7 +73,7 @@ async fn recall_patterns_for_intent(&self, intent: &Intent) -> Vec<PlanModificat
 }
 ```
 
-**Location**: `arbiter/delegating_arbiter.rs`
+**Location**: `cognitive_engine/delegating_engine.rs`
 
 ### 4. Error→Hint Mapping
 
@@ -86,7 +86,7 @@ async fn recall_patterns_for_intent(&self, intent: &Intent) -> Vec<PlanModificat
 | RateLimitError | `rate-limit` + `retry` |
 | LLMError | `fallback` + `circuit-breaker` |
 
-**Location**: `arbiter/delegating_arbiter.rs` - `pattern_to_modification_simple()`
+**Location**: `cognitive_engine/delegating_engine.rs` - `pattern_to_modification_simple()`
 
 ### 5. Plan Augmentation
 
@@ -110,7 +110,7 @@ pub fn augment_plan_with_learning(
 - `inject_rate_limit_metadata(source, target_cap)`
 - `inject_metrics_metadata(source, target_cap, emit_to_chain)`
 
-**Location**: `arbiter/learning_augmenter.rs`
+**Location**: `cognitive_engine/learning_augmenter.rs`
 
 ### 6. Hint Execution
 
@@ -156,8 +156,8 @@ circuit_breaker = true
 |-----------|----------|
 | Pattern extraction | `learning/capabilities.rs` |
 | Working memory | `working_memory.rs` |
-| Arbiter integration | `arbiter/delegating_arbiter.rs` |
-| Plan augmentation | `arbiter/learning_augmenter.rs` |
+| Cognitive Engine integration | `cognitive_engine/delegating_engine.rs` |
+| Plan augmentation | `cognitive_engine/learning_augmenter.rs` |
 | Hint handlers | `hints/handlers/*.rs` |
 | Hint registry | `hints/registry.rs` |
 

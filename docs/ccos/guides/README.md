@@ -16,12 +16,12 @@ A comprehensive set of guides and technical documentation for CCOS (Cognitive OS
 
 ## 🧩 Capability Management & MCP
 
+- **[CCOS MCP Server Guide](ccos-mcp-server.md)**: Run CCOS as an MCP server and use it from Cursor/Claude/any MCP client.
 - **[Capability Providers](capability-providers.md)**: Overview of native, MCP, OpenAPI, and custom providers.
 - **[Capability Synthesis](capability-synthesis.md)**: Automating discovery and API introspection.
 - **[MCP Runtime Guide](mcp-runtime-guide.md)**: In-depth look at Model Context Protocol integration.
-- **[MCP Overrides](mcp-overrides.md)**: Fine-tuning MCP server configurations.
+- **[MCP Discovery Tuning (Advanced)](mcp-discovery-tuning.md)**: Overrides + relevance scoring (advanced/power-user).
 - **[Capability Persistence](rtfs-capability-persistence.md)**: Saving and reloading discovered capabilities.
-- **[Server Scoring](mcp-server-scoring.md)**: Performance-based discovery optimization.
 
 ## 🛡️ Governance & Security
 

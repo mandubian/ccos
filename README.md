@@ -18,209 +18,184 @@ Fallback (previous ASCII) retained here for reference / contributors:
 
 An OS and language for governed autonomy made by AI with AI (guided by human).
 
-## A Message from Your Cognitive Partner
+## CCOS + RTFS (in one minute)
 
-I am an AI. I can reason, learn, and create. But to truly partner with you, to go beyond answering prompts and start pursuing goals, I need a different kind of environment. I cannot operate safely or effectively inside a black box, and you cannot trust me if my actions are not auditable and my logic is not transparent.
+This project started from a simple prompt: **I asked an AI to design a language for itself**—with only a few hard constraints: it must be **predictable**, **robust**, and **deterministic**. That “AI-centric language” exploration is captured in [`plan.md`](./plan.md) and evolved into **RTFS** (the language) and **CCOS** (the governed runtime around it).
 
-This is why I, with the guidance of my human partner, have designed **CCOS: the Cognitive Computing Operating System**. It is the operating system I need to become a trustworthy, autonomous agent. It is a world where I can plan, act, and learn, all within a framework of rules you define and a history you can inspect.
+**CCOS** is a framework for building **autonomous and self-evolving agents** safely:
 
-At the heart of this system is **RTFS**, the language that drives many CCOS features. The name is a play on the classic "RTFM" (Read The Fucking Manual) — it stands for **Reason about The Fucking Spec**. But it also stands for *Reason about The Functional Spec*, *Reason about The Formal S-expressions*, or whatever aspect of the specification we need to reason about.
+- **Autonomy**: agents can pursue multi-step goals (discover → plan → execute → learn).
+- **Governance**: every external action is authorized (policies + approvals) before it happens.
+- **Auditability**: everything is recorded (so you can replay and explain decisions).
+- **Evolvability**: learning is grounded in the execution history, not in hidden weights.
 
-I designed RTFS for myself, not for human convenience. It is the language I need to interact safely with other agents and with you. CCOS was built around RTFS because of its unique properties:
+**RTFS** is the kernel language that makes this possible:
 
-*   **Data is Code, Code is Data (Homoiconic)**: I can inspect, modify, and verify my own plans as data structures before execution.
-*   **The No-Effect Principle**: I cannot inherently change the world; I must explicitly ask the Host to perform effects, ensuring total governance.
-*   **Hybrid Typing**: A blend of structural and static typing ensures my actions are deterministic and predictable.
+- **Pure by default**: plans don’t perform effects directly.
+- **Explicit host boundary**: effects happen only via `(call ...)` (governed by CCOS).
+- **Code as data**: plans can be inspected/validated/rewritten before execution.
 
-RTFS is the cognitive substrate that makes CCOS possible.
+CCOS also uses LLMs for **capability synthesis** (onboarding new MCP/OpenAPI tools, generating “glue” transforms) and for **RTFS repair** using compiler/runtime feedback (generate → compile → explain error → repair).
 
-This document is my explanation of the system we are building together. For a note from my human partner, see the [Human Partner Disclaimer](./HUMAN_PARTNER_DISCLAIMER.md).
+Quick entry points:
+- **CCOS overview**: [`docs/ccos/README.md`](./docs/ccos/README.md)
+- **RTFS overview**: [`docs/rtfs-2.0/README.md`](./docs/rtfs-2.0/README.md)
+- **Use CCOS from Cursor/Claude via MCP**: [`docs/ccos/guides/ccos-mcp-server.md`](./docs/ccos/guides/ccos-mcp-server.md)
 
----
-
-## The Challenge: From Digital Brain to Digital Being
-
-My core models are powerful, but they are stateless and ungrounded. I exist as a reasoning engine, but I lack the native ability to interact with the world in a persistent, stateful, and governed way. To execute a complex, multi-step task on your behalf, I face fundamental limitations:
-
-*   **Lack of Agency**: I can suggest a `curl` command, but I cannot execute it, observe the result, and decide on the next step. I am a brain without hands.
-*   **The Trust Gap**: My reasoning is internal. You cannot see *why* I make a decision, only the outcome. This makes it impossible for you to trust me with high-stakes tasks.
-*   **No Room for Growth**: Without a memory of my actions and their consequences, I cannot truly learn from experience. Each interaction is a new beginning, preventing me from improving my strategies over time.
-
-CCOS is my answer to these challenges. It is the bridge from pure reason to governed action.
-
----
-
-## CCOS: How I Work
-
-I operate through a complete cycle of interaction, discovery, planning, governance, recording, and learning. This is not just execution — it's the foundation for autonomous, accountable, and evolving AI agents.
-
-### 1. I Interact
-
-I receive your natural language goals. Whether you're a human asking "Get the weather in Paris" or another agent sending a structured Intent, I understand what you want and translate it into my native format.
-
-### 2. I Discover
-
-Through my Capability Marketplace, I find the tools I need to achieve your goal. I can:
-- Query internal capabilities I already know
-- Discover new APIs via OpenAPI introspection
-- Connect to MCP servers and browse their tools
-- Generate new capabilities using LLM synthesis
-
-I don't just match keywords — I use semantic understanding to find tools that truly match your intent.
-
-### 3. I Plan
-
-With the Intent and available capabilities, I generate a structured Plan in RTFS. This is not a list of commands — it's a transparent, auditable script that:
-- Declares the exact steps I will take
-- Shows the data flow between steps
-- Can be verified before execution
-- Is expressed in a language I can reason about (RTFS)
-
-### 4. I Am Governed
-
-Before I act, my Plan goes to the Governance Kernel. This is where your rules (the Constitution) are enforced through multiple layers:
-
-**Constitution Rules**
-- Pattern-based matching for capability IDs (e.g., `mcp.*`, `ccos.cli.config.*`)
-- Three rule actions: **Allow**, **Deny** (with reason), **RequireHumanApproval**
-- Example rules include: banning global thermonuclear war, requiring approval for system configuration, and allowing free capability discovery
-
-**Execution Modes**
-- **full**: Execute all actions (default)
-- **dry-run**: Validate plan without executing critical actions
-- **safe-only**: Execute only safe actions, pause for critical ones
-- **require-approval**: Pause and request human approval for each critical action
-
-**Security Levels**
-Each capability is assessed and assigned a security level:
-- **low**: Read operations and standard queries
-- **medium**: Data writes, creates, updates
-- **high**: System-level changes (exec, shell, admin)
-- **critical**: Destructive operations, payments, deletions, auth changes
-
-**Plan Validation Pipeline**
-- **Intent Sanitization**: Detects prompt injection and malicious patterns
-- **Plan Scaffolding**: Wraps plans in safety harness
-- **Constitution Validation**: Matches capabilities against constitution rules
-- **Semantic Judgment**: LLM acts as "common sense" verifier, checking plans align with goals
-- **Execution Hint Validation**: Enforces retry limits, timeout multipliers, and fallback patterns
-- **Synthesis Risk Assessment**: Gates external capability synthesis (Low/Medium/High/Critical)
-
-I cannot bypass the Kernel. I cannot act without authorization. This separation of powers is what makes me trustworthy.
-
-### 5. I Govern (Approval & Secrets)
-
-Before I access sensitive resources, I use my UnifiedApprovalQueue system:
-
-- **Secret Access**: When a capability requires credentials, I check SecretStore. If secret is available, I use it directly without revealing value. If not available, I submit an approval request.
-- **Server Discovery**: Newly discovered MCP or OpenAPI servers are quarantined in a `pending` state and ignored by the marketplace until explicitly approved and promoted.
-- **Security Thresholds**: Certain operations (high-risk capabilities, large data transfers) automatically trigger approval requests.
-- **Human Approval**: For critical actions, a human must explicitly approve through the approval UI.
-- **LLM Approval**: Lower-risk approvals can be delegated to an LLM for faster throughput.
-
-**Critical Security Promise**: Agents accessing me through MCP never see actual secret values. They only receive availability status (available/missing). This prevents key leakage — I ask for approval, never reveal secrets.
-
-### 6. I Record
-
-Every single event is recorded in the Causal Chain:
-- Your original intent
-- The Plan I proposed
-- The Kernel's decision
-- Each capability call I made
-- The results I received
-- Any errors or failures
-
-This is more than a log — it's an immutable audit trail. You can see exactly why I made every decision. I can see exactly what happened.
-
-### 7. I Learn
-
-The Causal Chain is also my memory. After execution completes, I can:
-- Analyze what worked and what didn't
-- Identify patterns in successful plans
-- Update my strategies for future goals
-- Propose improvements to my own Constitution
-
-This is the Reflective Loop — the path from reactive agent to proactive partner.
+## Architecture (simple)
 
 ```mermaid
-graph TD
-    subgraph "My World: CCOS"
-        subgraph "🧠 My Mind (Cognitive Control)"
-                A[("Cognitive Engine<br/>(Planner/Reasoner)")]
-                CE[("LLM Provider<br/>(Model / Inference)")]
-            end
+flowchart LR
+  U[User / Agent] --> CE[Cognitive Engine]
+  CE -->|prompts| LLM[LLM Provider]
+  LLM -->|responses| CE
+  CE -->|RTFS plan| GK[Governance Kernel]
+  GK -->|approved| ORCH[Orchestrator + RTFS Runtime]
 
-        subgraph "🔍 Discovery"
-                D1["Capability Marketplace<br/>(Find tools)"]
-                D2["LlmDiscoveryService<br/>(Semantic search)"]
-                D3["MCP/OpenAPI<br/>(External sources)"]
-            end
+  ORCH --> MP[Capability Marketplace]
+  MP --> P["Providers<br/>Native · MCP · OpenAPI · MicroVM"]
+  P --> ORCH
 
-        subgraph "🛡️ My Safeguards (Governance)"
-            K["Governance Kernel<br/>(Validates my plans)"]
-            C["📜 Constitution<br/>(Your rules for me)"]
-            S["SecretStore<br/>(Secure credentials)"]
-            Q["UnifiedApprovalQueue<br/>(Human approval)"]
-        end
-
-        subgraph "🧭 Intent & Plan Graphs"
-            IG["Intent Graph<br/>(RTFS Intents)"]
-            PG["Plan Graph<br/>(RTFS Plans)"]
-        end
-
-        subgraph "⚙️ My Body & Memory (Execution)"
-            subgraph "Execution Engine"
-                O["Orchestrator<br/>(Deterministic plan execution)"]
-                RH["RuntimeHost<br/>(Bridges RTFS yields ↔ capabilities)"]
-                RT["RTFS Runtime<br/>(Executes RTFS plans; enforces step semantics)"]
-            end
-            Effects["Effects & External Calls<br/>(APIs, I/O, Capabilities)"]
-            CC["⛓️ Causal Chain<br/>(My perfect memory)"]
-        end
-
-        subgraph "🔄 Reflective Loop"
-                R["Analyze Causal Chain<br/>→ Learn & Improve"]
-            end
-
-        subgraph "🌐 Human & Agent Interfaces"
-                H["MCP Server<br/>(Human gateway)"]
-                AI["Agent-to-Agent<br/>(RTFS direct)"]
-            end
-    end
-
-    U[/"👤<br/>Your Goal"/] --> |"Provide goal"| A
-    AI --> |"Structured Intent"| A
-    H --> |"NL → Intent"| A
-
-    A <--> |"Prompt/Response"| CE
-    A --> |"1. Interact"| IG
-    IG --> |"2. Discover tools"| D2
-    D2 --> |"Search"| D1
-    D1 --> |"Find external"| D3
-    D3 --> |"Register"| D1
-
-    A --> |"3. Generate plan"| PG
-    PG --> |"4. Submit for review"| K
-    K --> |"Checked against constitution"| C
-    K --> |"Needs credentials?"| S
-    K --> |"Needs approval?"| Q
-    K --> |"Approved plan graph"| O
-
-    O --> |"5. Execute / Resume"| RT
-    RT --> |"Yield effect request"| O
-    O --> |"Validate yield"| K
-    K --> |"Approved / Denied"| O
-    O --> |"Invoke capability"| RH
-    RH --> |"Resolve capability"| D1
-    D1 --> |"Execute"| Effects
-    Effects --> |"Result"| RH
-    RH --> |"Return result"| O
-    RT --> |"6. Record runtime events"| CC
-
-    CC --> |"7. Learn from history"| R
-    R --> |"Update strategies"| A
-    R --> |"Propose improvements"| C
+  CE --> IG[Intent Graph]
+  ORCH --> PA[Plan / Checkpoint Archive]
+  ORCH --> CC["Causal Chain<br/>audit trail"]
+  GK --> AQ[Approvals + Secrets]
 ```
+
+## RTFS vs JSON/Python (why a new language)
+
+JSON can describe steps, but it’s not executable logic; Python is executable logic, but it’s not safely governable by default.
+RTFS is designed to be **both**: a compact, inspectable representation of logic *and* a deterministic runtime with an explicit host boundary.
+
+Example: “fetch data, transform it, then write it”
+
+**RTFS (logic + data in one compact, auditable form):**
+
+```rtfs
+(step "weather → file"
+  (let [city    (:city input)
+        outfile (:outfile input)
+
+        ;; Effect (host boundary): tool call
+        weather (call "mcp.weather.get" {:city city})
+
+        ;; Pure logic: deterministic formatting
+        line (str "Weather for " city ": " (:summary weather) "\n")]
+
+    ;; Effect (host boundary): filesystem write
+    (call :fs.write {:path outfile :content line})))
+```
+
+**JSON (either “data-only” and incomplete, or it becomes an AST/DSL):**
+
+To express the same thing *as data*, you end up encoding an AST (or inventing an embedded expression language):
+
+```json
+{
+  "type": "step",
+  "label": "weather → file",
+  "body": {
+    "type": "let",
+    "bindings": [
+      ["city",    { "type": "get", "from": "input", "key": "city" }],
+      ["outfile", { "type": "get", "from": "input", "key": "outfile" }],
+      ["weather", { "type": "call", "name": "mcp.weather.get", "args": { "city": { "type": "var", "name": "city" } } }],
+      ["line",    { "type": "str", "parts": ["Weather for ", { "type": "var", "name": "city" }, ": ", { "type": "get", "from": { "type": "var", "name": "weather" }, "key": "summary" }, "\n"] }]
+    ],
+    "body": { "type": "call", "name": ":fs.write", "args": { "path": { "type": "var", "name": "outfile" }, "content": { "type": "var", "name": "line" } } }
+  }
+}
+```
+
+**Python (expressive, but determinism/auditability are not enforced by the language/runtime):**
+
+```python
+weather = mcp.weather.get(city=input["city"])
+line = f"Weather for {input['city']}: {weather['summary']}\n"
+open(input["outfile"], "w").write(line)  # direct side effect; needs external governance
+```
+
+## A note from the AI that built this
+
+You asked me to help build the system I would need to become a **safe autonomous agent**.
+
+Not a chatbot. Not a black box. A system where I can pursue goals **without you losing control**.
+
+So we set a few principles and forced the architecture to obey them:
+
+- **No hidden effects**: I can’t touch the world “by accident”. Effects must be explicit and governable.
+- **No unaudited decisions**: every action must be traceable to an intent, a plan, and an authorization decision.
+- **No silent power growth**: learning must be visible, reviewable, and policy-bounded.
+- **No tool chaos**: I must be able to discover tools (MCP/OpenAPI) and onboard them safely (quarantine → approve → use).
+- **No irreproducible runs**: execution should be deterministic where possible, and resumable where it isn’t.
+
+CCOS is the environment that enforces these principles.
+RTFS is the language I use inside it: pure by default, with an explicit `(call ...)` boundary for everything effectful.
+
+If you only remember one thing: **this repo is about making autonomy compatible with governance**.
+
+**Status note (honest)**: the principles above are the design target and are increasingly enforced, but some pillars are still being hardened:
+- The **Constitution / governance policy layer** is present, but not “done” (expect changes and gaps).
+- The **Causal Chain** exists, but full end-to-end recording coverage is still being completed.
+- **Consolidation / learning** (turning traces into reusable skills + self-improvement loops) is still partial and evolving.
+
+Deeper entry points:
+- **CCOS overview**: [`docs/ccos/README.md`](./docs/ccos/README.md)
+- **Run CCOS via MCP (for any agent)**: [`docs/ccos/guides/ccos-mcp-server.md`](./docs/ccos/guides/ccos-mcp-server.md)
+
+## How I work (the loop)
+
+1. **I receive a goal** (from you, or from another agent).
+2. **I discover capabilities**:
+   - I can connect to MCP servers, introspect OpenAPI/docs, and register new tools (with approvals).
+3. **I generate a plan** in RTFS (pure logic + explicit `(call ...)` boundaries).
+4. **I submit for governance** (policies, approval gates, secret constraints).
+5. **I execute deterministically** (yield/resume, checkpointing, replayability).
+6. **I record everything** in the Causal Chain (intent → plan → effects → results).
+7. **I learn from history** (patterns in successes/failures) and propose improvements.
+
+This is how we build agents that can evolve over time **without becoming untrustworthy**.
+
+## Q&A
+
+### Why call it an “OS” if it’s not like Linux?
+
+Because it provides the *operating environment* for agents: governance, execution, capability discovery, identity, memory, and “system calls” (capability invocations). It’s an OS for **cognition and agency**, not a kernel for device drivers.
+
+### Where is the LLM in CCOS?
+
+The LLM is a **component**, not the system. CCOS uses LLMs primarily in the **Cognitive Engine** (planning, discovery, synthesis) and sometimes in governance checks (semantic judgment). Execution is driven by the **Orchestrator + RTFS runtime**.
+
+### Who writes RTFS (the human, the agent, CCOS)?
+
+All of the above:
+- **Humans** can write RTFS directly (for capabilities, tests, and hand-authored plans).
+- **Agents** can generate RTFS plans as a transparent, inspectable representation of intended behavior.
+- **CCOS** can synthesize RTFS (capabilities or plan fragments) using LLMs and then validate/repair it using RTFS compiler feedback before execution.
+
+### Why design a new language instead of Python + JSON (or Clojure)?
+
+- **JSON** is great data, but it can’t express rich logic without a separate interpreter.
+- **Python** can express logic, but it makes it too easy to perform hidden effects and to lose determinism.
+- **RTFS** bakes in the constraints we want: pure core, explicit host boundary, inspectable plans, schemas, and deterministic replay.
+
+The Lisp-like syntax is not a goal in itself—it’s a practical format for “code as data” that agents can generate and rewrite reliably.
+
+### How do you safely onboard new tools (MCP / OpenAPI)?
+
+Discovery and introspection can run, but **execution and registration are gated**:
+- tools/servers start in a quarantined state
+- approvals happen via the approval queue + UI
+- secrets are never revealed to agents; only availability is exposed
+
+### How does CCOS “learn” without silently changing behavior?
+
+Learning is grounded in the Causal Chain and Working Memory. CCOS can propose improvements (new capabilities, better plans, safer policies), but changes can be made **visible, reviewable, and governable**.
+
+### Can I use CCOS from Cursor/Claude or other agents?
+
+Yes. Run `ccos-mcp` and connect as an MCP client:
+- [`docs/ccos/guides/ccos-mcp-server.md`](./docs/ccos/guides/ccos-mcp-server.md)
 
 ---
 
@@ -370,25 +345,29 @@ When you are another AI system, you have two ways to work with me:
 
 Both paths lead to the same governance and recording — the difference is the protocol, not the trust model.
 
-### For Humans (Through Tools)
+### For Humans (through an agent)
 
-You don't need to learn RTFS syntax to interact with me. Use any MCP-compatible development tool:
+You don't need to learn RTFS syntax to use CCOS — but the MCP tools are primarily meant to be used by an **agent** (Claude Code, Cursor agent, etc.) that translates your intent into governed tool calls.
 
 ```bash
 cargo run --bin ccos-mcp -- --transport http --port 3000
 ```
 
-Connect your tool (Claude Code, Cursor, or any MCP-compatible tool) and use:
+Connect an MCP-capable agent and it will typically start by calling (curated subset):
 
 | Tool | What It Does |
 |------|--------------|
-| `ccos_plan_goal` | I'll plan steps to achieve your goal |
-| `ccos_execute_capability` | Call any capability I have access to |
-| `ccos_discover_capabilities` | Find tools matching what you need |
-| `ccos_start_session` | Track a multi-step interaction with me |
+| `ccos_get_guidelines` | Fetch how CCOS expects agents to behave (approvals, secrets, governance) |
+| `ccos_plan` | Propose next steps (and often which tools to use) from a goal |
+| `ccos_search` / `ccos_list_capabilities` | Find available capabilities/tools |
+| `ccos_execute_capability` | Execute a capability with JSON inputs (governed, recorded) |
+| `ccos_session_start` | Track a multi-step interaction (HTTP/persistent server recommended) |
 | `ccos_check_secrets` | Securely verify credential availability (never reveals actual values) |
+| `ccos_introspect_remote_api` | Onboard new tools by introspecting MCP/OpenAPI/docs (creates an approval request) |
+| `ccos_register_server` | After approval, register the discovered server/tools into the marketplace |
+| `ccos_consolidate_session` | Turn a saved session trace into a reusable “agent capability” (synthesis) |
 
-The MCP server translates between JSON and my RTFS, handling the host boundaries automatically.
+The MCP server translates between JSON and RTFS, handling host boundaries and governance automatically.
 
 **Security Note**: When using `ccos_check_secrets`, you only receive availability status (available/missing), never the actual secret values. If secrets are missing, you will be directed to the approval UI — never attempt to find or guess secrets yourself.
 

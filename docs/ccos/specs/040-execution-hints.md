@@ -198,12 +198,12 @@ HintHandlerRegistry.execute_with_hints → 7 Handlers Applied
 | LLMError | `fallback` + `circuit-breaker` |
 
 ### Related Files
-- `arbiter/learning_augmenter.rs` - Metadata injection functions
-- `arbiter/delegating_arbiter.rs` - Pattern→modification mapping
+- `cognitive_engine/learning_augmenter.rs` - Metadata injection functions
+- `cognitive_engine/delegating_engine.rs` - Pattern→modification mapping
 
 ## Related Specifications
 
 - [003-causal-chain.md](003-causal-chain.md) - Audit trail and provenance
-- [006-arbiter-and-cognitive-control.md](006-arbiter-and-cognitive-control.md) - Plan generation
+- [006-cognitive engine-and-cognitive-control.md](006-cognitive engine-and-cognitive-control.md) - Plan generation
 - [030-capability-system-architecture.md](030-capability-system-architecture.md) - Capability execution
 - [035-two-tier-governance.md](035-two-tier-governance.md) - Governance architecture

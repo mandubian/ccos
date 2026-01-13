@@ -1,11 +1,11 @@
-# CCOS Specification 006: Delegating Arbiter RTFS-First with JSON Fallback
+# CCOS Specification 006: Delegating Cognitive Engine RTFS-First with JSON Fallback
 
-**Status: Implemented**
-**Scope**: Defines the parsing strategy for Arbiter responses (RTFS primary, JSON fallback).
+**Status: ⚠️ Partial / Needs re-validation**
+**Scope**: Documents the **RTFS-first** intent generation path with a **JSON fallback** for the cognitive-engine planning layer.
 
 ## Overview
 
-The `DelegatingArbiter` now implements a RTFS-first approach for intent generation with graceful JSON fallback. This ensures we prioritize the native RTFS format while maintaining compatibility with LLMs that prefer to respond in JSON.
+The cognitive-engine delegating layer uses a **RTFS-first** approach for intent generation, with a **graceful JSON fallback**. This prioritizes the native RTFS format while keeping compatibility with LLMs that still respond in JSON.
 
 ## Implementation
 
@@ -66,10 +66,10 @@ The `DelegatingArbiter` now implements a RTFS-first approach for intent generati
 
 ### Unit Tests
 
-1. **`test_intent_generation`**: Verifies RTFS parsing from stub provider
-2. **`test_json_fallback_parsing`**: Explicitly tests JSON fallback path
-3. **`test_agent_registry`**: Ensures agent selection still works
-4. **`test_delegating_arbiter_creation`**: Basic initialization test
+This behavior should be covered by tests around:
+- RTFS parse success path
+- JSON fallback parse path
+- delegating engine initialization
 
 ### Test Results
 ```
@@ -80,10 +80,7 @@ test result: ok. 4 passed; 0 failed
 
 ## Logging
 
-The system logs parsing attempts to `logs/arbiter_llm.log`:
-- Event: `llm_intent_generation` - Raw LLM response
-- Format detection and fallback triggers
-- Success/failure of each parsing method
+Parsing attempts should be visible in the system/runtime logs (format detection, fallback triggers, success/failure).
 
 ## Future Enhancements
 
@@ -95,10 +92,9 @@ The system logs parsing attempts to `logs/arbiter_llm.log`:
 
 ## Related Files
 
-- `ccos/src/arbiter/delegating_arbiter.rs` - Main implementation
-- `ccos/src/arbiter/llm_provider.rs` - LLM provider interface
-- `rtfs/src/parser/mod.rs` - RTFS parser (formerly `parser.rs`)
-- `logs/arbiter_llm.log` - Runtime logging
+- `ccos/src/cognitive_engine/delegating_engine.rs` - Delegating engine implementation
+- `ccos/src/cognitive_engine/llm_provider.rs` - LLM provider interface and prompt wiring
+- `rtfs/src/parser/` - RTFS parser
 
 ## Migration Notes
 

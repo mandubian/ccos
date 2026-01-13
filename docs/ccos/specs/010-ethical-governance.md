@@ -3,7 +3,7 @@
 **Status:** Draft for Review  
 **Version:** 1.0  
 **Date:** 2025-09-20  
-**Related:** [000: Architecture](./000-ccos-architecture-new.md), [005: Security](./005-security-and-context-new.md), [006: Arbiter](./006-arbiter-and-cognitive-control-new.md)  
+**Related:** [000: Architecture](./000-ccos-architecture-new.md), [005: Security](./005-security-and-context-new.md), [006: Cognitive Engine](./006-cognitive-engine-and-cognitive-control.md)  
 
 ## Introduction: Human-Aligned Rules for AI Systems
 
@@ -14,7 +14,7 @@ Why foundational? AI can misalign; Constitution provides enforceable boundaries.
 ## Core Concepts
 
 ### 1. Constitution Structure
-Signed document (YAML/RTFS Map) with rules, scoped to components (plans, yields, arbiters).
+Signed document (YAML/RTFS Map) with rules, scoped to components (plans, yields, cognitive engines).
 
 **Fields**:
 - `:version`: Semantic.
@@ -44,7 +44,7 @@ graph TD
     DEC[Digital Ethics Committee<br/>(Human Review)]
     Const[Constitution<br/>(Signed Rules)]
     Kernel[Governance Kernel<br/>Loads + Verifies]
-    Event[Event: Yield/Plan<br/>From Orchestrator/Arbiter]
+    Event[Event: Yield/Plan<br/>From Orchestrator/Cognitive Engine]
     Eval[Eval Rules<br/>(RTFS IR on Event)]
     Action[Action: Allow/Deny/Log]
     Chain[Log to Causal Chain<br/>(Provenance)]
@@ -62,10 +62,10 @@ graph TD
 - **Reentrancy**: Rule evals are pure—resume re-applies without state drift; logs include rule ID.
 
 **Sample Application** (Yield Validation):
-- Yield :data.export {:sensitive true} → Rule eval: Condition false → Deny, chain `{:type :GovernanceDenial, :rule-id :privacy-1}` → Arbiter adapts.
+- Yield :data.export {:sensitive true} → Rule eval: Condition false → Deny, chain `{:type :GovernanceDenial, :rule-id :privacy-1}` → Cognitive Engine adapts.
 
 ### 4. Advanced: Formal Verification
-Kernel's rule engine can be formally verified (e.g., via Rust proofs) to ensure no bypasses. Arbiter federation includes Ethics sub-arbiter for pre-checks.
+Kernel's rule engine can be formally verified (e.g., via Rust proofs) to ensure no bypasses. Cognitive Engine federation includes Ethics sub-cognitive engine for pre-checks.
 
 ### 5. Semantic Plan Judgment
 Beyond formal rules, the Kernel employs a **Semantic Plan Judge** (see [041: Semantic Plan Judge](./041-semantic-plan-judge.md)) to perform "common sense" validation. This ensures that even if a plan follows all formal rules, it is blocked if it is semantically nonsensical or misaligned with the user's goal.

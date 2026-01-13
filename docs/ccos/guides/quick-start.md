@@ -101,7 +101,7 @@ That's it! 🎉
 
 ## Troubleshooting
 
-### Error: "Delegating arbiter not available"
+### Error: "Delegating cognitive engine not available"
 
 **Quick Fix:**
 ```bash

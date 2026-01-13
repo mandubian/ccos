@@ -206,8 +206,8 @@ v0.2 Adapters & ranking
 - [ ] Emit adapter+call planner when feasible
 - [ ] Expand telemetry with adapter decisions
 
-v0.3 Optional arbiter assist
-- [ ] If delegating arbiter configured, ask it for a proposal with structured context
+v0.3 Optional cognitive engine assist
+- [ ] If delegating cognitive engine configured, ask it for a proposal with structured context
 - [ ] Validate returned plan; fallback on validation failure
 
 v0.4 Agent synthesis integration

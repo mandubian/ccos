@@ -1,12 +1,12 @@
-# CCOS Specification 007: Prompt Assets Layout (CCOS Arbiter)
+# CCOS Specification 007: Prompt Assets Layout (CCOS Cognitive Engine)
 
 **Status: Implemented**
-**Scope**: Defines the directory structure and resolution logic for Arbiter prompts.
+**Scope**: Defines the directory structure and resolution logic for Cognitive Engine prompts.
 
 ## Single Source of Truth
-All arbiter prompt assets live under the repository root:
+All cognitive engine prompt assets live under the repository root:
 ```
-assets/prompts/arbiter/
+assets/prompts/cognitive engine/
 ```
 Subdirectories group functional prompt families (intent, RTFS intent, plan generation variants, delegation analysis). Each family contains versioned directories (e.g. `v1/`) with modular sections:
 ```
@@ -15,10 +15,10 @@ Subdirectories group functional prompt families (intent, RTFS intent, plan gener
 The `PromptManager` assembles these sections in a deterministic order.
 
 ## Removed Nested Copy
-Runtime resolution logic in `DelegatingArbiter::new` prefers `../assets/prompts/arbiter` when executed from the `ccos` crate directory; otherwise it falls back to `assets/prompts/arbiter`.
+Runtime resolution logic prefers `../assets/prompts/cognitive_engine` when executed from the `ccos` crate directory; otherwise it falls back to `assets/prompts/cognitive_engine`.
 
 ## Adding / Updating Prompts
-1. Create or copy a version directory: `assets/prompts/arbiter/<family>/v<N+1>/`.
+1. Create or copy a version directory: `assets/prompts/cognitive_engine/<family>/v<N+1>/`.
 2. Update sections; keep them small and focused.
 3. Reference the new ID+version via configuration or code (planned future config hook).
 4. Add tests if the change alters model instructions materially.
