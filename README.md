@@ -41,6 +41,7 @@ Quick entry points:
 - **CCOS overview**: [`docs/ccos/README.md`](./docs/ccos/README.md)
 - **RTFS overview**: [`docs/rtfs-2.0/README.md`](./docs/rtfs-2.0/README.md)
 - **Use CCOS from Cursor/Claude via MCP**: [`docs/ccos/guides/ccos-mcp-server.md`](./docs/ccos/guides/ccos-mcp-server.md)
+- **Full build log (all LLM chats)**: `mandubian/ccos-chats` — the recorded conversations that led to CCOS/RTFS (`https://github.com/mandubian/ccos-chats`)
 
 ## Architecture (simple)
 
