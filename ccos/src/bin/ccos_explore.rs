@@ -1727,10 +1727,13 @@ fn handle_servers_view(
             };
         }
         // Delete server
+        // Delete server
         KeyCode::Char('x') => {
             if !state.servers.is_empty() && state.servers_selected < state.servers.len() {
                 let server = &state.servers[state.servers_selected];
-                delete_server_async(event_tx, server.name.clone());
+                state.discover_popup = DiscoverPopup::DeleteConfirmation {
+                    server: server.clone(),
+                };
             }
         }
         // Refresh Schemas (re-introspect)
@@ -2488,6 +2491,8 @@ fn parse_rtfs_server_entry(content: &str) -> Option<ServerInfo> {
         tool_count: if tool_count > 0 { Some(tool_count) } else { None },
         tools,
         last_checked: None,
+        directory_path: None,
+        queue_id: None,
     })
 }
 
@@ -2662,13 +2667,15 @@ fn load_servers_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
                      let rtfs_path = path.join("server.rtfs");
                      if rtfs_path.exists() {
                           if let Ok(content) = tokio::fs::read_to_string(&rtfs_path).await {
-                               if let Some(info) = parse_rtfs_server_entry(&content) {
-                                    if let Some(f) = &mut debug_log { let _ = writeln!(f, "  Found approved on disk: {}", info.name); }
-                                    if !seen_endpoints.contains(&info.endpoint) {
-                                        seen_endpoints.insert(info.endpoint.clone());
-                                        servers.push(info);
-                                    }
-                               }
+                                if let Some(mut info) = parse_rtfs_server_entry(&content) {
+                                     info.directory_path = Some(path.to_string_lossy().to_string());
+                                     info.queue_id = None;
+                                     if let Some(f) = &mut debug_log { let _ = writeln!(f, "  Found approved on disk: {}", info.name); }
+                                     if !seen_endpoints.contains(&info.endpoint) {
+                                         seen_endpoints.insert(info.endpoint.clone());
+                                         servers.push(info);
+                                     }
+                                }
                           }
                      }
                  }
@@ -2697,6 +2704,8 @@ fn load_servers_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
                                          tool_count: None,
                                          tools: vec![],
                                          last_checked: None,
+                                         directory_path: None,
+                                         queue_id: Some(p.id.clone()),
                                      });
                                 }
                            }
@@ -2718,6 +2727,8 @@ fn load_servers_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
                                               tool_count: None,
                                               tools: vec![],
                                               last_checked: None,
+                                              directory_path: None,
+                                              queue_id: Some(r.id.clone()),
                                           });
                                      }
                                 }
@@ -2743,6 +2754,8 @@ fn load_servers_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
                     tool_count: None,
                     tools: vec![],
                     last_checked: None,
+                    directory_path: None,
+                    queue_id: None,
                 });
                 seen_endpoints.insert(config.endpoint);
             }
@@ -2765,22 +2778,42 @@ fn retry_server_async(event_tx: mpsc::UnboundedSender<TuiEvent>, server_name: St
 }
 
 /// Delete an approved server from disk
-fn delete_server_async(event_tx: mpsc::UnboundedSender<TuiEvent>, server_name: String) {
+/// Delete an approved server from disk
+fn delete_server_async(event_tx: mpsc::UnboundedSender<TuiEvent>, server: ServerInfo) {
     tokio::task::spawn_local(async move {
-        // Find the server directory by name
+        // 1. Try deleting from queue if queue_id is present
+        if let Some(qid) = &server.queue_id {
+             if let Ok(queue) = create_unified_queue() {
+                  if queue.remove(qid).await.is_ok() {
+                       load_servers_async(event_tx);
+                       return;
+                  }
+             }
+        }
+
+        // 2. Try deleting by directory_path if available
+        if let Some(path_str) = server.directory_path {
+             let path = std::path::PathBuf::from(path_str);
+             if path.exists() {
+                  if tokio::fs::remove_dir_all(&path).await.is_ok() {
+                       load_servers_async(event_tx);
+                  }
+                  return;
+             }
+        }
+
+        // 3. Fallback to name matching (improved)
         let root = ccos::utils::fs::get_workspace_root();
         let approved_dir = root.join("capabilities/servers/approved");
+        let server_name = server.name;
         
         // Try to find a directory matching the server name
         if let Ok(mut entries) = tokio::fs::read_dir(&approved_dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if path.is_dir() {
-                    // Check if this is the server we want to delete
-                    // Match by directory name containing the server name (case-insensitive)
                     let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     
-                    // Clean server name for comparison (remove status prefix)
                     let clean_name = server_name
                         .strip_prefix("✓ ")
                         .or_else(|| server_name.strip_prefix("◷ "))
@@ -2790,9 +2823,7 @@ fn delete_server_async(event_tx: mpsc::UnboundedSender<TuiEvent>, server_name: S
                     if dir_name.eq_ignore_ascii_case(clean_name) || 
                        dir_name.replace('_', " ").eq_ignore_ascii_case(clean_name) ||
                        dir_name.replace('-', " ").eq_ignore_ascii_case(clean_name) {
-                        // Found the server directory, delete it
                         if tokio::fs::remove_dir_all(&path).await.is_ok() {
-                            // Refresh server list
                             load_servers_async(event_tx);
                         }
                         return;
@@ -3031,10 +3062,53 @@ async fn find_servers_async(
     use ccos::examples_common::builder::{load_agent_config, find_llm_profile};
     use ccos::cognitive_engine::llm_provider::{LlmProviderConfig, LlmProviderFactory, LlmProviderType};
     
+    let query_lower = query.to_lowercase();
+    let mut all_suggestions: Vec<ApiSuggestion> = Vec::new();
+    
+    // ========== 1. Search local approved servers first ==========
+    let root = ccos::utils::fs::get_workspace_root();
+    let approved_dir = root.join("capabilities/servers/approved");
+    
+    if let Ok(mut entries) = tokio::fs::read_dir(&approved_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_dir() {
+                let rtfs_path = path.join("server.rtfs");
+                if rtfs_path.exists() {
+                    if let Ok(content) = tokio::fs::read_to_string(&rtfs_path).await {
+                        // Parse server.rtfs to extract name and endpoint
+                        if let Some(info) = parse_rtfs_server_entry(&content) {
+                            // Check if query matches name (case-insensitive)
+                            if info.name.to_lowercase().contains(&query_lower) ||
+                               info.endpoint.to_lowercase().contains(&query_lower) {
+                                all_suggestions.push(ApiSuggestion {
+                                    name: format!("[Local] {}", info.name),
+                                    endpoint: info.endpoint.clone(),
+                                    docs_url: Some(info.endpoint),
+                                    description: "Already approved server".to_string(),
+                                    auth_env_var: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // ========== 2. LLM Discovery (online search) ==========
     // Load agent config to get LLM profile
     let agent_config = match load_agent_config("config/agent_config.toml") {
         Ok(c) => c,
         Err(e) => {
+            // If local results exist, send them even if LLM config fails
+            if !all_suggestions.is_empty() {
+                let _ = event_tx.send(TuiEvent::ServerSuggestionsLoaded {
+                    query,
+                    suggestions: all_suggestions,
+                });
+                return;
+            }
             let _ = event_tx.send(TuiEvent::ServerSuggestionsFailed(
                 format!("Failed to load agent config: {}", e)
             ));
@@ -3086,6 +3160,14 @@ async fn find_servers_async(
     let provider = match provider_result {
         Some(p) => p,
         None => {
+            // If local results exist, send them even if LLM provider fails
+            if !all_suggestions.is_empty() {
+                let _ = event_tx.send(TuiEvent::ServerSuggestionsLoaded {
+                    query,
+                    suggestions: all_suggestions,
+                });
+                return;
+            }
             let _ = event_tx.send(TuiEvent::ServerSuggestionsFailed(
                 "No LLM provider configured. Check agent_config.toml and ensure API keys are set.".to_string()
             ));
@@ -3096,26 +3178,37 @@ async fn find_servers_async(
     // Create service with the configured provider
     let service = LlmDiscoveryService::with_provider(provider);
     
-    // Perform search
+    // Perform online search
     match service.search_external_apis(&query, None).await {
         Ok(results) => {
-            let suggestions = results.into_iter().map(|r| ApiSuggestion {
-                name: r.name,
-                endpoint: r.endpoint,
-                docs_url: r.docs_url,
-                description: r.description,
-                auth_env_var: r.auth_env_var,
-            }).collect();
+            // Add LLM results after local results
+            for r in results {
+                all_suggestions.push(ApiSuggestion {
+                    name: r.name,
+                    endpoint: r.endpoint,
+                    docs_url: r.docs_url,
+                    description: r.description,
+                    auth_env_var: r.auth_env_var,
+                });
+            }
             
             let _ = event_tx.send(TuiEvent::ServerSuggestionsLoaded {
                 query,
-                suggestions,
+                suggestions: all_suggestions,
             });
         }
         Err(e) => {
-            let _ = event_tx.send(TuiEvent::ServerSuggestionsFailed(
-                format!("Search failed: {}", e)
-            ));
+            // If local results exist, still show them even if LLM search fails
+            if !all_suggestions.is_empty() {
+                let _ = event_tx.send(TuiEvent::ServerSuggestionsLoaded {
+                    query,
+                    suggestions: all_suggestions,
+                });
+            } else {
+                let _ = event_tx.send(TuiEvent::ServerSuggestionsFailed(
+                    format!("Search failed: {}", e)
+                ));
+            }
         }
     }
 }
@@ -3901,6 +3994,18 @@ fn handle_discover_popup_key(
         DiscoverPopup::Error { .. } | DiscoverPopup::Success { .. } => {
             if let KeyCode::Esc | KeyCode::Enter = key.code {
                 next_popup = Some(DiscoverPopup::None);
+            }
+        }
+        DiscoverPopup::DeleteConfirmation { server } => {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    delete_server_async(event_tx, server.clone());
+                    next_popup = Some(DiscoverPopup::None);
+                }
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    next_popup = Some(DiscoverPopup::None);
+                }
+                _ => {}
             }
         }
         DiscoverPopup::None => {}

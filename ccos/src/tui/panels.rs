@@ -293,6 +293,18 @@ fn render_server_list(f: &mut Frame, state: &mut AppState, area: Rect) {
         return;
     }
 
+    // Layout: List (top) | Help Footer (bottom)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),    // List area
+            Constraint::Length(1), // Help footer
+        ])
+        .split(area);
+
+    let list_area = chunks[0];
+    let help_area = chunks[1];
+
     let items: Vec<ListItem> = state
         .servers
         .iter()
@@ -343,7 +355,21 @@ fn render_server_list(f: &mut Frame, state: &mut AppState, area: Rect) {
         .collect();
 
     let list = List::new(items).block(block);
-    f.render_widget(list, area);
+    f.render_widget(list, list_area);
+
+    // Render help footer
+    let help_text = Line::from(vec![
+        Span::styled("[d]", Style::default().fg(theme::GREEN)),
+        Span::raw(" Discover  "),
+        Span::styled("[r]", Style::default().fg(theme::BLUE)),
+        Span::raw(" Refresh  "),
+        Span::styled("[f]", Style::default().fg(theme::YELLOW)),
+        Span::raw(" Find  "),
+        Span::styled("[x]", Style::default().fg(theme::RED)),
+        Span::raw(" Delete"),
+    ]);
+    let help_paragraph = Paragraph::new(help_text).alignment(Alignment::Center);
+    f.render_widget(help_paragraph, help_area);
 }
 
 /// Render details for the selected server
@@ -2254,7 +2280,58 @@ fn render_discover_popup(f: &mut Frame, state: &mut AppState) {
         DiscoverPopup::Success { title, message } => {
             render_success_popup(f, title, message);
         }
+        DiscoverPopup::DeleteConfirmation { server } => {
+            render_delete_confirmation_popup(f, &server.name);
+        }
     }
+}
+
+fn render_delete_confirmation_popup(f: &mut Frame, server_name: &str) {
+    let area = f.size();
+    let popup_area = centered_rect(50, 20, area);
+
+    let title = " Confirm Deletion ";
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::RED))
+        .style(Style::default().bg(theme::BASE));
+
+    let content = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Are you sure you want to delete server "),
+            Span::styled(
+                server_name,
+                Style::default()
+                    .fg(theme::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("?"),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "This action cannot be undone.",
+            Style::default().fg(theme::PEACH),
+        )]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "[y] Yes, Delete",
+                Style::default().fg(theme::RED).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("      "),
+            Span::styled("[n] Cancel", Style::default().fg(theme::GREEN)),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(content)
+        .block(block)
+        .wrap(Wrap { trim: false })
+        .alignment(Alignment::Center);
+
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+    f.render_widget(paragraph, popup_area);
 }
 
 fn render_server_search_input_popup(

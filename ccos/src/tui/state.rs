@@ -259,6 +259,8 @@ pub struct ServerInfo {
     pub tool_count: Option<usize>,
     pub tools: Vec<String>,
     pub last_checked: Option<Instant>,
+    pub directory_path: Option<String>,
+    pub queue_id: Option<String>,
 }
 
 impl std::fmt::Display for CapabilitySource {
@@ -358,6 +360,8 @@ pub enum DiscoverPopup {
         selected: usize,
         selected_tools: std::collections::HashSet<usize>,
     },
+    /// Confirmation dialog for deleting a server
+    DeleteConfirmation { server: ServerInfo },
     /// Popup for entering a search query to find new servers
     ServerSearchInput {
         query: String,
