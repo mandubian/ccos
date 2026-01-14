@@ -541,12 +541,7 @@ Respond with ONLY the JSON array."#
             &text
         };
 
-        // Log first part of content for debugging
-        eprintln!(
-            "[CCOS] HTML content preview for {}: {}...",
-            url,
-            &text[..text.len().min(200)]
-        );
+        // Log first part of content for debugging (removed)
 
         let prompt = format!(
             r#"You are analyzing an API documentation page to extract API information.

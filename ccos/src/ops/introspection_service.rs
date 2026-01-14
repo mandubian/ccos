@@ -15,6 +15,7 @@ use crate::synthesis::introspection::api_introspector::{
     APIIntrospectionResult, APIIntrospector, AuthRequirements, DiscoveredEndpoint,
 };
 use crate::utils::fs::get_workspace_root;
+use crate::{ccos_eprintln, ccos_println};
 use rtfs::ast::TypeExpr;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -108,6 +109,24 @@ impl IntrospectionService {
     /// Create a new empty introspection service
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// Set the browser discovery service
+    pub fn with_browser_discovery(
+        mut self,
+        browser_discovery: Arc<crate::ops::browser_discovery::BrowserDiscoveryService>,
+    ) -> Self {
+        self.browser_discovery = Some(browser_discovery);
+        self
+    }
+
+    /// Set the LLM discovery service
+    pub fn with_llm_discovery(
+        mut self,
+        llm_discovery: Arc<crate::discovery::llm_discovery::LlmDiscoveryService>,
+    ) -> Self {
+        self.llm_discovery = Some(llm_discovery);
+        self
     }
 
     /// Introspect an OpenAPI spec URL
@@ -216,7 +235,7 @@ impl IntrospectionService {
             RuntimeError::Generic("Browser discovery service not configured".into())
         })?;
 
-        eprintln!("🔍 Introspecting using browser: {}", url);
+        ccos_println!("🔍 Introspecting using browser: {}", url);
 
         let extraction_result = if let Some(llm) = &self.llm_discovery {
             browser.extract_with_llm_analysis(url, llm).await
@@ -226,10 +245,43 @@ impl IntrospectionService {
 
         match extraction_result {
             Ok(browser_result) => {
+                // Helper to resolve relative URLs
+                let resolve_url = |candidate: &str, base: &str| -> Option<String> {
+                    if candidate.starts_with("http://") || candidate.starts_with("https://") {
+                        Some(candidate.to_string())
+                    } else if let Ok(base_url) = url::Url::parse(base) {
+                        base_url.join(candidate).ok().map(|u| u.to_string())
+                    } else {
+                        None
+                    }
+                };
+
                 // If we found an OpenAPI spec, we can prefer that
                 if let Some(spec_url) = &browser_result.spec_url {
-                    eprintln!("✅ Discovered OpenAPI spec via browser: {}", spec_url);
-                    return self.introspect_openapi(spec_url, server_name).await;
+                    let resolved = resolve_url(spec_url, &browser_result.source_url)
+                        .unwrap_or_else(|| spec_url.clone());
+                    ccos_println!("✅ Discovered OpenAPI spec via browser: {}", resolved);
+                    return self.introspect_openapi(&resolved, server_name).await;
+                }
+
+                // Fallback: Try the first valid URL from found_openapi_urls
+                for candidate_url in &browser_result.found_openapi_urls {
+                    // Basic validation: must look like a spec file
+                    let lower = candidate_url.to_lowercase();
+                    if lower.ends_with(".json")
+                        || lower.ends_with(".yaml")
+                        || lower.ends_with(".yml")
+                        || lower.contains("swagger")
+                        || lower.contains("openapi")
+                    {
+                        let resolved = resolve_url(candidate_url, &browser_result.source_url)
+                            .unwrap_or_else(|| candidate_url.clone());
+                        ccos_println!("🔄 Trying discovered OpenAPI candidate: {}", resolved);
+                        match self.introspect_openapi(&resolved, server_name).await {
+                            Ok(result) if result.success => return Ok(result),
+                            _ => continue, // Try next candidate
+                        }
+                    }
                 }
 
                 Ok(IntrospectionResult {
@@ -479,7 +531,7 @@ impl IntrospectionService {
     }
 
     /// Generate RTFS content for an OpenAPI endpoint
-    fn generate_rtfs_capability_from_openapi(
+    pub fn generate_rtfs_capability_from_openapi(
         &self,
         ep: &DiscoveredEndpoint,
         api_result: &APIIntrospectionResult,
@@ -506,7 +558,7 @@ impl IntrospectionService {
     }
 
     /// Generate RTFS content for a browser-discovered endpoint
-    fn generate_rtfs_capability_from_browser(
+    pub fn generate_rtfs_capability_from_browser(
         &self,
         ep: &crate::ops::browser_discovery::DiscoveredEndpoint,
         browser_result: &crate::ops::browser_discovery::BrowserDiscoveryResult,
@@ -557,8 +609,8 @@ impl IntrospectionService {
             module_name,
             "browser_discovery",
             spec_url,
-            None,
-            None,
+            ep.input_schema.as_ref(),
+            ep.output_schema.as_ref(),
         )
     }
 

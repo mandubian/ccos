@@ -29,6 +29,9 @@ pub struct ExtractedEndpoint {
     pub path: String,
     pub parameters: Vec<ExtractedParameter>,
     pub requires_auth: bool,
+    // NEW: Response schema information
+    pub response_type: Option<String>, // e.g. "object", "array", "string"
+    pub response_properties: Option<Vec<ExtractedProperty>>,
 }
 
 /// Extracted parameter from LLM parsing
@@ -38,6 +41,16 @@ pub struct ExtractedParameter {
     #[serde(rename = "type")]
     pub param_type: String,
     pub location: String, // query, path, header, body
+    pub required: bool,
+    pub description: String,
+}
+
+/// Extracted property for object types (responses or nested objects)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedProperty {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub prop_type: String,
     pub required: bool,
     pub description: String,
 }
@@ -457,7 +470,16 @@ Extract the following information in JSON format:
           "description": "City name"
         }}
       ],
-      "requires_auth": true
+      "requires_auth": true,
+      "response_type": "object",
+      "response_properties": [
+        {{
+          "name": "temperature",
+          "type": "float",
+          "required": true,
+          "description": "Temperature in Celsius"
+        }}
+      ]
     }}
   ],
   "auth": {{
@@ -582,7 +604,7 @@ Respond with ONLY the JSON object, no additional text."#,
     }
 
     /// Convert extracted endpoint to DiscoveredEndpoint
-    fn convert_endpoint(&self, ep: &ExtractedEndpoint) -> DiscoveredEndpoint {
+    pub fn convert_endpoint(&self, ep: &ExtractedEndpoint) -> DiscoveredEndpoint {
         let parameters: Vec<EndpointParameter> = ep
             .parameters
             .iter()
@@ -614,6 +636,41 @@ Respond with ONLY the JSON object, no additional text."#,
             })
         };
 
+        // Construct output schema from response properties
+        let output_schema = if let Some(props) = &ep.response_properties {
+            if !props.is_empty() {
+                let output_entries: Vec<MapTypeEntry> = props
+                    .iter()
+                    .map(|p| MapTypeEntry {
+                        key: Keyword(p.name.clone()),
+                        value_type: Box::new(self.parse_type(&p.prop_type)),
+                        optional: !p.required,
+                    })
+                    .collect();
+
+                let map_type = TypeExpr::Map {
+                    entries: output_entries,
+                    wildcard: None,
+                };
+
+                // Handle array wrapping if response_type indicates array
+                if let Some(rt) = &ep.response_type {
+                    if rt.to_lowercase().contains("array") || rt.to_lowercase().contains("list") {
+                        Some(TypeExpr::Vector(Box::new(map_type)))
+                    } else {
+                        Some(map_type)
+                    }
+                } else {
+                    Some(map_type)
+                }
+            } else {
+                None
+            }
+        } else {
+            // fallback for simple types if response_type is present but no properties (e.g. return string)
+            ep.response_type.as_ref().map(|rt| self.parse_type(rt))
+        };
+
         DiscoveredEndpoint {
             endpoint_id: ep.name.to_lowercase().replace(' ', "_"),
             name: ep.name.clone(),
@@ -621,7 +678,7 @@ Respond with ONLY the JSON object, no additional text."#,
             method: ep.method.clone(),
             path: ep.path.clone(),
             input_schema,
-            output_schema: None,
+            output_schema,
             requires_auth: ep.requires_auth,
             parameters,
         }
