@@ -11,7 +11,7 @@ use crate::utils::fs::get_workspace_root;
 use crate::utils::value_conversion;
 use reqwest::blocking::Client as BlockingHttpClient;
 use reqwest::{Method as HttpMethod, Url};
-use rtfs::ast::{MapKey, PrimitiveType, TypeExpr};
+use rtfs::ast::{MapKey, MapTypeEntry, PrimitiveType, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::microvm::{ExecutionContext, MicroVMConfig, MicroVMFactory};
 use rtfs::runtime::security::{RuntimeContext, SecurityAuthorizer};
@@ -693,7 +693,7 @@ impl CapabilityRegistry {
         // Timestamp capability - delegates to provider
         self.capabilities.insert(
             "ccos.system.current-timestamp-ms".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.system.current-timestamp-ms".to_string(),
                 Arity::Fixed(0),
                 Arc::new(|_args| {
@@ -701,6 +701,9 @@ impl CapabilityRegistry {
                         "System capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Get the current system timestamp in milliseconds".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
+                Some(TypeExpr::Primitive(PrimitiveType::Int)),
             ),
         );
 
@@ -726,7 +729,7 @@ impl CapabilityRegistry {
         // File operations - delegate to providers
         self.capabilities.insert(
             "ccos.io.file-exists".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.io.file-exists".to_string(),
                 Arity::Fixed(1),
                 Arc::new(|_args| {
@@ -734,6 +737,9 @@ impl CapabilityRegistry {
                         "I/O capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Check if a file exists at the given path".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                Some(TypeExpr::Primitive(PrimitiveType::Bool)),
             ),
         );
 
@@ -809,7 +815,7 @@ impl CapabilityRegistry {
 
         self.capabilities.insert(
             "ccos.io.delete-file".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.io.delete-file".to_string(),
                 Arity::Fixed(1),
                 Arc::new(|_args| {
@@ -817,12 +823,15 @@ impl CapabilityRegistry {
                         "File operations must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Delete a file at the given path".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                Some(TypeExpr::Primitive(PrimitiveType::Bool)),
             ),
         );
 
         self.capabilities.insert(
             "ccos.io.open-file".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.io.open-file".to_string(),
                 Arity::Variadic(1),
                 Arc::new(|_args| {
@@ -830,12 +839,15 @@ impl CapabilityRegistry {
                         "File operations must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Open a file at the given path".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                Some(TypeExpr::Primitive(PrimitiveType::Int)), // Returns a file handle
             ),
         );
 
         self.capabilities.insert(
             "ccos.io.read-line".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.io.read-line".to_string(),
                 Arity::Fixed(1),
                 Arc::new(|_args| {
@@ -843,12 +855,15 @@ impl CapabilityRegistry {
                         "File operations must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Read a line from a file handle".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::Int)),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
             ),
         );
 
         self.capabilities.insert(
             "ccos.io.write-line".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.io.write-line".to_string(),
                 Arity::Fixed(2),
                 Arc::new(|_args| {
@@ -856,12 +871,18 @@ impl CapabilityRegistry {
                         "File operations must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Write a line to a file handle".to_string()),
+                Some(TypeExpr::Tuple(vec![
+                    TypeExpr::Primitive(PrimitiveType::Int),
+                    TypeExpr::Primitive(PrimitiveType::String),
+                ])),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
 
         self.capabilities.insert(
             "ccos.io.close-file".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.io.close-file".to_string(),
                 Arity::Fixed(1),
                 Arc::new(|_args| {
@@ -869,6 +890,9 @@ impl CapabilityRegistry {
                         "File operations must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Close a file handle".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::Int)),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
 
@@ -879,7 +903,7 @@ impl CapabilityRegistry {
         // Logging capabilities - delegate to providers
         self.capabilities.insert(
             "ccos.io.log".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.io.log".to_string(),
                 Arity::Variadic(1),
                 Arc::new(|_args| {
@@ -887,12 +911,15 @@ impl CapabilityRegistry {
                         "Logging capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Log a message to the system log".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
 
         self.capabilities.insert(
             "ccos.io.print".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.io.print".to_string(),
                 Arity::Variadic(1),
                 Arc::new(|_args| {
@@ -900,12 +927,15 @@ impl CapabilityRegistry {
                         "Output capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Print a message to standard output".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
 
         self.capabilities.insert(
             "ccos.io.println".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.io.println".to_string(),
                 Arity::Variadic(1),
                 Arc::new(|_args| {
@@ -913,6 +943,9 @@ impl CapabilityRegistry {
                         "Output capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Print a line to standard output".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
     }
@@ -921,7 +954,7 @@ impl CapabilityRegistry {
         // HTTP operations
         self.capabilities.insert(
             "ccos.network.http-fetch".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.network.http-fetch".to_string(),
                 Arity::Variadic(1),
                 Arc::new(|_args| {
@@ -929,6 +962,37 @@ impl CapabilityRegistry {
                     Err(RuntimeError::Generic(
                         "Network operations must be executed through MicroVM isolation. Use CapabilityRegistry::execute_capability_with_microvm()".to_string(),
                     ))
+                }),
+                Some("Perform an HTTP request (GET, POST, etc.)".to_string()),
+                Some(TypeExpr::Map {
+                    entries: vec![
+                        rtfs::ast::MapTypeEntry {
+                            key: rtfs::ast::Keyword("url".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
+                            optional: false,
+                        },
+                        rtfs::ast::MapTypeEntry {
+                            key: rtfs::ast::Keyword("method".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
+                            optional: false,
+                        },
+                    ],
+                    wildcard: None,
+                }),
+                Some(TypeExpr::Map {
+                    entries: vec![
+                        rtfs::ast::MapTypeEntry {
+                            key: rtfs::ast::Keyword("status".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Int)),
+                            optional: false,
+                        },
+                        rtfs::ast::MapTypeEntry {
+                            key: rtfs::ast::Keyword("body".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
+                            optional: false,
+                        },
+                    ],
+                    wildcard: None,
                 }),
             ),
         );
@@ -941,7 +1005,7 @@ impl CapabilityRegistry {
         // Agent operations - delegate to providers
         self.capabilities.insert(
             "ccos.agent.discover-agents".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.agent.discover-agents".to_string(),
                 Arity::Variadic(0),
                 Arc::new(|_args| {
@@ -949,12 +1013,17 @@ impl CapabilityRegistry {
                         "Agent capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Discover specialized agents available in the ecosystem".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
+                Some(TypeExpr::Vector(Box::new(TypeExpr::Primitive(
+                    PrimitiveType::String,
+                )))),
             ),
         );
 
         self.capabilities.insert(
             "ccos.agent.task-coordination".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.agent.task-coordination".to_string(),
                 Arity::Variadic(0),
                 Arc::new(|_args| {
@@ -962,12 +1031,21 @@ impl CapabilityRegistry {
                         "Agent capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Coordinate tasks between multiple specialized agents".to_string()),
+                Some(TypeExpr::Map {
+                    entries: vec![],
+                    wildcard: None,
+                }),
+                Some(TypeExpr::Map {
+                    entries: vec![],
+                    wildcard: None,
+                }),
             ),
         );
 
         self.capabilities.insert(
             "ccos.agent.ask-human".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.agent.ask-human".to_string(),
                 Arity::Variadic(1),
                 Arc::new(|_args| {
@@ -975,13 +1053,16 @@ impl CapabilityRegistry {
                         "Agent capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Ask a question to the human user and wait for a response".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
             ),
         );
 
         // Alias for ccos.user.ask -> ccos.agent.ask-human
         self.capabilities.insert(
             "ccos.user.ask".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.user.ask".to_string(),
                 Arity::Variadic(1),
                 Arc::new(|_args| {
@@ -989,13 +1070,16 @@ impl CapabilityRegistry {
                         "Agent capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Ask a question to the user".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
             ),
         );
         self.map_capability_to_provider("ccos.user.ask", "local");
 
         self.capabilities.insert(
             "ccos.agent.discover-and-assess-agents".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.agent.discover-and-assess-agents".to_string(),
                 Arity::Variadic(0),
                 Arc::new(|_args| {
@@ -1003,12 +1087,20 @@ impl CapabilityRegistry {
                         "Agent capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some(
+                    "Discover specialized agents and assess their capabilities for a task"
+                        .to_string(),
+                ),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
+                Some(TypeExpr::Vector(Box::new(TypeExpr::Primitive(
+                    PrimitiveType::String,
+                )))),
             ),
         );
 
         self.capabilities.insert(
             "ccos.agent.establish-system-baseline".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.agent.establish-system-baseline".to_string(),
                 Arity::Variadic(0),
                 Arc::new(|_args| {
@@ -1016,6 +1108,9 @@ impl CapabilityRegistry {
                         "Agent capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Establish a baseline state for the CCOS system".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
     }
@@ -1025,7 +1120,7 @@ impl CapabilityRegistry {
         // Key-value store operations - delegate to providers
         self.capabilities.insert(
             "ccos.state.kv.get".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.state.kv.get".to_string(),
                 Arity::Fixed(1),
                 Arc::new(|_args| {
@@ -1033,12 +1128,15 @@ impl CapabilityRegistry {
                         "State capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Retrieve a value from the key-value store".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
             ),
         );
 
         self.capabilities.insert(
             "ccos.state.kv.put".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.state.kv.put".to_string(),
                 Arity::Fixed(2),
                 Arc::new(|_args| {
@@ -1046,6 +1144,12 @@ impl CapabilityRegistry {
                         "State capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Store a value in the key-value store".to_string()),
+                Some(TypeExpr::Tuple(vec![
+                    TypeExpr::Primitive(PrimitiveType::String),
+                    TypeExpr::Primitive(PrimitiveType::String),
+                ])),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
 

@@ -4,6 +4,7 @@
 //! JavaScript-rendered pages (SPAs, Swagger UI, etc.)
 
 use crate::capability_marketplace::CapabilityMarketplace;
+use crate::ccos_eprintln;
 use crate::mcp::discovery_session::MCPSessionManager;
 use crate::synthesis::introspection::{AuthConfig, LlmDocParser};
 use rtfs::runtime::error::RuntimeResult;
@@ -35,6 +36,9 @@ pub struct DiscoveredEndpoint {
     pub method: String,
     pub path: String,
     pub description: Option<String>,
+    pub input_schema: Option<rtfs::ast::TypeExpr>,
+    pub output_schema: Option<rtfs::ast::TypeExpr>,
+    pub parameters: Vec<crate::synthesis::introspection::EndpointParameter>,
 }
 
 /// Service for browser-based API discovery
@@ -70,7 +74,7 @@ impl BrowserDiscoveryService {
     pub async fn extract_from_url(&self, url: &str) -> RuntimeResult<BrowserDiscoveryResult> {
         use crate::mcp::discovery_session::MCPServerInfo;
 
-        eprintln!("[BrowserDiscovery] Navigating to: {}", url);
+        ccos_eprintln!("[BrowserDiscovery] Navigating to: {}", url);
 
         // Create MCP session manager (no auth needed for local Puppeteer)
         let session_manager = MCPSessionManager::new(None);
@@ -104,7 +108,7 @@ impl BrowserDiscoveryService {
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
         // Extract page content using puppeteer_evaluate
-        eprintln!("[BrowserDiscovery] Calling puppeteer_evaluate...");
+        ccos_eprintln!("[BrowserDiscovery] Calling puppeteer_evaluate...");
         let eval_result = session_manager
             .call_tool(
                 &session,
@@ -191,14 +195,35 @@ impl BrowserDiscoveryService {
                                 }
                             });
                             
-                            // 6. Look for spec URLs in script tags
+                            // 6. Look for spec URLs in script tags (both inline and src)
                             document.querySelectorAll('script').forEach(script => {
+                                // Check script.src for spec files
+                                if (script.src && !result.specUrl) {
+                                    const src = script.src.toLowerCase();
+                                    if (src.endsWith('.json') || src.endsWith('.yaml') || src.endsWith('.yml')
+                                        || src.includes('swagger') || src.includes('openapi')) {
+                                        result.specUrl = script.src;
+                                    }
+                                }
+                                // Check inline script content
                                 const text = script.textContent || '';
-                                const urlMatch = text.match(/url\s*:\s*["']([^"']+(?:\.json|\.yaml|\.yml|openapi|swagger)[^"']*)["']/i);
+                                const urlMatch = text.match(/url\s*:\s*["']([^"']+(?:\.json|\.yaml|\.yml|openapi|swagger)[^"']*?)["']/i);
                                 if (urlMatch && !result.specUrl) {
                                     result.specUrl = urlMatch[1];
                                 }
                             });
+                            
+                            // 6b. Check for Redoc and RapiDoc elements
+                            if (!result.specUrl) {
+                                const redoc = document.querySelector('redoc');
+                                if (redoc && redoc.getAttribute('spec-url')) {
+                                    result.specUrl = redoc.getAttribute('spec-url');
+                                }
+                                const rapiDoc = document.querySelector('rapi-doc');
+                                if (rapiDoc && rapiDoc.getAttribute('spec-url')) {
+                                    result.specUrl = rapiDoc.getAttribute('spec-url');
+                                }
+                            }
                             
                             // 7. Fallback: Look for API patterns in rendered text
                             if (result.apiEndpoints.length === 0) {
@@ -241,7 +266,7 @@ impl BrowserDiscoveryService {
                     .map(|s| s.as_str())
                     .unwrap_or("");
 
-                eprintln!(
+                ccos_eprintln!(
                     "[BrowserDiscovery DEBUG] Raw content len: {}",
                     content_str.len()
                 );
@@ -268,7 +293,7 @@ impl BrowserDiscoveryService {
                     };
 
                 if let Some(v) = page_data {
-                    eprintln!("[BrowserDiscovery DEBUG] Successfully parsed JSON result");
+                    ccos_eprintln!("[BrowserDiscovery DEBUG] Successfully parsed JSON result");
                     let title = v
                         .get("title")
                         .and_then(|t| t.as_str())
@@ -307,6 +332,9 @@ impl BrowserDiscoveryService {
                                         method,
                                         path,
                                         description,
+                                        input_schema: None,
+                                        output_schema: None,
+                                        parameters: Vec::new(),
                                     })
                                 })
                                 .collect()
@@ -326,7 +354,7 @@ impl BrowserDiscoveryService {
                         error: None,
                     })
                 } else {
-                    eprintln!(
+                    ccos_eprintln!(
                         "[BrowserDiscovery DEBUG] Failed to parse JSON. Content start: {}",
                         if json_content.len() > 100 {
                             &json_content[..100]
@@ -349,7 +377,7 @@ impl BrowserDiscoveryService {
                 }
             }
             Err(e) => {
-                eprintln!("[BrowserDiscovery] Evaluation failed: {}", e);
+                ccos_eprintln!("[BrowserDiscovery] Evaluation failed: {}", e);
                 Ok(BrowserDiscoveryResult {
                     success: false,
                     source_url: url.to_string(),
@@ -385,7 +413,7 @@ impl BrowserDiscoveryService {
             if html.len() > 100 {
                 // If we have low confidence results, use the dedicated doc parser
                 if needs_llm {
-                    eprintln!("[BrowserDiscovery] Low confidence in heuristic extraction. Using LLM Doc Parser...");
+                    ccos_eprintln!("[BrowserDiscovery] Low confidence in heuristic extraction. Using LLM Doc Parser...");
 
                     // Simple HTML to text conversion
                     let text_content = html
@@ -429,7 +457,7 @@ impl BrowserDiscoveryService {
                         .await
                     {
                         Ok(llm_result) => {
-                            eprintln!(
+                            ccos_eprintln!(
                                 "[BrowserDiscovery] LLM Parser success! Found {} endpoints.",
                                 llm_result.endpoints.len()
                             );
@@ -439,10 +467,18 @@ impl BrowserDiscoveryService {
                                 result.discovered_endpoints = llm_result
                                     .endpoints
                                     .iter()
-                                    .map(|e| crate::ops::browser_discovery::DiscoveredEndpoint {
-                                        method: e.method.clone(),
-                                        path: e.path.clone(),
-                                        description: Some(e.description.clone()),
+                                    .map(|e| {
+                                        // Convert using the LlmDocParser's logic to get schemas
+                                        let converted = parser.convert_endpoint(e);
+
+                                        crate::ops::browser_discovery::DiscoveredEndpoint {
+                                            method: converted.method,
+                                            path: converted.path,
+                                            description: Some(converted.description),
+                                            input_schema: converted.input_schema,
+                                            output_schema: converted.output_schema,
+                                            parameters: converted.parameters,
+                                        }
                                     })
                                     .collect();
                             }
@@ -459,7 +495,7 @@ impl BrowserDiscoveryService {
                             // Extract Auth
                             if let Some(extracted_auth) = llm_result.auth {
                                 if let Ok(auth_config) = extracted_auth.try_into() {
-                                    eprintln!(
+                                    ccos_eprintln!(
                                         "[BrowserDiscovery] Discovered Auth Config: {:?}",
                                         auth_config
                                     );
@@ -468,7 +504,7 @@ impl BrowserDiscoveryService {
                             }
                         }
                         Err(e) => {
-                            eprintln!("[BrowserDiscovery] LLM Doc Parser failed: {}", e);
+                            ccos_eprintln!("[BrowserDiscovery] LLM Doc Parser failed: {}", e);
                         }
                     }
                 } else {
@@ -479,14 +515,15 @@ impl BrowserDiscoveryService {
                     {
                         Ok(apis) => {
                             for api in apis {
-                                eprintln!(
+                                ccos_eprintln!(
                                     "[BrowserDiscovery] LLM found API: {} - {}",
-                                    api.name, api.description
+                                    api.name,
+                                    api.description
                                 );
                             }
                         }
                         Err(e) => {
-                            eprintln!("[BrowserDiscovery] LLM analysis failed: {}", e);
+                            ccos_eprintln!("[BrowserDiscovery] LLM analysis failed: {}", e);
                         }
                     }
                 }

@@ -3,6 +3,7 @@
 use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
 use crate::discovery::config::DiscoveryConfig;
 use crate::discovery::GoalDiscoveryAgent;
+use crate::{ccos_eprintln, ccos_println};
 #[cfg(feature = "tui")]
 use dialoguer::theme::ColorfulTheme;
 use rtfs::runtime::error::RuntimeResult;
@@ -59,18 +60,18 @@ pub async fn discover_by_goal_with_options(
 
     // Show mode being used
     if options.llm {
-        println!("🧠 Using LLM-enhanced discovery (intent analysis + semantic ranking)");
+        ccos_println!("🧠 Using LLM-enhanced discovery (intent analysis + semantic ranking)");
     }
 
     // Get scored results (before queuing)
     let scored_results = agent.search_and_score(&goal, options.llm).await?;
 
     if scored_results.is_empty() {
-        println!("🔍 No matching servers found.");
+        ccos_println!("🔍 No matching servers found.");
 
         if options.interactive {
             // Fallback: ask user if they want to add a server manually
-            println!();
+            ccos_println!();
             #[cfg(feature = "tui")]
             let add_manual =
                 dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
@@ -99,7 +100,7 @@ pub async fn discover_by_goal_with_options(
 
     let results: Vec<_> = if let Some(n) = effective_top {
         if total_found > n && !options.interactive {
-            println!(
+            ccos_println!(
                 "⚠️  Non-interactive mode: limiting to top {} results (found {}). Use --interactive or --top N to see all.",
                 n, total_found
             );
@@ -109,7 +110,7 @@ pub async fn discover_by_goal_with_options(
         scored_results
     };
 
-    println!(
+    ccos_println!(
         "🔍 Processing {} server candidates (threshold: {:.2})",
         results.len(),
         options.threshold
@@ -138,7 +139,7 @@ pub async fn discover_by_goal_with_options(
         }
 
         // Show instructions before the multi-select
-        println!("\n📋 All servers pre-selected. Use SPACE to toggle, ENTER to confirm.\n");
+        ccos_println!("\n📋 All servers pre-selected. Use SPACE to toggle, ENTER to confirm.\n");
 
         // Show interactive multi-select (all pre-selected - user deselects unwanted)
         #[cfg(feature = "tui")]
@@ -161,10 +162,10 @@ pub async fn discover_by_goal_with_options(
         ));
 
         if selections.is_empty() {
-            println!("❌ No servers selected.");
+            ccos_println!("❌ No servers selected.");
 
             // Fallback: ask user if they want to add a server manually
-            println!();
+            ccos_println!();
             #[cfg(feature = "tui")]
             let add_manual =
                 dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
@@ -183,7 +184,7 @@ pub async fn discover_by_goal_with_options(
             return Ok(vec![]);
         }
 
-        println!("✓ Selected {} of {} servers", selections.len(), items.len());
+        ccos_println!("✓ Selected {} of {} servers", selections.len(), items.len());
 
         // Filter to selected items
         let selected: Vec<_> = selections.into_iter().map(|i| results[i].clone()).collect();
@@ -214,21 +215,22 @@ pub async fn discover_by_goal_with_options(
             });
 
             if let Some(existing) = approved_conflict {
-                println!();
-                println!(
+                ccos_println!();
+                ccos_println!(
                     "⚠️  Server \"{}\" already exists in approved list",
                     existing.server_info.name
                 );
-                println!(
+                ccos_println!(
                     "   Current: v{}, approved on {}",
                     existing.version,
                     &existing.approved_at.to_rfc3339()[..10]
                 );
-                println!(
+                ccos_println!(
                     "   New discovery: \"{}\" ({})",
-                    result.server_info.name, result.server_info.endpoint
+                    result.server_info.name,
+                    result.server_info.endpoint
                 );
-                println!();
+                ccos_println!();
 
                 let options = vec![
                     "Add to pending for re-approval (merge on approval)",
@@ -256,7 +258,7 @@ pub async fn discover_by_goal_with_options(
                     // Add to pending
                     servers_to_queue.push((result.clone(), *score));
                 } else {
-                    println!("   ✓ Skipped - keeping existing approved server");
+                    ccos_println!("   ✓ Skipped - keeping existing approved server");
                 }
                 continue;
             }
@@ -269,21 +271,22 @@ pub async fn discover_by_goal_with_options(
             });
 
             if let Some(existing) = pending_conflict {
-                println!();
-                println!(
+                ccos_println!();
+                ccos_println!(
                     "⚠️  Server \"{}\" already exists in pending list",
                     existing.server_info.name
                 );
-                println!(
+                ccos_println!(
                     "   Current: queued on {}, expires on {}",
                     &existing.requested_at.to_rfc3339()[..10],
                     &existing.expires_at.to_rfc3339()[..10]
                 );
-                println!(
+                ccos_println!(
                     "   New discovery: \"{}\" ({})",
-                    result.server_info.name, result.server_info.endpoint
+                    result.server_info.name,
+                    result.server_info.endpoint
                 );
-                println!();
+                ccos_println!();
 
                 let options = vec![
                     "Merge - Update existing pending entry (keeps existing ID)",
@@ -316,7 +319,7 @@ pub async fn discover_by_goal_with_options(
                     queue.remove_pending(&existing.id).await?;
                     servers_to_queue.push((result.clone(), *score));
                 } else {
-                    println!("   ✓ Skipped - keeping existing pending entry");
+                    ccos_println!("   ✓ Skipped - keeping existing pending entry");
                 }
             } else {
                 // No conflict, add to pending
@@ -325,7 +328,7 @@ pub async fn discover_by_goal_with_options(
         }
 
         if servers_to_queue.is_empty() {
-            println!("⚠️  No servers to queue (all skipped or already approved)");
+            ccos_println!("⚠️  No servers to queue (all skipped or already approved)");
             return Ok(vec![]);
         }
 
@@ -340,7 +343,7 @@ pub async fn discover_by_goal_with_options(
         }
 
         // Ask if user wants to introspect tools
-        println!();
+        ccos_println!();
         #[cfg(feature = "tui")]
         let introspect =
             dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
@@ -353,7 +356,7 @@ pub async fn discover_by_goal_with_options(
         let introspect = false; // Default to false in non-interactive
 
         if introspect {
-            println!("\n🔍 Introspecting queued servers...\n");
+            ccos_println!("\n🔍 Introspecting queued servers...\n");
             for (pending_id, result) in &queued_servers {
                 let name = &result.server_info.name;
 
@@ -365,19 +368,19 @@ pub async fn discover_by_goal_with_options(
                 endpoints_to_try.retain(|e| !e.is_empty() && e.starts_with("http"));
 
                 if endpoints_to_try.is_empty() {
-                    println!("⚠️  {} - No HTTP endpoint, skipping", name);
+                    ccos_println!("⚠️  {} - No HTTP endpoint, skipping", name);
                     continue;
                 }
 
                 // Show which endpoints we'll try
                 if endpoints_to_try.len() > 1 {
-                    println!(
+                    ccos_println!(
                         "📡 Connecting to {} ({} endpoint(s) available)...",
                         name,
                         endpoints_to_try.len()
                     );
                 } else {
-                    println!("📡 Connecting to {}...", name);
+                    ccos_println!("📡 Connecting to {}...", name);
                 }
 
                 let auth_env_var = result.server_info.auth_env_var.as_deref();
@@ -386,7 +389,7 @@ pub async fn discover_by_goal_with_options(
                 // Try each endpoint until one succeeds
                 for (idx, endpoint) in endpoints_to_try.iter().enumerate() {
                     if idx > 0 {
-                        println!(
+                        ccos_println!(
                             "   🔄 Trying alternative endpoint {} of {}...",
                             idx + 1,
                             endpoints_to_try.len()
@@ -398,19 +401,19 @@ pub async fn discover_by_goal_with_options(
                     {
                         Ok(introspection) => {
                             if introspection.tools.is_empty() {
-                                println!("   ⚠️  No tools found");
+                                ccos_println!("   ⚠️  No tools found");
                             } else {
-                                println!("   ✅ Found {} tools:", introspection.tools.len());
+                                ccos_println!("   ✅ Found {} tools:", introspection.tools.len());
                                 for tool in introspection.tools.iter().take(10) {
                                     let desc = tool
                                         .description
                                         .as_deref()
                                         .map(|d| d.chars().take(50).collect::<String>())
                                         .unwrap_or_default();
-                                    println!("      • {} - {}", tool.tool_name, desc);
+                                    ccos_println!("      • {} - {}", tool.tool_name, desc);
                                 }
                                 if introspection.tools.len() > 10 {
-                                    println!(
+                                    ccos_println!(
                                         "      ... and {} more",
                                         introspection.tools.len() - 10
                                     );
@@ -430,9 +433,9 @@ pub async fn discover_by_goal_with_options(
                                 )
                                 .await
                                 {
-                                    println!("   ⚠️  Failed to save capabilities: {}", e);
+                                    ccos_println!("   ⚠️  Failed to save capabilities: {}", e);
                                 } else {
-                                    println!("   💾 Capabilities saved to RTFS file");
+                                    ccos_println!("   💾 Capabilities saved to RTFS file");
                                 }
                             }
                             introspection_success = true;
@@ -448,26 +451,26 @@ pub async fn discover_by_goal_with_options(
                                     || error_msg.contains("Unauthorized")
                                     || error_msg.contains("not set")
                                 {
-                                    println!("   ⚠️  Authentication required");
+                                    ccos_println!("   ⚠️  Authentication required");
 
                                     // Show expected env var
                                     if let Some(env_var) = auth_env_var {
-                                        println!(
+                                        ccos_println!(
                                             "   📝 Expected environment variable: {}",
                                             env_var
                                         );
-                                        println!(
+                                        ccos_println!(
                                             "   💡 Set it with: export {}=<your-token>",
                                             env_var
                                         );
 
                                         // GitHub-specific hint
                                         if name.to_lowercase().contains("github") {
-                                            println!("   💡 For GitHub, you can also use: GITHUB_TOKEN or GITHUB_PAT");
+                                            ccos_println!("   💡 For GitHub, you can also use: GITHUB_TOKEN or GITHUB_PAT");
                                         }
 
                                         // Ask if user wants to update the token and retry
-                                        println!();
+                                        ccos_println!();
                                         #[cfg(feature = "tui")]
                                         let retry = dialoguer::Confirm::with_theme(
                                             &dialoguer::theme::ColorfulTheme::default(),
@@ -505,10 +508,10 @@ pub async fn discover_by_goal_with_options(
                                                     || env_var.contains('=')
                                                     || env_var.contains('\0')
                                                 {
-                                                    println!("   ⚠️  Invalid environment variable name: {}", env_var);
+                                                    ccos_println!("   ⚠️  Invalid environment variable name: {}", env_var);
                                                     false
                                                 } else if token.contains('\0') {
-                                                    println!(
+                                                    ccos_println!(
                                                         "   ⚠️  Token contains invalid characters"
                                                     );
                                                     false
@@ -519,7 +522,7 @@ pub async fn discover_by_goal_with_options(
                                                     unsafe {
                                                         std::env::set_var(env_var, &token);
                                                     }
-                                                    println!("   ✓ Token set. Retrying...");
+                                                    ccos_println!("   ✓ Token set. Retrying...");
                                                     true
                                                 };
 
@@ -529,17 +532,17 @@ pub async fn discover_by_goal_with_options(
                                                     match crate::ops::server::introspect_server_by_url(endpoint, name, Some(env_var)).await {
                                                     Ok(introspection) => {
                                                         if introspection.tools.is_empty() {
-                                                            println!("   ⚠️  No tools found");
+                                                            ccos_println!("   ⚠️  No tools found");
                                                         } else {
-                                                            println!("   ✅ Found {} tools:", introspection.tools.len());
+                                                            ccos_println!("   ✅ Found {} tools:", introspection.tools.len());
                                                             for tool in introspection.tools.iter().take(10) {
                                                                 let desc = tool.description.as_deref()
                                                                     .map(|d| d.chars().take(50).collect::<String>())
                                                                     .unwrap_or_default();
-                                                                println!("      • {} - {}", tool.tool_name, desc);
+                                                                ccos_println!("      • {} - {}", tool.tool_name, desc);
                                                             }
                                                             if introspection.tools.len() > 10 {
-                                                                println!("      ... and {} more", introspection.tools.len() - 10);
+                                                                ccos_println!("      ... and {} more", introspection.tools.len() - 10);
                                                             }
 
                                                             // Save tools to RTFS file and link to pending entry
@@ -550,31 +553,31 @@ pub async fn discover_by_goal_with_options(
                                                                 &result.server_info,
                                                                 Some(pending_id.clone()),
                                                             ).await {
-                                                                println!("   ⚠️  Failed to save capabilities: {}", e);
+                                                                ccos_println!("   ⚠️  Failed to save capabilities: {}", e);
                                                             } else {
-                                                                println!("   💾 Capabilities saved to RTFS file");
+                                                                ccos_println!("   💾 Capabilities saved to RTFS file");
                                                             }
                                                             introspection_success = true;
                                                         }
                                                     }
                                                     Err(e2) => {
-                                                        println!("   ❌ Still failed: {}", e2);
-                                                        println!("   💡 Troubleshooting:");
+                                                        ccos_println!("   ❌ Still failed: {}", e2);
+                                                        ccos_println!("   💡 Troubleshooting:");
 
                                                         // Check if it's GitHub Copilot endpoint
                                                         if endpoint.contains("githubcopilot.com") {
-                                                            println!("      ⚠️  This is GitHub Copilot MCP (not regular GitHub)");
-                                                            println!("      • Requires a GitHub Copilot API token (not regular PAT)");
-                                                            println!("      • Get token from: https://github.com/settings/tokens?type=beta");
-                                                            println!("      • Token must have 'copilot' scope/permissions");
+                                                            ccos_println!("      ⚠️  This is GitHub Copilot MCP (not regular GitHub)");
+                                                            ccos_println!("      • Requires a GitHub Copilot API token (not regular PAT)");
+                                                            ccos_println!("      • Get token from: https://github.com/settings/tokens?type=beta");
+                                                            ccos_println!("      • Token must have 'copilot' scope/permissions");
                                                         } else {
-                                                            println!("      • Verify token is valid and not expired");
-                                                            println!("      • Check token has required permissions/scopes");
+                                                            ccos_println!("      • Verify token is valid and not expired");
+                                                            ccos_println!("      • Check token has required permissions/scopes");
                                                             if name.to_lowercase().contains("github") {
-                                                                println!("      • For GitHub: Use a Personal Access Token (PAT) with appropriate scopes");
+                                                                ccos_println!("      • For GitHub: Use a Personal Access Token (PAT) with appropriate scopes");
                                                             }
                                                         }
-                                                        println!("      • Token should be just the token value (we add 'Bearer' prefix automatically)");
+                                                        ccos_println!("      • Token should be just the token value (we add 'Bearer' prefix automatically)");
                                                     }
                                                 }
                                                 }
@@ -582,17 +585,17 @@ pub async fn discover_by_goal_with_options(
                                         }
                                     }
                                 } else {
-                                    println!("   ❌ {}", error_msg);
+                                    ccos_println!("   ❌ {}", error_msg);
                                 }
                             } else {
                                 // Not the last endpoint, just log and continue trying
                                 if endpoints_to_try.len() > 1 {
-                                    println!(
+                                    ccos_println!(
                                         "   ⚠️  Failed: {} (trying next endpoint...)",
                                         error_msg
                                     );
                                 } else {
-                                    println!("   ❌ Failed: {}", error_msg);
+                                    ccos_println!("   ❌ Failed: {}", error_msg);
                                 }
                             }
                         }
@@ -601,13 +604,13 @@ pub async fn discover_by_goal_with_options(
 
                 // If all endpoints failed, show a summary
                 if !introspection_success && endpoints_to_try.len() > 1 {
-                    println!(
+                    ccos_println!(
                         "   ❌ All {} endpoint(s) failed for {}",
                         endpoints_to_try.len(),
                         name
                     );
                 }
-                println!();
+                ccos_println!();
             }
         }
 
@@ -726,7 +729,9 @@ async fn handle_manual_url_entry(
         } else {
             // API Documentation page
             if !llm_enabled {
-                println!("⚠️  LLM discovery required for documentation parsing. Use --llm flag.");
+                ccos_println!(
+                    "⚠️  LLM discovery required for documentation parsing. Use --llm flag."
+                );
                 continue;
             }
             handle_documentation_url(agent, goal, &url, llm_enabled, storage_path).await?
@@ -735,7 +740,7 @@ async fn handle_manual_url_entry(
         all_ids.extend(ids);
 
         // Ask if user wants to add more
-        println!();
+        ccos_println!();
         #[cfg(feature = "tui")]
         let add_more = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
             .with_prompt("Do you want to add another server/API?")
@@ -749,12 +754,12 @@ async fn handle_manual_url_entry(
         if !add_more {
             break;
         }
-        println!();
+        ccos_println!();
     }
 
     if !all_ids.is_empty() {
-        println!("\n✓ Queued {} server(s) for approval.", all_ids.len());
-        println!("  • Use 'ccos approval pending' to review and approve.");
+        ccos_println!("\n✓ Queued {} server(s) for approval.", all_ids.len());
+        ccos_println!("  • Use 'ccos approval pending' to review and approve.");
     }
 
     Ok(all_ids)
@@ -767,7 +772,7 @@ async fn handle_mcp_url(
     url: &str,
     storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
-    println!("🔍 Introspecting MCP server at {}...", url);
+    ccos_println!("🔍 Introspecting MCP server at {}...", url);
 
     // Derive server name from URL
     let name_guess = url
@@ -781,9 +786,9 @@ async fn handle_mcp_url(
 
     match crate::ops::server::introspect_server_by_url(url, &name_guess, None).await {
         Ok(introspection) => {
-            println!("   ✅ Introspection successful!");
-            println!("   Server Name: {}", introspection.server_name);
-            println!("   Tools Found: {}", introspection.tools.len());
+            ccos_println!("   ✅ Introspection successful!");
+            ccos_println!("   Server Name: {}", introspection.server_name);
+            ccos_println!("   Tools Found: {}", introspection.tools.len());
 
             // Create a synthetic RegistrySearchResult
             let result = crate::discovery::registry_search::RegistrySearchResult {
@@ -819,15 +824,15 @@ async fn handle_mcp_url(
             )
             .await
             {
-                println!("   ⚠️  Failed to save capabilities: {}", e);
+                ccos_println!("   ⚠️  Failed to save capabilities: {}", e);
             } else {
-                println!("   💾 Capabilities saved to RTFS file");
+                ccos_println!("   💾 Capabilities saved to RTFS file");
             }
 
             Ok(vec![id])
         }
         Err(e) => {
-            println!("❌ Failed to introspect MCP server: {}", e);
+            ccos_println!("❌ Failed to introspect MCP server: {}", e);
             Ok(vec![])
         }
     }
@@ -841,15 +846,15 @@ async fn handle_documentation_url(
     _llm_enabled: bool,
     storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
-    println!("🔍 Fetching API documentation from {}...", url);
-    println!("🤖 Using LLM to extract API endpoints...");
+    ccos_println!("🔍 Fetching API documentation from {}...", url);
+    ccos_println!("🤖 Using LLM to extract API endpoints...");
 
     // Get LLM provider from arbiter (async)
     let llm_provider = match crate::arbiter::get_default_llm_provider().await {
         Some(provider) => provider,
         None => {
-            println!("❌ No LLM provider configured.");
-            println!("   Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable.");
+            ccos_println!("❌ No LLM provider configured.");
+            ccos_println!("   Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable.");
             return Ok(vec![]);
         }
     };
@@ -872,22 +877,25 @@ async fn handle_documentation_url(
         .await
     {
         Ok(api_result) => {
-            println!("   ✅ Documentation parsed successfully!");
-            println!(
+            ccos_println!("   ✅ Documentation parsed successfully!");
+            ccos_println!(
                 "   API: {} v{}",
-                api_result.api_title, api_result.api_version
+                api_result.api_title,
+                api_result.api_version
             );
-            println!("   Base URL: {}", api_result.base_url);
-            println!("   Endpoints found: {}", api_result.endpoints.len());
+            ccos_println!("   Base URL: {}", api_result.base_url);
+            ccos_println!("   Endpoints found: {}", api_result.endpoints.len());
 
             for endpoint in api_result.endpoints.iter().take(5) {
-                println!(
+                ccos_println!(
                     "      • {} {} - {}",
-                    endpoint.method, endpoint.path, endpoint.name
+                    endpoint.method,
+                    endpoint.path,
+                    endpoint.name
                 );
             }
             if api_result.endpoints.len() > 5 {
-                println!("      ... and {} more", api_result.endpoints.len() - 5);
+                ccos_println!("      ... and {} more", api_result.endpoints.len() - 5);
             }
 
             // Create a synthetic RegistrySearchResult for the API
@@ -918,19 +926,19 @@ async fn handle_documentation_url(
             )
             .await
             {
-                println!("   ⚠️  Failed to save capabilities: {}", e);
+                ccos_println!("   ⚠️  Failed to save capabilities: {}", e);
             } else {
-                println!("   💾 Capabilities saved to RTFS file");
+                ccos_println!("   💾 Capabilities saved to RTFS file");
             }
 
             Ok(vec![id])
         }
         Err(e) => {
-            println!("❌ Failed to parse documentation: {}", e);
-            println!("   💡 Tips:");
-            println!("      • Ensure the URL points to API documentation");
-            println!("      • Check that LLM API key is valid");
-            println!("      • Try a more specific documentation page");
+            ccos_println!("❌ Failed to parse documentation: {}", e);
+            ccos_println!("   💡 Tips:");
+            ccos_println!("      • Ensure the URL points to API documentation");
+            ccos_println!("      • Check that LLM API key is valid");
+            ccos_println!("      • Try a more specific documentation page");
             Ok(vec![])
         }
     }

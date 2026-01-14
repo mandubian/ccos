@@ -11,6 +11,7 @@ use crate::mcp::core::MCPDiscoveryService;
 use crate::mcp::types::{DiscoveryOptions, MCPTool};
 use crate::synthesis::introspection::mcp_introspector::{MCPIntrospectionResult, MCPIntrospector};
 use crate::utils::fs::find_workspace_root;
+use crate::{ccos_eprintln, ccos_println};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use std::io::Write;
 use std::path::PathBuf;
@@ -418,8 +419,8 @@ pub async fn introspect_server_by_url(
                 } else {
                     "***".to_string()
                 };
-                eprintln!("🔐 Using auth from {}: {}", env_var, masked);
-                eprintln!("   Authorization header format: Bearer <token>");
+                ccos_eprintln!("🔐 Using auth from {}: {}", env_var, masked);
+                ccos_eprintln!("   Authorization header format: Bearer <token>");
             }
 
             Some(headers)
@@ -553,7 +554,7 @@ pub async fn save_discovered_tools(
 
     // Debug: log the workspace root being used (only in debug mode)
     if std::env::var("CCOS_DEBUG").is_ok() {
-        eprintln!("📁 Using workspace root: {}", workspace_root.display());
+        ccos_eprintln!("📁 Using workspace root: {}", workspace_root.display());
     }
 
     // Save to capabilities/servers/pending/{server_id}/capabilities.rtfs
@@ -577,12 +578,12 @@ pub async fn save_discovered_tools(
         // Check if this is the same server (by comparing server name/endpoint)
         // If it's the same, we can safely overwrite (update)
         // If it's different, we should warn or merge
-        eprintln!(
+        ccos_eprintln!(
             "⚠️  Capabilities file already exists for pending server: {}",
             server_id
         );
-        eprintln!("   Existing file: {}", capabilities_path);
-        eprintln!("   Updating with new introspection results...");
+        ccos_eprintln!("   Existing file: {}", capabilities_path);
+        ccos_eprintln!("   Updating with new introspection results...");
     }
 
     // Save RTFS capabilities (overwrites existing file if present)

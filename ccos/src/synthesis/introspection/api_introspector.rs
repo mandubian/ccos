@@ -140,8 +140,6 @@ impl APIIntrospector {
             return self.introspect_mock_api(api_domain);
         }
 
-        eprintln!("🔍 Introspecting API from OpenAPI spec: {}", spec_url);
-
         // Fetch OpenAPI spec
         let spec = self.fetch_openapi_spec(spec_url).await?;
 
@@ -271,6 +269,7 @@ impl APIIntrospector {
         let client = reqwest::Client::new();
         let response = client
             .get(spec_url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .timeout(std::time::Duration::from_secs(30))
             .send()
             .await

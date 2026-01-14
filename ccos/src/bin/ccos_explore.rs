@@ -34,6 +34,7 @@ use ccos::tui::{
         CapabilityCategory, CapabilityResolution, CapabilitySource, DecompNode, DiscoverPopup,
         DiscoveredCapability, DiscoveryEntry, DiscoverySearchResult, ExecutionMode, LlmInteraction,
         NodeStatus, PendingServerEntry, ServerInfo, ServerStatus, TraceEventType, View,
+        ApiSuggestion,
     },
 };
 
@@ -213,6 +214,16 @@ enum TuiEvent {
         server_name: String,
         error: String,
     },
+    /// Refresh complete
+    RefreshComplete {
+        server_name: String,
+        message: String,
+    },
+    /// Refresh failed
+    RefreshFailed {
+        server_name: String,
+        error: String,
+    },
     /// Server introspection requires authentication
     IntrospectionAuthRequired {
         server_name: String,
@@ -255,6 +266,13 @@ enum TuiEvent {
     },
     /// Approvals operation error
     ApprovalsError(String),
+    /// Server suggestions loaded from LLM
+    ServerSuggestionsLoaded {
+        query: String,
+        suggestions: Vec<ApiSuggestion>,
+    },
+    /// Server suggestion search failed
+    ServerSuggestionsFailed(String),
 }
 
 fn main() -> io::Result<()> {
@@ -663,6 +681,18 @@ fn process_tui_event(
                 };
             }
         }
+        TuiEvent::RefreshComplete { server_name, message } => {
+            state.discover_popup = DiscoverPopup::Success {
+                title: format!("Refresh Successful: {}", server_name),
+                message,
+            };
+        }
+        TuiEvent::RefreshFailed { server_name, error } => {
+            state.discover_popup = DiscoverPopup::Error {
+                title: format!("Refresh Failed: {}", server_name),
+                message: error,
+            };
+        }
         TuiEvent::IntrospectionAuthRequired {
             server_name,
             endpoint,
@@ -783,6 +813,22 @@ fn process_tui_event(
             );
             state.approvals_loading = false;
         }
+        TuiEvent::ServerSuggestionsLoaded { query, suggestions } => {
+            state.discover_loading = false;
+            // Update the popup with suggestions
+             state.discover_popup = DiscoverPopup::ServerSuggestions {
+                query,
+                suggestions,
+                selected: 0,
+            };
+        }
+        TuiEvent::ServerSuggestionsFailed(error) => {
+            state.discover_loading = false;
+             state.discover_popup = DiscoverPopup::Error {
+                title: "Server Search Failed".to_string(),
+                message: error,
+            };
+        }
     }
 }
 
@@ -810,8 +856,8 @@ async fn handle_key_event(
             } else if !matches!(state.discover_popup, DiscoverPopup::None) {
                 // Handle popup escape - go back or close
                 match &state.discover_popup {
-                    DiscoverPopup::IntrospectionResults { .. } => {
-                        // Go back to search results (if we had them)
+                    DiscoverPopup::IntrospectionResults { .. } | DiscoverPopup::Success { .. } => {
+                        // Close or go back
                         state.discover_popup = DiscoverPopup::None;
                     }
                     _ => {
@@ -828,21 +874,6 @@ async fn handle_key_event(
         // View switching shortcuts (1-7) - blocked only in Goals view with active goal input
         // (so user can type numbers in the goal input field)
         (KeyCode::Char('1'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
-            state.current_view = View::Goals;
-            state.active_panel = ActivePanel::GoalInput;
-            return;
-        }
-        (KeyCode::Char('2'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
-            state.current_view = View::Plans;
-            state.active_panel = ActivePanel::GoalInput; // Plans view not yet implemented
-            return;
-        }
-        (KeyCode::Char('3'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
-            state.current_view = View::Execute;
-            state.active_panel = ActivePanel::GoalInput; // Execute view not yet implemented
-            return;
-        }
-        (KeyCode::Char('4'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
             state.current_view = View::Discover;
             state.active_panel = ActivePanel::DiscoverList;
             // Trigger capability loading if not already loaded
@@ -851,7 +882,7 @@ async fn handle_key_event(
             }
             return;
         }
-        (KeyCode::Char('5'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
+        (KeyCode::Char('2'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
             state.current_view = View::Servers;
             state.active_panel = ActivePanel::ServersList;
             // Trigger server loading if not already loaded
@@ -860,7 +891,7 @@ async fn handle_key_event(
             }
             return;
         }
-        (KeyCode::Char('6'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
+        (KeyCode::Char('3'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
             state.current_view = View::Approvals;
             state.active_panel = ActivePanel::ApprovalsPendingList;
             // Trigger approvals loading if not already loaded
@@ -870,6 +901,21 @@ async fn handle_key_event(
             {
                 load_approvals_async(event_tx.clone());
             }
+            return;
+        }
+        (KeyCode::Char('4'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
+            state.current_view = View::Goals;
+            state.active_panel = ActivePanel::GoalInput;
+            return;
+        }
+        (KeyCode::Char('5'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
+            state.current_view = View::Plans;
+            state.active_panel = ActivePanel::GoalInput; // Plans view not yet implemented
+            return;
+        }
+        (KeyCode::Char('6'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
+            state.current_view = View::Execute;
+            state.active_panel = ActivePanel::GoalInput; // Execute view not yet implemented
             return;
         }
         (KeyCode::Char('7'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
@@ -1595,16 +1641,32 @@ fn handle_servers_view(
     event_tx: mpsc::UnboundedSender<TuiEvent>,
 ) {
     match key.code {
-        // Navigate up in server list
+        // Navigate up
         KeyCode::Char('k') | KeyCode::Up => {
-            if state.servers_selected > 0 {
-                state.servers_selected -= 1;
+            match state.active_panel {
+                ActivePanel::ServerDetails => {
+                    state.server_details_scroll = state.server_details_scroll.saturating_sub(1);
+                }
+                _ => {
+                    if state.servers_selected > 0 {
+                        state.servers_selected -= 1;
+                        state.server_details_scroll = 0; // Reset scroll on selection change
+                    }
+                }
             }
         }
-        // Navigate down in server list
+        // Navigate down
         KeyCode::Char('j') | KeyCode::Down => {
-            if !state.servers.is_empty() && state.servers_selected < state.servers.len() - 1 {
-                state.servers_selected += 1;
+            match state.active_panel {
+                ActivePanel::ServerDetails => {
+                    state.server_details_scroll = state.server_details_scroll.saturating_add(1);
+                }
+                _ => {
+                    if !state.servers.is_empty() && state.servers_selected < state.servers.len() - 1 {
+                        state.servers_selected += 1;
+                        state.server_details_scroll = 0; // Reset scroll on selection change
+                    }
+                }
             }
         }
         // Refresh servers
@@ -1612,6 +1674,18 @@ fn handle_servers_view(
             if !state.servers_loading {
                 load_servers_async(event_tx);
             }
+        }
+        // Retry rejected server
+        KeyCode::Char('R') => {
+             if !state.servers.is_empty() && state.servers_selected < state.servers.len() {
+                 let server = &state.servers[state.servers_selected];
+                 // Check if rejected
+                 if matches!(server.status, ServerStatus::Rejected) {
+                     // Strip prefix "⛔ " if present
+                     let name = server.name.strip_prefix("⛔ ").unwrap_or(&server.name).trim();
+                     retry_server_async(event_tx.clone(), name.to_string());
+                 }
+             }
         }
         // Discover tools for selected server
         KeyCode::Char('d') => {
@@ -1643,6 +1717,37 @@ fn handle_servers_view(
                     state.servers_selected,
                     server.endpoint.clone(),
                 );
+            }
+        }
+        // Find new servers
+        KeyCode::Char('f') | KeyCode::Char('/') => {
+            state.discover_popup = DiscoverPopup::ServerSearchInput {
+                query: String::new(),
+                cursor_position: 0,
+            };
+        }
+        // Delete server
+        KeyCode::Char('x') => {
+            if !state.servers.is_empty() && state.servers_selected < state.servers.len() {
+                let server = &state.servers[state.servers_selected];
+                delete_server_async(event_tx, server.name.clone());
+            }
+        }
+        // Refresh Schemas (re-introspect)
+        KeyCode::Char('S') => {
+            if !state.servers.is_empty() && state.servers_selected < state.servers.len() {
+                let server = &state.servers[state.servers_selected];
+                let server_name = server.name.clone();
+                let endpoint = server.endpoint.clone();
+                
+                // Set popup to Introspecting to show progress logs
+                state.discover_popup = DiscoverPopup::Introspecting {
+                    server_name: server_name.clone(),
+                    endpoint: endpoint.clone(),
+                    logs: vec!["Starting schema refresh...".to_string()],
+                };
+                
+                refresh_server_schemas_async(event_tx, server_name);
             }
         }
         _ => {}
@@ -2271,9 +2376,265 @@ fn suggest_auth_env_var(server_name: &str) -> String {
     format!("{}_MCP_TOKEN", namespace.to_uppercase())
 }
 
+
+/// Helper to parse server.rtfs content (shared)
+fn parse_rtfs_server_entry(content: &str) -> Option<ServerInfo> {
+    use rtfs::ast::{Expression, Literal, TopLevel};
+    
+    // Parse RTFS content
+    let top_levels = rtfs::parser::parse(content).ok()?;
+    
+    // Find (server ...) expression
+    let args = top_levels.iter().find_map(|tl| {
+        if let TopLevel::Expression(Expression::List(list)) = tl {
+                if let Some(Expression::Symbol(s)) = list.first() {
+                    if s.0 == "server" {
+                        return Some(&list[1..]);
+                    }
+                }
+        } else if let TopLevel::Expression(Expression::FunctionCall { callee, arguments }) = tl {
+                if let Expression::Symbol(s) = &**callee {
+                    if s.0 == "server" {
+                        return Some(arguments.as_slice());
+                    }
+                }
+        }
+        None
+    })?;
+
+    // Extract fields
+    let mut name = String::new();
+    let mut endpoint = String::new();
+    let mut failures = 0;
+    let mut total_calls = 0;
+    let mut tool_count = 0;
+    let mut tools: Vec<String> = Vec::new();
+
+    for i in (0..args.len()).step_by(2) {
+        if i+1 >= args.len() { break; }
+        
+        let key_str = match &args[i] {
+            Expression::Literal(Literal::Keyword(k)) => Some(k.0.as_str()),
+            Expression::Literal(Literal::Symbol(s)) if s.0.starts_with(':') => Some(&s.0[1..]),
+            _ => None
+        };
+
+        if let Some(key) = key_str {
+            match key {
+                "consecutive_failures" => {
+                    if let Expression::Literal(Literal::Integer(n)) = &args[i+1] {
+                        failures = *n;
+                    }
+                },
+                "total_calls" => {
+                    if let Expression::Literal(Literal::Integer(n)) = &args[i+1] {
+                        total_calls = *n;
+                    }
+                },
+                "capability_files" => {
+                    if let Expression::Vector(files) = &args[i+1] {
+                        tool_count = files.len();
+                        for file_expr in files {
+                            if let Expression::Literal(Literal::String(path)) = file_expr {
+                                // Extract tool name from path like "server/openapi/category/tool_name.rtfs"
+                                if let Some(file_name) = path.rsplit('/').next() {
+                                    let tool_name = file_name.trim_end_matches(".rtfs");
+                                    tools.push(tool_name.to_string());
+                                }
+                            }
+                        }
+                    }
+                },
+                "server_info" => {
+                        if let Expression::Map(map) = &args[i+1] {
+                            for (k, v) in map {
+                                let key_str = match k {
+                                    rtfs::ast::MapKey::Keyword(kw) => Some(&kw.0),
+                                    rtfs::ast::MapKey::String(s) => Some(s),
+                                    _ => None
+                                };
+
+                                if let Some(key) = key_str {
+                                    if key == "name" {
+                                        if let Expression::Literal(Literal::String(s)) = v {
+                                                name = s.clone();
+                                        }
+                                    } else if key == "endpoint" {
+                                        if let Expression::Literal(Literal::String(s)) = v {
+                                                endpoint = s.clone();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                },
+                _ => {}
+            }
+        }
+    }
+
+    if name.is_empty() { return None; }
+
+    Some(ServerInfo {
+        name: format!("✓ {}", name),
+        endpoint: endpoint.clone(),
+        status: if failures > 0 {
+                ServerStatus::Error
+        } else if total_calls > 0 {
+                ServerStatus::Connected
+        } else {
+                ServerStatus::Unknown
+        },
+        tool_count: if tool_count > 0 { Some(tool_count) } else { None },
+        tools,
+        last_checked: None,
+    })
+}
+
+/// Refresh server schemas asynchronously
+fn refresh_server_schemas_async(
+    event_tx: mpsc::UnboundedSender<TuiEvent>,
+    server_name: String,
+) {
+    // Strip approval checkmark and whitespace immediately
+    let server_name = server_name.trim_start_matches(|c: char| c == '✓' || c.is_whitespace()).to_string();
+
+    // Send loading indicator immediately
+    let _ = event_tx.send(TuiEvent::ServersLoading);
+    let _ = event_tx.send(TuiEvent::IntrospectionLog(format!("🔄 Refreshing schemas for '{}'...", server_name)));
+    
+    tokio::task::spawn_local(async move {
+        let root = ccos::utils::fs::get_workspace_root();
+        let approved_dir = root.join("capabilities/servers/approved");
+        
+        let mut source_url = None;
+        let mut server_dir = None;
+
+        if let Ok(mut entries) = tokio::fs::read_dir(&approved_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                 let path = entry.path();
+                 if path.is_dir() {
+                     let rtfs_path = path.join("server.rtfs");
+                     if rtfs_path.exists() {
+                          if let Ok(content) = tokio::fs::read_to_string(&rtfs_path).await {
+                               if let Some(info) = parse_rtfs_server_entry(&content) {
+                                   let clean_info_name = info.name.trim_start_matches(|c: char| c == '✓' || c.is_whitespace()).to_lowercase();
+                                   let clean_target_name = server_name.to_lowercase();
+                                   
+                                   if clean_info_name == clean_target_name {
+                                        server_dir = Some(path);
+                                        // Try both :source_url and :spec_url
+                                        if let Some(idx) = content.find(":source_url") {
+                                            let rest = &content[idx..];
+                                            if let Some(start_quote) = rest.find('"') {
+                                                if let Some(end_quote) = rest[start_quote+1..].find('"') {
+                                                    source_url = Some(rest[start_quote+1..start_quote+1+end_quote].to_string());
+                                                }
+                                            }
+                                        } else if let Some(idx) = content.find(":spec_url") {
+                                            let rest = &content[idx..];
+                                            if let Some(start_quote) = rest.find('"') {
+                                                if let Some(end_quote) = rest[start_quote+1..].find('"') {
+                                                    source_url = Some(rest[start_quote+1..start_quote+1+end_quote].to_string());
+                                                }
+                                            }
+                                        }
+                                        break;
+                                   } else {
+                                        // Log candidate for debugging
+                                        let _ = event_tx.send(TuiEvent::IntrospectionLog(format!("  (Candidate '{}' != '{}')", clean_info_name, clean_target_name)));
+                                   }
+                               }
+                          }
+                     }
+                 }
+            }
+        }
+
+        if source_url.is_none() || server_dir.is_none() {
+            let _ = event_tx.send(TuiEvent::RefreshFailed {
+                server_name: server_name.clone(),
+                error: format!("No source URL found for '{}'. Cannot refresh schemas.", server_name),
+            });
+            load_servers_async(event_tx);
+            return;
+        }
+        
+        let url = source_url.unwrap();
+        let dir = server_dir.unwrap();
+
+        let _ = event_tx.send(TuiEvent::IntrospectionLog(format!("🔍 Introspecting {} ...", url)));
+             
+        match ccos::discovery::llm_discovery::LlmDiscoveryService::new().await {
+            Ok(llm_svc) => {
+                let browser_svc = std::sync::Arc::new(ccos::ops::browser_discovery::BrowserDiscoveryService::new());
+                
+                let service = ccos::ops::introspection_service::IntrospectionService::empty()
+                   .with_browser_discovery(browser_svc)
+                   .with_llm_discovery(std::sync::Arc::new(llm_svc));
+
+                match service.introspect_browser(&url, &server_name).await {
+                    Ok(result) => {
+                        if result.success {
+                            // Use the service to generate RTFS files and update manifest consistently
+                            // Clean up old directories first to prevent duplication/orphans
+                            let browser_dir = dir.join("browser_discovery");
+                            let openapi_dir = dir.join("openapi");
+                            if browser_dir.exists() {
+                                let _ = tokio::fs::remove_dir_all(&browser_dir).await;
+                            }
+                            if openapi_dir.exists() {
+                                let _ = tokio::fs::remove_dir_all(&openapi_dir).await;
+                            }
+
+                            // Generate new files
+                            match service.generate_rtfs_files(&result, &dir, &url) {
+                                Ok(gen_result) => {
+                                    let count = gen_result.capability_files.len();
+                                    let _ = event_tx.send(TuiEvent::RefreshComplete {
+                                        server_name: server_name.clone(),
+                                        message: format!("Successfully refreshed {} endpoints for '{}'", count, server_name),
+                                    });
+                                },
+                                Err(e) => {
+                                    let _ = event_tx.send(TuiEvent::RefreshFailed {
+                                        server_name: server_name.clone(),
+                                        error: format!("Failed to generate RTFS files: {}", e),
+                                    });
+                                }
+                            }
+                        } else {
+                            let err_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
+                            let _ = event_tx.send(TuiEvent::RefreshFailed {
+                                server_name: server_name.clone(),
+                                error: err_msg,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        let _ = event_tx.send(TuiEvent::RefreshFailed {
+                            server_name: server_name.clone(),
+                            error: format!("Introspection error: {}", e),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = event_tx.send(TuiEvent::RefreshFailed {
+                    server_name: server_name.clone(),
+                    error: format!("Failed to create LLM service: {}", e),
+                });
+            }
+        }
+        load_servers_async(event_tx);
+    });
+}
+
 fn load_servers_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
     // Signal loading started
     let _ = event_tx.send(TuiEvent::ServersLoading);
+
+
 
     tokio::task::spawn_local(async move {
         use ccos::mcp::core::MCPDiscoveryService;
@@ -2282,28 +2643,90 @@ fn load_servers_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
         let mut servers: Vec<ServerInfo> = Vec::new();
         let mut seen_endpoints: HashSet<String> = HashSet::new();
 
-        // First, load approved servers from the approval queue
-        if let Ok(queue) = create_unified_queue() {
-            if let Ok(approved_requests) = queue.list_approved_servers().await {
-                for r in approved_requests {
-                    if let Some(a) = r.to_approved_discovery() {
-                        seen_endpoints.insert(a.server_info.endpoint.clone());
-                        servers.push(ServerInfo {
-                            name: format!("✓ {}", a.server_info.name), // Mark as approved
-                            endpoint: a.server_info.endpoint,
-                            status: if a.consecutive_failures > 0 {
-                                ServerStatus::Error
-                            } else if a.total_calls > 0 {
-                                ServerStatus::Connected
-                            } else {
-                                ServerStatus::Unknown
-                            },
-                            tool_count: a.capability_files.as_ref().map(|f| f.len()),
-                            tools: vec![],
-                            last_checked: None, // Would need live check
-                        });
-                    }
-                }
+        // Debug file (optional, just for verification if user checks logs)
+        let mut debug_log = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/ccos_debug.log").ok();
+        use std::io::Write;
+        
+        if let Some(f) = &mut debug_log { let _ = writeln!(f, "--- Loading Servers (Disk + Queue) ---"); }
+
+        // 1. Approved Servers (Direct from Disk)
+        let root = ccos::utils::fs::get_workspace_root();
+        let approved_dir = root.join("capabilities/servers/approved");
+        
+        if let Some(f) = &mut debug_log { let _ = writeln!(f, "Scanning approved dir: {:?}", approved_dir); }
+
+        if let Ok(mut entries) = tokio::fs::read_dir(&approved_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                 let path = entry.path();
+                 if path.is_dir() {
+                     let rtfs_path = path.join("server.rtfs");
+                     if rtfs_path.exists() {
+                          if let Ok(content) = tokio::fs::read_to_string(&rtfs_path).await {
+                               if let Some(info) = parse_rtfs_server_entry(&content) {
+                                    if let Some(f) = &mut debug_log { let _ = writeln!(f, "  Found approved on disk: {}", info.name); }
+                                    if !seen_endpoints.contains(&info.endpoint) {
+                                        seen_endpoints.insert(info.endpoint.clone());
+                                        servers.push(info);
+                                    }
+                               }
+                          }
+                     }
+                 }
+            }
+        }
+        
+        // 2. Queue-based Servers (Pending & Rejected)
+        let queue_res = create_unified_queue();
+        
+        match queue_res {
+            Ok(queue) => {
+                 type UQ = ccos::approval::UnifiedApprovalQueue<ccos::approval::storage_file::FileApprovalStorage>;
+                 
+                 // Pending
+                 if let Ok(pending) = queue.list_pending_servers().await {
+                      if let Some(f) = &mut debug_log { let _ = writeln!(f, "Pending servers in queue: {}", pending.len()); }
+                      for r in pending {
+                           if let Some(p) = r.to_pending_discovery() {
+                                if !seen_endpoints.contains(&p.server_info.endpoint) {
+                                     if let Some(f) = &mut debug_log { let _ = writeln!(f, "  Added Pending: {}", p.server_info.name); }
+                                     seen_endpoints.insert(p.server_info.endpoint.clone());
+                                     servers.push(ServerInfo {
+                                         name: format!("◷ {}", p.server_info.name),
+                                         endpoint: p.server_info.endpoint,
+                                         status: ServerStatus::Pending,
+                                         tool_count: None,
+                                         tools: vec![],
+                                         last_checked: None,
+                                     });
+                                }
+                           }
+                      }
+                 }
+
+                 // Rejected
+                 if let Ok(all) = queue.list(Default::default()).await {
+                      for r in all {
+                           if matches!(r.status, ccos::approval::ApprovalStatus::Rejected { .. }) {
+                                if let Some(si) = UQ::extract_server_info(&r) {
+                                     if !seen_endpoints.contains(&si.endpoint) {
+                                          if let Some(f) = &mut debug_log { let _ = writeln!(f, "  Added Rejected: {}", si.name); }
+                                          seen_endpoints.insert(si.endpoint.clone());
+                                          servers.push(ServerInfo {
+                                              name: format!("⛔ {}", si.name),
+                                              endpoint: si.endpoint.clone(),
+                                              status: ServerStatus::Rejected,
+                                              tool_count: None,
+                                              tools: vec![],
+                                              last_checked: None,
+                                          });
+                                     }
+                                }
+                           }
+                      }
+                 }
+            }
+            Err(e) => {
+                 if let Some(f) = &mut debug_log { let _ = writeln!(f, "Failed to create unified queue for pending/rejected check: {}", e); }
             }
         }
 
@@ -2326,6 +2749,57 @@ fn load_servers_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
         }
 
         let _ = event_tx.send(TuiEvent::ServersLoaded(servers));
+    });
+}
+
+/// Retry/Re-submit a rejected server
+fn retry_server_async(event_tx: mpsc::UnboundedSender<TuiEvent>, server_name: String) {
+    tokio::task::spawn_local(async move {
+        if let Ok(queue) = create_unified_queue() {
+            if let Ok(_) = queue.retry_server(&server_name).await {
+                // Refresh server list to show updated status
+                load_servers_async(event_tx);
+            }
+        }
+    });
+}
+
+/// Delete an approved server from disk
+fn delete_server_async(event_tx: mpsc::UnboundedSender<TuiEvent>, server_name: String) {
+    tokio::task::spawn_local(async move {
+        // Find the server directory by name
+        let root = ccos::utils::fs::get_workspace_root();
+        let approved_dir = root.join("capabilities/servers/approved");
+        
+        // Try to find a directory matching the server name
+        if let Ok(mut entries) = tokio::fs::read_dir(&approved_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_dir() {
+                    // Check if this is the server we want to delete
+                    // Match by directory name containing the server name (case-insensitive)
+                    let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    
+                    // Clean server name for comparison (remove status prefix)
+                    let clean_name = server_name
+                        .strip_prefix("✓ ")
+                        .or_else(|| server_name.strip_prefix("◷ "))
+                        .or_else(|| server_name.strip_prefix("⛔ "))
+                        .unwrap_or(&server_name);
+                    
+                    if dir_name.eq_ignore_ascii_case(clean_name) || 
+                       dir_name.replace('_', " ").eq_ignore_ascii_case(clean_name) ||
+                       dir_name.replace('-', " ").eq_ignore_ascii_case(clean_name) {
+                        // Found the server directory, delete it
+                        if tokio::fs::remove_dir_all(&path).await.is_ok() {
+                            // Refresh server list
+                            load_servers_async(event_tx);
+                        }
+                        return;
+                    }
+                }
+            }
+        }
     });
 }
 
@@ -2547,6 +3021,103 @@ fn load_known_api_capabilities() -> Vec<DiscoveredCapability> {
     }
 
     caps
+}
+
+async fn find_servers_async(
+    query: String,
+    event_tx: mpsc::UnboundedSender<TuiEvent>,
+) {
+    use ccos::discovery::llm_discovery::LlmDiscoveryService;
+    use ccos::examples_common::builder::{load_agent_config, find_llm_profile};
+    use ccos::cognitive_engine::llm_provider::{LlmProviderConfig, LlmProviderFactory, LlmProviderType};
+    
+    // Load agent config to get LLM profile
+    let agent_config = match load_agent_config("config/agent_config.toml") {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = event_tx.send(TuiEvent::ServerSuggestionsFailed(
+                format!("Failed to load agent config: {}", e)
+            ));
+            return;
+        }
+    };
+    
+    // Try to find an LLM profile - prefer "openrouter_free:balanced" or fall back to first available
+    let profile_names = ["openrouter_free:balanced", "gpt4", "claude", "openai", "anthropic"];
+    let mut provider_result = None;
+    
+    for profile_name in &profile_names {
+        if let Some(profile) = find_llm_profile(&agent_config, profile_name) {
+            // Resolve API key from env var or direct value
+            let api_key = profile.api_key.clone().or_else(|| {
+                profile.api_key_env.as_ref().and_then(|env| std::env::var(env).ok())
+            });
+            
+            if let Some(key) = api_key {
+                let provider_type = match profile.provider.as_str() {
+                    "openai" => LlmProviderType::OpenAI,
+                    "anthropic" => LlmProviderType::Anthropic,
+                    "openrouter" => LlmProviderType::OpenAI, // OpenRouter uses OpenAI API
+                    _ => LlmProviderType::OpenAI,
+                };
+                
+                let config = LlmProviderConfig {
+                    provider_type,
+                    model: profile.model.clone(),
+                    api_key: Some(key),
+                    base_url: profile.base_url.clone(),
+                    max_tokens: profile.max_tokens.or(Some(4096)),
+                    temperature: profile.temperature.or(Some(0.7)),
+                    timeout_seconds: Some(60),
+                    retry_config: Default::default(),
+                };
+                
+                match LlmProviderFactory::create_provider(config).await {
+                    Ok(p) => {
+                        provider_result = Some(p);
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+        }
+    }
+    
+    let provider = match provider_result {
+        Some(p) => p,
+        None => {
+            let _ = event_tx.send(TuiEvent::ServerSuggestionsFailed(
+                "No LLM provider configured. Check agent_config.toml and ensure API keys are set.".to_string()
+            ));
+            return;
+        }
+    };
+    
+    // Create service with the configured provider
+    let service = LlmDiscoveryService::with_provider(provider);
+    
+    // Perform search
+    match service.search_external_apis(&query, None).await {
+        Ok(results) => {
+            let suggestions = results.into_iter().map(|r| ApiSuggestion {
+                name: r.name,
+                endpoint: r.endpoint,
+                docs_url: r.docs_url,
+                description: r.description,
+                auth_env_var: r.auth_env_var,
+            }).collect();
+            
+            let _ = event_tx.send(TuiEvent::ServerSuggestionsLoaded {
+                query,
+                suggestions,
+            });
+        }
+        Err(e) => {
+            let _ = event_tx.send(TuiEvent::ServerSuggestionsFailed(
+                format!("Search failed: {}", e)
+            ));
+        }
+    }
 }
 
 fn load_core_capabilities() -> Vec<DiscoveredCapability> {
@@ -2837,10 +3408,11 @@ async fn introspect_server_async(
     endpoint: String,
     event_tx: mpsc::UnboundedSender<TuiEvent>,
 ) {
-    use ccos::ops::server::introspect_server_by_url;
+    use ccos::ops::introspection_service::{IntrospectionService, IntrospectionSource};
+    use ccos::utils::fs::{get_workspace_root, sanitize_filename};
 
     let _ = event_tx.send(TuiEvent::IntrospectionLog(format!(
-        "Initializing session with {}...",
+        "Initializing introspection for {}...",
         endpoint
     )));
     let _ = event_tx.send(TuiEvent::Trace(
@@ -2852,62 +3424,185 @@ async fn introspect_server_async(
     // Determine the auth env var to use
     let suggested_env_var = suggest_auth_env_var(&server_name);
 
-    // Check if token is available
-    let auth_env_var = if std::env::var(&suggested_env_var).is_ok() {
-        let _ = event_tx.send(TuiEvent::IntrospectionLog(format!(
-            "Using auth token from {}",
-            suggested_env_var
-        )));
-        Some(suggested_env_var.as_str())
-    } else if std::env::var("MCP_AUTH_TOKEN").is_ok() {
+
+    // Setup paths
+    let server_id = sanitize_filename(&server_name);
+    let workspace_root = get_workspace_root();
+    let pending_dir = workspace_root.join("capabilities/servers/pending").join(&server_id);
+
+    // Create introspection service with browser discovery capability
+    let browser_svc = std::sync::Arc::new(ccos::ops::browser_discovery::BrowserDiscoveryService::new());
+    let introspection_service = IntrospectionService::empty()
+        .with_browser_discovery(browser_svc);
+
+    // Detect introspection type and execute
+    let result = if IntrospectionService::is_openapi_url(&endpoint) {
         let _ = event_tx.send(TuiEvent::IntrospectionLog(
-            "Using auth token from MCP_AUTH_TOKEN".to_string(),
+            "Detected OpenAPI spec URL, introspecting...".to_string(),
         ));
-        Some("MCP_AUTH_TOKEN")
+        introspection_service.introspect_openapi(&endpoint, &server_name).await
+    } else if IntrospectionService::is_stdio_command(&endpoint) {
+        let _ = event_tx.send(TuiEvent::IntrospectionLog(
+            "Detected stdio command, introspecting MCP...".to_string(),
+        ));
+        // For stdio commands, we need MCP discovery service
+        // Fall back to old method for now
+        use ccos::ops::server::introspect_server_by_url;
+        let auth_env_var = if std::env::var(&suggested_env_var).is_ok() {
+            Some(suggested_env_var.as_str())
+        } else {
+            None
+        };
+        match introspect_server_by_url(&endpoint, &server_name, auth_env_var).await {
+            Ok(mcp_result) => {
+                // Convert MCP result to discovered capabilities
+                let discovered_tools: Vec<DiscoveredCapability> = mcp_result
+                    .tools
+                    .iter()
+                    .map(|tool| DiscoveredCapability {
+                        id: format!("mcp:{}:{}", server_name, tool.tool_name),
+                        name: tool.tool_name.clone(),
+                        description: tool.description.clone().unwrap_or_default(),
+                        source: server_name.clone(),
+                        category: CapabilityCategory::McpTool,
+                        version: None,
+                        input_schema: tool.input_schema_json.as_ref().map(|v| v.to_string()),
+                        output_schema: None,
+                        permissions: Vec::new(),
+                        effects: Vec::new(),
+                        metadata: std::collections::HashMap::new(),
+                    })
+                    .collect();
+
+                let _ = event_tx.send(TuiEvent::IntrospectionLog(format!(
+                    "Found {} MCP tools.",
+                    discovered_tools.len()
+                )));
+                let _ = event_tx.send(TuiEvent::IntrospectionComplete {
+                    server_name,
+                    endpoint,
+                    tools: discovered_tools,
+                });
+                return;
+            }
+            Err(e) => {
+                let _ = event_tx.send(TuiEvent::IntrospectionFailed {
+                    server_name,
+                    error: format!("MCP introspection failed: {}", e),
+                });
+                return;
+            }
+        }
     } else {
-        let _ = event_tx.send(TuiEvent::IntrospectionLog(format!(
-            "No auth token found (checked {} and MCP_AUTH_TOKEN)",
-            suggested_env_var
-        )));
-        None
+        // Try browser-based discovery for HTML docs or general URLs
+        let _ = event_tx.send(TuiEvent::IntrospectionLog(
+            "Trying browser-based discovery...".to_string(),
+        ));
+        introspection_service.introspect_browser(&endpoint, &server_name).await
     };
 
-    // Use the same introspection function as the CLI
-    match introspect_server_by_url(&endpoint, &server_name, auth_env_var).await {
-        Ok(result) => {
-            let _ = event_tx.send(TuiEvent::IntrospectionLog(format!(
-                "Found {} tools.",
-                result.tools.len()
-            )));
+    match result {
+        Ok(intro_result) => {
+            if intro_result.success {
+                let source_str = match intro_result.source {
+                    IntrospectionSource::OpenApi => "OpenAPI",
+                    IntrospectionSource::Mcp => "MCP",
+                    IntrospectionSource::McpStdio => "MCP (stdio)",
+                    IntrospectionSource::HtmlDocs => "HTML Docs",
+                    IntrospectionSource::Browser => "Browser",
+                    IntrospectionSource::Unknown => "Unknown",
+                };
+                
+                let _ = event_tx.send(TuiEvent::IntrospectionLog(format!(
+                    "Introspection successful via {}",
+                    source_str
+                )));
 
-            let discovered_tools: Vec<DiscoveredCapability> = result
-                .tools
-                .iter()
-                .map(|tool| DiscoveredCapability {
-                    id: format!("mcp:{}:{}", server_name, tool.tool_name),
-                    name: tool.tool_name.clone(),
-                    description: tool.description.clone().unwrap_or_default(),
-                    source: server_name.clone(),
-                    category: CapabilityCategory::McpTool,
-                    version: None,
-                    input_schema: tool.input_schema_json.as_ref().map(|v| v.to_string()),
-                    output_schema: None,
-                    permissions: Vec::new(),
-                    effects: Vec::new(),
-                    metadata: std::collections::HashMap::new(),
-                })
-                .collect();
+                // Convert to DiscoveredCapability
+                let mut discovered_tools: Vec<DiscoveredCapability> = Vec::new();
 
-            let _ = event_tx.send(TuiEvent::IntrospectionComplete {
-                server_name: server_name.clone(),
-                endpoint: endpoint.clone(),
-                tools: discovered_tools,
-            });
+                // From API result (OpenAPI)
+                if let Some(ref api) = intro_result.api_result {
+                    for ep in &api.endpoints {
+                        discovered_tools.push(DiscoveredCapability {
+                            id: format!("api:{}:{}", server_name, ep.endpoint_id),
+                            name: ep.name.clone(),
+                            description: ep.description.clone(),
+                            source: format!("{} ({})", server_name, source_str),
+                            category: CapabilityCategory::McpTool,
+                            version: None,
+                            input_schema: None,
+                            output_schema: None,
+                            permissions: Vec::new(),
+                            effects: Vec::new(),
+                            metadata: std::collections::HashMap::new(),
+                        });
+                    }
+                }
+
+                // From browser result
+                if let Some(ref browser) = intro_result.browser_result {
+                    for ep in &browser.discovered_endpoints {
+                        discovered_tools.push(DiscoveredCapability {
+                            id: format!("browser:{}:{}_{}", server_name, ep.method, ep.path),
+                            name: format!("{} {}", ep.method, ep.path),
+                            description: ep.description.clone().unwrap_or_default(),
+                            source: format!("{} ({})", server_name, source_str),
+                            category: CapabilityCategory::McpTool,
+                            version: None,
+                            input_schema: None,
+                            output_schema: None,
+                            permissions: Vec::new(),
+                            effects: Vec::new(),
+                            metadata: std::collections::HashMap::new(),
+                        });
+                    }
+                }
+
+                // From manifests (MCP tools)
+                for manifest in &intro_result.manifests {
+                    discovered_tools.push(DiscoveredCapability {
+                        id: format!("mcp:{}:{}", server_name, manifest.id),
+                        name: manifest.name.clone(),
+                        description: manifest.description.clone(),
+                        source: format!("{} ({})", server_name, source_str),
+                        category: CapabilityCategory::McpTool,
+                        version: None,
+                        input_schema: manifest.input_schema.as_ref().map(|s| s.to_string()),
+                        output_schema: None,
+                        permissions: Vec::new(),
+                        effects: Vec::new(),
+                        metadata: std::collections::HashMap::new(),
+                    });
+                }
+
+                let _ = event_tx.send(TuiEvent::IntrospectionLog(format!(
+                    "Found {} capabilities.",
+                    discovered_tools.len()
+                )));
+
+                if discovered_tools.is_empty() {
+                    let _ = event_tx.send(TuiEvent::IntrospectionFailed {
+                        server_name,
+                        error: "No capabilities discovered. The URL may not have an accessible API spec.".to_string(),
+                    });
+                } else {
+                    let _ = event_tx.send(TuiEvent::IntrospectionComplete {
+                        server_name,
+                        endpoint,
+                        tools: discovered_tools,
+                    });
+                }
+            } else {
+                let _ = event_tx.send(TuiEvent::IntrospectionFailed {
+                    server_name,
+                    error: intro_result.error.unwrap_or_else(|| "Introspection failed".to_string()),
+                });
+            }
         }
         Err(e) => {
             let error_str = format!("{}", e);
 
-            // Log full error for debugging
             let _ = event_tx.send(TuiEvent::Trace(
                 TraceEventType::Error,
                 format!("Introspection failed for {}: {}", server_name, error_str),
@@ -2915,20 +3610,16 @@ async fn introspect_server_async(
             ));
 
             // Check if it's an auth error
-            if error_str.contains("MCP_AUTH_TOKEN")
-                || error_str.contains("not set")
-                || error_str.contains("401")
+            if error_str.contains("401")
                 || error_str.contains("Unauthorized")
                 || error_str.contains("authentication")
                 || error_str.contains("token")
                 || error_str.contains("auth")
             {
-                // Suggest auth env var based on server name
                 let env_var = suggest_auth_env_var(&server_name);
-
                 let _ = event_tx.send(TuiEvent::IntrospectionAuthRequired {
-                    server_name: server_name.clone(),
-                    endpoint: endpoint.clone(),
+                    server_name,
+                    endpoint,
                     env_var,
                 });
             } else {
@@ -2984,6 +3675,99 @@ fn handle_discover_popup_key(
     let mut next_popup = None;
 
     match &mut state.discover_popup {
+        DiscoverPopup::ServerSearchInput {
+            query,
+            cursor_position,
+        } => {
+            match key.code {
+                KeyCode::Enter => {
+                    // Trigger async search
+                    if !query.is_empty() {
+                        let query = query.clone();
+                        let tx = event_tx.clone();
+                        state.discover_loading = true;
+                        
+                        // Spawn search task
+                        tokio::task::spawn_local(async move {
+                            find_servers_async(query, tx).await;
+                        });
+                        
+                        // We shouldn't change popup here immediately, the async task will 
+                        // send an event to update state to ServerSuggestions
+                    }
+                }
+                KeyCode::Esc => {
+                    next_popup = Some(DiscoverPopup::None);
+                }
+                KeyCode::Backspace => {
+                    if *cursor_position > 0 {
+                        query.remove(*cursor_position - 1);
+                        *cursor_position -= 1;
+                    }
+                }
+                KeyCode::Delete => {
+                    if *cursor_position < query.len() {
+                        query.remove(*cursor_position);
+                    }
+                }
+                KeyCode::Left => {
+                    *cursor_position = cursor_position.saturating_sub(1);
+                }
+                KeyCode::Right => {
+                    if *cursor_position < query.len() {
+                        *cursor_position += 1;
+                    }
+                }
+                KeyCode::Char(c) => {
+                    query.insert(*cursor_position, c);
+                    *cursor_position += 1;
+                }
+                _ => {}
+            }
+        }
+        DiscoverPopup::ServerSuggestions {
+            suggestions,
+            selected,
+            ..
+        } => {
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    *selected = selected.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !suggestions.is_empty() {
+                        *selected = (*selected + 1).min(suggestions.len() - 1);
+                    }
+                }
+                KeyCode::Enter => {
+                    // Introspect selected suggestion
+                    // For REST APIs, use docs_url if available (may have OpenAPI spec)
+                    // Otherwise fall back to endpoint
+                     if let Some(suggestion) = suggestions.get(*selected) {
+                        let introspect_url = suggestion.docs_url.clone()
+                            .unwrap_or_else(|| suggestion.endpoint.clone());
+                        
+                        next_popup = Some(DiscoverPopup::Introspecting {
+                            server_name: suggestion.name.clone(),
+                            endpoint: introspect_url.clone(),
+                            logs: Vec::new(),
+                        });
+
+                        // Spawn async task for introspection
+                        let server_name = suggestion.name.clone();
+                        let event_tx_clone = event_tx.clone();
+
+                        tokio::task::spawn_local(async move {
+                            introspect_server_async(server_name, introspect_url, event_tx_clone).await;
+                        });
+                    }
+                }
+                KeyCode::Esc => {
+                    next_popup = Some(DiscoverPopup::None);
+                }
+                _ => {}
+            }
+        }
         DiscoverPopup::SearchResults { servers, selected } => {
             match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -3114,7 +3898,7 @@ fn handle_discover_popup_key(
                 next_popup = Some(DiscoverPopup::None);
             }
         }
-        DiscoverPopup::Error { .. } => {
+        DiscoverPopup::Error { .. } | DiscoverPopup::Success { .. } => {
             if let KeyCode::Esc | KeyCode::Enter = key.code {
                 next_popup = Some(DiscoverPopup::None);
             }

@@ -3,6 +3,7 @@
 //! Handles communication with MCP servers running as local processes via stdio.
 //! Implements JSON-RPC 2.0 over line-delimited stdio.
 
+use crate::{ccos_eprintln, ccos_println};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -103,7 +104,7 @@ impl StdioClient {
                 match stderr.read_line(&mut line).await {
                     Ok(0) => break,
                     Ok(_) => {
-                        eprintln!("[MCP-SERVER-LOG] {}", line.trim());
+                        ccos_eprintln!("[MCP-SERVER-LOG] {}", line.trim());
                     }
                     Err(_) => break,
                 }

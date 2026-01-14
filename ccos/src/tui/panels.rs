@@ -3,7 +3,7 @@
 //! Ratatui widgets for each panel in the 6-panel layout.
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
@@ -120,12 +120,12 @@ fn render_header(f: &mut Frame, state: &mut AppState, area: Rect) {
 /// Render the left navigation menu
 fn render_nav_menu(f: &mut Frame, state: &mut AppState, area: Rect) {
     let views = [
-        (View::Goals, "Goals", "1"),
-        (View::Plans, "Plans", "2"),
-        (View::Execute, "Execute", "3"),
-        (View::Discover, "Discover", "4"),
-        (View::Servers, "Servers", "5"),
-        (View::Approvals, "Approvals", "6"),
+        (View::Discover, "Discover", "1"),
+        (View::Servers, "Servers", "2"),
+        (View::Approvals, "Approvals", "3"),
+        (View::Goals, "Goals", "4"),
+        (View::Plans, "Plan", "5"),
+        (View::Execute, "Execute", "6"),
         (View::Config, "Config", "7"),
     ];
 
@@ -305,6 +305,8 @@ fn render_server_list(f: &mut Frame, state: &mut AppState, area: Rect) {
                 ServerStatus::Connecting => theme::STATUS_WARNING,
                 ServerStatus::Error => theme::STATUS_ERROR,
                 ServerStatus::Unknown => theme::SUBTEXT0,
+                ServerStatus::Pending => theme::STATUS_WARNING,
+                ServerStatus::Rejected => theme::STATUS_ERROR,
             };
 
             let tools_str = server
@@ -351,7 +353,7 @@ fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::PANEL_BORDER));
 
-    if state.servers.is_empty() || state.servers_selected >= state.servers.len() {
+    if state.servers.is_empty() {
         let paragraph = Paragraph::new("Select a server to view details")
             .style(Style::default().fg(theme::SUBTEXT0))
             .block(block);
@@ -359,13 +361,46 @@ fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
         return;
     }
 
+    if state.servers_selected >= state.servers.len() {
+        return;
+    }
+
     let server = &state.servers[state.servers_selected];
+
+    // Render the outer block
+    f.render_widget(block.clone(), area);
+
+    // Get inner area for content
+    let inner_area = block.inner(area);
+
+    // Layout:
+    // Top: Info (Left) | Actions (Right)
+    // Bottom: Tool List (Scrollable)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(8), // Header height for info + actions
+            Constraint::Min(1),    // Tool list body
+        ])
+        .split(inner_area);
+
+    let top_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(50), // Info
+            Constraint::Percentage(50), // Actions
+        ])
+        .split(chunks[0]);
+
+    // --- Render Server Info (Top Left) ---
     let status_color = match server.status {
         ServerStatus::Connected => theme::STATUS_SUCCESS,
         ServerStatus::Disconnected => theme::SUBTEXT0,
         ServerStatus::Connecting => theme::STATUS_WARNING,
         ServerStatus::Error => theme::STATUS_ERROR,
         ServerStatus::Unknown => theme::SUBTEXT0,
+        ServerStatus::Pending => theme::STATUS_WARNING,
+        ServerStatus::Rejected => theme::STATUS_ERROR,
     };
 
     let status_text = match server.status {
@@ -374,6 +409,8 @@ fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
         ServerStatus::Connecting => "Connecting...",
         ServerStatus::Error => "Error",
         ServerStatus::Unknown => "Unknown",
+        ServerStatus::Pending => "Pending Approval",
+        ServerStatus::Rejected => "Rejected",
     };
 
     let tools_text = server
@@ -381,7 +418,7 @@ fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
         .map(|c| format!("{}", c))
         .unwrap_or_else(|| "Unknown".to_string());
 
-    let mut lines = vec![
+    let info_lines = vec![
         Line::from(vec![
             Span::styled("Name:     ", Style::default().fg(theme::SUBTEXT0)),
             Span::styled(
@@ -391,63 +428,90 @@ fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
-        Line::from(""),
         Line::from(vec![
             Span::styled("Endpoint: ", Style::default().fg(theme::SUBTEXT0)),
             Span::styled(&server.endpoint, Style::default().fg(theme::SAPPHIRE)),
         ]),
-        Line::from(""),
         Line::from(vec![
             Span::styled("Status:   ", Style::default().fg(theme::SUBTEXT0)),
             Span::styled(server.status.icon(), Style::default().fg(status_color)),
             Span::raw(" "),
             Span::styled(status_text, Style::default().fg(status_color)),
         ]),
-        Line::from(""),
         Line::from(vec![
             Span::styled("Tools:    ", Style::default().fg(theme::SUBTEXT0)),
             Span::styled(tools_text, Style::default().fg(theme::PEACH)),
         ]),
     ];
 
-    // Add individual tool names if available
+    f.render_widget(Paragraph::new(info_lines), top_chunks[0]);
+
+    // --- Render Actions (Top Right) ---
+    let actions_lines = vec![
+        Line::from(vec![Span::styled(
+            "Actions",
+            Style::default()
+                .fg(theme::SUBTEXT0)
+                .add_modifier(Modifier::UNDERLINED),
+        )]),
+        Line::from(vec![
+            Span::styled("[d] ", Style::default().fg(theme::MAUVE)),
+            Span::raw("Discover tools"),
+        ]),
+        Line::from(vec![
+            Span::styled("[c] ", Style::default().fg(theme::MAUVE)),
+            Span::raw("Check connection"),
+        ]),
+        Line::from(vec![
+            Span::styled("[r] ", Style::default().fg(theme::MAUVE)),
+            Span::raw("Refresh servers"),
+        ]),
+        Line::from(vec![
+            Span::styled("[f] ", Style::default().fg(theme::TEAL)),
+            Span::raw("Find new servers"),
+        ]),
+        Line::from(vec![
+            Span::styled("[R] ", Style::default().fg(theme::YELLOW)),
+            Span::raw("Retry rejected"),
+        ]),
+        Line::from(vec![
+            Span::styled("[S] ", Style::default().fg(theme::MAUVE)),
+            Span::raw("Refresh schemas"),
+        ]),
+        Line::from(vec![
+            Span::styled("[x] ", Style::default().fg(theme::RED)),
+            Span::raw("Delete server"),
+        ]),
+    ];
+
+    // Use Alignment::Right for actions? Or just keep them left-aligned within the right block
+    f.render_widget(Paragraph::new(actions_lines), top_chunks[1]);
+
+    // --- Render Tool List (Bottom) ---
+    let mut tool_lines = Vec::new();
     if !server.tools.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled(
+        tool_lines.push(Line::from(vec![Span::styled(
             "Tool List:",
             Style::default().fg(theme::SUBTEXT0),
         )]));
         for tool_name in &server.tools {
-            lines.push(Line::from(vec![
+            tool_lines.push(Line::from(vec![
                 Span::styled("  • ", Style::default().fg(theme::GREEN)),
                 Span::styled(tool_name.clone(), Style::default().fg(theme::TEXT)),
             ]));
         }
+    } else {
+        tool_lines.push(Line::from(Span::styled(
+            "No tools discovered yet.",
+            Style::default().fg(theme::SUBTEXT0),
+        )));
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled(
-        "Actions: ",
-        Style::default().fg(theme::SUBTEXT0),
-    )]));
-    lines.push(Line::from(vec![
-        Span::styled("  [d] ", Style::default().fg(theme::MAUVE)),
-        Span::raw("Discover tools"),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  [c] ", Style::default().fg(theme::MAUVE)),
-        Span::raw("Check connection"),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  [r] ", Style::default().fg(theme::MAUVE)),
-        Span::raw("Refresh all servers"),
-    ]));
-
-    let paragraph = Paragraph::new(lines)
-        .block(block)
-        .wrap(Wrap { trim: false });
-    f.render_widget(paragraph, area);
+    let scroll_offset = state.server_details_scroll;
+    f.render_widget(
+        Paragraph::new(tool_lines).scroll((scroll_offset as u16, 0)),
+        chunks[1],
+    );
 }
 
 // =========================================
@@ -556,6 +620,18 @@ fn render_pending_list(f: &mut Frame, state: &AppState, area: Rect) {
         return;
     }
 
+    // Layout: List (top) | Help Footer (bottom)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),    // List area
+            Constraint::Length(1), // Help footer
+        ])
+        .split(area);
+
+    let list_area = chunks[0];
+    let help_area = chunks[1];
+
     let items: Vec<ListItem> = state
         .pending_servers
         .iter()
@@ -618,7 +694,19 @@ fn render_pending_list(f: &mut Frame, state: &AppState, area: Rect) {
         .collect();
 
     let list = List::new(items).block(block);
-    f.render_widget(list, area);
+    f.render_widget(list, list_area);
+
+    // Render help footer
+    let help_text = Line::from(vec![
+        Span::styled("[a]", Style::default().fg(theme::GREEN)),
+        Span::raw(" Approve  "),
+        Span::styled("[r]", Style::default().fg(theme::RED)),
+        Span::raw(" Reject  "),
+        Span::styled("[t]", Style::default().fg(theme::YELLOW)),
+        Span::raw(" Token"),
+    ]);
+    let help_paragraph = Paragraph::new(help_text).alignment(Alignment::Center);
+    f.render_widget(help_paragraph, help_area);
 }
 
 /// Render details for the selected pending server
@@ -2121,6 +2209,19 @@ fn render_discover_popup(f: &mut Frame, state: &mut AppState) {
     let popup = state.discover_popup.clone();
     match &popup {
         DiscoverPopup::None => {}
+        DiscoverPopup::ServerSearchInput {
+            query,
+            cursor_position,
+        } => {
+            render_server_search_input_popup(f, query, *cursor_position, state);
+        }
+        DiscoverPopup::ServerSuggestions {
+            suggestions,
+            selected,
+            ..
+        } => {
+            render_server_suggestions_popup(f, suggestions, *selected);
+        }
         DiscoverPopup::SearchResults { servers, selected } => {
             render_search_results_popup(f, servers, *selected);
         }
@@ -2150,7 +2251,109 @@ fn render_discover_popup(f: &mut Frame, state: &mut AppState) {
         DiscoverPopup::Error { title, message } => {
             render_error_popup(f, title, message);
         }
+        DiscoverPopup::Success { title, message } => {
+            render_success_popup(f, title, message);
+        }
     }
+}
+
+fn render_server_search_input_popup(
+    f: &mut Frame,
+    query: &str,
+    cursor_position: usize,
+    state: &AppState,
+) {
+    let area = f.size();
+    let popup_area = centered_rect(50, 20, area);
+
+    let title = if state.discover_loading {
+        format!(" Find New Servers {} ", state.spinner_icon())
+    } else {
+        " Find New Servers ".to_string()
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .style(Style::default().bg(theme::BASE));
+
+    let content = vec![
+        Line::from(vec![Span::styled(
+            "Describe what you are looking for:",
+            Style::default().fg(theme::SUBTEXT0),
+        )]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(theme::TEAL)),
+            Span::styled(query, Style::default().fg(theme::TEXT)),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Example: 'weather api', 'sms service', 'github'",
+            Style::default()
+                .fg(theme::SUBTEXT0)
+                .add_modifier(Modifier::ITALIC),
+        )]),
+    ];
+
+    let paragraph = Paragraph::new(content).block(block);
+
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+    f.render_widget(paragraph, popup_area);
+
+    // Render cursor manually if simple Paragraph doesn't support it easily without breaking lines
+    // For simplicity, we assume the cursor is at end or handled by state logic for display
+}
+
+fn render_server_suggestions_popup(
+    f: &mut Frame,
+    suggestions: &[crate::tui::state::ApiSuggestion],
+    selected: usize,
+) {
+    let area = f.size();
+    let popup_area = centered_rect(70, 60, area);
+
+    let items: Vec<ListItem> = suggestions
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let is_selected = i == selected;
+            let prefix = if is_selected { "▶ " } else { "  " };
+            let style = if is_selected {
+                Style::default()
+                    .fg(theme::GREEN)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT)
+            };
+
+            // Show name + endpoint + description (truncated)
+            let endpoint_display = format!(" ({})", truncate(&s.endpoint, 30));
+            let desc = format!(" - {}", truncate(&s.description, 35));
+
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(&s.name, style),
+                Span::styled(endpoint_display, Style::default().fg(theme::SAPPHIRE)),
+                Span::styled(desc, Style::default().fg(theme::SUBTEXT0)),
+            ]))
+        })
+        .collect();
+
+    let block = Block::default()
+        .title(format!(
+            " Suggestions ({} found) - Enter: Introspect, Esc: Close ",
+            suggestions.len()
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::MAUVE))
+        .style(Style::default().bg(theme::BASE));
+
+    let list = List::new(items).block(block);
+
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+    f.render_widget(list, popup_area);
 }
 
 /// Render search results popup with server list
@@ -2381,6 +2584,59 @@ fn render_error_popup(f: &mut Frame, title: &str, message: &str) {
         .title(format!(" ⚠ {} ", title))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::RED))
+        .style(Style::default().bg(theme::BASE));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+    f.render_widget(paragraph, popup_area);
+}
+
+fn render_success_popup(f: &mut Frame, title: &str, message: &str) {
+    let area = f.size();
+    let popup_area = centered_rect(60, 40, area);
+    let inner_width = popup_area.width.saturating_sub(4) as usize;
+
+    let mut lines: Vec<Line> = vec![Line::from("")];
+
+    for msg_line in message.lines() {
+        let words: Vec<&str> = msg_line.split_whitespace().collect();
+        let mut current_line = String::new();
+
+        for word in words {
+            if current_line.is_empty() {
+                current_line = word.to_string();
+            } else if current_line.len() + 1 + word.len() <= inner_width.saturating_sub(4) {
+                current_line.push(' ');
+                current_line.push_str(word);
+            } else {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  {}", current_line),
+                    Style::default().fg(theme::GREEN),
+                )]));
+                current_line = word.to_string();
+            }
+        }
+        if !current_line.is_empty() {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  {}", current_line),
+                Style::default().fg(theme::GREEN),
+            )]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled(
+        "  Press Esc or Enter to close",
+        Style::default().fg(theme::SUBTEXT0),
+    )]));
+
+    let block = Block::default()
+        .title(format!(" ✓ {} ", title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::GREEN))
         .style(Style::default().bg(theme::BASE));
 
     let paragraph = Paragraph::new(lines)

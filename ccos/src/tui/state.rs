@@ -20,48 +20,48 @@ const MAX_LLM_HISTORY: usize = 10;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum View {
     #[default]
-    Goals, // Goal input → plan construction
-    Plans,     // Browse/manage saved plans (future)
-    Execute,   // Live execution monitoring (future)
-    Discover,  // Capability browser (future)
+    Discover, // Capability browser (future)
     Servers,   // MCP server management (future)
     Approvals, // Approval queue (future)
+    Goals,     // Goal input → plan construction
+    Plans,     // Browse/manage saved plans (future)
+    Execute,   // Live execution monitoring (future)
     Config,    // Configuration (future)
 }
 
 impl View {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Goals => "Goals",
-            Self::Plans => "Plans",
-            Self::Execute => "Execute",
             Self::Discover => "Discover",
             Self::Servers => "Servers",
             Self::Approvals => "Approvals",
+            Self::Goals => "Goals",
+            Self::Plans => "Plan",
+            Self::Execute => "Execute",
             Self::Config => "Config",
         }
     }
 
     pub fn shortcut(&self) -> char {
         match self {
-            Self::Goals => '1',
-            Self::Plans => '2',
-            Self::Execute => '3',
-            Self::Discover => '4',
-            Self::Servers => '5',
-            Self::Approvals => '6',
+            Self::Discover => '1',
+            Self::Servers => '2',
+            Self::Approvals => '3',
+            Self::Goals => '4',
+            Self::Plans => '5',
+            Self::Execute => '6',
             Self::Config => '7',
         }
     }
 
     pub fn all() -> &'static [View] {
         &[
-            View::Goals,
-            View::Plans,
-            View::Execute,
             View::Discover,
             View::Servers,
             View::Approvals,
+            View::Goals,
+            View::Plans,
+            View::Execute,
             View::Config,
         ]
     }
@@ -232,6 +232,8 @@ pub enum ServerStatus {
     Disconnected,
     Connecting,
     Error,
+    Pending,
+    Rejected,
 }
 
 impl ServerStatus {
@@ -242,6 +244,8 @@ impl ServerStatus {
             Self::Disconnected => "○",
             Self::Connecting => "◐",
             Self::Error => "✗",
+            Self::Pending => "◷",
+            Self::Rejected => "⛔",
         }
     }
 }
@@ -354,8 +358,21 @@ pub enum DiscoverPopup {
         selected: usize,
         selected_tools: std::collections::HashSet<usize>,
     },
+    /// Popup for entering a search query to find new servers
+    ServerSearchInput {
+        query: String,
+        cursor_position: usize,
+    },
+    /// LLM suggestions for servers matching a query
+    ServerSuggestions {
+        query: String,
+        suggestions: Vec<ApiSuggestion>,
+        selected: usize,
+    },
     /// Error popup
     Error { title: String, message: String },
+    /// Success popup
+    Success { title: String, message: String },
 }
 
 /// Entry in the discovery list (header or capability)
@@ -372,6 +389,16 @@ pub struct DiscoverySearchResult {
     pub endpoint: String,
     pub description: Option<String>,
     pub source: String,
+}
+
+/// An API suggestion from LLM discovery
+#[derive(Debug, Clone)]
+pub struct ApiSuggestion {
+    pub name: String,
+    pub endpoint: String,
+    pub docs_url: Option<String>,
+    pub description: String,
+    pub auth_env_var: Option<String>,
 }
 
 /// An LLM interaction record
@@ -444,6 +471,7 @@ pub struct AppState {
     pub servers: Vec<ServerInfo>,
     pub servers_selected: usize,
     pub servers_loading: bool,
+    pub server_details_scroll: usize,
 
     // =========================================
     // Discover State
@@ -562,8 +590,8 @@ pub struct AuthTokenPopup {
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            current_view: View::Goals,
-            active_panel: ActivePanel::GoalInput,
+            current_view: View::default(),
+            active_panel: ActivePanel::DiscoverList,
             should_quit: false,
             show_help: false,
 
@@ -605,6 +633,7 @@ impl Default for AppState {
             servers: Vec::new(),
             servers_selected: 0,
             servers_loading: false,
+            server_details_scroll: 0,
 
             // Discover View
             discovered_capabilities: Vec::new(),
