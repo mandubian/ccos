@@ -206,6 +206,28 @@ impl LocalFileProvider {
         fs::mkdir(&path, recursive)?;
         Ok(Value::Boolean(true))
     }
+
+    fn read_file_base64(input: &Value) -> RuntimeResult<Value> {
+        let path = Self::extract_path(input)?;
+        let content = fs::read_file_bytes(&path)?;
+        use base64::Engine;
+        Ok(Value::String(
+            base64::engine::general_purpose::STANDARD.encode(content),
+        ))
+    }
+
+    fn write_file_base64(input: &Value) -> RuntimeResult<Value> {
+        let path = Self::extract_path(input)?;
+        let content_b64 = Self::extract_content(input)?;
+        use base64::Engine;
+        let content = base64::engine::general_purpose::STANDARD
+            .decode(&content_b64)
+            .map_err(|e| {
+                RuntimeError::Generic(format!("Failed to decode base64 content: {}", e))
+            })?;
+        fs::write_file_bytes(&path, &content)?;
+        Ok(Value::Boolean(true))
+    }
 }
 
 impl CapabilityProvider for LocalFileProvider {
@@ -274,6 +296,25 @@ impl CapabilityProvider for LocalFileProvider {
                 false,
                 vec![Permission::FileWrite(std::path::PathBuf::from("/"))],
             ),
+            Self::descriptor(
+                "ccos.fs.read-base64",
+                "Read the content of a file as a base64 encoded string. \
+                 Use for reading binary files like images, PDFs, etc.",
+                1,
+                true,
+                vec![Permission::FileRead(std::path::PathBuf::from("/"))],
+            ),
+            Self::descriptor(
+                "ccos.fs.write-base64",
+                "Write base64 encoded content to a file. \
+                 Use for writing binary files like images, PDFs, etc.",
+                2,
+                false,
+                vec![
+                    Permission::FileWrite(std::path::PathBuf::from("/")),
+                    Permission::FileRead(std::path::PathBuf::from("/")),
+                ],
+            ),
         ]
     }
 
@@ -284,12 +325,14 @@ impl CapabilityProvider for LocalFileProvider {
         _context: &ExecutionContext,
     ) -> RuntimeResult<Value> {
         match capability_id {
-            "ccos.fs.list" => Self::list_dir(inputs),
-            "ccos.fs.read" => Self::read_file(inputs),
-            "ccos.fs.write" => Self::write_file(inputs),
-            "ccos.fs.delete" => Self::delete(inputs),
-            "ccos.fs.exists" => Self::exists(inputs),
-            "ccos.fs.mkdir" => Self::mkdir(inputs),
+            "ccos.fs.list" | "ccos.io.list-dir" => Self::list_dir(inputs),
+            "ccos.fs.read" | "ccos.io.read-file" => Self::read_file(inputs),
+            "ccos.fs.write" | "ccos.io.write-file" => Self::write_file(inputs),
+            "ccos.fs.read-base64" | "ccos.io.read-file-base64" => Self::read_file_base64(inputs),
+            "ccos.fs.write-base64" | "ccos.io.write-file-base64" => Self::write_file_base64(inputs),
+            "ccos.fs.delete" | "ccos.io.delete-file" => Self::delete(inputs),
+            "ccos.fs.exists" | "ccos.io.file-exists" => Self::exists(inputs),
+            "ccos.fs.mkdir" | "ccos.io.mkdir" => Self::mkdir(inputs),
             other => Err(RuntimeError::Generic(format!(
                 "LocalFileProvider does not support capability {}",
                 other

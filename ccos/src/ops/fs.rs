@@ -65,6 +65,16 @@ pub fn write_file(path: &str, content: &str) -> RuntimeResult<()> {
     fs::write(path, content).map_err(|e| RuntimeError::IoError(e.to_string()))
 }
 
+/// Read file content as bytes
+pub fn read_file_bytes(path: &str) -> RuntimeResult<Vec<u8>> {
+    fs::read(path).map_err(|e| RuntimeError::IoError(e.to_string()))
+}
+
+/// Write bytes to file
+pub fn write_file_bytes(path: &str, content: &[u8]) -> RuntimeResult<()> {
+    fs::write(path, content).map_err(|e| RuntimeError::IoError(e.to_string()))
+}
+
 /// Delete file or directory
 pub fn delete(path: &str, recursive: bool) -> RuntimeResult<bool> {
     let path_ref = Path::new(path);

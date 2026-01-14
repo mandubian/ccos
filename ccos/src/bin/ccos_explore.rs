@@ -285,10 +285,25 @@ async fn async_main() -> io::Result<()> {
         std::env::set_var("CCOS_QUIET", "1");
     }
 
+    // Install panic hook to restore terminal on panic
+    let original_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        // Best-effort terminal restoration
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            std::io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        );
+        original_panic_hook(panic_info);
+    }));
+
     // Terminal setup
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    // Flush to ensure escape sequences are sent immediately
+    std::io::Write::flush(&mut stdout)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -810,23 +825,24 @@ async fn handle_key_event(
             }
             return;
         }
-        // View switching shortcuts (1-7) - only when not in goal input mode
-        (KeyCode::Char('1'), _) if state.active_panel != ActivePanel::GoalInput => {
+        // View switching shortcuts (1-7) - blocked only in Goals view with active goal input
+        // (so user can type numbers in the goal input field)
+        (KeyCode::Char('1'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
             state.current_view = View::Goals;
             state.active_panel = ActivePanel::GoalInput;
             return;
         }
-        (KeyCode::Char('2'), _) if state.active_panel != ActivePanel::GoalInput => {
+        (KeyCode::Char('2'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
             state.current_view = View::Plans;
             state.active_panel = ActivePanel::GoalInput; // Plans view not yet implemented
             return;
         }
-        (KeyCode::Char('3'), _) if state.active_panel != ActivePanel::GoalInput => {
+        (KeyCode::Char('3'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
             state.current_view = View::Execute;
             state.active_panel = ActivePanel::GoalInput; // Execute view not yet implemented
             return;
         }
-        (KeyCode::Char('4'), _) if state.active_panel != ActivePanel::GoalInput => {
+        (KeyCode::Char('4'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
             state.current_view = View::Discover;
             state.active_panel = ActivePanel::DiscoverList;
             // Trigger capability loading if not already loaded
@@ -835,7 +851,7 @@ async fn handle_key_event(
             }
             return;
         }
-        (KeyCode::Char('5'), _) if state.active_panel != ActivePanel::GoalInput => {
+        (KeyCode::Char('5'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
             state.current_view = View::Servers;
             state.active_panel = ActivePanel::ServersList;
             // Trigger server loading if not already loaded
@@ -844,7 +860,7 @@ async fn handle_key_event(
             }
             return;
         }
-        (KeyCode::Char('6'), _) if state.active_panel != ActivePanel::GoalInput => {
+        (KeyCode::Char('6'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
             state.current_view = View::Approvals;
             state.active_panel = ActivePanel::ApprovalsPendingList;
             // Trigger approvals loading if not already loaded
@@ -856,7 +872,7 @@ async fn handle_key_event(
             }
             return;
         }
-        (KeyCode::Char('7'), _) if state.active_panel != ActivePanel::GoalInput => {
+        (KeyCode::Char('7'), _) if state.active_panel != ActivePanel::GoalInput || state.current_view != View::Goals => {
             state.current_view = View::Config;
             state.active_panel = ActivePanel::GoalInput; // Config view not yet implemented
             return;
@@ -2405,8 +2421,6 @@ fn load_local_capabilities_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
 
     tokio::task::spawn_local(async move {
         use ccos::capabilities::registry::CapabilityRegistry;
-        use ccos::mcp::core::MCPDiscoveryService;
-        use ccos::mcp::types::DiscoveryOptions;
         use std::collections::HashMap;
 
         // Create a capability registry and get all registered capabilities
@@ -2468,117 +2482,12 @@ fn load_local_capabilities_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
         // Add core capabilities from files
         capabilities.extend(load_core_capabilities());
 
-        // Load capabilities from known MCP servers (from config)
-        let service = MCPDiscoveryService::new();
-        let known_servers = service.list_known_servers().await;
-        let options = DiscoveryOptions::default();
+        // Load capabilities from approved servers (from RTFS files on disk - no network needed)
+        capabilities.extend(load_approved_server_capabilities());
 
-        let mut seen_endpoints = std::collections::HashSet::new();
-
-        for server in known_servers {
-            seen_endpoints.insert(server.endpoint.clone());
-            if let Ok(tools) = service.discover_tools(&server, &options).await {
-                for tool in tools {
-                    capabilities.push(DiscoveredCapability {
-                        id: format!("mcp:{}:{}", server.name, tool.tool_name),
-                        name: tool.tool_name.clone(),
-                        description: tool.description.unwrap_or_default(),
-                        source: server.name.clone(),
-                        category: CapabilityCategory::McpTool,
-                        version: None,
-                        input_schema: tool
-                            .input_schema_json
-                            .as_ref()
-                            .map(|v| format_schema_compact(v))
-                            .or_else(|| {
-                                tool.input_schema
-                                    .as_ref()
-                                    .and_then(|s| s.to_json().ok())
-                                    .map(|v| format_schema_compact(&v))
-                            })
-                            .or_else(|| tool.input_schema.as_ref().map(|s| s.to_string())),
-                        output_schema: tool
-                            .output_schema
-                            .as_ref()
-                            .and_then(|s| s.to_json().ok())
-                            .map(|v| format_schema_compact(&v))
-                            .or_else(|| tool.output_schema.as_ref().map(|s| s.to_string())),
-                        permissions: Vec::new(),
-                        effects: Vec::new(),
-                        metadata: HashMap::new(),
-                    });
-                }
-            }
-        }
-
-        // Also load capabilities from approved servers (from approval queue)
-        use ccos::mcp::types::MCPServerConfig;
-
-        if let Ok(queue) = create_unified_queue() {
-            if let Ok(approved_requests) = queue.list_approved_servers().await {
-                for r in approved_requests {
-                    if let Some(approved_server) = r.to_approved_discovery() {
-                        // Skip if we already loaded this endpoint
-                        if seen_endpoints.contains(&approved_server.server_info.endpoint) {
-                            continue;
-                        }
-                        seen_endpoints.insert(approved_server.server_info.endpoint.clone());
-
-                        // Create a temporary server config from approved server info
-                        let temp_server_config = MCPServerConfig {
-                            name: approved_server.server_info.name.clone(),
-                            endpoint: approved_server.server_info.endpoint.clone(),
-                            auth_token: None, // Will use env var if available
-                            timeout_seconds: 30,
-                            protocol_version: "2024-11-05".to_string(),
-                        };
-
-                        // Try to discover tools from approved server
-                        if let Ok(tools) =
-                            service.discover_tools(&temp_server_config, &options).await
-                        {
-                            for tool in tools {
-                                capabilities.push(DiscoveredCapability {
-                                    id: format!(
-                                        "mcp:{}:{}",
-                                        approved_server.server_info.name, tool.tool_name
-                                    ),
-                                    name: tool.tool_name.clone(),
-                                    description: tool.description.unwrap_or_default(),
-                                    source: approved_server.server_info.name.clone(),
-                                    category: CapabilityCategory::McpTool,
-                                    version: None,
-                                    input_schema: tool
-                                        .input_schema_json
-                                        .as_ref()
-                                        .map(|v| format_schema_compact(v))
-                                        .or_else(|| {
-                                            tool.input_schema
-                                                .as_ref()
-                                                .and_then(|s| s.to_json().ok())
-                                                .map(|v| format_schema_compact(&v))
-                                        })
-                                        .or_else(|| {
-                                            tool.input_schema.as_ref().map(|s| s.to_string())
-                                        }),
-                                    output_schema: tool
-                                        .output_schema
-                                        .as_ref()
-                                        .and_then(|s| s.to_json().ok())
-                                        .map(|v| format_schema_compact(&v))
-                                        .or_else(|| {
-                                            tool.output_schema.as_ref().map(|s| s.to_string())
-                                        }),
-                                    permissions: Vec::new(),
-                                    effects: Vec::new(),
-                                    metadata: HashMap::new(),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // NOTE: MCP server tools are NOT loaded here to avoid blocking the TUI.
+        // Users can load server tools on-demand via the Servers view (press 5)
+        // or by using the search functionality (press 's' or '/').
 
         let _ = event_tx.send(TuiEvent::LocalCapabilitiesLoaded(capabilities));
     });
@@ -2734,6 +2643,139 @@ fn load_core_capabilities() -> Vec<DiscoveredCapability> {
 
     ccos_eprintln!(
         "load_core_capabilities: Loaded {} core capabilities total",
+        caps.len()
+    );
+    caps
+}
+
+/// Load capabilities from approved server RTFS files (no network required)
+fn load_approved_server_capabilities() -> Vec<DiscoveredCapability> {
+    use ccos::capability_marketplace::mcp_discovery::MCPDiscoveryProvider;
+    use ccos::capability_marketplace::mcp_discovery::MCPServerConfig;
+    use ccos::utils::fs::resolve_workspace_path;
+
+    let mut caps = Vec::new();
+
+    // Look in capabilities/servers/approved/ for RTFS files
+    let approved_dir = resolve_workspace_path("capabilities/servers/approved");
+    ccos_eprintln!(
+        "load_approved_server_capabilities: Looking for approved servers in {:?}",
+        approved_dir
+    );
+
+    if !approved_dir.exists() || !approved_dir.is_dir() {
+        ccos_eprintln!(
+            "load_approved_server_capabilities: approved_dir does not exist: {:?}",
+            approved_dir
+        );
+        return caps;
+    }
+
+    let parser = match MCPDiscoveryProvider::new(MCPServerConfig::default()) {
+        Ok(p) => p,
+        Err(e) => {
+            ccos_eprintln!(
+                "load_approved_server_capabilities: Failed to create parser: {}",
+                e
+            );
+            return caps;
+        }
+    };
+
+    // Iterate over subdirectories (each subdirectory is a server)
+    if let Ok(entries) = std::fs::read_dir(&approved_dir) {
+        for entry in entries.flatten() {
+            let server_dir = entry.path();
+            if !server_dir.is_dir() {
+                continue;
+            }
+
+            let server_name = server_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            // Recursively find all .rtfs capability files (not server.rtfs manifest)
+            fn find_rtfs_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+                let mut files = Vec::new();
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            files.extend(find_rtfs_files(&path));
+                        } else if path.is_file() {
+                            // Only include .rtfs files, skip server.rtfs manifests
+                            if path.extension().map_or(false, |ext| ext == "rtfs") {
+                                if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                                    if file_name != "server.rtfs" {
+                                        files.push(path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                files
+            }
+
+            let rtfs_files = find_rtfs_files(&server_dir);
+            ccos_eprintln!(
+                "load_approved_server_capabilities: Found {} RTFS files in server {}",
+                rtfs_files.len(),
+                server_name
+            );
+
+            for path in rtfs_files {
+                match parser.load_rtfs_capabilities(path.to_str().unwrap_or_default()) {
+                    Ok(module) => {
+                        for cap_def in module.capabilities {
+                            match parser.rtfs_to_capability_manifest(&cap_def) {
+                                Ok(manifest) => {
+                                    caps.push(DiscoveredCapability {
+                                        id: manifest.id.clone(),
+                                        name: manifest.name.clone(),
+                                        description: manifest.description.clone(),
+                                        source: format!("✓ {}", server_name),
+                                        category: CapabilityCategory::McpTool,
+                                        version: Some(manifest.version.clone()),
+                                        input_schema: manifest
+                                            .input_schema
+                                            .as_ref()
+                                            .map(|s| s.to_string()),
+                                        output_schema: manifest
+                                            .output_schema
+                                            .as_ref()
+                                            .map(|s| s.to_string()),
+                                        permissions: Vec::new(),
+                                        effects: Vec::new(),
+                                        metadata: manifest.metadata.clone(),
+                                    });
+                                }
+                                Err(e) => {
+                                    ccos_eprintln!(
+                                        "load_approved_server_capabilities: Failed to convert manifest from {:?}: {}",
+                                        path,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        ccos_eprintln!(
+                            "load_approved_server_capabilities: Failed to load {:?}: {}",
+                            path,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    ccos_eprintln!(
+        "load_approved_server_capabilities: Loaded {} capabilities from approved servers",
         caps.len()
     );
     caps
