@@ -130,6 +130,29 @@ impl StandardLibrary {
             })),
         );
 
+        // Pretty-print JSON serialization
+        env.define(
+            &Symbol("tool/serialize-json-pretty".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "tool/serialize-json-pretty".to_string(),
+                arity: Arity::Fixed(1),
+                func: std::sync::Arc::new(|args: Vec<Value>| {
+                    Self::tool_serialize_json_pretty(args)
+                }),
+            })),
+        );
+
+        env.define(
+            &Symbol("serialize-json-pretty".to_string()),
+            Value::Function(Function::Builtin(BuiltinFunction {
+                name: "serialize-json-pretty".to_string(),
+                arity: Arity::Fixed(1),
+                func: std::sync::Arc::new(|args: Vec<Value>| {
+                    Self::tool_serialize_json_pretty(args)
+                }),
+            })),
+        );
+
         env.define(
             &Symbol("tool/parse-json".to_string()),
             Value::Function(Function::Builtin(BuiltinFunction {
@@ -745,6 +768,30 @@ impl StandardLibrary {
             .map_err(|e| RuntimeError::Generic(format!("JSON serialization error: {}", e)))?;
 
         match serde_json::to_string(&json_val) {
+            Ok(s) => Ok(Value::String(s)),
+            Err(e) => Err(RuntimeError::Generic(format!(
+                "JSON serialization error: {}",
+                e
+            ))),
+        }
+    }
+
+    /// `(tool/serialize-json-pretty data)`
+    ///
+    /// Converts an RTFS value to pretty-formatted JSON string representation.
+    fn tool_serialize_json_pretty(args: Vec<Value>) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "tool/serialize-json-pretty".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let json_val = Self::rtfs_value_to_json(&args[0])
+            .map_err(|e| RuntimeError::Generic(format!("JSON serialization error: {}", e)))?;
+
+        match serde_json::to_string_pretty(&json_val) {
             Ok(s) => Ok(Value::String(s)),
             Err(e) => Err(RuntimeError::Generic(format!(
                 "JSON serialization error: {}",

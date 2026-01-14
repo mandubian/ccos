@@ -4,7 +4,7 @@
 
 use crate::capabilities::capability::Capability;
 use crate::capabilities::provider::CapabilityProvider;
-use crate::capabilities::providers::{JsonProvider, LocalFileProvider};
+use crate::capabilities::providers::LocalFileProvider;
 use crate::secrets::SecretStore;
 use crate::synthesis::missing_capability_resolver::MissingCapabilityResolver;
 use crate::utils::fs::get_workspace_root;
@@ -518,7 +518,6 @@ impl CapabilityRegistry {
         // Register LocalProvider for development/bootstrap
         registry.register_local_provider();
         registry.register_file_provider();
-        registry.register_json_provider();
 
         registry
     }
@@ -564,24 +563,11 @@ impl CapabilityRegistry {
             "ccos.io.file-exists",
             "ccos.io.read-file",
             "ccos.io.write-file",
+            "ccos.io.read-file-base64",
+            "ccos.io.write-file-base64",
             "ccos.io.delete-file",
         ] {
             self.map_capability_to_provider(capability, "local-file");
-        }
-    }
-
-    fn register_json_provider(&mut self) {
-        let provider = JsonProvider::default();
-        self.providers
-            .insert(provider.provider_id().to_string(), Box::new(provider));
-        for capability in [
-            "ccos.json.parse",
-            "ccos.json.stringify",
-            "ccos.json.stringify-pretty",
-            "ccos.data.parse-json",
-            "ccos.data.serialize-json",
-        ] {
-            self.map_capability_to_provider(capability, "local-json");
         }
     }
 
@@ -787,6 +773,41 @@ impl CapabilityRegistry {
         );
 
         self.capabilities.insert(
+            "ccos.io.read-file-base64".to_string(),
+            Capability::with_metadata(
+                "ccos.io.read-file-base64".to_string(),
+                Arity::Fixed(1),
+                Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "File operations must be executed through providers".to_string(),
+                    ))
+                }),
+                Some("Read file content as a base64 string".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+            ),
+        );
+
+        self.capabilities.insert(
+            "ccos.io.write-file-base64".to_string(),
+            Capability::with_metadata(
+                "ccos.io.write-file-base64".to_string(),
+                Arity::Fixed(2),
+                Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "File operations must be executed through providers".to_string(),
+                    ))
+                }),
+                Some("Write base64 encoded string to a file".to_string()),
+                Some(TypeExpr::Tuple(vec![
+                    TypeExpr::Primitive(PrimitiveType::String),
+                    TypeExpr::Primitive(PrimitiveType::String),
+                ])),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
+            ),
+        );
+
+        self.capabilities.insert(
             "ccos.io.delete-file".to_string(),
             Capability::new(
                 "ccos.io.delete-file".to_string(),
@@ -851,74 +872,9 @@ impl CapabilityRegistry {
             ),
         );
 
-        // JSON parsing
-        self.capabilities.insert(
-            "ccos.json.parse".to_string(),
-            Capability::with_metadata(
-                "ccos.json.parse".to_string(),
-                Arity::Fixed(1),
-                Arc::new(|_args| {
-                    Err(RuntimeError::Generic(
-                        "Data capabilities must be executed through providers".to_string(),
-                    ))
-                }),
-                Some("Parse a JSON string into a structured value".to_string()),
-                Some(TypeExpr::Primitive(PrimitiveType::String)),
-                Some(TypeExpr::Any),
-            ),
-        );
-
-        self.capabilities.insert(
-            "ccos.json.stringify".to_string(),
-            Capability::new(
-                "ccos.json.stringify".to_string(),
-                Arity::Fixed(1),
-                Arc::new(|_args| {
-                    Err(RuntimeError::Generic(
-                        "Data capabilities must be executed through providers".to_string(),
-                    ))
-                }),
-            ),
-        );
-
-        self.capabilities.insert(
-            "ccos.json.stringify-pretty".to_string(),
-            Capability::new(
-                "ccos.json.stringify-pretty".to_string(),
-                Arity::Fixed(1),
-                Arc::new(|_args| {
-                    Err(RuntimeError::Generic(
-                        "Data capabilities must be executed through providers".to_string(),
-                    ))
-                }),
-            ),
-        );
-
-        self.capabilities.insert(
-            "ccos.data.parse-json".to_string(),
-            Capability::new(
-                "ccos.data.parse-json".to_string(),
-                Arity::Fixed(1),
-                Arc::new(|_args| {
-                    Err(RuntimeError::Generic(
-                        "Data capabilities must be executed through providers".to_string(),
-                    ))
-                }),
-            ),
-        );
-
-        self.capabilities.insert(
-            "ccos.data.serialize-json".to_string(),
-            Capability::new(
-                "ccos.data.serialize-json".to_string(),
-                Arity::Fixed(1),
-                Arc::new(|_args| {
-                    Err(RuntimeError::Generic(
-                        "Data capabilities must be executed through providers".to_string(),
-                    ))
-                }),
-            ),
-        );
+        // NOTE: JSON parsing functions (parse-json, serialize-json, serialize-json-pretty)
+        // are now pure RTFS stdlib functions and not CCOS capabilities.
+        // Use (parse-json str) and (serialize-json val) directly in RTFS code.
 
         // Logging capabilities - delegate to providers
         self.capabilities.insert(
