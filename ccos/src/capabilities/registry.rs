@@ -280,6 +280,22 @@ impl LocalProvider {
     }
 
     fn kv_put_capability(args: Vec<Value>) -> RuntimeResult<Value> {
+        // Handle normalized map case: first arg is a map containing the fields
+        if args.len() == 1 {
+            if let Some(Value::Map(map)) = args.first() {
+                let key = map
+                    .get(&MapKey::Keyword(rtfs::ast::Keyword("key".to_string())))
+                    .or_else(|| map.get(&MapKey::String("key".to_string())))
+                    .and_then(|v| v.as_string())
+                    .ok_or_else(|| {
+                        RuntimeError::Generic("Missing 'key' in kv.put map".to_string())
+                    })?;
+
+                eprintln!("HOST_CALL: kv.put({}, <value>) - mock (normalized)", key);
+                return Ok(Value::Boolean(true));
+            }
+        }
+
         if args.len() != 2 {
             return Err(RuntimeError::ArityMismatch {
                 function: "ccos.state.kv.put".to_string(),
@@ -414,13 +430,24 @@ impl CapabilityProvider for LocalProvider {
         // Extract args from inputs
         let args = match inputs {
             Value::Vector(vec) => vec.clone(),
-            _ => {
-                return Err(RuntimeError::TypeError {
-                    expected: "vector".to_string(),
-                    actual: inputs.type_name().to_string(),
-                    operation: "local provider".to_string(),
-                })
+            Value::List(list) => list.clone(),
+            Value::Map(map) => {
+                // If it's a map, check if it's the new calling convention with :args
+                if let Some(args_val) = map
+                    .get(&MapKey::Keyword(rtfs::ast::Keyword("args".to_string())))
+                    .or_else(|| map.get(&MapKey::String("args".to_string())))
+                {
+                    match args_val {
+                        Value::Vector(vec) => vec.clone(),
+                        Value::List(list) => list.clone(),
+                        other => vec![other.clone()],
+                    }
+                } else {
+                    // It's a direct map argument (likely normalized)
+                    vec![Value::Map(map.clone())]
+                }
             }
+            other => vec![other.clone()],
         };
 
         // Route to appropriate capability implementation
@@ -566,6 +593,8 @@ impl CapabilityRegistry {
             "ccos.io.read-file-base64",
             "ccos.io.write-file-base64",
             "ccos.io.delete-file",
+            "ccos.io.mkdir",
+            "ccos.io.list-dir",
         ] {
             self.map_capability_to_provider(capability, "local-file");
         }
@@ -763,17 +792,30 @@ impl CapabilityRegistry {
             "ccos.io.write-file".to_string(),
             Capability::with_metadata(
                 "ccos.io.write-file".to_string(),
-                Arity::Fixed(2),
+                // Arity::Range allows 1 map arg OR 2 positional args
+                Arity::Range(1, 2),
                 Arc::new(|_args| {
                     Err(RuntimeError::Generic(
                         "File operations must be executed through providers".to_string(),
                     ))
                 }),
                 Some("Write the given content to a file at the specified path".to_string()),
-                Some(TypeExpr::Tuple(vec![
-                    TypeExpr::Primitive(PrimitiveType::String),
-                    TypeExpr::Primitive(PrimitiveType::String),
-                ])),
+                // Map-only schema - positional args normalized via normalize_args_to_map
+                Some(TypeExpr::Map {
+                    entries: vec![
+                        MapTypeEntry {
+                            key: Keyword("path".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                        MapTypeEntry {
+                            key: Keyword("content".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                    ],
+                    wildcard: None,
+                }),
                 Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
@@ -798,17 +840,30 @@ impl CapabilityRegistry {
             "ccos.io.write-file-base64".to_string(),
             Capability::with_metadata(
                 "ccos.io.write-file-base64".to_string(),
-                Arity::Fixed(2),
+                // Arity::Range allows 1 map arg OR 2 positional args
+                Arity::Range(1, 2),
                 Arc::new(|_args| {
                     Err(RuntimeError::Generic(
                         "File operations must be executed through providers".to_string(),
                     ))
                 }),
                 Some("Write base64 encoded string to a file".to_string()),
-                Some(TypeExpr::Tuple(vec![
-                    TypeExpr::Primitive(PrimitiveType::String),
-                    TypeExpr::Primitive(PrimitiveType::String),
-                ])),
+                // Map-only schema - positional args normalized via normalize_args_to_map
+                Some(TypeExpr::Map {
+                    entries: vec![
+                        MapTypeEntry {
+                            key: Keyword("path".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                        MapTypeEntry {
+                            key: Keyword("content".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                    ],
+                    wildcard: None,
+                }),
                 Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
@@ -833,14 +888,30 @@ impl CapabilityRegistry {
             "ccos.io.open-file".to_string(),
             Capability::with_metadata(
                 "ccos.io.open-file".to_string(),
-                Arity::Variadic(1),
+                // Arity::Range allows 1 map arg OR 2 positional args (path, mode)
+                Arity::Range(1, 2),
                 Arc::new(|_args| {
                     Err(RuntimeError::Generic(
                         "File operations must be executed through providers".to_string(),
                     ))
                 }),
                 Some("Open a file at the given path".to_string()),
-                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                // Map-only schema - positional args normalized via normalize_args_to_map
+                Some(TypeExpr::Map {
+                    entries: vec![
+                        MapTypeEntry {
+                            key: Keyword("path".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                        MapTypeEntry {
+                            key: Keyword("mode".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: true,
+                        },
+                    ],
+                    wildcard: None,
+                }),
                 Some(TypeExpr::Primitive(PrimitiveType::Int)), // Returns a file handle
             ),
         );
@@ -865,6 +936,8 @@ impl CapabilityRegistry {
             "ccos.io.write-line".to_string(),
             Capability::with_metadata(
                 "ccos.io.write-line".to_string(),
+                // Arity::Range allows 1 map arg OR 2 positional args
+                // The normalization helper converts positional to map
                 Arity::Range(1, 2),
                 Arc::new(|_args| {
                     Err(RuntimeError::Generic(
@@ -872,29 +945,22 @@ impl CapabilityRegistry {
                     ))
                 }),
                 Some("Write a line to a file handle".to_string()),
-                Some(TypeExpr::Union(vec![
-                    // Positional args: (handle line)
-                    TypeExpr::Tuple(vec![
-                        TypeExpr::Primitive(PrimitiveType::Int),
-                        TypeExpr::Primitive(PrimitiveType::String),
-                    ]),
-                    // Map args: {:handle <int> :line <string>}
-                    TypeExpr::Map {
-                        entries: vec![
-                            MapTypeEntry {
-                                key: Keyword("handle".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
-                                optional: false,
-                            },
-                            MapTypeEntry {
-                                key: Keyword("line".to_string()),
-                                value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
-                                optional: false,
-                            },
-                        ],
-                        wildcard: None,
-                    },
-                ])),
+                // Map-only schema - positional args normalized via normalize_args_to_map
+                Some(TypeExpr::Map {
+                    entries: vec![
+                        MapTypeEntry {
+                            key: Keyword("handle".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+                            optional: false,
+                        },
+                        MapTypeEntry {
+                            key: Keyword("line".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                    ],
+                    wildcard: None,
+                }),
                 Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
@@ -912,6 +978,56 @@ impl CapabilityRegistry {
                 Some("Close a file handle".to_string()),
                 Some(TypeExpr::Primitive(PrimitiveType::Int)),
                 Some(TypeExpr::Primitive(PrimitiveType::Nil)),
+            ),
+        );
+
+        self.capabilities.insert(
+            "ccos.io.mkdir".to_string(),
+            Capability::with_metadata(
+                "ccos.io.mkdir".to_string(),
+                // Arity::Range allows 1 map arg OR 2 positional args (path, recursive)
+                Arity::Range(1, 2),
+                Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "File operations must be executed through providers".to_string(),
+                    ))
+                }),
+                Some("Create a directory at the given path".to_string()),
+                // Map-only schema - positional args normalized via normalize_args_to_map
+                Some(TypeExpr::Map {
+                    entries: vec![
+                        MapTypeEntry {
+                            key: Keyword("path".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                        MapTypeEntry {
+                            key: Keyword("recursive".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Bool)),
+                            optional: true,
+                        },
+                    ],
+                    wildcard: None,
+                }),
+                Some(TypeExpr::Primitive(PrimitiveType::Bool)),
+            ),
+        );
+
+        self.capabilities.insert(
+            "ccos.io.list-dir".to_string(),
+            Capability::with_metadata(
+                "ccos.io.list-dir".to_string(),
+                Arity::Fixed(1),
+                Arc::new(|_args| {
+                    Err(RuntimeError::Generic(
+                        "File operations must be executed through providers".to_string(),
+                    ))
+                }),
+                Some("List contents of a directory".to_string()),
+                Some(TypeExpr::Primitive(PrimitiveType::String)),
+                Some(TypeExpr::Vector(Box::new(TypeExpr::Primitive(
+                    PrimitiveType::String,
+                )))),
             ),
         );
 
@@ -975,7 +1091,8 @@ impl CapabilityRegistry {
             "ccos.network.http-fetch".to_string(),
             Capability::with_metadata(
                 "ccos.network.http-fetch".to_string(),
-                Arity::Variadic(1),
+                // Arity::Range allows 1 map arg OR at least 2 positional args (url, method)
+                Arity::Range(1, 2),
                 Arc::new(|_args| {
                     // HTTP operations must be executed through MicroVM isolation
                     Err(RuntimeError::Generic(
@@ -994,6 +1111,19 @@ impl CapabilityRegistry {
                             key: rtfs::ast::Keyword("method".to_string()),
                             value_type: Box::new(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
                             optional: false,
+                        },
+                        rtfs::ast::MapTypeEntry {
+                            key: rtfs::ast::Keyword("headers".to_string()),
+                            value_type: Box::new(TypeExpr::Map {
+                                entries: vec![],
+                                wildcard: Some(Box::new(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String))),
+                            }),
+                            optional: true,
+                        },
+                        rtfs::ast::MapTypeEntry {
+                            key: rtfs::ast::Keyword("body".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
+                            optional: true,
                         },
                     ],
                     wildcard: None,
@@ -1157,59 +1287,137 @@ impl CapabilityRegistry {
             "ccos.state.kv.put".to_string(),
             Capability::with_metadata(
                 "ccos.state.kv.put".to_string(),
-                Arity::Fixed(2),
+                // Arity::Range allows 1 map arg OR 2 positional args
+                Arity::Range(1, 2),
                 Arc::new(|_args| {
                     Err(RuntimeError::Generic(
                         "State capabilities must be executed through providers".to_string(),
                     ))
                 }),
                 Some("Store a value in the key-value store".to_string()),
-                Some(TypeExpr::Tuple(vec![
-                    TypeExpr::Primitive(PrimitiveType::String),
-                    TypeExpr::Primitive(PrimitiveType::String),
-                ])),
+                // Map-only schema - positional args normalized via normalize_args_to_map
+                Some(TypeExpr::Map {
+                    entries: vec![
+                        MapTypeEntry {
+                            key: Keyword("key".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                        MapTypeEntry {
+                            key: Keyword("value".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                    ],
+                    wildcard: None,
+                }),
                 Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
 
         self.capabilities.insert(
             "ccos.state.kv.cas-put".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.state.kv.cas-put".to_string(),
-                Arity::Fixed(3), // key, expected_value, new_value
+                // Arity::Range allows 1 map arg OR 3 positional args
+                Arity::Range(1, 3),
                 Arc::new(|_args| {
                     Err(RuntimeError::Generic(
                         "State capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some(
+                    "Compare-and-swap put: atomically update key if current value matches expected"
+                        .to_string(),
+                ),
+                // Map-only schema - positional args normalized via normalize_args_to_map
+                Some(TypeExpr::Map {
+                    entries: vec![
+                        MapTypeEntry {
+                            key: Keyword("key".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                        MapTypeEntry {
+                            key: Keyword("expected".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                        MapTypeEntry {
+                            key: Keyword("new".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                    ],
+                    wildcard: None,
+                }),
+                Some(TypeExpr::Primitive(PrimitiveType::Bool)),
             ),
         );
 
         // Counter operations - delegate to providers
         self.capabilities.insert(
             "ccos.state.counter.inc".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.state.counter.inc".to_string(),
-                Arity::Variadic(1), // key, increment (default 1)
+                // Arity::Range allows 1 map arg OR 2 positional args (key, increment)
+                Arity::Range(1, 2),
                 Arc::new(|_args| {
                     Err(RuntimeError::Generic(
                         "State capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Increment a stateful counter".to_string()),
+                // Map-only schema - positional args normalized via normalize_args_to_map
+                Some(TypeExpr::Map {
+                    entries: vec![
+                        MapTypeEntry {
+                            key: Keyword("key".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                        MapTypeEntry {
+                            key: Keyword("increment".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+                            optional: true, // Default 1
+                        },
+                    ],
+                    wildcard: None,
+                }),
+                Some(TypeExpr::Primitive(PrimitiveType::Int)), // Returns new value
             ),
         );
 
         // Event log operations - delegate to providers
         self.capabilities.insert(
             "ccos.state.event.append".to_string(),
-            Capability::new(
+            Capability::with_metadata(
                 "ccos.state.event.append".to_string(),
-                Arity::Variadic(1), // key, event_data...
+                // Arity::Range allows 1 map arg OR 2 positional args (key, data)
+                Arity::Range(1, 2),
                 Arc::new(|_args| {
                     Err(RuntimeError::Generic(
                         "State capabilities must be executed through providers".to_string(),
                     ))
                 }),
+                Some("Append an event to a stateful log".to_string()),
+                // Map-only schema - positional args normalized via normalize_args_to_map
+                Some(TypeExpr::Map {
+                    entries: vec![
+                        MapTypeEntry {
+                            key: Keyword("key".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                        MapTypeEntry {
+                            key: Keyword("data".to_string()),
+                            value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                            optional: false,
+                        },
+                    ],
+                    wildcard: None,
+                }),
+                Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),
         );
     }

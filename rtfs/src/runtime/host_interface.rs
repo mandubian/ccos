@@ -13,6 +13,12 @@ pub trait HostInterface: std::fmt::Debug + Send + Sync {
     /// This is the primary entry point for the runtime to perform external actions.
     fn execute_capability(&self, name: &str, args: &[Value]) -> RuntimeResult<Value>;
 
+    /// Returns the input schema for a capability, if available.
+    /// Used by the runtime to normalize positional args to map format.
+    fn get_capability_input_schema(&self, _name: &str) -> Option<crate::ast::TypeExpr> {
+        None // Default: no schema available
+    }
+
     /// Notifies the host that a plan step has started.
     /// The host is responsible for logging this to the Causal Chain.
     /// Returns the action_id of the created "PlanStepStarted" action.

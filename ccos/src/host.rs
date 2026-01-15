@@ -17,7 +17,7 @@ use rtfs::runtime::host_interface::HostInterface;
 use rtfs::runtime::security::{default_effects_for_capability, RuntimeContext};
 use rtfs::runtime::values::Value;
 // futures::executor used via fully qualified path below
-use rtfs::ast::MapKey;
+use rtfs::ast::{MapKey, TypeExpr};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
@@ -335,6 +335,18 @@ impl HostInterface for RuntimeHost {
             });
         }
 
+        // Apply RTFS-level argument normalization if schema is available
+        let normalized_args = if let Some(schema) = self.get_capability_input_schema(name) {
+            let normalized = crate::capabilities::arg_normalization::normalize_args_to_map(
+                args.to_vec(),
+                &schema,
+            )?;
+            vec![normalized]
+        } else {
+            args.to_vec()
+        };
+        let args = &normalized_args;
+
         if self.security_context.allowed_effects.is_some()
             || !self.security_context.denied_effects.is_empty()
         {
@@ -531,6 +543,29 @@ impl HostInterface for RuntimeHost {
             .record_result(action, execution_result)?;
 
         result
+    }
+
+    fn get_capability_input_schema(&self, name: &str) -> Option<TypeExpr> {
+        let marketplace = self.capability_marketplace.clone();
+        let name_owned = name.to_string();
+
+        let runtime_handle = tokio::runtime::Handle::try_current().ok();
+
+        std::thread::spawn(move || {
+            let fut = async move {
+                let caps = marketplace.capabilities.read().await;
+                caps.get(&name_owned).and_then(|m| m.input_schema.clone())
+            };
+
+            if let Some(handle) = runtime_handle {
+                handle.block_on(fut)
+            } else {
+                futures::executor::block_on(fut)
+            }
+        })
+        .join()
+        .ok()
+        .flatten()
     }
 
     fn notify_step_started(&self, step_name: &str) -> RuntimeResult<String> {

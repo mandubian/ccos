@@ -18,6 +18,7 @@ use std::time::Duration;
 use urlencoding::encode;
 
 use crate::capabilities::native_provider::NativeCapabilityProvider;
+use crate::capabilities::provider::CapabilityProvider;
 use crate::capabilities::SessionPoolManager;
 use rtfs::runtime::microvm::{
     ExecutionContext as MicroVMExecutionContext, MicroVMFactory, Program, ScriptLanguage,
@@ -724,18 +725,17 @@ impl CapabilityExecutor for RegistryExecutor {
         _context: &ExecutionContext<'_>,
     ) -> RuntimeResult<Value> {
         if let ProviderType::Registry(registry_cap) = provider {
-            let args = match inputs {
-                Value::List(list) => list.clone(),
-                Value::Vector(vec) => vec.clone(),
-                v => vec![v.clone()],
-            };
-            // Note: RTFS stub registry doesn't support execute_capability_with_microvm
-            // Registry capabilities should be migrated to proper CCOS providers
-            // For now, return an error
-            Err(RuntimeError::Generic(format!(
-                "Registry capability '{}' not supported - RTFS/CCOS separation in progress",
-                registry_cap.capability_id
-            )))
+            let registry = registry_cap.registry.read().await;
+
+            // Re-wrap inputs in CallMetadata if needed, but for registry we usually
+            // just pass the inputs directly as the registry handles its own envelope unwrapping
+            // or expects a Vector of arguments depending on the provider.
+
+            registry.execute_capability_with_microvm(
+                &registry_cap.capability_id,
+                vec![inputs.clone()],
+                None,
+            )
         } else {
             Err(RuntimeError::Generic(
                 "ProviderType mismatch for RegistryExecutor".to_string(),
