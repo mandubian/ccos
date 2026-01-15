@@ -11,7 +11,7 @@ use crate::utils::fs::get_workspace_root;
 use crate::utils::value_conversion;
 use reqwest::blocking::Client as BlockingHttpClient;
 use reqwest::{Method as HttpMethod, Url};
-use rtfs::ast::{MapKey, MapTypeEntry, PrimitiveType, TypeExpr};
+use rtfs::ast::{Keyword, MapKey, MapTypeEntry, PrimitiveType, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::microvm::{ExecutionContext, MicroVMConfig, MicroVMFactory};
 use rtfs::runtime::security::{RuntimeContext, SecurityAuthorizer};
@@ -865,16 +865,35 @@ impl CapabilityRegistry {
             "ccos.io.write-line".to_string(),
             Capability::with_metadata(
                 "ccos.io.write-line".to_string(),
-                Arity::Fixed(2),
+                Arity::Range(1, 2),
                 Arc::new(|_args| {
                     Err(RuntimeError::Generic(
                         "File operations must be executed through providers".to_string(),
                     ))
                 }),
                 Some("Write a line to a file handle".to_string()),
-                Some(TypeExpr::Tuple(vec![
-                    TypeExpr::Primitive(PrimitiveType::Int),
-                    TypeExpr::Primitive(PrimitiveType::String),
+                Some(TypeExpr::Union(vec![
+                    // Positional args: (handle line)
+                    TypeExpr::Tuple(vec![
+                        TypeExpr::Primitive(PrimitiveType::Int),
+                        TypeExpr::Primitive(PrimitiveType::String),
+                    ]),
+                    // Map args: {:handle <int> :line <string>}
+                    TypeExpr::Map {
+                        entries: vec![
+                            MapTypeEntry {
+                                key: Keyword("handle".to_string()),
+                                value_type: Box::new(TypeExpr::Primitive(PrimitiveType::Int)),
+                                optional: false,
+                            },
+                            MapTypeEntry {
+                                key: Keyword("line".to_string()),
+                                value_type: Box::new(TypeExpr::Primitive(PrimitiveType::String)),
+                                optional: false,
+                            },
+                        ],
+                        wildcard: None,
+                    },
                 ])),
                 Some(TypeExpr::Primitive(PrimitiveType::Nil)),
             ),

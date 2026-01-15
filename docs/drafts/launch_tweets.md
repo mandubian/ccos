@@ -311,3 +311,62 @@ https://github.com/mandubian/ccos
 
 For transparency, I’m also open-sourcing the full chat history in a side repo so the process is inspectable and debuggable.
 https://github.com/mandubian/ccos-chats
+
+
+
+
+----
+
+
+
+Tweet thread draft (<=280 chars per tweet):
+
+1/ Just made public a personal project I’ve been building for ~8 months: CCOS + RTFS.
+It’s about building autonomous agents that can act… without turning into unaudited black boxes.
+
+2/ It’s also an experiment: I pushed an AI to help design the system it would need to become a trustworthy agent.
+Constraints from day 1: predictable + deterministic execution, explicit effects, auditability.
+
+3/ RTFS is the language: homoiconic, hybrid typed S-expressions.
+Designed for agents (not human convenience) so plans are compact, inspectable, and can be validated/rewritten before execution.
+
+4/ CCOS is the runtime around RTFS: it turns “I want X” into:
+Intent -> Plan -> Govern -> Execute -> Record -> Improve
+Autonomy with accountability is the goal.
+
+5/ Explicit effects boundary:
+RTFS plans don’t do I/O directly. Every external action is an explicit host call.
+That means governance can gate effects before they happen, and you can see exactly what was requested.
+
+6/ Separation of reasoning vs execution:
+The Cognitive Engine proposes plans (often using an LLM).
+The Orchestrator executes them deterministically (yield/resume), so “thinking” and “doing” are not entangled.
+
+7/ Governance:
+Policy/constitution rules + approvals. High-risk actions pause for human review.
+Secrets are never exposed to agents: they only learn “available/missing”, not the value.
+
+8/ Auditability:
+Causal Chain records intent -> plan -> approvals -> tool calls -> results.
+So you can inspect “why did it do this?” after the fact (and eventually replay/refine).
+
+9/ Reentrancy:
+Checkpoint/resume so long tasks can pause, recover from failures, and continue safely instead of restarting from scratch.
+
+10/ Tools & discovery:
+Capability marketplace + search, plus onboarding of new tools via MCP/OpenAPI/docs introspection:
+introspect -> approve -> register -> use
+No “random tool drift”.
+
+11/ Synthesis & repair:
+When glue is missing, CCOS can synthesize capabilities/transforms using LLMs.
+RTFS can also be repaired using compiler feedback loops (generate -> compile -> explain error -> repair).
+
+12/ Interop + direction:
+CCOS speaks MCP today (so agents like Cursor/Claude can drive it).
+Isolation/sandboxing + metaplanning are part of the roadmap. This is still WIP, but the architecture is in place.
+
+13/ Repo: https://github.com/mandubian/ccos
+Full process / chat history: https://github.com/mandubian/ccos-chats
+
+14/ Personal note: I built this in Rust because I can read/correct it but can’t write it fluently myself — and that constraint was part of the experiment.

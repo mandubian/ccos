@@ -11,6 +11,7 @@
 
 use crate::arbiter::{get_default_llm_provider, LlmProvider};
 use crate::discovery::registry_search::RegistrySearchResult;
+use crate::ops::browser_discovery::extract_mcp_server_command_from_html;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 
@@ -514,6 +515,18 @@ Respond with ONLY the JSON array."#
                     }]);
                 }
             }
+        }
+
+        // Check for MCP stdio server configs in HTML pages
+        if let Some(command) = extract_mcp_server_command_from_html(&text) {
+            return Ok(vec![ExternalApiResult {
+                name: command.name.clone(),
+                endpoint: command.to_stdio_command(),
+                docs_url: Some(url.to_string()),
+                description: "MCP server config discovered from documentation".to_string(),
+                auth_env_var: None,
+                source: "mcp_listing".to_string(),
+            }]);
         }
 
         // For HTML pages, use LLM to extract API info

@@ -27,6 +27,7 @@ use ccos::ccos_eprintln;
 use ccos::examples_common::builder::ModularPlannerBuilder;
 use ccos::planner::modular_planner::decomposition::llm_adapter::LlmInteractionCapture;
 use ccos::planner::modular_planner::orchestrator::TraceEvent;
+use ccos::ops::server::introspect_server_by_url;
 use ccos::tui::{
     panels,
     state::{
@@ -367,6 +368,11 @@ async fn run_event_loop<B: ratatui::backend::Backend>(
 ) -> io::Result<()> {
     let mut last_tick = Instant::now();
 
+    // Load local capabilities at startup if we're on the Discover view (default)
+    if state.current_view == View::Discover && state.discovered_capabilities.is_empty() && !state.discover_loading {
+        load_local_capabilities_async(event_tx.clone());
+    }
+
     // If auto_run is enabled, start the planner immediately
     if auto_run && !state.goal_input.is_empty() {
         spawn_planner_task(state, event_tx.clone());
@@ -392,7 +398,7 @@ async fn run_event_loop<B: ratatui::backend::Backend>(
                     handle_key_event(state, key, event_tx.clone()).await;
                 }
                 Event::Mouse(mouse) => {
-                    handle_mouse_event(state, mouse, terminal.size()?);
+                    handle_mouse_event(state, mouse, terminal.size()?, event_tx.clone());
                 }
                 _ => {}
             }
@@ -838,7 +844,20 @@ async fn handle_key_event(
     key: event::KeyEvent,
     event_tx: mpsc::UnboundedSender<TuiEvent>,
 ) {
-    // Global shortcuts
+    // Popup handling must come FIRST to intercept keys before global shortcuts
+    // Discovery popup-specific handling (intercepts all keys when active)
+    if !matches!(state.discover_popup, DiscoverPopup::None) {
+        handle_discover_popup_key(state, key, event_tx.clone());
+        return;
+    }
+
+    // Auth token popup handling (intercepts all keys when active)
+    if state.auth_token_popup.is_some() {
+        handle_auth_token_popup(state, key, event_tx.clone());
+        return;
+    }
+
+    // Global shortcuts (only processed when no popup is active)
     match (key.code, key.modifiers) {
         (KeyCode::Char('q'), _) if state.active_panel != ActivePanel::GoalInput => {
             state.should_quit = true;
@@ -932,18 +951,6 @@ async fn handle_key_event(
             return;
         }
         _ => {}
-    }
-
-    // Discovery popup-specific handling (intercepts all keys when active)
-    if !matches!(state.discover_popup, DiscoverPopup::None) {
-        handle_discover_popup_key(state, key, event_tx.clone());
-        return;
-    }
-
-    // Auth token popup handling (intercepts all keys when active)
-    if state.auth_token_popup.is_some() {
-        handle_auth_token_popup(state, key, event_tx.clone());
-        return;
     }
 
     // View-specific handling
@@ -1469,164 +1476,305 @@ fn handle_mouse_event(
     state: &mut AppState,
     mouse: crossterm::event::MouseEvent,
     size: ratatui::layout::Rect,
+    event_tx: mpsc::UnboundedSender<TuiEvent>,
 ) {
     use ccos::tui::state::ActivePanel;
 
     let col = mouse.column;
     let row = mouse.row;
 
-    match state.current_view {
-        View::Goals => {
-            // Calculate layout regions (matching panels.rs render function)
-            // Main vertical layout: [Goal (3 rows), Main (remaining), Status (1 row)]
-            let goal_height = 3u16;
-            let status_height = 1u16;
-            let main_height = size.height.saturating_sub(goal_height + status_height);
-
-            // Layout: 45% left (RTFS Plan), 55% right (2x2 grid)
-            let left_width = (size.width * 45) / 100;
-
-            // Determine which region was clicked
-            match mouse.kind {
-                MouseEventKind::Down(_) | MouseEventKind::Up(_) => {
-                    if row < goal_height {
-                        // Goal input panel
-                        state.active_panel = ActivePanel::GoalInput;
-                    } else if row < goal_height + main_height {
-                        // Main content area
-                        let main_row = row - goal_height;
-
-                        if col < left_width {
-                            // Left column: RTFS Plan (full height)
-                            state.active_panel = ActivePanel::RtfsPlan;
-                        } else {
-                            // Right column: 2x2 grid
-                            let right_height = main_height / 2;
-                            let right_width = size.width - left_width;
-                            let right_half_width = right_width / 2;
-                            let right_col = col - left_width;
-
-                            if main_row < right_height {
-                                // Top row
-                                if right_col < right_half_width {
-                                    state.active_panel = ActivePanel::DecompositionTree;
-                                } else {
-                                    state.active_panel = ActivePanel::CapabilityResolution;
+    // Handle menu clicks (left sidebar, columns 0-15)
+    // Layout: header (row 0), content (rows 1 to height-2), status (row height-1)
+    // Menu is in content area, starting at row 1
+    if col < 16 && row >= 1 && row < size.height.saturating_sub(1) {
+        match mouse.kind {
+            crossterm::event::MouseEventKind::Down(_) | crossterm::event::MouseEventKind::Up(_) => {
+                // Menu has border (1 row top), then items
+                // Each menu item takes 1 row
+                let menu_start_row = 1; // After header
+                let menu_item_row = row.saturating_sub(menu_start_row + 1); // +1 for top border
+                
+                // Menu has 7 items: Discover, Servers, Approvals, Goals, Plans, Execute, Config
+                let views = [
+                    View::Discover,
+                    View::Servers,
+                    View::Approvals,
+                    View::Goals,
+                    View::Plans,
+                    View::Execute,
+                    View::Config,
+                ];
+                
+                if menu_item_row < views.len() as u16 {
+                    let selected_view = views[menu_item_row as usize];
+                    if state.current_view != selected_view {
+                        state.current_view = selected_view;
+                        
+                        // Set appropriate active panel for the view
+                        match selected_view {
+                            View::Discover => {
+                                state.active_panel = ActivePanel::DiscoverList;
+                                // Load capabilities if needed
+                                if state.discovered_capabilities.is_empty() && !state.discover_loading {
+                                    load_local_capabilities_async(event_tx.clone());
                                 }
-                            } else {
-                                // Bottom row
-                                if right_col < right_half_width {
-                                    state.active_panel = ActivePanel::TraceTimeline;
-                                } else {
-                                    state.active_panel = ActivePanel::LlmInspector;
+                            }
+                            View::Servers => {
+                                state.active_panel = ActivePanel::ServersList;
+                                // Load servers if needed
+                                if state.servers.is_empty() && !state.servers_loading {
+                                    load_servers_async(event_tx.clone());
                                 }
+                            }
+                            View::Approvals => {
+                                state.active_panel = ActivePanel::ApprovalsPendingList;
+                                // Load approvals if needed
+                                if state.pending_servers.is_empty()
+                                    && state.approved_servers.is_empty()
+                                    && !state.approvals_loading
+                                {
+                                    load_approvals_async(event_tx.clone());
+                                }
+                            }
+                            View::Goals => {
+                                state.active_panel = ActivePanel::GoalInput;
+                            }
+                            _ => {
+                                // Other views not fully implemented
                             }
                         }
                     }
                 }
-                MouseEventKind::ScrollUp => match state.active_panel {
-                    ActivePanel::RtfsPlan => {
-                        state.rtfs_plan_scroll = state.rtfs_plan_scroll.saturating_sub(3);
-                    }
-                    ActivePanel::LlmInspector => {
-                        state.llm_response_scroll = state.llm_response_scroll.saturating_sub(3);
-                    }
-                    ActivePanel::TraceTimeline => {
-                        state.trace_selected = state.trace_selected.saturating_sub(3);
-                    }
-                    _ => {}
-                },
-                MouseEventKind::ScrollDown => match state.active_panel {
-                    ActivePanel::RtfsPlan => {
-                        if let Some(plan) = &state.rtfs_plan {
-                            let max_scroll = plan.lines().count().saturating_sub(1);
-                            state.rtfs_plan_scroll = (state.rtfs_plan_scroll + 3).min(max_scroll);
+                return; // Menu click handled, don't process further
+            }
+            _ => {}
+        }
+    }
+
+    match state.current_view {
+        View::Goals => {
+            // Calculate layout regions (matching panels.rs render function)
+            // Main content starts at row 1 (after header), menu is columns 0-15
+            let header_height = 1u16;
+            let content_start_row = header_height;
+            let content_start_col = 16u16; // After menu
+            let content_width = size.width.saturating_sub(content_start_col);
+            
+            // Main vertical layout: [Goal (3 rows), Main (remaining)]
+            let goal_height = 3u16;
+            let main_height = size.height.saturating_sub(goal_height + header_height + 1); // +1 for status bar
+
+            // Layout: 45% left (RTFS Plan), 55% right (2x2 grid) - relative to content width
+            let left_width = (content_width * 45) / 100;
+
+            // Only process clicks in main content area (not menu)
+            if col >= content_start_col && row >= content_start_row {
+                let content_row = row - content_start_row;
+                
+                // Determine which region was clicked
+                match mouse.kind {
+                    MouseEventKind::Down(_) | MouseEventKind::Up(_) => {
+                        if content_row < goal_height {
+                            // Goal input panel
+                            state.active_panel = ActivePanel::GoalInput;
+                        } else if content_row < goal_height + main_height {
+                            // Main content area
+                            let main_row = content_row - goal_height;
+                            let content_col = col - content_start_col;
+
+                            if content_col < left_width {
+                                // Left column: RTFS Plan (full height)
+                                state.active_panel = ActivePanel::RtfsPlan;
+                            } else {
+                                // Right column: 2x2 grid
+                                let right_height = main_height / 2;
+                                let right_width = content_width - left_width;
+                                let right_half_width = right_width / 2;
+                                let right_col = content_col - left_width;
+
+                                if main_row < right_height {
+                                    // Top row
+                                    if right_col < right_half_width {
+                                        state.active_panel = ActivePanel::DecompositionTree;
+                                    } else {
+                                        state.active_panel = ActivePanel::CapabilityResolution;
+                                    }
+                                } else {
+                                    // Bottom row
+                                    if right_col < right_half_width {
+                                        state.active_panel = ActivePanel::TraceTimeline;
+                                    } else {
+                                        state.active_panel = ActivePanel::LlmInspector;
+                                    }
+                                }
+                            }
                         }
                     }
-                    ActivePanel::LlmInspector => {
-                        state.llm_response_scroll += 3;
-                    }
-                    ActivePanel::TraceTimeline => {
-                        let filtered_count = state
-                            .trace_entries
-                            .iter()
-                            .filter(|e| state.verbose_trace || e.event_type.is_important())
-                            .count();
-                        if filtered_count > 0 {
-                            state.trace_selected =
-                                (state.trace_selected + 3).min(filtered_count.saturating_sub(1));
+                    MouseEventKind::ScrollUp => match state.active_panel {
+                        ActivePanel::RtfsPlan => {
+                            state.rtfs_plan_scroll = state.rtfs_plan_scroll.saturating_sub(3);
                         }
-                    }
+                        ActivePanel::LlmInspector => {
+                            state.llm_response_scroll = state.llm_response_scroll.saturating_sub(3);
+                        }
+                        ActivePanel::TraceTimeline => {
+                            state.trace_selected = state.trace_selected.saturating_sub(3);
+                        }
+                        _ => {}
+                    },
+                    MouseEventKind::ScrollDown => match state.active_panel {
+                        ActivePanel::RtfsPlan => {
+                            if let Some(plan) = &state.rtfs_plan {
+                                let max_scroll = plan.lines().count().saturating_sub(1);
+                                state.rtfs_plan_scroll = (state.rtfs_plan_scroll + 3).min(max_scroll);
+                            }
+                        }
+                        ActivePanel::LlmInspector => {
+                            state.llm_response_scroll += 3;
+                        }
+                        ActivePanel::TraceTimeline => {
+                            let filtered_count = state
+                                .trace_entries
+                                .iter()
+                                .filter(|e| state.verbose_trace || e.event_type.is_important())
+                                .count();
+                            if filtered_count > 0 {
+                                state.trace_selected =
+                                    (state.trace_selected + 3).min(filtered_count.saturating_sub(1));
+                            }
+                        }
+                        _ => {}
+                    },
                     _ => {}
-                },
-                _ => {}
+                }
             }
         }
         View::Discover => {
             // Layout: Discovery input at top (3 rows), List below
+            // Main content starts at row 1 (after header), menu is columns 0-15
+            // So content area starts at row 1, column 16+
+            let header_height = 1u16;
             let input_height = 3u16;
+            let content_start_row = header_height;
+            let content_start_col = 16u16; // After menu
 
-            match mouse.kind {
-                MouseEventKind::Down(_) | MouseEventKind::Up(_) => {
-                    if row < input_height {
-                        state.active_panel = ActivePanel::DiscoverInput;
-                    } else {
-                        state.active_panel = ActivePanel::DiscoverList;
-                    }
-                }
-                MouseEventKind::ScrollUp => {
-                    if state.active_panel == ActivePanel::DiscoverList {
-                        state.discover_selected = state.discover_selected.saturating_sub(3);
-                        // Sync scroll
-                        if state.discover_selected < state.discover_scroll {
-                            state.discover_scroll = state.discover_selected;
-                        }
-                    } else if state.active_panel == ActivePanel::DiscoverDetails {
-                        state.discover_details_scroll =
-                            state.discover_details_scroll.saturating_sub(3);
-                    }
-                }
-                MouseEventKind::ScrollDown => {
-                    if state.active_panel == ActivePanel::DiscoverList {
-                        let visible_len = state.visible_discovery_entries().len();
-                        let visible_height = state.discover_panel_height;
-                        if visible_len > 0 {
-                            state.discover_selected =
-                                (state.discover_selected + 3).min(visible_len - 1);
-                            // Sync scroll
-                            if state.discover_selected >= state.discover_scroll + visible_height {
-                                state.discover_scroll =
-                                    state.discover_selected.saturating_sub(visible_height - 1);
+            // Only process clicks in main content area (not menu)
+            if col >= content_start_col && row >= content_start_row {
+                let content_row = row - content_start_row;
+                
+                match mouse.kind {
+                    MouseEventKind::Down(_) | MouseEventKind::Up(_) => {
+                        if content_row < input_height {
+                            state.active_panel = ActivePanel::DiscoverInput;
+                        } else {
+                            state.active_panel = ActivePanel::DiscoverList;
+                            
+                            // Calculate which list item was clicked
+                            // List starts after input (input_height rows)
+                            // Account for list border (1 row top)
+                            let list_start_row = input_height + 1;
+                            if content_row >= list_start_row {
+                                let item_row = content_row - list_start_row;
+                                let visible_entries = state.visible_discovery_entries();
+                                let scroll_offset = state.discover_scroll;
+                                let clicked_index = scroll_offset + item_row as usize;
+                                
+                                if clicked_index < visible_entries.len() {
+                                    state.discover_selected = clicked_index;
+                                }
                             }
                         }
-                    } else if state.active_panel == ActivePanel::DiscoverDetails {
-                        state.discover_details_scroll =
-                            state.discover_details_scroll.saturating_add(3);
                     }
+                    MouseEventKind::ScrollUp => {
+                        if state.active_panel == ActivePanel::DiscoverList {
+                            state.discover_selected = state.discover_selected.saturating_sub(3);
+                            // Sync scroll
+                            if state.discover_selected < state.discover_scroll {
+                                state.discover_scroll = state.discover_selected;
+                            }
+                        } else if state.active_panel == ActivePanel::DiscoverDetails {
+                            state.discover_details_scroll =
+                                state.discover_details_scroll.saturating_sub(3);
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if state.active_panel == ActivePanel::DiscoverList {
+                            let visible_len = state.visible_discovery_entries().len();
+                            let visible_height = state.discover_panel_height;
+                            if visible_len > 0 {
+                                state.discover_selected =
+                                    (state.discover_selected + 3).min(visible_len - 1);
+                                // Sync scroll
+                                if state.discover_selected >= state.discover_scroll + visible_height {
+                                    state.discover_scroll =
+                                        state.discover_selected.saturating_sub(visible_height - 1);
+                                }
+                            }
+                        } else if state.active_panel == ActivePanel::DiscoverDetails {
+                            state.discover_details_scroll =
+                                state.discover_details_scroll.saturating_add(3);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
         View::Servers => {
-            // Layout: Title? Or maybe full list?
-            // Assuming full list or similar to Discover
-            match mouse.kind {
-                MouseEventKind::Down(_) | MouseEventKind::Up(_) => {
-                    // For now just activate list
-                    state.active_panel = ActivePanel::ServersList;
-                }
-                MouseEventKind::ScrollUp => {
-                    if state.active_panel == ActivePanel::ServersList {
-                        state.servers_selected = state.servers_selected.saturating_sub(3);
+            // Layout: Two columns - server list (left) | server details (right)
+            // Main content starts at row 1 (after header), menu is columns 0-15
+            let header_height = 1u16;
+            let content_start_row = header_height;
+            let content_start_col = 16u16; // After menu
+            
+            // Only process clicks in main content area (not menu)
+            if col >= content_start_col && row >= content_start_row {
+                let content_row = row - content_start_row;
+                let content_col = col - content_start_col;
+                let content_width = size.width.saturating_sub(content_start_col);
+                
+                match mouse.kind {
+                    MouseEventKind::Down(_) | MouseEventKind::Up(_) => {
+                        // Split content into two columns (50/50)
+                        let left_half = content_width / 2;
+                        
+                        if content_col < left_half {
+                            // Left column: Server list
+                            state.active_panel = ActivePanel::ServersList;
+                            
+                            // Calculate which server was clicked
+                            // Account for list border (1 row top)
+                            let list_start_row = 1;
+                            if content_row >= list_start_row {
+                                let item_row = content_row - list_start_row;
+                                let clicked_index = item_row as usize;
+                                
+                                if clicked_index < state.servers.len() {
+                                    state.servers_selected = clicked_index;
+                                    state.server_details_scroll = 0; // Reset details scroll
+                                }
+                            }
+                        } else {
+                            // Right column: Server details
+                            state.active_panel = ActivePanel::ServerDetails;
+                        }
                     }
-                }
-                MouseEventKind::ScrollDown => {
-                    if state.active_panel == ActivePanel::ServersList && !state.servers.is_empty() {
-                        state.servers_selected =
-                            (state.servers_selected + 3).min(state.servers.len() - 1);
+                    MouseEventKind::ScrollUp => {
+                        if state.active_panel == ActivePanel::ServersList {
+                            state.servers_selected = state.servers_selected.saturating_sub(3);
+                        } else if state.active_panel == ActivePanel::ServerDetails {
+                            state.server_details_scroll = state.server_details_scroll.saturating_sub(3);
+                        }
                     }
+                    MouseEventKind::ScrollDown => {
+                        if state.active_panel == ActivePanel::ServersList && !state.servers.is_empty() {
+                            state.servers_selected =
+                                (state.servers_selected + 3).min(state.servers.len() - 1);
+                        } else if state.active_panel == ActivePanel::ServerDetails {
+                            state.server_details_scroll = state.server_details_scroll.saturating_add(3);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
         _ => {}
@@ -3064,6 +3212,7 @@ async fn find_servers_async(
     
     let query_lower = query.to_lowercase();
     let mut all_suggestions: Vec<ApiSuggestion> = Vec::new();
+    let mut seen_endpoints: std::collections::HashSet<String> = std::collections::HashSet::new();
     
     // ========== 1. Search local approved servers first ==========
     let root = ccos::utils::fs::get_workspace_root();
@@ -3081,13 +3230,16 @@ async fn find_servers_async(
                             // Check if query matches name (case-insensitive)
                             if info.name.to_lowercase().contains(&query_lower) ||
                                info.endpoint.to_lowercase().contains(&query_lower) {
-                                all_suggestions.push(ApiSuggestion {
+                                let endpoint = info.endpoint.clone();
+                                if seen_endpoints.insert(endpoint.clone()) {
+                                    all_suggestions.push(ApiSuggestion {
                                     name: format!("[Local] {}", info.name),
-                                    endpoint: info.endpoint.clone(),
-                                    docs_url: Some(info.endpoint),
-                                    description: "Already approved server".to_string(),
-                                    auth_env_var: None,
-                                });
+                                        endpoint: endpoint.clone(),
+                                        docs_url: Some(endpoint),
+                                        description: "Already approved server".to_string(),
+                                        auth_env_var: None,
+                                    });
+                                }
                             }
                         }
                     }
@@ -3096,7 +3248,50 @@ async fn find_servers_async(
         }
     }
     
-    // ========== 2. LLM Discovery (online search) ==========
+    // ========== 2. Registry search (MCP registry + web search) ==========
+    {
+        use ccos::ops::server::search_servers;
+        match search_servers(query.clone(), None, false, None).await {
+            Ok(results) => {
+                for info in results {
+                    // Include stdio commands (like "npx -y @modelcontextprotocol/server-puppeteer")
+                    // as valid endpoints, not just HTTP URLs
+                    let endpoint = info.endpoint.trim();
+                    if endpoint.is_empty() {
+                        continue;
+                    }
+                    if seen_endpoints.insert(endpoint.to_string()) {
+                        // For stdio commands, use the endpoint as-is
+                        // For HTTP URLs, we can use them as docs_url too
+                        let docs_url = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+                            Some(endpoint.to_string())
+                        } else {
+                            // For stdio commands, try to find docs URL from description or name
+                            // Many MCP servers have GitHub repos or docs pages
+                            None
+                        };
+                        
+                        all_suggestions.push(ApiSuggestion {
+                            name: format!("[Registry] {}", info.name),
+                            endpoint: endpoint.to_string(),
+                            docs_url,
+                            description: info.description.unwrap_or_else(|| "Discovered via registry search".to_string()),
+                            auth_env_var: None,
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = event_tx.send(TuiEvent::Trace(
+                    TraceEventType::ToolDiscovery,
+                    format!("Registry search failed: {}", e),
+                    None,
+                ));
+            }
+        }
+    }
+    
+    // ========== 3. LLM Discovery (online search) ==========
     // Load agent config to get LLM profile
     let agent_config = match load_agent_config("config/agent_config.toml") {
         Ok(c) => c,
@@ -3179,17 +3374,28 @@ async fn find_servers_async(
     let service = LlmDiscoveryService::with_provider(provider);
     
     // Perform online search
-    match service.search_external_apis(&query, None).await {
+    let url_hint = if query.contains("://") {
+        Some(query.as_str())
+    } else {
+        None
+    };
+
+    match service.search_external_apis(&query, url_hint).await {
         Ok(results) => {
             // Add LLM results after local results
             for r in results {
-                all_suggestions.push(ApiSuggestion {
-                    name: r.name,
-                    endpoint: r.endpoint,
-                    docs_url: r.docs_url,
-                    description: r.description,
-                    auth_env_var: r.auth_env_var,
-                });
+                if r.endpoint.trim().is_empty() {
+                    continue;
+                }
+                if seen_endpoints.insert(r.endpoint.clone()) {
+                    all_suggestions.push(ApiSuggestion {
+                        name: r.name,
+                        endpoint: r.endpoint,
+                        docs_url: r.docs_url,
+                        description: r.description,
+                        auth_env_var: r.auth_env_var,
+                    });
+                }
             }
             
             let _ = event_tx.send(TuiEvent::ServerSuggestionsLoaded {
@@ -3597,6 +3803,76 @@ async fn introspect_server_async(
     match result {
         Ok(intro_result) => {
             if intro_result.success {
+                if let Some(ref browser) = intro_result.browser_result {
+                    if let Some(ref mcp_command) = browser.mcp_server_command {
+                        let stdio_command = mcp_command.to_stdio_command();
+                        let _ = event_tx.send(TuiEvent::IntrospectionLog(format!(
+                            "Discovered MCP stdio config: {}",
+                            stdio_command
+                        )));
+
+                        let auth_env_var = if std::env::var(&suggested_env_var).is_ok() {
+                            Some(suggested_env_var.as_str())
+                        } else {
+                            None
+                        };
+
+                        match introspect_server_by_url(
+                            &stdio_command,
+                            &server_name,
+                            auth_env_var,
+                        )
+                        .await
+                        {
+                            Ok(mcp_result) => {
+                                let discovered_tools: Vec<DiscoveredCapability> = mcp_result
+                                    .tools
+                                    .iter()
+                                    .map(|tool| DiscoveredCapability {
+                                        id: format!("mcp:{}:{}", server_name, tool.tool_name),
+                                        name: tool.tool_name.clone(),
+                                        description: tool.description.clone().unwrap_or_default(),
+                                        source: format!("{} (MCP stdio)", server_name),
+                                        category: CapabilityCategory::McpTool,
+                                        version: None,
+                                        input_schema: tool.input_schema_json.as_ref().map(|v| v.to_string()),
+                                        output_schema: None,
+                                        permissions: Vec::new(),
+                                        effects: Vec::new(),
+                                        metadata: std::collections::HashMap::new(),
+                                    })
+                                    .collect();
+
+                                let _ = event_tx.send(TuiEvent::IntrospectionLog(format!(
+                                    "Found {} MCP tools via stdio.",
+                                    discovered_tools.len()
+                                )));
+
+                                if discovered_tools.is_empty() {
+                                    let _ = event_tx.send(TuiEvent::IntrospectionFailed {
+                                        server_name,
+                                        error: "No tools discovered from MCP stdio config.".to_string(),
+                                    });
+                                } else {
+                                    let _ = event_tx.send(TuiEvent::IntrospectionComplete {
+                                        server_name,
+                                        endpoint: stdio_command,
+                                        tools: discovered_tools,
+                                    });
+                                }
+                                return;
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(TuiEvent::IntrospectionFailed {
+                                    server_name,
+                                    error: format!("MCP stdio introspection failed: {}", e),
+                                });
+                                return;
+                            }
+                        }
+                    }
+                }
+
                 let source_str = match intro_result.source {
                     IntrospectionSource::OpenApi => "OpenAPI",
                     IntrospectionSource::Mcp => "MCP",

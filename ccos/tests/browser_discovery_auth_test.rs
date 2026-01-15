@@ -40,6 +40,7 @@ async fn test_browser_discovery_auth_generation() {
         found_openapi_urls: vec![],
         spec_url: None,
         api_base_url: Some("https://api.example.com".to_string()),
+        mcp_server_command: None,
         auth: Some(auth_config),
         error: None,
     };

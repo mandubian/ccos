@@ -26,8 +26,29 @@ pub struct BrowserDiscoveryResult {
     pub spec_url: Option<String>,
     /// The actual API base URL (distinct from source_url which might be docs)
     pub api_base_url: Option<String>,
+    /// MCP stdio server config discovered in documentation pages
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_server_command: Option<McpServerCommand>,
     pub auth: Option<AuthConfig>,
     pub error: Option<String>,
+}
+
+/// MCP stdio command info discovered from docs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerCommand {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+}
+
+impl McpServerCommand {
+    pub fn to_stdio_command(&self) -> String {
+        if self.args.is_empty() {
+            self.command.clone()
+        } else {
+            format!("{} {}", self.command, self.args.join(" "))
+        }
+    }
 }
 
 /// An endpoint discovered from browser extraction
@@ -341,6 +362,10 @@ impl BrowserDiscoveryService {
                         })
                         .unwrap_or_default();
 
+                    let mcp_server_command = html
+                        .as_deref()
+                        .and_then(extract_mcp_server_command_from_html);
+
                     Ok(BrowserDiscoveryResult {
                         success: true,
                         source_url: url.to_string(),
@@ -350,6 +375,7 @@ impl BrowserDiscoveryService {
                         found_openapi_urls: found_links,
                         spec_url,
                         api_base_url: None,
+                        mcp_server_command,
                         auth: None,
                         error: None,
                     })
@@ -362,6 +388,9 @@ impl BrowserDiscoveryService {
                             json_content
                         }
                     );
+                    let mcp_server_command =
+                        extract_mcp_server_command_from_html(content_str);
+
                     Ok(BrowserDiscoveryResult {
                         success: true,
                         source_url: url.to_string(),
@@ -371,6 +400,7 @@ impl BrowserDiscoveryService {
                         found_openapi_urls: vec![],
                         spec_url: None,
                         api_base_url: None,
+                        mcp_server_command,
                         auth: None,
                         error: None,
                     })
@@ -387,6 +417,7 @@ impl BrowserDiscoveryService {
                     found_openapi_urls: vec![],
                     spec_url: None,
                     api_base_url: None,
+                    mcp_server_command: None,
                     auth: None,
                     error: Some(format!("Failed to evaluate page: {}", e)),
                 })
@@ -537,5 +568,102 @@ impl BrowserDiscoveryService {
 impl Default for BrowserDiscoveryService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Extract MCP stdio server info from a documentation HTML payload.
+pub fn extract_mcp_server_command_from_html(html: &str) -> Option<McpServerCommand> {
+    let decoded = html
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+
+    let json_blob = extract_json_object_containing(&decoded, "\"mcpServers\"")?;
+    let parsed: serde_json::Value = serde_json::from_str(&json_blob).ok()?;
+    let servers = parsed.get("mcpServers")?.as_object()?;
+    let (name, config) = servers.iter().next()?;
+
+    let command = config.get("command")?.as_str()?.to_string();
+    let args = config
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+
+    Some(McpServerCommand {
+        name: name.to_string(),
+        command,
+        args,
+    })
+}
+
+fn extract_json_object_containing(text: &str, marker: &str) -> Option<String> {
+    let marker_index = text.find(marker)?;
+    let start = text[..marker_index].rfind('{')?;
+    let slice = &text[start..];
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escape = false;
+
+    for (offset, ch) in slice.char_indices() {
+        if in_string {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(slice[..=offset].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_mcp_server_command_from_html;
+
+    #[test]
+    fn test_extract_mcp_server_command_from_html() {
+        let html = r#"
+            <pre><code>{
+              &quot;mcpServers&quot;: {
+                &quot;code-craka-puppeteer-mcp&quot;: {
+                  &quot;args&quot;: [&quot;-y&quot;, &quot;@modelcontextprotocol/server-puppeteer&quot;],
+                  &quot;command&quot;: &quot;npx&quot;
+                }
+              }
+            }</code></pre>
+        "#;
+
+        let command = extract_mcp_server_command_from_html(html).expect("command");
+        assert_eq!(command.name, "code-craka-puppeteer-mcp");
+        assert_eq!(command.command, "npx");
+        assert_eq!(command.args, vec!["-y", "@modelcontextprotocol/server-puppeteer"]);
+        assert_eq!(
+            command.to_stdio_command(),
+            "npx -y @modelcontextprotocol/server-puppeteer"
+        );
     }
 }
