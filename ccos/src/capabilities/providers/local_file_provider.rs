@@ -48,39 +48,50 @@ impl LocalFileProvider {
     }
 
     fn extract_path(input: &Value) -> RuntimeResult<String> {
+        // More robust extraction that handles:
+        // 1. Value::String (direct path)
+        // 2. Value::Map containing "path" or "key" (normalized)
+        // 3. Value::Vector/List where the first element is a Map containing these (wrapped normalized)
+        
         match input {
             Value::String(s) => Ok(s.clone()),
             Value::Map(map) => {
-                // Try "path" key
-                if let Some(val) = map
-                    .get(&MapKey::String("path".to_string()))
-                    .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword("path".to_string()))))
-                {
-                    if let Some(s) = val.as_string() {
-                        return Ok(s.to_string());
-                    }
-                }
-                // Try "args"
-                if let Some(args_val) = map
-                    .get(&MapKey::String("args".to_string()))
-                    .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword("args".to_string()))))
-                {
-                    if let Value::List(args) | Value::Vector(args) = args_val {
-                        if !args.is_empty() {
-                            if let Some(s) = args[0].as_string() {
-                                return Ok(s.to_string());
-                            }
+                // Try "path" or "key" (for KV-like semantics if used here)
+                for key_name in &["path", "key", "key-path"] {
+                    if let Some(val) = map.get(&MapKey::String(key_name.to_string()))
+                        .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword(key_name.to_string())))) 
+                    {
+                        if let Some(s) = val.as_string() {
+                            return Ok(s.to_string());
                         }
                     }
                 }
-                Err(RuntimeError::Generic(
-                    "Missing 'path' parameter for filesystem operation".to_string(),
-                ))
+                
+                // Fallback to "args" if it exists (legacy wrapping)
+                if let Some(args_val) = map.get(&MapKey::String("args".to_string()))
+                    .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword("args".to_string()))))
+                {
+                    return Self::extract_path(args_val);
+                }
+                
+                Err(RuntimeError::Generic(format!("Missing 'path' parameter in map. Keys: {:?}", map.keys().collect::<Vec<_>>())))
             }
             Value::List(args) | Value::Vector(args) if !args.is_empty() => {
+                if args.len() == 1 {
+                    // Try to extract from the first argument recursively
+                    // This handles cases like [Value::Map(...)] or [Value::String(...)]
+                    return Self::extract_path(&args[0]);
+                }
+                
+                // For multi-arg, usually the first one is the path
                 if let Some(s) = args[0].as_string() {
                     Ok(s.to_string())
                 } else {
+                    // But if it's a map, try extracting from it
+                    if let Value::Map(_) = &args[0] {
+                        return Self::extract_path(&args[0]);
+                    }
+                    
                     Err(RuntimeError::TypeError {
                         expected: "string".to_string(),
                         actual: args[0].type_name().to_string(),
@@ -88,60 +99,78 @@ impl LocalFileProvider {
                     })
                 }
             }
-            _ => Err(RuntimeError::Generic(
-                "Invalid input for filesystem operation: expected string or map with 'path'"
-                    .to_string(),
-            )),
+            _ => Err(RuntimeError::Generic(format!("Invalid input for filesystem operation: expected string or map with 'path', got {}", input.type_name()))),
         }
     }
 
     fn extract_bool(input: &Value, key: &str, default: bool) -> bool {
-        if let Value::Map(map) = input {
-            if let Some(val) = map
-                .get(&MapKey::String(key.to_string()))
-                .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword(key.to_string()))))
-            {
-                if let Value::Boolean(b) = val {
-                    return *b;
+        match input {
+            Value::Map(map) => {
+                if let Some(val) = map.get(&MapKey::String(key.to_string()))
+                    .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword(key.to_string()))))
+                {
+                    if let Value::Boolean(b) = val {
+                        return *b;
+                    }
                 }
+                default
             }
+            Value::List(args) | Value::Vector(args) if !args.is_empty() => {
+                // Try extracting from the first arg if it's a map
+                if let Value::Map(_) = &args[0] {
+                    return Self::extract_bool(&args[0], key, default);
+                }
+                default
+            }
+            _ => default
         }
-        default
     }
 
     fn extract_content(input: &Value) -> RuntimeResult<String> {
-        if let Value::Map(map) = input {
-            if let Some(val) = map
-                .get(&MapKey::String("content".to_string()))
-                .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword("content".to_string()))))
-            {
-                if let Some(s) = val.as_string() {
-                    return Ok(s.to_string());
-                }
-            }
-            // Try args[1]
-            if let Some(args_val) = map
-                .get(&MapKey::String("args".to_string()))
-                .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword("args".to_string()))))
-            {
-                if let Value::List(args) | Value::Vector(args) = args_val {
-                    if args.len() >= 2 {
-                        if let Some(s) = args[1].as_string() {
+        match input {
+            Value::String(s) => Ok(s.clone()),
+            Value::Map(map) => {
+                // Try "content", "value", or "data"
+                for key_name in &["content", "value", "data"] {
+                    if let Some(val) = map.get(&MapKey::String(key_name.to_string()))
+                        .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword(key_name.to_string())))) 
+                    {
+                        if let Some(s) = val.as_string() {
                             return Ok(s.to_string());
                         }
                     }
                 }
-            }
-        } else if let Value::List(args) | Value::Vector(args) = input {
-            if args.len() >= 2 {
-                if let Some(s) = args[1].as_string() {
-                    return Ok(s.to_string());
+                
+                // Fallback to "args"
+                if let Some(args_val) = map.get(&MapKey::String("args".to_string()))
+                    .or_else(|| map.get(&MapKey::Keyword(rtfs::ast::Keyword("args".to_string()))))
+                {
+                    return Self::extract_content(args_val);
                 }
+                
+                Err(RuntimeError::Generic(format!("Missing 'content' parameter in map. Keys: {:?}", map.keys().collect::<Vec<_>>())))
             }
+            Value::List(args) | Value::Vector(args) if !args.is_empty() => {
+                if args.len() == 1 {
+                    return Self::extract_content(&args[0]);
+                }
+                
+                // Traditionally for write-file(path, content), content is args[1]
+                if args.len() >= 2 {
+                    if let Some(s) = args[1].as_string() {
+                        return Ok(s.to_string());
+                    }
+                }
+                
+                // If it's a map at args[0], try extracting from it
+                if let Value::Map(_) = &args[0] {
+                    return Self::extract_content(&args[0]);
+                }
+                
+                Err(RuntimeError::Generic("Missing 'content' parameter in arguments".to_string()))
+            }
+            _ => Err(RuntimeError::Generic(format!("Invalid input for write operation: expected string or map, got {}", input.type_name()))),
         }
-        Err(RuntimeError::Generic(
-            "Missing 'content' parameter for write-file operation".to_string(),
-        ))
     }
 
     fn list_dir(input: &Value) -> RuntimeResult<Value> {
