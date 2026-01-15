@@ -400,25 +400,19 @@ fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
     let inner_area = block.inner(area);
 
     // Layout:
-    // Top: Info (Left) | Actions (Right)
-    // Bottom: Tool List (Scrollable)
+    // Top: Info (full width)
+    // Middle: Tool List (Scrollable)
+    // Bottom: Actions (Right-aligned)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8), // Header height for info + actions
+            Constraint::Length(4), // Server info
             Constraint::Min(1),    // Tool list body
+            Constraint::Length(8), // Actions at bottom
         ])
         .split(inner_area);
 
-    let top_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50), // Info
-            Constraint::Percentage(50), // Actions
-        ])
-        .split(chunks[0]);
-
-    // --- Render Server Info (Top Left) ---
+    // --- Render Server Info (Top) ---
     let status_color = match server.status {
         ServerStatus::Connected => theme::STATUS_SUCCESS,
         ServerStatus::Disconnected => theme::SUBTEXT0,
@@ -470,9 +464,35 @@ fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
         ]),
     ];
 
-    f.render_widget(Paragraph::new(info_lines), top_chunks[0]);
+    f.render_widget(Paragraph::new(info_lines), chunks[0]);
 
-    // --- Render Actions (Top Right) ---
+    // --- Render Tool List (Middle) ---
+    let mut tool_lines = Vec::new();
+    if !server.tools.is_empty() {
+        tool_lines.push(Line::from(vec![Span::styled(
+            "Tool List:",
+            Style::default().fg(theme::SUBTEXT0),
+        )]));
+        for tool_name in &server.tools {
+            tool_lines.push(Line::from(vec![
+                Span::styled("  • ", Style::default().fg(theme::GREEN)),
+                Span::styled(tool_name.clone(), Style::default().fg(theme::TEXT)),
+            ]));
+        }
+    } else {
+        tool_lines.push(Line::from(Span::styled(
+            "No tools discovered yet.",
+            Style::default().fg(theme::SUBTEXT0),
+        )));
+    }
+
+    let scroll_offset = state.server_details_scroll;
+    f.render_widget(
+        Paragraph::new(tool_lines).scroll((scroll_offset as u16, 0)),
+        chunks[1],
+    );
+
+    // --- Render Actions (Bottom Right) ---
     let actions_lines = vec![
         Line::from(vec![Span::styled(
             "Actions",
@@ -510,33 +530,19 @@ fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
         ]),
     ];
 
-    // Use Alignment::Right for actions? Or just keep them left-aligned within the right block
-    f.render_widget(Paragraph::new(actions_lines), top_chunks[1]);
+    // Create a layout for bottom area to align actions to the right
+    let bottom_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(0),      // Spacer (takes remaining space)
+            Constraint::Length(25),  // Actions width (enough for action text)
+        ])
+        .split(chunks[2]);
 
-    // --- Render Tool List (Bottom) ---
-    let mut tool_lines = Vec::new();
-    if !server.tools.is_empty() {
-        tool_lines.push(Line::from(vec![Span::styled(
-            "Tool List:",
-            Style::default().fg(theme::SUBTEXT0),
-        )]));
-        for tool_name in &server.tools {
-            tool_lines.push(Line::from(vec![
-                Span::styled("  • ", Style::default().fg(theme::GREEN)),
-                Span::styled(tool_name.clone(), Style::default().fg(theme::TEXT)),
-            ]));
-        }
-    } else {
-        tool_lines.push(Line::from(Span::styled(
-            "No tools discovered yet.",
-            Style::default().fg(theme::SUBTEXT0),
-        )));
-    }
-
-    let scroll_offset = state.server_details_scroll;
+    // Render actions aligned to the right
     f.render_widget(
-        Paragraph::new(tool_lines).scroll((scroll_offset as u16, 0)),
-        chunks[1],
+        Paragraph::new(actions_lines).alignment(Alignment::Right),
+        bottom_chunks[1],
     );
 }
 

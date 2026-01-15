@@ -81,9 +81,17 @@ pub struct ApisGuruSearchResult {
 
 impl ApisGuruClient {
     pub fn new() -> Self {
+        // Create client with longer timeouts for large file downloads
+        // APIs.guru list.json is ~9MB and can take time to download
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new()); // Fallback to default if builder fails
+        
         Self {
             base_url: "https://api.apis.guru".to_string(),
-            client: reqwest::Client::new(),
+            client,
         }
     }
 
@@ -164,14 +172,23 @@ impl ApisGuruClient {
     async fn list_all_apis(&self) -> RuntimeResult<HashMap<String, ApisGuruApi>> {
         let url = format!("{}/v2/list.json", self.base_url);
 
+        // APIs.guru list.json is very large (thousands of APIs), so we need a longer timeout
         let response = self
             .client
             .get(&url)
             .header("Accept", "application/json")
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(120)) // 2 minutes for large file download
             .send()
             .await
-            .map_err(|e| RuntimeError::Generic(format!("Failed to fetch APIs.guru list: {}", e)))?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    RuntimeError::Generic(format!(
+                        "APIS.guru operation timed out (the list.json file is very large, ~9MB). Try again or check your connection."
+                    ))
+                } else {
+                    RuntimeError::Generic(format!("Failed to fetch APIs.guru list: {}", e))
+                }
+            })?;
 
         if !response.status().is_success() {
             return Err(RuntimeError::Generic(format!(

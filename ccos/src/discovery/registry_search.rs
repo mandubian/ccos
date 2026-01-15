@@ -2,13 +2,14 @@ use crate::approval::queue::{DiscoverySource, ServerInfo};
 use crate::discovery::apis_guru::ApisGuruClient;
 use crate::mcp::registry::MCPRegistryClient;
 use crate::synthesis::runtime::web_search_discovery::WebSearchDiscovery;
-use rtfs::runtime::error::RuntimeResult;
+use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::Deserialize;
 use std::path::PathBuf;
 
 pub struct RegistrySearcher {
     mcp_client: MCPRegistryClient,
     apis_guru_client: ApisGuruClient,
+    npm_client: reqwest::Client,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,166 @@ impl RegistrySearcher {
         Self {
             mcp_client: MCPRegistryClient::new(),
             apis_guru_client: ApisGuruClient::new(),
+            npm_client: reqwest::Client::new(),
+        }
+    }
+    
+    /// Search NPM registry for MCP packages
+    async fn search_npm(&self, query: &str) -> RuntimeResult<Vec<RegistrySearchResult>> {
+        let mut results = Vec::new();
+        let query_lower = query.to_lowercase();
+        
+        // Well-known official MCP packages that should be checked directly
+        let well_known_packages = vec![
+            "@modelcontextprotocol/server-puppeteer",
+            "@modelcontextprotocol/server-filesystem",
+            "@modelcontextprotocol/server-github",
+            "@modelcontextprotocol/server-postgres",
+        ];
+        
+        // If query matches a well-known package, try direct lookup first
+        for pkg_name in &well_known_packages {
+            if query_lower.contains("puppeteer") && pkg_name.contains("puppeteer") {
+                if let Ok(pkg_result) = self.lookup_npm_package(pkg_name).await {
+                    if let Some(result) = pkg_result {
+                        results.push(result);
+                    }
+                }
+            }
+        }
+        
+        let search_url = "https://registry.npmjs.org/-/v1/search";
+        let search_params = [
+            ("text", query),
+            ("size", "20"),
+        ];
+        
+        let response = self
+            .npm_client
+            .get(search_url)
+            .query(&search_params)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to search NPM: {}", e)))?;
+        
+        if !response.status().is_success() {
+            return Ok(results);
+        }
+        
+        let json: serde_json::Value = response.json().await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to parse NPM response: {}", e)))?;
+        
+        if let Some(objects) = json.get("objects").and_then(|o| o.as_array()) {
+            for obj in objects {
+                if let Some(package) = obj.get("package") {
+                    let name = package.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string());
+                    let description = package.get("description")
+                        .and_then(|d| d.as_str())
+                        .map(|s| s.to_string());
+                    let keywords = package.get("keywords")
+                        .and_then(|k| k.as_array())
+                        .map(|arr| arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    
+                    // Filter for MCP-related packages
+                    // Include packages with "mcp" in name/keywords/description OR in @modelcontextprotocol scope
+                    let is_mcp_related = name.as_ref()
+                        .map(|n| {
+                            n.contains("mcp") 
+                            || n.contains("modelcontextprotocol")
+                            || n.starts_with("@modelcontextprotocol/") // Official MCP packages
+                        })
+                        .unwrap_or(false)
+                        || keywords.iter().any(|k| k.to_lowercase().contains("mcp"))
+                        || description.as_ref()
+                            .map(|d| d.to_lowercase().contains("mcp"))
+                            .unwrap_or(false);
+                    
+                    if is_mcp_related {
+                        if let Some(name) = name {
+                            // Construct stdio command for npm packages
+                            let endpoint = format!("npx -y {}", name);
+                            
+                            results.push(RegistrySearchResult {
+                                source: DiscoverySource::NpmRegistry {
+                                    package: name.clone(),
+                                },
+                                server_info: ServerInfo {
+                                    name: name.clone(),
+                                    endpoint,
+                                    description,
+                                    auth_env_var: Some(crate::approval::suggest_auth_env_var(&name)),
+                                    capabilities_path: None,
+                                    alternative_endpoints: Vec::new(),
+                                    capability_files: None,
+                                },
+                                match_score: 0.8, // Slightly lower than MCP registry matches
+                                alternative_endpoints: Vec::new(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(results)
+    }
+    
+    /// Direct lookup of an NPM package by name
+    async fn lookup_npm_package(&self, package_name: &str) -> RuntimeResult<Option<RegistrySearchResult>> {
+        let url = format!("https://registry.npmjs.org/{}", package_name);
+        
+        let response = self
+            .npm_client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to lookup NPM package: {}", e)))?;
+        
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+        
+        let json: serde_json::Value = response.json().await
+            .map_err(|e| RuntimeError::Generic(format!("Failed to parse NPM package response: {}", e)))?;
+        
+        let description = json.get("description")
+            .and_then(|d| d.as_str())
+            .map(|s| s.to_string());
+        
+        // Check if it's MCP-related
+        let is_mcp = package_name.contains("mcp") 
+            || package_name.contains("modelcontextprotocol")
+            || description.as_ref()
+                .map(|d| d.to_lowercase().contains("mcp"))
+                .unwrap_or(false);
+        
+        if is_mcp {
+            let endpoint = format!("npx -y {}", package_name);
+            Ok(Some(RegistrySearchResult {
+                source: DiscoverySource::NpmRegistry {
+                    package: package_name.to_string(),
+                },
+                server_info: ServerInfo {
+                    name: package_name.to_string(),
+                    endpoint,
+                    description,
+                    auth_env_var: Some(crate::approval::suggest_auth_env_var(package_name)),
+                    capabilities_path: None,
+                    alternative_endpoints: Vec::new(),
+                    capability_files: None,
+                },
+                match_score: 0.9, // Higher score for well-known packages
+                alternative_endpoints: Vec::new(),
+            }))
+        } else {
+            Ok(None)
         }
     }
 
@@ -34,8 +195,48 @@ impl RegistrySearcher {
         let debug = std::env::var("CCOS_DEBUG").is_ok();
 
         // 1. Search MCP Registry (remote)
-        match self.mcp_client.search_servers(query).await {
-            Ok(mcp_servers) => {
+        // Try the full query first, then try individual words if multi-word query returns nothing
+        let mcp_servers_result = self.mcp_client.search_servers(query).await;
+        
+        let mcp_servers = if let Ok(ref servers) = mcp_servers_result {
+            if servers.is_empty() {
+                // If query has multiple words and initial search returned nothing, try individual words
+                let words: Vec<&str> = query.split_whitespace().collect();
+                if words.len() > 1 {
+                    // Try each word individually and combine results
+                    let mut combined_results = Vec::new();
+                    let mut seen_names = std::collections::HashSet::new();
+                    
+                    for word in words {
+                        if let Ok(word_results) = self.mcp_client.search_servers(word).await {
+                            for server in word_results {
+                                if seen_names.insert(server.name.clone()) {
+                                    combined_results.push(server);
+                                }
+                            }
+                        }
+                    }
+                    
+                    if !combined_results.is_empty() {
+                        if debug {
+                            eprintln!("🔍 Multi-word query '{}' split into words, found {} servers", query, combined_results.len());
+                        }
+                        combined_results
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                }
+            } else {
+                servers.clone()
+            }
+        } else {
+            // If search failed, return empty
+            Vec::new()
+        };
+        
+        if !mcp_servers.is_empty() {
                 if debug {
                     eprintln!("🔍 MCP Registry: found {} servers", mcp_servers.len());
                 }
@@ -43,31 +244,69 @@ impl RegistrySearcher {
                     .into_iter()
                     .map(|server| {
                         let (endpoint, alternatives) = if let Some(remotes) = &server.remotes {
-                            // Collect all HTTP/HTTPS remotes as alternatives
-                            let all_http_remotes: Vec<String> = remotes
+                            // Select best remote (prioritizes HTTP/HTTPS, but falls back to stdio commands)
+                            let primary = MCPRegistryClient::select_best_remote_url(remotes)
+                                .unwrap_or_default();
+                            
+                            // Collect all remotes as alternatives (including stdio commands)
+                            let all_remotes: Vec<String> = remotes
                                 .iter()
                                 .filter_map(|r| {
-                                    let remote_type = r.r#type.to_ascii_lowercase();
                                     let url = r.url.trim();
-                                    if !url.is_empty()
-                                        && (remote_type == "http"
-                                            || remote_type == "https"
-                                            || url.starts_with("http://")
-                                            || url.starts_with("https://"))
-                                    {
+                                    if !url.is_empty() {
                                         Some(url.to_string())
                                     } else {
                                         None
                                     }
                                 })
                                 .collect();
-
-                            // Select best as primary, rest as alternatives
-                            let primary = MCPRegistryClient::select_best_remote_url(remotes)
-                                .unwrap_or_default();
-                            let mut alternatives = all_http_remotes;
+                            
+                            let mut alternatives = all_remotes;
                             alternatives.retain(|url| url != &primary);
 
+                            (primary, alternatives)
+                        } else if let Some(packages) = &server.packages {
+                            // If no remotes, try to construct endpoint from packages with stdio transport
+                            let mut stdio_endpoints = Vec::new();
+                            
+                            for package in packages {
+                                if package.transport.r#type.to_lowercase() == "stdio" {
+                                    let command = match package.registry_type.to_lowercase().as_str() {
+                                        "npm" | "npx" => {
+                                            // For npm packages, use npx
+                                            if let Some(version) = &package.version {
+                                                format!("npx -y {}@{}", package.identifier, version)
+                                            } else {
+                                                format!("npx -y {}", package.identifier)
+                                            }
+                                        }
+                                        "pypi" => {
+                                            // For PyPI packages, try python -m or direct command
+                                            let module_name = package.identifier.replace("-", "_");
+                                            if let Some(runtime_hint) = &package.runtime_hint {
+                                                runtime_hint.clone()
+                                            } else {
+                                                format!("python -m {}", module_name)
+                                            }
+                                        }
+                                        _ => {
+                                            // For other registries, use identifier as-is or with runtime hint
+                                            if let Some(runtime_hint) = &package.runtime_hint {
+                                                runtime_hint.clone()
+                                            } else {
+                                                package.identifier.clone()
+                                            }
+                                        }
+                                    };
+                                    stdio_endpoints.push(command);
+                                }
+                            }
+                            
+                            // Use first stdio endpoint as primary, rest as alternatives
+                            let primary = stdio_endpoints.first().cloned().unwrap_or_default();
+                            let mut alternatives = stdio_endpoints;
+                            alternatives.retain(|url| url != &primary);
+                            
                             (primary, alternatives)
                         } else {
                             (String::new(), Vec::new())
@@ -93,16 +332,34 @@ impl RegistrySearcher {
                         }
                     })
                     .collect();
-                results.extend(registry_results);
+            results.extend(registry_results);
+        } else {
+            if debug {
+                eprintln!("⚠️  MCP Registry search returned no results for '{}'", query);
+            }
+        }
+
+        // 2. Search NPM registry for MCP packages
+        match self.search_npm(query).await {
+            Ok(npm_results) => {
+                if debug && !npm_results.is_empty() {
+                    eprintln!("🔍 NPM Registry: found {} MCP packages", npm_results.len());
+                }
+                // Deduplicate by endpoint
+                for npm_result in npm_results {
+                    if !results.iter().any(|r| r.server_info.endpoint == npm_result.server_info.endpoint) {
+                        results.push(npm_result);
+                    }
+                }
             }
             Err(e) => {
                 if debug {
-                    eprintln!("⚠️  MCP Registry search failed: {}", e);
+                    eprintln!("⚠️  NPM search failed: {}", e);
                 }
             }
         }
 
-        // 2. Search local overrides.json
+        // 3. Search local overrides.json
         let override_results = self.search_overrides(query)?;
         if debug && !override_results.is_empty() {
             eprintln!(
@@ -112,7 +369,7 @@ impl RegistrySearcher {
         }
         results.extend(override_results);
 
-        // 3. Search APIs.guru (OpenAPI directory)
+        // 4. Search APIs.guru (OpenAPI directory)
         match self.search_apis_guru(query).await {
             Ok(apis_results) => results.extend(apis_results),
             Err(e) => {
@@ -121,7 +378,7 @@ impl RegistrySearcher {
             }
         }
 
-        // 4. Web search (fallback) - can be disabled via env var or config file
+        // 5. Web search (fallback) - can be disabled via env var or config file
         if Self::is_web_search_enabled() {
             match self.search_web(query).await {
                 Ok(web_results) => results.extend(web_results),

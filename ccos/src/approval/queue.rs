@@ -48,6 +48,7 @@ pub struct RiskAssessment {
 pub enum DiscoverySource {
     McpRegistry { name: String },
     ApisGuru { api_name: String },
+    NpmRegistry { package: String },
     WebSearch { url: String },
     Manual { user: String },
     OpenApi { url: String },
@@ -62,6 +63,7 @@ impl DiscoverySource {
         match self {
             DiscoverySource::McpRegistry { name } => format!("mcp_registry:{}", name),
             DiscoverySource::ApisGuru { api_name } => format!("apis:{}", api_name),
+            DiscoverySource::NpmRegistry { package } => format!("npm:{}", package),
             DiscoverySource::WebSearch { url } => format!("web:{}", url),
             DiscoverySource::Manual { user } => format!("manual:{}", user),
             DiscoverySource::OpenApi { url } => format!("openapi:{}", url),
