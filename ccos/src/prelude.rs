@@ -55,6 +55,8 @@ pub fn load_prelude(env: &mut Environment) {
                 let key_val = args.pop().unwrap();
                 let key = match key_val {
                     Value::String(s) => s,
+                    Value::Keyword(k) => k.0,
+                    Value::Symbol(sym) => sym.0,
                     other => other.to_string(),
                 };
                 evaluator.set_context_value(key, value).map(|_| Value::Nil)

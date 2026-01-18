@@ -140,6 +140,28 @@ impl IrRuntime {
         }
     }
 
+    /// Get a value with cross-plan context fallback.
+    ///
+    /// Lookup order:
+    /// 1) Host execution context (may include step-scoped context)
+    /// 2) RuntimeContext cross-plan parameters
+    pub fn get_with_cross_plan_fallback(&self, key: &str) -> Option<Value> {
+        if let Some(value) = self.host.get_context_value(key) {
+            return Some(value);
+        }
+        self.security_context.get_cross_plan_param(key).cloned()
+    }
+
+    /// Gets a value from the current execution context with cross-plan fallback.
+    pub fn get_context_value(&self, key: &str) -> Option<Value> {
+        self.get_with_cross_plan_fallback(key)
+    }
+
+    /// Sets a step-scoped context value (delegates to host).
+    pub fn set_context_value(&self, key: String, value: Value) -> Result<(), RuntimeError> {
+        self.host.set_step_context_value(key, value)
+    }
+
     /// Minimal converter from IR types to AST TypeExpr for runtime validation
     fn ir_to_type_expr(ir: &crate::ir::core::IrType) -> crate::ast::TypeExpr {
         use crate::ast::{MapTypeEntry, ParamType, PrimitiveType, TypeExpr};
@@ -316,10 +338,13 @@ impl IrRuntime {
         match node {
             IrNode::Literal { value, .. } => Ok(ExecutionOutcome::Complete(value.clone().into())),
             IrNode::VariableRef { name, .. } => {
-                let val = env.get(name).ok_or_else(|| {
-                    RuntimeError::UndefinedSymbol(crate::ast::Symbol(name.clone()))
-                })?;
-                Ok(ExecutionOutcome::Complete(val))
+                if let Some(val) = env.get(name) {
+                    return Ok(ExecutionOutcome::Complete(val));
+                }
+                if let Some(val) = self.get_with_cross_plan_fallback(name.as_str()) {
+                    return Ok(ExecutionOutcome::Complete(val));
+                }
+                Err(RuntimeError::UndefinedSymbol(crate::ast::Symbol(name.clone())))
             }
             IrNode::VariableDef {
                 name,
@@ -1348,7 +1373,7 @@ impl IrRuntime {
             }
             IrNode::ResourceRef { name, .. } => {
                 // Resolve resource references from the host's execution context
-                match self.host.get_context_value(name) {
+                match self.get_with_cross_plan_fallback(name.as_str()) {
                     Some(value) => Ok(ExecutionOutcome::Complete(value)),
                     None => {
                         // If not found in context, return the resource name as a string for backward compatibility
@@ -2509,6 +2534,58 @@ impl IrRuntime {
             "every?" => self.ir_every_with_context(args, env, module_registry),
             "some?" => self.ir_some_with_context(args, env, module_registry),
             "sort-by" => self.ir_sort_by_with_context(args, env, module_registry),
+            "context/get" => {
+                if args.len() != 1 {
+                    return Err(RuntimeError::ArityMismatch {
+                        function: builtin_fn.name.clone(),
+                        expected: "1".to_string(),
+                        actual: args.len(),
+                    });
+                }
+
+                let key = match &args[0] {
+                    Value::String(s) => s.clone(),
+                    Value::Keyword(k) => k.0.clone(),
+                    Value::Symbol(sym) => sym.0.clone(),
+                    other => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "string, keyword, or symbol".to_string(),
+                            actual: other.type_name().to_string(),
+                            operation: builtin_fn.name.clone(),
+                        })
+                    }
+                };
+
+                Ok(ExecutionOutcome::Complete(
+                    self.get_with_cross_plan_fallback(key.as_str())
+                        .unwrap_or(Value::Nil),
+                ))
+            }
+            "context/set" => {
+                if args.len() != 2 {
+                    return Err(RuntimeError::ArityMismatch {
+                        function: builtin_fn.name.clone(),
+                        expected: "2".to_string(),
+                        actual: args.len(),
+                    });
+                }
+
+                let key = match &args[0] {
+                    Value::String(s) => s.clone(),
+                    Value::Keyword(k) => k.0.clone(),
+                    Value::Symbol(sym) => sym.0.clone(),
+                    other => {
+                        return Err(RuntimeError::TypeError {
+                            expected: "string, keyword, or symbol".to_string(),
+                            actual: other.type_name().to_string(),
+                            operation: builtin_fn.name.clone(),
+                        })
+                    }
+                };
+
+                self.set_context_value(key, args[1].clone())?;
+                Ok(ExecutionOutcome::Complete(Value::Nil))
+            }
             "call" => {
                 // Execute capability calls immediately in IR runtime using the HostInterface
                 // This mirrors the AST evaluator behavior and keeps examples runnable end-to-end.
@@ -4107,10 +4184,12 @@ impl IrRuntime {
             crate::ast::Expression::Symbol(symbol) => {
                 // Variable reference
                 if let Some(value) = env.get(&symbol.0) {
-                    Ok(ExecutionOutcome::Complete(value))
-                } else {
-                    Err(RuntimeError::UndefinedSymbol(symbol.clone()))
+                    return Ok(ExecutionOutcome::Complete(value));
                 }
+                if let Some(value) = self.get_with_cross_plan_fallback(symbol.0.as_str()) {
+                    return Ok(ExecutionOutcome::Complete(value));
+                }
+                Err(RuntimeError::UndefinedSymbol(symbol.clone()))
             }
             crate::ast::Expression::Literal(literal) => {
                 // Literal value
