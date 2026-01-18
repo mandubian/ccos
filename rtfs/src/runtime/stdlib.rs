@@ -438,6 +438,75 @@ impl StandardLibrary {
                 func: std::sync::Arc::new(Self::call_capability),
             })),
         );
+
+        // Step-scoped context helpers (delegates to host)
+        // These mirror the CCOS prelude helpers but are implemented in RTFS stdlib
+        // so they are available in IR runtime as well.
+        env.define(
+            &Symbol("context/get".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "context/get".to_string(),
+                arity: Arity::Fixed(1),
+                func: Arc::new(Self::context_get),
+            })),
+        );
+        env.define(
+            &Symbol("context/set".to_string()),
+            Value::Function(Function::BuiltinWithContext(BuiltinFunctionWithContext {
+                name: "context/set".to_string(),
+                arity: Arity::Fixed(2),
+                func: Arc::new(Self::context_set),
+            })),
+        );
+    }
+
+    fn context_key_from_value(value: &Value) -> RuntimeResult<String> {
+        match value {
+            Value::String(s) => Ok(s.clone()),
+            Value::Keyword(k) => Ok(k.0.clone()),
+            Value::Symbol(sym) => Ok(sym.0.clone()),
+            other => Err(RuntimeError::TypeError {
+                expected: "string, keyword, or symbol".to_string(),
+                actual: other.type_name().to_string(),
+                operation: "context key".to_string(),
+            }),
+        }
+    }
+
+    fn context_get(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        _env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 1 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "context/get".to_string(),
+                expected: "1".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let key = Self::context_key_from_value(&args[0])?;
+        Ok(evaluator.get_context_value(&key).unwrap_or(Value::Nil))
+    }
+
+    fn context_set(
+        args: Vec<Value>,
+        evaluator: &Evaluator,
+        _env: &mut Environment,
+    ) -> RuntimeResult<Value> {
+        if args.len() != 2 {
+            return Err(RuntimeError::ArityMismatch {
+                function: "context/set".to_string(),
+                expected: "2".to_string(),
+                actual: args.len(),
+            });
+        }
+
+        let key = Self::context_key_from_value(&args[0])?;
+        let value = args[1].clone();
+        evaluator.set_context_value(key, value)?;
+        Ok(Value::Nil)
     }
 
     // --- Tooling Function Implementations ---
