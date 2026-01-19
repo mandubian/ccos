@@ -540,9 +540,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    let browser_discovery = Arc::new(ccos::ops::browser_discovery::BrowserDiscoveryService::new());
-    let mcp_discovery = Arc::new(MCPDiscoveryService::new().with_marketplace(marketplace.clone()));
-
     // Create shared approval queue for both executor and HTTP UI
     let approval_queue = {
         let storage = ccos::approval::storage_file::FileApprovalStorage::new(
@@ -586,11 +583,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         marketplace.clone(),
         causal_chain,
         llm_discovery,
-        mcp_discovery,
-        browser_discovery,
         session_store,
         approval_queue.clone(),
         agent_memory.clone(), // Pass AgentMemory
+        agent_config.clone(),
     );
 
     if args.verbose {
@@ -701,11 +697,10 @@ fn register_ccos_tools(
     marketplace: Arc<CapabilityMarketplace>,
     causal_chain: Arc<StdMutex<CausalChain>>,
     discovery_service: Arc<LlmDiscoveryService>,
-    mcp_discovery_service: Arc<MCPDiscoveryService>,
-    browser_discovery_service: Arc<ccos::ops::browser_discovery::BrowserDiscoveryService>,
     session_store: SessionStore,
     approval_queue: UnifiedApprovalQueue<ccos::approval::storage_file::FileApprovalStorage>,
     agent_memory: Arc<RwLock<AgentMemory>>,
+    agent_config: Option<AgentConfig>,
 ) {
     // ccos_search
     let mp = marketplace.clone();
@@ -2702,9 +2697,7 @@ fn register_ccos_tools(
 
     // ccos_introspect_remote_api - Introspect an external MCP/OpenAPI server and queue for approval
     let aq_introspect = approval_queue.clone();
-    let ds_introspect = discovery_service.clone(); 
-    let mcp_ds_introspect = mcp_discovery_service.clone();
-    let browser_ds_introspect = browser_discovery_service.clone();
+    let ds_introspect = discovery_service.clone();
     let agent_config_for_pipeline = agent_config.clone();
     server.register_tool(
         "ccos_introspect_remote_api",
@@ -2730,8 +2723,6 @@ fn register_ccos_tools(
         Box::new(move |params| {
             let aq = aq_introspect.clone();
             let ds = ds_introspect.clone();
-            let mcp_ds = mcp_ds_introspect.clone();
-            let browser_ds = browser_ds_introspect.clone();
             let agent_config = agent_config_for_pipeline.clone();
             Box::pin(async move {
                 let endpoint = params.get("endpoint").and_then(|v| v.as_str()).unwrap_or("");
@@ -2755,19 +2746,13 @@ fn register_ccos_tools(
                     }
                 });
 
-                let pipeline_config = agent_config
-                    .as_ref()
-                    .map(|cfg| cfg.server_discovery_pipeline.clone())
-                    .unwrap_or_default();
-                let missing_caps = agent_config
-                    .as_ref()
-                    .map(|cfg| cfg.missing_capabilities.clone())
-                    .unwrap_or_default();
-
-                let mut pipeline = match ServerDiscoveryPipeline::new(
-                    pipeline_config,
-                    missing_caps,
+                // Use from_config for consistency with ccos-explore
+                let default_config = AgentConfig::default();
+                let cfg = agent_config.as_ref().unwrap_or(&default_config);
+                let pipeline = match ServerDiscoveryPipeline::from_config(
+                    cfg,
                     aq.clone(),
+                    Some(ds.clone()),
                 )
                 .await
                 {
@@ -2779,10 +2764,6 @@ fn register_ccos_tools(
                         }))
                     }
                 };
-                pipeline = pipeline
-                    .with_mcp_discovery(mcp_ds.clone())
-                    .with_browser_discovery(browser_ds.clone())
-                    .with_llm_discovery(Some(ds.clone()));
 
                 let target = PipelineTarget {
                     input: endpoint.to_string(),
