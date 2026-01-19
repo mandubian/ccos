@@ -28,6 +28,7 @@ use ccos::approval::{
 };
 use ccos::arbiter::llm_provider::LlmProvider;
 
+use ccos::config::types::{AgentConfig, ValidationConfig};
 use ccos::types::Plan;
 
 // ModularPlanner imports for LLM-based decomposition
@@ -44,6 +45,7 @@ use ccos::secrets::SecretStore;
 use ccos::synthesis::core::schema_serializer::type_expr_to_rtfs_pretty;
 use ccos::synthesis::dialogue::capability_synthesizer::{CapabilitySynthesizer, SynthesisRequest};
 use ccos::synthesis::mcp_introspector::MCPIntrospector;
+use ccos::ops::server_discovery_pipeline::{PipelineTarget, ServerDiscoveryPipeline};
 use futures::future::BoxFuture;
 use ccos::types::StorableIntent;
 use ccos::utils::fs::get_workspace_root;
@@ -1689,6 +1691,7 @@ fn register_ccos_tools(
                 // 4. Map capabilities to RegistrySearchResult for ranking
                 use ccos::approval::queue::{DiscoverySource, ServerInfo};
                 use ccos::discovery::registry_search::RegistrySearchResult;
+                use ccos::discovery::DiscoveryCategory;
 
                 let search_results: Vec<RegistrySearchResult> = hits
                     .iter()
@@ -1705,6 +1708,7 @@ fn register_ccos_tools(
                         },
                         match_score: h.score as f32,
                         alternative_endpoints: Vec::new(),
+                        category: DiscoveryCategory::Other,
                     })
                     .collect();
 
@@ -2701,6 +2705,7 @@ fn register_ccos_tools(
     let ds_introspect = discovery_service.clone(); 
     let mcp_ds_introspect = mcp_discovery_service.clone();
     let browser_ds_introspect = browser_discovery_service.clone();
+    let agent_config_for_pipeline = agent_config.clone();
     server.register_tool(
         "ccos_introspect_remote_api",
         "Introspect an external server (MCP, OpenAPI, or HTML documentation) to discover its capabilities. Works with MCP endpoints, OpenAPI specs, and API documentation pages. Creates an approval request for the server.",
@@ -2727,6 +2732,7 @@ fn register_ccos_tools(
             let ds = ds_introspect.clone();
             let mcp_ds = mcp_ds_introspect.clone();
             let browser_ds = browser_ds_introspect.clone();
+            let agent_config = agent_config_for_pipeline.clone();
             Box::pin(async move {
                 let endpoint = params.get("endpoint").and_then(|v| v.as_str()).unwrap_or("");
                 let name = params.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -2739,8 +2745,7 @@ fn register_ccos_tools(
                     }));
                 }
 
-                // Create server config for introspection
-                let server_name = name.clone().unwrap_or_else(|| {
+                let server_name_guess = name.clone().unwrap_or_else(|| {
                     if let Ok(url) = url::Url::parse(endpoint) {
                         url.host_str()
                             .map(|h| h.replace(".", "_"))
@@ -2750,110 +2755,84 @@ fn register_ccos_tools(
                     }
                 });
 
-                // Optimization: Strip common redundant suffixes from server name for better search results
-                let search_name = {
-                    let mut s = server_name.clone();
-                    for suffix in &[" API Spec", " Spec", " Documentation", " API Docs", " API"] {
-                        if s.to_lowercase().ends_with(&suffix.to_lowercase()) {
-                            s = s[..s.len() - suffix.len()].to_string();
-                        }
-                    }
-                    s
-                };
+                let pipeline_config = agent_config
+                    .as_ref()
+                    .map(|cfg| cfg.server_discovery_pipeline.clone())
+                    .unwrap_or_default();
+                let missing_caps = agent_config
+                    .as_ref()
+                    .map(|cfg| cfg.missing_capabilities.clone())
+                    .unwrap_or_default();
 
-                let server_id = ccos::utils::fs::sanitize_filename(&server_name);
-                let workspace_root = ccos::utils::fs::get_workspace_root();
-                let pending_dir = workspace_root.join("capabilities/servers/pending").join(&server_id);
-
-                let introspection_service = ccos::ops::introspection_service::IntrospectionService::new(
-                    mcp_ds.clone(), 
-                    ds.clone(), 
-                    browser_ds.clone(),
-                    aq.clone()
-                );
-
-                // Step 2: Unified Introspection (MCP -> Browser -> Fallback)
-                let result = if ccos::ops::introspection_service::IntrospectionService::is_openapi_url(endpoint) {
-                    introspection_service.introspect_openapi(endpoint, &server_name).await?
-                } else {
-                    // Try MCP first
-                    let mcp_res = introspection_service.introspect_mcp(
-                        endpoint, 
-                        name.clone(), 
-                        auth_env_var.clone(),
-                        &*mcp_ds,
-                        &pending_dir,
-                    ).await?;
-                    
-                    if mcp_res.success && !mcp_res.manifests.is_empty() {
-                        mcp_res
-                    } else {
-                        // Fallback to Browser
-                        introspection_service.introspect_browser(endpoint, &server_name).await?
+                let mut pipeline = match ServerDiscoveryPipeline::new(
+                    pipeline_config,
+                    missing_caps,
+                    aq.clone(),
+                )
+                .await
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Ok(json!({
+                            "success": false,
+                            "error": format!("Failed to initialize discovery pipeline: {}", e)
+                        }))
                     }
                 };
+                pipeline = pipeline
+                    .with_mcp_discovery(mcp_ds.clone())
+                    .with_browser_discovery(browser_ds.clone())
+                    .with_llm_discovery(Some(ds.clone()));
 
-                if result.success {
-                    // Generate RTFS files
-                    match introspection_service.generate_rtfs_files(&result, &pending_dir, endpoint) {
-                        Ok(gen_result) => {
-                            // Create approval request
-                            let approval_id = match introspection_service.create_approval_request(
-                                &result, 
-                                endpoint, 
-                                &aq, 
-                                Some(gen_result.capability_files.clone()),
-                                24 * 7
-                            ).await {
-                                Ok(id) => id,
-                                Err(e) => return Ok(json!({"success": false, "error": format!("Failed to create approval request: {}", e)}))
-                            };
+                let target = PipelineTarget {
+                    input: endpoint.to_string(),
+                    name: name.clone(),
+                    auth_env_var: auth_env_var.clone(),
+                };
 
-                            let mut response = json!({
-                                "success": true,
-                                "approval_id": approval_id,
-                                "server_name": server_name,
-                                "source": format!("{:?}", result.source).to_lowercase(),
-                                "capability_files_count": gen_result.capability_files.len(),
-                                "agent_guidance": format!("Server '{}' introspected. MANDATORY: You must now ask the user to manually approve this server at the /approvals UI. DO NOT call ccos_register_server until the user confirms approval.", server_name),
-                                "next_steps": [
-                                    "Notify the user that introspection is complete.",
-                                    "Tell the user to go to the CCOS Control Center at /approvals to approve the new capabilities.",
-                                    "WAIT for the user to confirm they have approved the server.",
-                                    "Only after user confirmation, call ccos_register_server with approval_id to finalize registration."
-                                ]
-                            });
-
-                            // Add previews
-                            if let Some(api) = &result.api_result {
-                                response["discovered_endpoints_count"] = json!(api.endpoints.len());
-                                response["endpoint_previews"] = json!(api.endpoints.iter().take(10).map(|ep| {
-                                    json!({"id": ep.endpoint_id, "name": ep.name, "method": ep.method, "path": ep.path})
-                                }).collect::<Vec<_>>());
-                            } else if let Some(browser) = &result.browser_result {
-                                response["discovered_endpoints_count"] = json!(browser.discovered_endpoints.len());
-                                response["endpoint_previews"] = json!(browser.discovered_endpoints.iter().take(10).map(|ep| {
-                                    json!({"id": format!("{}_{}", ep.method, ep.path), "name": format!("{} {}", ep.method, ep.path)})
-                                }).collect::<Vec<_>>());
-                            } else if !result.manifests.is_empty() {
-                                response["discovered_endpoints_count"] = json!(result.manifests.len());
-                                response["endpoint_previews"] = json!(result.manifests.iter().take(10).map(|m| {
-                                    json!({"id": m.id, "name": m.name})
-                                }).collect::<Vec<_>>());
-                            }
-
-                            return Ok(response);
-                        }
-                        Err(e) => return Ok(json!({"success": false, "error": format!("Failed to generate RTFS files: {}", e)}))
+                let queue_result = match pipeline.stage_and_queue(target).await {
+                    Ok(res) => res,
+                    Err(e) => {
+                        return Ok(json!({
+                            "success": false,
+                            "error": format!("Introspection failed: {}", e),
+                            "ask_user": generate_introspection_failure_suggestions(&server_name_guess, endpoint)
+                        }))
                     }
+                };
+
+                let server_name = queue_result
+                    .preview
+                    .as_ref()
+                    .map(|p| p.server_name.clone())
+                    .unwrap_or(server_name_guess);
+
+                let mut response = json!({
+                    "success": true,
+                    "approval_id": queue_result.approval_id,
+                    "server_name": server_name,
+                    "source": queue_result.source,
+                    "capability_files_count": queue_result.capability_files.len(),
+                    "agent_guidance": format!("Server '{}' introspected. MANDATORY: You must now ask the user to manually approve this server at the /approvals UI. DO NOT call ccos_register_server until the user confirms approval.", server_name),
+                    "next_steps": [
+                        "Notify the user that introspection is complete.",
+                        "Tell the user to go to the CCOS Control Center at /approvals to approve the new capabilities.",
+                        "WAIT for the user to confirm they have approved the server.",
+                        "Only after user confirmation, call ccos_register_server with approval_id to finalize registration."
+                    ]
+                });
+
+                if let Some(preview) = &queue_result.preview {
+                    response["discovered_endpoints_count"] = json!(preview.endpoints.len());
+                    response["endpoint_previews"] = json!(preview
+                        .endpoints
+                        .iter()
+                        .take(10)
+                        .map(|ep| json!({"id": ep.id, "name": ep.name, "method": ep.method, "path": ep.path}))
+                        .collect::<Vec<_>>());
                 }
 
-                // If all fails, return error with suggestions
-                Ok(json!({
-                    "success": false,
-                    "error": result.error.unwrap_or_else(|| format!("Could not introspect API from {}", endpoint)),
-                    "ask_user": generate_introspection_failure_suggestions(&server_name, endpoint)
-                }))
+                Ok(response)
             })
         }),
     );
@@ -3231,22 +3210,27 @@ fn register_ccos_tools(
             },
             "required": ["code"]
         }),
-        Box::new(move |params| {
-            Box::pin(async move {
-                let code = params.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                let error = params.get("error_message").and_then(|v| v.as_str());
-                let use_llm = params.get("use_llm").and_then(|v| v.as_bool()).unwrap_or(false);
+        Box::new({
+            let ccos = ccos.clone();
+            move |params| {
+                let ccos = ccos.clone();
+                Box::pin(async move {
+                    let code = params.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                    let error = params.get("error_message").and_then(|v| v.as_str());
+                    let use_llm = params.get("use_llm").and_then(|v| v.as_bool()).unwrap_or(false);
 
-                if use_llm {
-                    // Use LLM-based repair with comprehensive prompt templates
-                    let result = repair_rtfs_code_with_llm(code, error).await;
-                    Ok(json!(result))
-                } else {
-                    // Fast heuristic-based repair
-                    let suggestions = repair_rtfs_code(code);
-                    Ok(json!(suggestions))
-                }
-            })
+                    if use_llm {
+                        // Use LLM-based repair with comprehensive prompt templates
+                        let validation_config = &ccos.agent_config.validation;
+                        let result = repair_rtfs_code_with_llm(code, error, validation_config).await;
+                        Ok(json!(result))
+                    } else {
+                        // Fast heuristic-based repair
+                        let suggestions = repair_rtfs_code(code);
+                        Ok(json!(suggestions))
+                    }
+                })
+            }
         }),
     );
 }
@@ -3489,25 +3473,64 @@ fn explain_rtfs_error(error: &str, code: Option<&str>) -> serde_json::Value {
 fn repair_rtfs_code(code: &str) -> serde_json::Value {
     let mut suggestions: Vec<serde_json::Value> = vec![];
 
-    let open_parens = code.matches('(').count();
-    let close_parens = code.matches(')').count();
+    // Handle all bracket types
+    let pairs = [('(', ')', "parenthesis"), ('[', ']', "square bracket"), ('{', '}', "curly brace")];
+    let mut result_code = code.to_string();
 
-    if open_parens > close_parens {
-        let missing = open_parens - close_parens;
-        let repaired = format!("{}{}", code, ")".repeat(missing));
-        suggestions.push(json!({
-            "type": "bracket_fix",
-            "description": format!("Add {} missing closing parenthesis", missing),
-            "repaired_code": repaired,
-            "confidence": "high"
-        }));
-    } else if close_parens > open_parens {
-        let extra = close_parens - open_parens;
-        suggestions.push(json!({
-            "type": "bracket_fix",
-            "description": format!("Remove {} extra closing parenthesis or add opening", extra),
-            "confidence": "medium"
-        }));
+    for (open, close, name) in pairs {
+        let open_count = code.matches(open).count();
+        let close_count = code.matches(close).count();
+
+        if open_count > close_count {
+            let missing = open_count - close_count;
+            let added = close.to_string().repeat(missing);
+            result_code.push_str(&added);
+            suggestions.push(json!({
+                "type": "bracket_fix",
+                "description": format!("Add {} missing closing {}", missing, name),
+                "repaired_code": result_code.clone(),
+                "confidence": "high"
+            }));
+        } else if close_count > open_count {
+            let extra = close_count - open_count;
+            // For extra closing, we can't easily know where the opening one should be, 
+            // but we can suggest removing them if they are at the very end
+            let mut trimmed = result_code.clone();
+            let mut removed = 0;
+            while trimmed.ends_with(close) && removed < extra {
+                trimmed.pop();
+                removed += 1;
+            }
+            
+            if removed > 0 {
+                result_code = trimmed;
+                suggestions.push(json!({
+                    "type": "bracket_fix",
+                    "description": format!("Remove {} extra closing {} from end", removed, name),
+                    "repaired_code": result_code.clone(),
+                    "confidence": "high"
+                }));
+            } else {
+                // Try a more aggressive repair: remove the first occurrence of the extra bracket
+                let mut aggressive_repair = result_code.clone();
+                if let Some(pos) = aggressive_repair.find(close) {
+                    aggressive_repair.remove(pos);
+                    result_code = aggressive_repair;
+                    suggestions.push(json!({
+                        "type": "bracket_fix",
+                        "description": format!("Remove extra closing {} at position {}", name, pos),
+                        "repaired_code": result_code.clone(),
+                        "confidence": "medium"
+                    }));
+                } else {
+                    suggestions.push(json!({
+                        "type": "bracket_fix",
+                        "description": format!("Remove {} extra closing {} or add opening ones", extra, name),
+                        "confidence": "low"
+                    }));
+                }
+            }
+        }
     }
 
     let typo_fixes = vec![
@@ -3567,9 +3590,14 @@ fn repair_rtfs_code(code: &str) -> serde_json::Value {
 
 /// LLM-based repair using comprehensive prompt templates from assets/prompts/cognitive_engine/auto_repair/v1/
 /// This provides better repairs than heuristics for complex syntax/semantic errors.
-async fn repair_rtfs_code_with_llm(code: &str, error_message: Option<&str>) -> serde_json::Value {
-    use ccos::synthesis::validation::llm_validator::{
-        auto_repair_plan, ValidationConfig, ValidationError, ValidationErrorType,
+async fn repair_rtfs_code_with_llm(
+    code: &str,
+    error_message: Option<&str>,
+    config: &ValidationConfig,
+) -> serde_json::Value {
+    use ccos::config::types::ValidationConfig as _;
+    use ccos::synthesis::validation::{
+        auto_repair_plan, ValidationError, ValidationErrorType,
     };
 
     // Convert error message to validation errors for the template
@@ -3602,9 +3630,7 @@ async fn repair_rtfs_code_with_llm(code: &str, error_message: Option<&str>) -> s
         });
     }
 
-    let config = ValidationConfig::default();
-
-    match auto_repair_plan(code, &errors, 1, &config).await {
+    match auto_repair_plan(code, &errors, 1, config).await {
         Ok(Some(repaired)) => {
             let repair_valid = rtfs::parser::parse(&repaired).is_ok();
             json!({
