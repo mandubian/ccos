@@ -1089,7 +1089,8 @@ impl ModularPlanner {
 
         // 5b. LLM Plan Validation (if enabled)
         if self.config.enable_plan_validation {
-            use crate::synthesis::validation::{auto_repair_plan, validate_plan, ValidationConfig};
+            use crate::config::ValidationConfig;
+            use crate::synthesis::validation::{auto_repair_plan, validate_plan};
             use std::collections::HashMap as StdHashMap;
 
             let validation_config = ValidationConfig::default();
@@ -2484,9 +2485,8 @@ impl ModularPlanner {
 
                                     // 1b. LLM Schema Validation (if enabled)
                                     if self.config.enable_schema_validation {
-                                        use crate::synthesis::validation::{
-                                            validate_schema, ValidationConfig,
-                                        };
+                                        use crate::config::ValidationConfig;
+                                        use crate::synthesis::validation::validate_schema;
                                         let validation_config = ValidationConfig::default();
                                         let sample_preview = grounding_preview(&val);
 

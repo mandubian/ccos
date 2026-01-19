@@ -7,62 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Configuration for LLM validation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValidationConfig {
-    /// Enable LLM schema validation for inferred schemas
-    #[serde(default)]
-    pub enable_schema_validation: bool,
-
-    /// Enable LLM plan validation (schema compatibility, dependencies)
-    #[serde(default)]
-    pub enable_plan_validation: bool,
-
-    /// Enable auto-repair on validation failures
-    #[serde(default = "default_true")]
-    pub enable_auto_repair: bool,
-
-    /// Enable LLM repair for runtime execution errors (dialog-based)
-    #[serde(default = "default_true")]
-    pub enable_runtime_repair: bool,
-
-    /// Max auto-repair attempts before queuing for external review
-    #[serde(default = "default_max_repair_attempts")]
-    pub max_repair_attempts: usize,
-
-    /// Max runtime repair attempts (dialog loop bound)
-    #[serde(default = "default_max_runtime_repair_attempts")]
-    pub max_runtime_repair_attempts: usize,
-
-    /// LLM profile to use for validation (from llm_profiles section)
-    /// Format: "set:model" or "profile_name"
-    #[serde(default)]
-    pub validation_profile: Option<String>,
-}
-
-fn default_true() -> bool {
-    true
-}
-fn default_max_repair_attempts() -> usize {
-    2
-}
-fn default_max_runtime_repair_attempts() -> usize {
-    5
-}
-
-impl Default for ValidationConfig {
-    fn default() -> Self {
-        Self {
-            enable_schema_validation: false,
-            enable_plan_validation: false,
-            enable_auto_repair: true,
-            enable_runtime_repair: true,
-            max_repair_attempts: 2,
-            max_runtime_repair_attempts: 5,
-            validation_profile: None,
-        }
-    }
-}
+use crate::config::types::ValidationConfig;
 
 /// Result of a validation attempt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -418,25 +363,25 @@ pub async fn auto_repair_plan(
         )
         .replace("{diagnostics}", &diagnostics)
         .replace("{grammar_hint_block}", grammar_hints)
-        .replace(
-            "{fixture_guidance_block}",
-            &format!("{}\n\n{}", strategy, anti_patterns),
-        )
-        .replace("{broken_plan}", plan);
+        .replace("{fixture_guidance_block}", strategy)
+        .replace("{anti_patterns_block}", anti_patterns)
+        .replace("{plan}", plan);
 
     match provider.generate_text(&prompt).await {
         Ok(response) => {
             let repaired = extract_rtfs_code(&response);
-            // Validate the repaired code looks like valid RTFS
-            if repaired.contains("(plan")
-                || repaired.contains("(capability")
-                || repaired.contains("(do")
-                || repaired.contains("(let")
+            // Validate the repaired code looks like valid RTFS (contains at least one balanced-looking expression)
+            if (repaired.contains('(') && repaired.contains(')'))
+                || (repaired.contains('[') && repaired.contains(']'))
+                || (repaired.contains('{') && repaired.contains('}'))
             {
                 log::info!("Auto-repair attempt {} succeeded", attempt);
                 Ok(Some(repaired))
             } else {
-                log::warn!("Auto-repair produced invalid response");
+                log::warn!(
+                    "Auto-repair produced response that doesn't look like RTFS: {}",
+                    repaired
+                );
                 Ok(None)
             }
         }
