@@ -12,6 +12,8 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use crate::discovery::registry_search::{DiscoveryCategory, RegistrySearchResult};
+
 /// Maximum number of events to retain
 const MAX_EVENTS: usize = 500;
 const MAX_LLM_HISTORY: usize = 10;
@@ -224,7 +226,7 @@ pub enum CapabilitySource {
 }
 
 /// Connection status for an MCP server
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ServerStatus {
     #[default]
     Unknown,
@@ -232,6 +234,7 @@ pub enum ServerStatus {
     Disconnected,
     Connecting,
     Error,
+    Timeout,
     Pending,
     Rejected,
 }
@@ -244,6 +247,7 @@ impl ServerStatus {
             Self::Disconnected => "○",
             Self::Connecting => "◐",
             Self::Error => "✗",
+            Self::Timeout => "⏱",
             Self::Pending => "◷",
             Self::Rejected => "⛔",
         }
@@ -342,15 +346,21 @@ pub enum DiscoverPopup {
     #[default]
     None,
     /// Search results popup - shows matching servers
+    /// Search results popup - shows matching servers (Find Servers)
     SearchResults {
-        servers: Vec<DiscoverySearchResult>,
+        servers: Vec<RegistrySearchResult>,
         selected: usize,
+        stack: Vec<(Vec<RegistrySearchResult>, String)>,
+        breadcrumbs: Vec<String>,
+        current_category: Option<DiscoveryCategory>,
     },
     /// Loading popup while introspecting a server
     Introspecting {
         server_name: String,
         endpoint: String,
         logs: Vec<String>,
+        /// Optional: previous search results to return to on Esc/cancel
+        return_to_results: Option<(Vec<RegistrySearchResult>, Vec<String>)>,
     },
     /// Introspection results - shows discovered tools
     IntrospectionResults {
@@ -359,6 +369,11 @@ pub enum DiscoverPopup {
         tools: Vec<DiscoveredCapability>,
         selected: usize,
         selected_tools: std::collections::HashSet<usize>,
+        added_success: bool,
+        pended_success: bool,
+        editing_name: bool,
+        /// Optional: previous search results to return to on Esc/cancel
+        return_to_results: Option<(Vec<RegistrySearchResult>, Vec<String>)>,
     },
     /// Confirmation dialog for deleting a server
     DeleteConfirmation { server: ServerInfo },
@@ -370,13 +385,27 @@ pub enum DiscoverPopup {
     /// LLM suggestions for servers matching a query
     ServerSuggestions {
         query: String,
-        suggestions: Vec<ApiSuggestion>,
+        results: Vec<RegistrySearchResult>,
         selected: usize,
+        // Navigation stack: (results, query/context)
+        stack: Vec<(Vec<RegistrySearchResult>, String)>,
+        // Breadcrumbs for navigation bar
+        breadcrumbs: Vec<String>,
+        // Current category filter
+        current_category: Option<DiscoveryCategory>,
     },
     /// Error popup
     Error { title: String, message: String },
     /// Success popup
     Success { title: String, message: String },
+    /// Tool details popup for discovered API endpoints
+    ToolDetails {
+        name: String,
+        endpoint: String,
+        description: String,
+        category: DiscoveryCategory,
+        return_to_results: Option<(Vec<RegistrySearchResult>, Vec<String>)>,
+    },
 }
 
 /// Entry in the discovery list (header or capability)
@@ -384,25 +413,6 @@ pub enum DiscoverPopup {
 pub enum DiscoveryEntry {
     Header { name: String, is_local: bool },
     Capability(usize), // index into discovered_capabilities
-}
-
-/// A server found in a discovery search (from MCP registry)
-#[derive(Debug, Clone)]
-pub struct DiscoverySearchResult {
-    pub name: String,
-    pub endpoint: String,
-    pub description: Option<String>,
-    pub source: String,
-}
-
-/// An API suggestion from LLM discovery
-#[derive(Debug, Clone)]
-pub struct ApiSuggestion {
-    pub name: String,
-    pub endpoint: String,
-    pub docs_url: Option<String>,
-    pub description: String,
-    pub auth_env_var: Option<String>,
 }
 
 /// An LLM interaction record
@@ -425,6 +435,10 @@ pub struct AppState {
     pub active_panel: ActivePanel,
     pub should_quit: bool,
     pub show_help: bool,
+
+    // Input handling (used to dedupe key press/release semantics across terminals)
+    pub last_key_press_sig: Option<String>,
+    pub last_key_press_at: Option<Instant>,
 
     // Goal Input
     pub goal_input: String,
@@ -528,6 +542,8 @@ pub struct DiscoveredCapability {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityCategory {
     McpTool,
+    OpenApiTool,
+    BrowserApiTool,
     RtfsFunction,
     Builtin,
     Synthesized,
@@ -598,6 +614,9 @@ impl Default for AppState {
             active_panel: ActivePanel::DiscoverList,
             should_quit: false,
             show_help: false,
+
+            last_key_press_sig: None,
+            last_key_press_at: None,
 
             goal_input: String::new(),
             cursor_position: 0,

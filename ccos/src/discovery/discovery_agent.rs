@@ -438,7 +438,7 @@ impl DiscoveryAgent {
         // Extract semantic terms from goal (e.g., "issues", "branches", "commits")
         let semantic_terms = Self::extract_semantic_terms(&query_text);
         if !semantic_terms.is_empty() {
-            eprintln!(
+            crate::ccos_println!(
                 "  → Extracted semantic terms from goal: {:?}",
                 semantic_terms
             );
