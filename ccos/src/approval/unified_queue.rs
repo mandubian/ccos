@@ -149,6 +149,25 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
         requesting_goal: Option<String>,
         expires_in_hours: i64,
     ) -> RuntimeResult<String> {
+        // Check for existing pending or approved requests for the same endpoint
+        let all = self.list(Default::default()).await?;
+        for r in all {
+            if let ApprovalCategory::ServerDiscovery {
+                server_info: si, ..
+            } = &r.category
+            {
+                if si.endpoint == server_info.endpoint {
+                    // If pending or approved, don't add duplicate
+                    if matches!(
+                        r.status,
+                        ApprovalStatus::Pending | ApprovalStatus::Approved { .. }
+                    ) {
+                        return Ok(r.id);
+                    }
+                }
+            }
+        }
+
         let request = ApprovalRequest::new(
             ApprovalCategory::ServerDiscovery {
                 source,
@@ -214,8 +233,19 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             ..
         } = request.category
         {
-            if let Ok(Some(files)) = self.move_server_directory(&server_info.name, "pending", "approved") {
+            // Try moving from pending -> approved
+            if let Ok(Some(files)) =
+                self.move_server_directory(&server_info.name, "pending", "approved")
+            {
                 *capability_files = Some(files);
+            } else {
+                // FALLBACK: If not in pending, maybe it was already rejected (duplicate case)
+                // Try moving from rejected -> approved
+                if let Ok(Some(files)) =
+                    self.move_server_directory(&server_info.name, "rejected", "approved")
+                {
+                    *capability_files = Some(files);
+                }
             }
         }
 
@@ -510,8 +540,21 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
                 at: chrono::Utc::now(),
             };
             // Reset health tracking
-            if let ApprovalCategory::ServerDiscovery { ref mut health, .. } = updated.category {
+            if let ApprovalCategory::ServerDiscovery {
+                ref mut health,
+                ref mut capability_files,
+                ref server_info,
+                ..
+            } = updated.category
+            {
                 *health = Some(ServerHealthTracking::default());
+
+                // Move artifacts back from rejected to approved
+                if let Ok(Some(files)) =
+                    self.move_server_directory(&server_info.name, "rejected", "approved")
+                {
+                    *capability_files = Some(files);
+                }
             }
             self.storage.update(&updated).await?;
             Ok(())
