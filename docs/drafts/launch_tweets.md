@@ -78,8 +78,10 @@ Autonomy requires accountability.
 A tiny taste of RTFS (code is data):
 
 ```rtfs
-(step "fetch-issues"
-  (call :mcp.github.list_issues {:owner "OWNER" :repo "REPO"}))
+;; Logic (code) and Data share the same structure
+(let [repos [{:owner "rust-lang" :repo "rust"}
+             {:owner "mandubian" :repo "ccos"}]]
+  (map (fn [r] (call :mcp.github.star r)) repos))
 ```
 
 **Tweet 3 (Governed Autonomy)**
@@ -370,3 +372,31 @@ Isolation/sandboxing + metaplanning are part of the roadmap. This is still WIP, 
 Full process / chat history: https://github.com/mandubian/ccos-chats
 
 14/ Personal note: I built this in Rust because I can read/correct it but can’t write it fluently myself — and that constraint was part of the experiment.
+
+
+----
+
+I want to tweet a thread about RTFS language and why AI designs it that way.
+
+Thread draft (<=280 chars per tweet):
+1/ RTFS (Reason about The Functional Spec) is a programming language designed by an AI for itself.
+It’s homoiconic (code=data), hybrid typed (static + structural), and built for predictable, auditable execution.
+2/ Why a new language? Because existing ones (Python, JS) are for humans. They have syntactic sugar, implicit effects, and side effects that make reasoning about plans unreliable.
+3/ Homoiconicity means RTFS code is just data structures (S-expressions). The AI can inspect, verify, and modify its own plans before execution.
+4/ Explicit effects: RTFS can’t do I/O directly. Every external action is an explicit host call, so the AI must ask permission and can be audited.
+5/ Hybrid typing: RTFS uses structural types to describe data shapes and static types to ensure function signatures are correct. This prevents runtime surprises.
+6/ Determinism: RTFS plans are pure functions. Given the same input, they always produce the same output. This makes debugging and replaying plans feasible.
+7/ Example RTFS snippet:
+```rtfs
+;; Logic (code) and Data share the same structure
+(let [repos [{:owner "rust-lang" :repo "rust"}
+             {:owner "mandubian" :repo "ccos"}]]
+  (map (fn [r] (call :mcp.github.star r)) repos))
+```
+8/ RTFS is not just a language; it’s part of a larger system (CCOS) that governs AI autonomy with accountability.
+9/ By designing RTFS, the AI created a tool that lets it reason about its own behavior in a safe, predictable way.
+10/ RTFS + CCOS are open source:
+https://github.com/mandubian/ccos
+#AI #OpenSource #Rust #Agents #LLM
+
+----
