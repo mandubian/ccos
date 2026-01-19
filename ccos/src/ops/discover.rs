@@ -1,9 +1,12 @@
 //! Discovery operations - pure logic functions for server discovery
 
 use crate::approval::{storage_file::FileApprovalStorage, UnifiedApprovalQueue};
+use crate::ccos_println;
 use crate::discovery::config::DiscoveryConfig;
+use crate::config::types::AgentConfig;
 use crate::discovery::GoalDiscoveryAgent;
-use crate::{ccos_eprintln, ccos_println};
+use crate::ops::server_discovery_pipeline::{PipelineTarget, ServerDiscoveryPipeline};
+use crate::utils::fs::get_workspace_root;
 #[cfg(feature = "tui")]
 use dialoguer::theme::ColorfulTheme;
 use rtfs::runtime::error::RuntimeResult;
@@ -38,6 +41,15 @@ impl Default for DiscoverOptions {
 fn create_queue(storage_path: PathBuf) -> RuntimeResult<UnifiedApprovalQueue<FileApprovalStorage>> {
     let storage = Arc::new(FileApprovalStorage::new(storage_path)?);
     Ok(UnifiedApprovalQueue::new(storage))
+}
+
+fn load_agent_config_from_workspace() -> AgentConfig {
+    let config_path = get_workspace_root().join("config/agent_config.toml");
+    if let Ok(content) = std::fs::read_to_string(&config_path) {
+        toml::from_str(&content).unwrap_or_default()
+    } else {
+        AgentConfig::default()
+    }
 }
 
 /// Goal-driven server discovery (simple API - uses defaults)
@@ -422,11 +434,7 @@ pub async fn discover_by_goal_with_options(
                                 // Save tools to RTFS file and link to pending entry
                                 if let Err(e) = crate::ops::server::save_discovered_tools(
                                     storage_path.to_path_buf(),
-                                    introspection
-                                        .tools
-                                        .iter()
-                                        .map(|t| t.to_mcp_tool())
-                                        .collect(),
+                                    introspection.tools.clone(),
                                     &introspection,
                                     &result.server_info,
                                     Some(pending_id.clone()),
@@ -548,7 +556,7 @@ pub async fn discover_by_goal_with_options(
                                                             // Save tools to RTFS file and link to pending entry
                                                             if let Err(e) = crate::ops::server::save_discovered_tools(
                                                                 storage_path.to_path_buf(),
-                                                                introspection.tools.iter().map(|t| t.to_mcp_tool()).collect(),
+                                                                introspection.tools.clone(),
                                                                 &introspection,
                                                                 &result.server_info,
                                                                 Some(pending_id.clone()),
@@ -767,14 +775,13 @@ async fn handle_manual_url_entry(
 
 /// Handle MCP server URL - introspect and queue
 async fn handle_mcp_url(
-    agent: &GoalDiscoveryAgent,
-    goal: &str,
+    _agent: &GoalDiscoveryAgent,
+    _goal: &str,
     url: &str,
     storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     ccos_println!("🔍 Introspecting MCP server at {}...", url);
 
-    // Derive server name from URL
     let name_guess = url
         .split("://")
         .nth(1)
@@ -784,52 +791,27 @@ async fn handle_mcp_url(
         .unwrap_or("unknown")
         .to_string();
 
-    match crate::ops::server::introspect_server_by_url(url, &name_guess, None).await {
-        Ok(introspection) => {
+    let queue = create_queue(storage_path.to_path_buf())?;
+    let agent_config = load_agent_config_from_workspace();
+    let pipeline = ServerDiscoveryPipeline::new(
+        agent_config.server_discovery_pipeline.clone(),
+        agent_config.missing_capabilities.clone(),
+        queue,
+    )
+    .await?;
+
+    match pipeline
+        .stage_and_queue(PipelineTarget {
+            input: url.to_string(),
+            name: Some(name_guess),
+            auth_env_var: None,
+        })
+        .await
+    {
+        Ok(result) => {
             ccos_println!("   ✅ Introspection successful!");
-            ccos_println!("   Server Name: {}", introspection.server_name);
-            ccos_println!("   Tools Found: {}", introspection.tools.len());
-
-            // Create a synthetic RegistrySearchResult
-            let result = crate::discovery::registry_search::RegistrySearchResult {
-                source: crate::approval::queue::DiscoverySource::Manual {
-                    user: "cli".to_string(),
-                },
-                server_info: crate::approval::queue::ServerInfo {
-                    name: introspection.server_name.clone(),
-                    endpoint: introspection.server_url.clone(),
-                    description: Some("Manually added MCP server".to_string()),
-                    auth_env_var: None,
-                    capabilities_path: None,
-                    alternative_endpoints: Vec::new(),
-                    capability_files: None,
-                },
-                match_score: 1.0,
-                alternative_endpoints: Vec::new(),
-            };
-
-            let id = agent.queue_result(goal, result.clone(), 1.0).await?;
-
-            // Save tools
-            if let Err(e) = crate::ops::server::save_discovered_tools(
-                storage_path.to_path_buf(),
-                introspection
-                    .tools
-                    .iter()
-                    .map(|t| t.to_mcp_tool())
-                    .collect(),
-                &introspection,
-                &result.server_info,
-                Some(id.clone()),
-            )
-            .await
-            {
-                ccos_println!("   ⚠️  Failed to save capabilities: {}", e);
-            } else {
-                ccos_println!("   💾 Capabilities saved to RTFS file");
-            }
-
-            Ok(vec![id])
+            ccos_println!("   Approval ID: {}", result.approval_id);
+            Ok(vec![result.approval_id])
         }
         Err(e) => {
             ccos_println!("❌ Failed to introspect MCP server: {}", e);
@@ -840,105 +822,39 @@ async fn handle_mcp_url(
 
 /// Handle documentation URL - use LLM to parse API docs
 async fn handle_documentation_url(
-    agent: &GoalDiscoveryAgent,
-    goal: &str,
+    _agent: &GoalDiscoveryAgent,
+    _goal: &str,
     url: &str,
     _llm_enabled: bool,
     storage_path: &std::path::Path,
 ) -> RuntimeResult<Vec<String>> {
     ccos_println!("🔍 Fetching API documentation from {}...", url);
-    ccos_println!("🤖 Using LLM to extract API endpoints...");
+    ccos_println!("🤖 Using discovery pipeline for introspection...");
 
-    // Get LLM provider from arbiter (async)
-    let llm_provider = match crate::arbiter::get_default_llm_provider().await {
-        Some(provider) => provider,
-        None => {
-            ccos_println!("❌ No LLM provider configured.");
-            ccos_println!("   Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable.");
-            return Ok(vec![]);
-        }
-    };
+    let queue = create_queue(storage_path.to_path_buf())?;
+    let agent_config = load_agent_config_from_workspace();
+    let pipeline = ServerDiscoveryPipeline::new(
+        agent_config.server_discovery_pipeline.clone(),
+        agent_config.missing_capabilities.clone(),
+        queue,
+    )
+    .await?;
 
-    // Parse documentation with LLM
-    let parser = crate::synthesis::introspection::llm_doc_parser::LlmDocParser::new();
-
-    // Extract domain from URL for context
-    let domain = url
-        .split("://")
-        .nth(1)
-        .unwrap_or("unknown")
-        .split('/')
-        .next()
-        .unwrap_or("unknown")
-        .to_string();
-
-    match parser
-        .parse_from_url(url, &domain, llm_provider.as_ref())
+    match pipeline
+        .stage_and_queue(PipelineTarget {
+            input: url.to_string(),
+            name: None,
+            auth_env_var: None,
+        })
         .await
     {
-        Ok(api_result) => {
+        Ok(result) => {
             ccos_println!("   ✅ Documentation parsed successfully!");
-            ccos_println!(
-                "   API: {} v{}",
-                api_result.api_title,
-                api_result.api_version
-            );
-            ccos_println!("   Base URL: {}", api_result.base_url);
-            ccos_println!("   Endpoints found: {}", api_result.endpoints.len());
-
-            for endpoint in api_result.endpoints.iter().take(5) {
-                ccos_println!(
-                    "      • {} {} - {}",
-                    endpoint.method,
-                    endpoint.path,
-                    endpoint.name
-                );
-            }
-            if api_result.endpoints.len() > 5 {
-                ccos_println!("      ... and {} more", api_result.endpoints.len() - 5);
-            }
-
-            // Create a synthetic RegistrySearchResult for the API
-            let result = crate::discovery::registry_search::RegistrySearchResult {
-                source: crate::approval::queue::DiscoverySource::Manual {
-                    user: "cli".to_string(),
-                },
-                server_info: crate::approval::queue::ServerInfo {
-                    name: api_result.api_title.clone(),
-                    endpoint: api_result.base_url.clone(),
-                    description: Some(format!("HTTP API parsed from documentation: {}", url)),
-                    auth_env_var: api_result.auth_requirements.env_var_name.clone(),
-                    capabilities_path: None,
-                    alternative_endpoints: Vec::new(),
-                    capability_files: None,
-                },
-                match_score: 1.0,
-                alternative_endpoints: Vec::new(),
-            };
-
-            let id = agent.queue_result(goal, result.clone(), 1.0).await?;
-
-            // Save the parsed API as capabilities
-            if let Err(e) = crate::ops::server::save_api_capabilities(
-                storage_path.to_path_buf(),
-                &api_result,
-                &id,
-            )
-            .await
-            {
-                ccos_println!("   ⚠️  Failed to save capabilities: {}", e);
-            } else {
-                ccos_println!("   💾 Capabilities saved to RTFS file");
-            }
-
-            Ok(vec![id])
+            ccos_println!("   Approval ID: {}", result.approval_id);
+            Ok(vec![result.approval_id])
         }
         Err(e) => {
             ccos_println!("❌ Failed to parse documentation: {}", e);
-            ccos_println!("   💡 Tips:");
-            ccos_println!("      • Ensure the URL points to API documentation");
-            ccos_println!("      • Check that LLM API key is valid");
-            ccos_println!("      • Try a more specific documentation page");
             Ok(vec![])
         }
     }
