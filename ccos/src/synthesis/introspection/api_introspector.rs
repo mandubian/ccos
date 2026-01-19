@@ -1,6 +1,6 @@
 use crate::arbiter::llm_provider::LlmProvider;
 use crate::capability_marketplace::types::{CapabilityManifest, EffectType};
-use crate::synthesis::core::schema_serializer::type_expr_to_rtfs_compact;
+use crate::synthesis::core::schema_serializer::type_expr_to_rtfs_pretty;
 use rtfs::ast::{Keyword, MapTypeEntry, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -642,21 +642,113 @@ impl APIIntrospector {
             schema.clone()
         };
 
-        if let Some(type_str) = resolved_schema.get("type").and_then(|t| t.as_str()) {
-            match type_str {
-                "string" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::String)),
-                "integer" | "long" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Int)),
-                "number" | "decimal" | "double" | "float" => {
-                    Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Float))
+        // Handle anyOf / oneOf
+        for key in ["anyOf", "oneOf"] {
+            if let Some(arr) = resolved_schema.get(key).and_then(|a| a.as_array()) {
+                let mut types = Vec::new();
+                let mut effectively_nullable = false;
+
+                for t in arr {
+                    // Check if this branch is just null
+                    if t.get("type").and_then(|v| v.as_str()) == Some("null") {
+                        effectively_nullable = true;
+                        continue;
+                    }
+
+                    if let Ok(ty) = self.json_schema_to_rtfs_type(t, spec) {
+                        if matches!(ty, TypeExpr::Primitive(rtfs::ast::PrimitiveType::Nil)) {
+                            effectively_nullable = true;
+                        } else if !matches!(ty, TypeExpr::Any) {
+                            types.push(ty);
+                        }
+                    }
                 }
-                "boolean" => Ok(TypeExpr::Primitive(rtfs::ast::PrimitiveType::Bool)),
+
+                if !types.is_empty() {
+                    let mut base_type = if types.len() == 1 {
+                        types.remove(0)
+                    } else {
+                        // Deduplicate types in union
+                        let mut unique_types = Vec::new();
+                        let mut seen = std::collections::HashSet::new();
+                        for t in types {
+                            let s = t.to_string();
+                            if !seen.contains(&s) {
+                                seen.insert(s);
+                                unique_types.push(t);
+                            }
+                        }
+                        if unique_types.len() == 1 {
+                            unique_types.remove(0)
+                        } else {
+                            TypeExpr::Union(unique_types)
+                        }
+                    };
+
+                    if effectively_nullable && !matches!(base_type, TypeExpr::Optional(_)) {
+                        base_type = TypeExpr::Optional(Box::new(base_type));
+                    }
+                    return Ok(base_type);
+                }
+            }
+        }
+
+        // Handle allOf
+        if let Some(all_of) = resolved_schema.get("allOf").and_then(|a| a.as_array()) {
+            for t in all_of {
+                let res = self.json_schema_to_rtfs_type(t, spec)?;
+                if !matches!(res, TypeExpr::Any) {
+                    return Ok(res);
+                }
+            }
+        }
+
+        // Handle "type": ["string", "null"] or "nullable": true
+        let is_nullable = resolved_schema
+            .get("nullable")
+            .and_then(|n| n.as_bool())
+            .unwrap_or(false);
+
+        let type_val = resolved_schema.get("type");
+        let (base_type_str, is_nullable_type) = if let Some(t) = type_val.and_then(|t| t.as_str()) {
+            (Some(t), false)
+        } else if let Some(arr) = type_val.and_then(|t| t.as_array()) {
+            // Check if it contains "null"
+            let has_null = arr.iter().any(|v| v.as_str() == Some("null"));
+            // Find the first non-null type
+            let type_str = arr.iter().find_map(|v| {
+                let s = v.as_str()?;
+                if s != "null" {
+                    Some(s)
+                } else {
+                    None
+                }
+            });
+            (type_str, has_null)
+        } else if resolved_schema.get("properties").is_some() {
+            (Some("object"), false)
+        } else {
+            (None, false)
+        };
+
+        let effective_nullable = is_nullable || is_nullable_type;
+
+        let base_type = if let Some(type_str) = base_type_str {
+            match type_str {
+                "string" => TypeExpr::Primitive(rtfs::ast::PrimitiveType::String),
+                "integer" | "long" => TypeExpr::Primitive(rtfs::ast::PrimitiveType::Int),
+                "number" | "decimal" | "double" | "float" => {
+                    TypeExpr::Primitive(rtfs::ast::PrimitiveType::Float)
+                }
+                "boolean" => TypeExpr::Primitive(rtfs::ast::PrimitiveType::Bool),
+                "null" => TypeExpr::Primitive(rtfs::ast::PrimitiveType::Nil),
                 "array" => {
                     let element_type = if let Some(items) = resolved_schema.get("items") {
                         self.json_schema_to_rtfs_type(items, spec)?
                     } else {
                         TypeExpr::Any
                     };
-                    Ok(TypeExpr::Vector(Box::new(element_type)))
+                    TypeExpr::Vector(Box::new(element_type))
                 }
                 "object" => {
                     let mut entries = Vec::new();
@@ -677,22 +769,39 @@ impl APIIntrospector {
 
                         for (key, prop_schema) in properties {
                             let prop_type = self.json_schema_to_rtfs_type(prop_schema, spec)?;
+
+                            // Check if prop_type is optional/nullable
+                            let is_prop_nullable = match &prop_type {
+                                TypeExpr::Optional(_) => true,
+                                TypeExpr::Union(types) => types.iter().any(|t| {
+                                    matches!(t, TypeExpr::Primitive(rtfs::ast::PrimitiveType::Nil))
+                                }),
+                                TypeExpr::Primitive(rtfs::ast::PrimitiveType::Nil) => true,
+                                _ => false,
+                            };
+
                             entries.push(MapTypeEntry {
                                 key: Keyword(key.clone()),
                                 value_type: Box::new(prop_type),
-                                optional: !required_fields.contains(key),
+                                optional: !required_fields.contains(key) || is_prop_nullable,
                             });
                         }
                     }
-                    Ok(TypeExpr::Map {
+                    TypeExpr::Map {
                         entries,
                         wildcard: None,
-                    })
+                    }
                 }
-                _ => Ok(TypeExpr::Any),
+                _ => TypeExpr::Any,
             }
         } else {
-            Ok(TypeExpr::Any)
+            TypeExpr::Any
+        };
+
+        if effective_nullable && !matches!(base_type, TypeExpr::Optional(_) | TypeExpr::Any) {
+            Ok(TypeExpr::Optional(Box::new(base_type)))
+        } else {
+            Ok(base_type)
         }
     }
 
@@ -908,7 +1017,7 @@ impl APIIntrospector {
     }
 
     /// Mock API introspection for testing
-    fn introspect_mock_api(&self, api_domain: &str) -> RuntimeResult<APIIntrospectionResult> {
+    pub fn introspect_mock_api(&self, api_domain: &str) -> RuntimeResult<APIIntrospectionResult> {
         // Special handling for OpenWeather API
         if api_domain.contains("openweather") {
             return self.introspect_openweather_api();
@@ -1285,7 +1394,7 @@ impl APIIntrospector {
 
     /// Convert TypeExpr to RTFS schema string (using shared utility)
     fn type_expr_to_rtfs_string(expr: &TypeExpr) -> String {
-        type_expr_to_rtfs_compact(expr)
+        type_expr_to_rtfs_pretty(expr)
     }
 
     /// Serialize capability to RTFS format

@@ -24,7 +24,7 @@
 use crate::capability_marketplace::types::{CapabilityManifest, EffectType};
 use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 use crate::mcp::types::DiscoveredMCPTool;
-use crate::synthesis::core::schema_serializer::type_expr_to_rtfs_compact;
+use crate::synthesis::core::schema_serializer::type_expr_to_rtfs_pretty;
 use rtfs::ast::{Keyword, MapTypeEntry, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -167,9 +167,69 @@ impl MCPIntrospector {
         })
     }
 
-    /// Convert JSON Schema to RTFS TypeExpr (reuses logic from api_introspector)
-    /// Convert JSON Schema to RTFS TypeExpr (reuses logic from api_introspector)
-    fn json_schema_to_rtfs_type(&self, schema: &serde_json::Value) -> RuntimeResult<TypeExpr> {
+    /// Convert JSON Schema to RTFS TypeExpr
+    pub fn json_schema_to_rtfs_type(&self, schema: &serde_json::Value) -> RuntimeResult<TypeExpr> {
+        // Handle anyOf / oneOf
+        for key in ["anyOf", "oneOf"] {
+            if let Some(arr) = schema.get(key).and_then(|a| a.as_array()) {
+                let mut types = Vec::new();
+                let mut effectively_nullable = false;
+
+                for t in arr {
+                    // Check if this branch is just null
+                    if t.get("type").and_then(|v| v.as_str()) == Some("null") {
+                        effectively_nullable = true;
+                        continue;
+                    }
+
+                    if let Ok(ty) = self.json_schema_to_rtfs_type(t) {
+                        if matches!(ty, TypeExpr::Primitive(rtfs::ast::PrimitiveType::Nil)) {
+                            effectively_nullable = true;
+                        } else if !matches!(ty, TypeExpr::Any) {
+                            types.push(ty);
+                        }
+                    }
+                }
+
+                if !types.is_empty() {
+                    let mut base_type = if types.len() == 1 {
+                        types.remove(0)
+                    } else {
+                        // Deduplicate types in union
+                        let mut unique_types = Vec::new();
+                        let mut seen = std::collections::HashSet::new();
+                        for t in types {
+                            let s = t.to_string();
+                            if !seen.contains(&s) {
+                                seen.insert(s);
+                                unique_types.push(t);
+                            }
+                        }
+                        if unique_types.len() == 1 {
+                            unique_types.remove(0)
+                        } else {
+                            TypeExpr::Union(unique_types)
+                        }
+                    };
+
+                    if effectively_nullable && !matches!(base_type, TypeExpr::Optional(_)) {
+                        base_type = TypeExpr::Optional(Box::new(base_type));
+                    }
+                    return Ok(base_type);
+                }
+            }
+        }
+
+        // Handle allOf (simplified - just take the first one with type or properties)
+        if let Some(all_of) = schema.get("allOf").and_then(|a| a.as_array()) {
+            for t in all_of {
+                let res = self.json_schema_to_rtfs_type(t)?;
+                if !matches!(res, TypeExpr::Any) {
+                    return Ok(res);
+                }
+            }
+        }
+
         // Handle "type": ["string", "null"] or "nullable": true
         let is_nullable = schema
             .get("nullable")
@@ -193,6 +253,8 @@ impl MCPIntrospector {
                 }
             });
             (type_str, has_null)
+        } else if schema.get("properties").is_some() {
+            (Some("object"), false)
         } else {
             (None, false)
         };
@@ -210,6 +272,7 @@ impl MCPIntrospector {
                     }
                 }
                 "boolean" => TypeExpr::Primitive(rtfs::ast::PrimitiveType::Bool),
+                "null" => TypeExpr::Primitive(rtfs::ast::PrimitiveType::Nil),
                 "array" => {
                     let element_type = if let Some(items) = schema.get("items") {
                         self.json_schema_to_rtfs_type(items)?
@@ -453,7 +516,7 @@ impl MCPIntrospector {
                     eprintln!(
                         "✅ Inferred output schema + sample (retry) for '{}': schema={}, sample lines={}",
                         tool.tool_name,
-                        type_expr_to_rtfs_compact(&output_schema),
+                        type_expr_to_rtfs_pretty(&output_schema),
                         sample_snippet
                             .as_ref()
                             .map(|s| s.lines().count())
@@ -473,7 +536,7 @@ impl MCPIntrospector {
             eprintln!(
                 "✅ Inferred output schema + sample for '{}': schema={}, sample lines={}",
                 tool.tool_name,
-                type_expr_to_rtfs_compact(&output_schema),
+                type_expr_to_rtfs_pretty(&output_schema),
                 sample_snippet
                     .as_ref()
                     .map(|s| s.lines().count())
@@ -771,13 +834,13 @@ impl MCPIntrospector {
         let input_schema_str = capability
             .input_schema
             .as_ref()
-            .map(type_expr_to_rtfs_compact)
+            .map(|s| type_expr_to_rtfs_pretty(s))
             .unwrap_or_else(|| ":any".to_string());
 
         let output_schema_str = capability
             .output_schema
             .as_ref()
-            .map(type_expr_to_rtfs_compact)
+            .map(|s| type_expr_to_rtfs_pretty(s))
             .unwrap_or_else(|| ":any".to_string());
 
         let permissions_str = if capability.permissions.is_empty() {
@@ -966,7 +1029,7 @@ impl MCPIntrospector {
     }
 
     /// Mock MCP server introspection for testing
-    fn introspect_mock_mcp_server(
+    pub fn introspect_mock_mcp_server(
         &self,
         server_name: &str,
     ) -> RuntimeResult<MCPIntrospectionResult> {
@@ -1144,11 +1207,52 @@ impl Default for MCPIntrospector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_mcp_introspector_creation() {
         let introspector = MCPIntrospector::new();
         assert!(!introspector.mock_mode);
+    }
+
+    #[test]
+    fn test_complex_schema_introspection() {
+        let introspector = MCPIntrospector::new();
+
+        // Schema with anyOf (one is null)
+        let schema = json!({
+            "anyOf": [
+                { "type": "string" },
+                { "type": "null" }
+            ]
+        });
+
+        let rtfs_type = introspector.json_schema_to_rtfs_type(&schema).unwrap();
+        // Should simplify to :string? because one is null
+        assert_eq!(rtfs_type.to_string(), ":string?");
+
+        // Schema with properties but no type:object
+        let obj_schema = json!({
+            "properties": {
+                "name": { "type": "string" }
+            }
+        });
+        let rtfs_type_obj = introspector.json_schema_to_rtfs_type(&obj_schema).unwrap();
+        assert!(rtfs_type_obj.to_string().contains(":map"));
+
+        // Schema with actual Union
+        let union_schema = json!({
+            "anyOf": [
+                { "type": "string" },
+                { "type": "number" }
+            ]
+        });
+        let rtfs_type_union = introspector
+            .json_schema_to_rtfs_type(&union_schema)
+            .unwrap();
+        assert!(rtfs_type_union.to_string().contains(":union"));
+        assert!(rtfs_type_union.to_string().contains(":string"));
+        assert!(rtfs_type_union.to_string().contains(":float"));
     }
 
     #[test]

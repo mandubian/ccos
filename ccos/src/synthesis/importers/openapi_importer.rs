@@ -1187,18 +1187,97 @@ impl OpenAPIImporter {
 
     /// Convert JSON Schema type to RTFS keyword type
     pub fn json_schema_to_rtfs_type(&self, schema: &serde_json::Value) -> String {
-        if let Some(schema_type) = schema.get("type").and_then(|t| t.as_str()) {
-            match schema_type {
+        // Handle anyOf/oneOf/allOf
+        for key in ["anyOf", "oneOf"] {
+            if let Some(arr) = schema.get(key).and_then(|a| a.as_array()) {
+                let mut effectively_nullable = false;
+                let mut type_strs = Vec::new();
+
+                for t in arr {
+                    if t.get("type").and_then(|v| v.as_str()) == Some("null") {
+                        effectively_nullable = true;
+                        continue;
+                    }
+
+                    let ty = self.json_schema_to_rtfs_type(t);
+                    if ty == ":nil" {
+                        effectively_nullable = true;
+                    } else if ty != ":any" {
+                        type_strs.push(ty);
+                    }
+                }
+
+                if !type_strs.is_empty() {
+                    let mut unique_types = type_strs;
+                    unique_types.sort();
+                    unique_types.dedup();
+
+                    let base_type = if unique_types.len() == 1 {
+                        unique_types.remove(0)
+                    } else {
+                        format!("[:union {}]", unique_types.join(" "))
+                    };
+
+                    if effectively_nullable && !base_type.ends_with('?') {
+                        return format!("{}?", base_type);
+                    }
+                    return base_type;
+                }
+            }
+        }
+
+        if let Some(all_of) = schema.get("allOf").and_then(|a| a.as_array()) {
+            if let Some(first) = all_of.get(0) {
+                return self.json_schema_to_rtfs_type(first);
+            }
+        }
+
+        // Handle "type": ["string", "null"] or "nullable": true
+        let is_nullable = schema
+            .get("nullable")
+            .and_then(|n| n.as_bool())
+            .unwrap_or(false);
+
+        let type_val = schema.get("type");
+        let (base_type_str, is_nullable_type) = if let Some(t) = type_val.and_then(|t| t.as_str()) {
+            (Some(t), false)
+        } else if let Some(arr) = type_val.and_then(|t| t.as_array()) {
+            let has_null = arr.iter().any(|v| v.as_str() == Some("null"));
+            let type_str = arr.iter().find_map(|v| {
+                let s = v.as_str()?;
+                if s != "null" {
+                    Some(s)
+                } else {
+                    None
+                }
+            });
+            (type_str, has_null)
+        } else if schema.get("properties").is_some() {
+            (Some("object"), false)
+        } else {
+            (None, false)
+        };
+
+        let effective_nullable = is_nullable || is_nullable_type;
+
+        let base_type = if let Some(type_str) = base_type_str {
+            match type_str {
                 "string" => ":string".to_string(),
-                "number" => ":number".to_string(),
-                "integer" => ":number".to_string(),
+                "number" | "integer" => ":number".to_string(),
                 "boolean" => ":boolean".to_string(),
+                "null" => ":nil".to_string(),
                 "array" => ":list".to_string(),
                 "object" => ":map".to_string(),
                 _ => ":any".to_string(),
             }
         } else {
             ":any".to_string()
+        };
+
+        if effective_nullable && base_type != ":any" && base_type != ":nil" {
+            format!("{}?", base_type)
+        } else {
+            base_type
         }
     }
 
