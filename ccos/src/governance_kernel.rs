@@ -661,7 +661,8 @@ impl GovernanceKernel {
                 );
 
                 // Try LLM repair for parse errors
-                use crate::synthesis::validation::{llm_repair_runtime_error, ValidationConfig};
+                use crate::config::ValidationConfig;
+                use crate::synthesis::validation::llm_repair_runtime_error;
                 let validation_config = ValidationConfig::default();
 
                 if validation_config.enable_runtime_repair {

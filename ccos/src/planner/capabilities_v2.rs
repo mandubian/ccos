@@ -13,9 +13,8 @@ use crate::catalog::{CatalogEntryKind, CatalogFilter, CatalogService};
 use crate::mcp::discovery_session::{MCPServerInfo, MCPSessionManager};
 // Note: Using local SubIntentDto instead of importing private SubIntent
 
-use crate::synthesis::validation::llm_validator::{
-    auto_repair_plan, validate_plan, ValidationConfig, ValidationError,
-};
+use crate::config::ValidationConfig;
+use crate::synthesis::validation::{auto_repair_plan, validate_plan, ValidationError};
 use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 use crate::CCOS;
 
