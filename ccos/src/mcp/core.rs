@@ -1029,18 +1029,21 @@ impl MCPDiscoveryService {
                         })
                 });
             let server_dir = export_dir.join(&server_config.name);
+            let server_manifest = server_dir.join("server.rtfs");
             let module_file = server_dir.join("capabilities.rtfs");
 
-            if module_file.exists() {
+            if server_manifest.exists() || module_file.exists() {
                 ccos_eprintln!(
                     "ℹ️  Found existing capability export for {}: {}",
                     server_config.name,
-                    module_file.display()
+                    server_manifest
+                        .exists()
+                        .then(|| server_manifest.display().to_string())
+                        .unwrap_or_else(|| module_file.display().to_string())
                 );
 
                 // Try to load manifests from this file instead of re-discovering
                 if let Some(ref marketplace) = self.marketplace {
-                    let path_str = module_file.to_str().unwrap_or_default();
                     let parser = MCPDiscoveryProvider::new_with_rtfs_host_factory(
                         server_config.clone(),
                         marketplace.get_rtfs_host_factory(),
@@ -1049,36 +1052,57 @@ impl MCPDiscoveryService {
                         RuntimeError::Generic(format!("Failed to initialize RTFS parser: {}", e))
                     })?;
 
-                    if let Ok(module) = parser.load_rtfs_capabilities(path_str) {
-                        let mut manifests = Vec::new();
-                        for cap_def in module.capabilities {
-                            if let Ok(manifest) = parser.rtfs_to_capability_manifest(&cap_def) {
-                                manifests.push(manifest);
-                            }
-                        }
+                    let mut manifests = Vec::new();
 
-                        if !manifests.is_empty() {
-                            ccos_eprintln!(
-                                "   ✅ Loaded {} capabilities from export file",
-                                manifests.len()
-                            );
+                    if server_manifest.exists() {
+                        let base_path = server_dir.to_string_lossy().to_string();
+                        let mut files_to_load = Vec::new();
+                        Self::collect_rtfs_files_recursive(
+                            &server_dir,
+                            &base_path,
+                            &mut files_to_load,
+                        );
+                        files_to_load.retain(|f| !f.ends_with("server.rtfs"));
 
-                            // Ensure they are registered in marketplace if requested
-                            if options.register_in_marketplace {
-                                for manifest in &manifests {
-                                    self.register_capability(manifest).await?;
+                        for rel_path in &files_to_load {
+                            let full_path = server_dir.join(rel_path);
+                            if let Ok(module) =
+                                parser.load_rtfs_capabilities(full_path.to_string_lossy().as_ref())
+                            {
+                                for cap_def in module.capabilities {
+                                    if let Ok(manifest) =
+                                        parser.rtfs_to_capability_manifest(&cap_def)
+                                    {
+                                        manifests.push(manifest);
+                                    }
                                 }
                             }
-
-                            return Ok((manifests, None));
-                        } else {
-                            ccos_eprintln!("   ⚠️  Loaded 0 capabilities from export file");
                         }
-                    } else if let Err(e) = parser.load_rtfs_capabilities(path_str) {
+                    } else if module_file.exists() {
+                        let path_str = module_file.to_str().unwrap_or_default();
+                        if let Ok(module) = parser.load_rtfs_capabilities(path_str) {
+                            for cap_def in module.capabilities {
+                                if let Ok(manifest) = parser.rtfs_to_capability_manifest(&cap_def) {
+                                    manifests.push(manifest);
+                                }
+                            }
+                        }
+                    }
+
+                    if !manifests.is_empty() {
                         ccos_eprintln!(
-                            "   ⚠️  Failed to load RTFS capabilities from export file: {}",
-                            e
+                            "   ✅ Loaded {} capabilities from export file(s)",
+                            manifests.len()
                         );
+
+                        // Ensure they are registered in marketplace if requested
+                        if options.register_in_marketplace {
+                            for manifest in &manifests {
+                                self.register_capability(manifest).await?;
+                            }
+                        }
+
+                        return Ok((manifests, None));
                     }
                 } else {
                     ccos_eprintln!("   ⚠️  Marketplace not available for loading export file");
@@ -1226,8 +1250,9 @@ impl MCPDiscoveryService {
                         })
                 });
             let server_dir = export_dir.join(&server_config.name);
+            let server_manifest = server_dir.join("server.rtfs");
             let module_file = server_dir.join("capabilities.rtfs");
-            module_file.exists()
+            server_manifest.exists() || module_file.exists()
         };
 
         // Warn if capabilities already exist
@@ -1320,14 +1345,13 @@ impl MCPDiscoveryService {
         Ok((manifests, approval_id))
     }
 
-    /// Export capabilities from a server to a single RTFS module file
+    /// Export capabilities from a server to RTFS files and a server.rtfs manifest
     async fn export_server_capabilities_to_rtfs(
         &self,
         server_config: &MCPServerConfig,
         manifests: &[CapabilityManifest],
         options: &DiscoveryOptions,
     ) -> RuntimeResult<()> {
-        use std::fs;
         use std::path::PathBuf;
 
         // Determine export directory
@@ -1364,24 +1388,42 @@ impl MCPDiscoveryService {
                     })
             });
 
-        // Create directory structure: <export_dir>/<server_name>/
-        let server_dir = export_dir.join(&server_config.name);
-        fs::create_dir_all(&server_dir).map_err(|e| {
+        self.export_manifests_to_rtfs_layout(server_config, manifests, &export_dir)?;
+
+        Ok(())
+    }
+
+    /// Export manifests to per-capability RTFS files and server.rtfs
+    pub fn export_manifests_to_rtfs_layout(
+        &self,
+        server_config: &MCPServerConfig,
+        manifests: &[CapabilityManifest],
+        export_dir: &std::path::Path,
+    ) -> RuntimeResult<Vec<String>> {
+        use std::fs;
+
+        // Create directory structure: <export_dir>/<server_name>/mcp
+        let sanitized_name = crate::utils::fs::sanitize_filename(&server_config.name);
+        let server_dir = export_dir.join(&sanitized_name);
+        let mcp_dir = server_dir.join("mcp");
+        fs::create_dir_all(&mcp_dir).map_err(|e| {
             RuntimeError::Generic(format!("Failed to create export directory: {}", e))
         })?;
 
-        // Export to single module file: <server_dir>/capabilities.rtfs
-        let module_file = server_dir.join("capabilities.rtfs");
+        // Clean up existing .rtfs files in the mcp/ directory to remove orphaned capabilities
+        // (from tools that were renamed or removed from the server)
+        if let Ok(entries) = fs::read_dir(&mcp_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("rtfs") {
+                    if let Err(e) = fs::remove_file(&path) {
+                        log::warn!("Failed to remove old capability file {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
 
-        // Create RTFS module with only the discovered capabilities from this server
-        let mut rtfs_content = String::new();
-        rtfs_content.push_str(";; CCOS MCP Capabilities Module\n");
-        rtfs_content.push_str(&format!(";; Generated at: {}\n", chrono::Utc::now()));
-        rtfs_content.push_str(&format!(
-            ";; Server: {} ({})\n\n",
-            server_config.name, server_config.endpoint
-        ));
-        rtfs_content.push_str("(do\n");
+        let mut capability_files = Vec::new();
 
         for manifest in manifests {
             // Generate implementation code for MCP capabilities
@@ -1397,20 +1439,70 @@ impl MCPDiscoveryService {
                 manifest,
                 &implementation_code,
             );
-            rtfs_content.push_str(&format!("  {}\n\n", cap_rtfs));
+
+            let file_name = crate::utils::fs::sanitize_filename(&manifest.id);
+            let file_path = mcp_dir.join(format!("{}.rtfs", file_name));
+            let relative_path = format!("mcp/{}.rtfs", file_name);
+
+            let mut content = String::new();
+            content.push_str(&format!(";; Capability: {}\n", manifest.id));
+            content.push_str(&cap_rtfs);
+            content.push('\n');
+
+            fs::write(&file_path, content).map_err(|e| {
+                RuntimeError::Generic(format!("Failed to write capability file: {}", e))
+            })?;
+
+            capability_files.push(relative_path);
         }
 
-        rtfs_content.push_str(")\n");
-        fs::write(&module_file, rtfs_content).map_err(|e| {
-            RuntimeError::Generic(format!("Failed to write RTFS module file: {}", e))
-        })?;
+        let files_rtfs = capability_files
+            .iter()
+            .map(|f| format!("\"{}\"", f))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let server_rtfs = format!(
+            r#";; Server Manifest: {}
+(server
+  :source {{
+    :type "MCP"
+    :spec_url "{}"
+  }}
+  :server_info {{
+    :name "{}"
+    :endpoint "{}"
+    :description "MCP server: {}"
+    :auth_env_var nil
+  }}
+  :api_info {{
+    :endpoints_count {}
+    :base_url "{}"
+  }}
+  :capability_files [{}]
+)
+"#,
+            server_config.name,
+            server_config.endpoint,
+            server_config.name,
+            server_config.endpoint,
+            server_config.name,
+            manifests.len(),
+            server_config.endpoint,
+            files_rtfs,
+        );
+
+        let server_rtfs_path = server_dir.join("server.rtfs");
+        fs::write(&server_rtfs_path, server_rtfs)
+            .map_err(|e| RuntimeError::Generic(format!("Failed to write server.rtfs: {}", e)))?;
+
         ccos_println!(
             "  💾 Exported {} capabilities to {}",
             manifests.len(),
-            module_file.display()
+            server_rtfs_path.display()
         );
 
-        Ok(())
+        Ok(capability_files)
     }
 
     /// Get server config for a domain hint
