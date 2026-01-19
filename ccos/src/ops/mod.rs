@@ -15,6 +15,7 @@ pub mod llm;
 pub mod native;
 pub mod plan;
 pub mod server;
+pub mod server_discovery_pipeline;
 
 #[cfg(test)]
 mod tests;

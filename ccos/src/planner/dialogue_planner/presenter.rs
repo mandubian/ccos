@@ -117,6 +117,10 @@ impl DialoguePresenter {
             .iter()
             .filter(|r| matches!(r.source, DiscoverySource::WebSearch { .. }))
             .count();
+        let llm_count = results
+            .iter()
+            .filter(|r| matches!(r.source, DiscoverySource::LlmSuggestion { .. }))
+            .count();
         let local_count = results
             .iter()
             .filter(|r| matches!(r.source, DiscoverySource::LocalOverride { .. }))
@@ -131,6 +135,9 @@ impl DialoguePresenter {
         }
         if web_count > 0 {
             sources.push(format!("🔍 {} Web", web_count));
+        }
+        if llm_count > 0 {
+            sources.push(format!("🤖 {} LLM", llm_count));
         }
         if local_count > 0 {
             sources.push(format!("📂 {} Local", local_count));
@@ -172,6 +179,7 @@ impl DialoguePresenter {
             DiscoverySource::McpRegistry { .. } => "🔧",
             DiscoverySource::ApisGuru { .. } => "🌐",
             DiscoverySource::WebSearch { .. } => "🔍",
+            DiscoverySource::LlmSuggestion { .. } => "🤖",
             DiscoverySource::LocalOverride { .. } => "📂",
             _ => "📦",
         }
@@ -317,6 +325,7 @@ impl DialoguePresenter {
             DiscoverySource::McpRegistry { name } => format!("MCP Registry ({})", name),
             DiscoverySource::ApisGuru { api_name } => format!("APIs.guru ({})", api_name),
             DiscoverySource::WebSearch { url } => format!("Web Search ({})", url),
+            DiscoverySource::LlmSuggestion { name } => format!("LLM Suggestion ({})", name),
             DiscoverySource::LocalOverride { path } => format!("Local Override ({})", path),
             _ => "Unknown".to_string(),
         }

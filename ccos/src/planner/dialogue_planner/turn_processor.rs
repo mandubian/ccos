@@ -6,6 +6,7 @@ use super::types::*;
 use crate::approval::queue::{DiscoverySource, ServerInfo};
 use crate::arbiter::llm_provider::LlmProvider;
 use crate::capability_marketplace::types::CapabilityMarketplace;
+use crate::discovery::DiscoveryCategory;
 use crate::discovery::RegistrySearchResult;
 use crate::intent_graph::IntentGraph;
 use crate::mcp::core::MCPDiscoveryService;
@@ -418,6 +419,7 @@ impl TurnProcessor {
                                                         },
                                                         match_score: 0.9,
                                                         alternative_endpoints: vec![],
+                                                        category: DiscoveryCategory::WebApi,
                                                     });
 
                                                     additional_msg
@@ -477,6 +479,7 @@ impl TurnProcessor {
                                                         },
                                                         match_score: 1.0,
                                                         alternative_endpoints: vec![],
+                                                        category: DiscoveryCategory::OpenApi,
                                                     });
                                                 }
                                                 Err(e) => {
@@ -540,6 +543,7 @@ impl TurnProcessor {
                                             },
                                             match_score: 0.8, // Slightly lower score for raw links
                                             alternative_endpoints: vec![],
+                                            category: DiscoveryCategory::WebDoc,
                                         });
                                     }
                                 }
@@ -649,6 +653,9 @@ impl TurnProcessor {
                             }
                             crate::approval::queue::DiscoverySource::WebSearch { url } => {
                                 format!("Web: {}", url.chars().take(50).collect::<String>())
+                            }
+                            crate::approval::queue::DiscoverySource::LlmSuggestion { name } => {
+                                format!("LLM: {}", name)
                             }
                             crate::approval::queue::DiscoverySource::LocalOverride { path } => {
                                 format!("Local: {}", path.split('/').last().unwrap_or(path))
