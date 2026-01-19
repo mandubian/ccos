@@ -190,12 +190,52 @@ output_schema_introspection = true
 # Let the resolver call the promptstore-backed LLM synthesis flow
 llm_synthesis = true
 # Enable web search discovery fallback (disabled by default for performance/privacy)
-web_search = false
+web_search = true
 # Optional guardrails
 human_approval_required = false
 # Tweak attempt/verbosity knobs (env overrides still win)
 max_attempts = 3
 verbose_logging = false
+
+[server_discovery_pipeline]
+# Enable the pipeline globally
+enabled = true
+# Default execution mode: "preview" or "stage_and_queue"
+mode = "stage_and_queue"
+# Ordered stages for query discovery
+query_pipeline_order = ["registry_search", "llm_suggest", "rank", "dedupe", "limit"]
+# Ordered introspection stages (fallback order)
+introspection_order = ["mcp", "openapi", "browser"]
+# Candidate limits and threshold
+max_candidates = 30
+max_ranked = 15
+threshold = 0.65
+
+[server_discovery_pipeline.sources]
+mcp_registry = true
+npm = true
+overrides = true
+apis_guru = true
+# If unset, falls back to missing_capabilities.web_search
+# web_search = true
+llm_suggest = true
+known_apis = true
+
+[server_discovery_pipeline.introspection]
+mcp_http = true
+mcp_stdio = true
+openapi = true
+browser = true
+
+[server_discovery_pipeline.staging]
+pending_subdir = "capabilities/servers/pending"
+server_id_strategy = "sanitize_filename"
+layout = "rtfs_layout_v1"
+
+[server_discovery_pipeline.approvals]
+enabled = true
+expiry_hours = 168
+risk_default = "medium"
 
 [llm_profiles]
 default = "openrouter_free:balanced_ds_32"

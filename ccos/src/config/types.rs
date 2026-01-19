@@ -54,6 +54,9 @@ pub struct AgentConfig {
     /// Discovery engine configuration
     #[serde(default)]
     pub discovery: DiscoveryConfig,
+    /// Server discovery pipeline configuration
+    #[serde(default)]
+    pub server_discovery_pipeline: ServerDiscoveryPipelineConfig,
     /// Catalog configuration (plan/capability reuse thresholds)
     #[serde(default)]
     pub catalog: CatalogConfig,
@@ -66,6 +69,9 @@ pub struct AgentConfig {
     /// AI Self-Programming configuration (trust levels, approval gates)
     #[serde(default)]
     pub self_programming: SelfProgrammingConfig,
+    /// LLM Validation configuration (schema, plan validation, auto-repair)
+    #[serde(default)]
+    pub validation: ValidationConfig,
 }
 
 impl Default for AgentConfig {
@@ -85,10 +91,12 @@ impl Default for AgentConfig {
             features: vec![],
             llm_profiles: None,
             discovery: DiscoveryConfig::default(),
+            server_discovery_pipeline: ServerDiscoveryPipelineConfig::default(),
             catalog: CatalogConfig::default(),
             missing_capabilities: MissingCapabilityRuntimeConfig::default(),
             storage: StoragePathsConfig::default(),
             self_programming: SelfProgrammingConfig::default(),
+            validation: ValidationConfig::default(),
         }
     }
 }
@@ -371,6 +379,233 @@ impl Default for DiscoveryConfig {
     }
 }
 
+/// Configuration for LLM validation (schema, plan, auto-repair)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ValidationConfig {
+    /// Enable LLM schema validation for inferred schemas
+    #[serde(default)]
+    pub enable_schema_validation: bool,
+
+    /// Enable LLM plan validation (schema compatibility, dependencies)
+    #[serde(default)]
+    pub enable_plan_validation: bool,
+
+    /// Enable auto-repair on validation failures
+    #[serde(default = "default_true")]
+    pub enable_auto_repair: bool,
+
+    /// Enable LLM repair for runtime execution errors (dialog-based)
+    #[serde(default = "default_true")]
+    pub enable_runtime_repair: bool,
+
+    /// Max auto-repair attempts before queuing for external review
+    #[serde(default = "default_max_repair_attempts")]
+    pub max_repair_attempts: usize,
+
+    /// Max runtime repair attempts (dialog loop bound)
+    #[serde(default = "default_max_runtime_repair_attempts")]
+    pub max_runtime_repair_attempts: usize,
+
+    /// LLM profile to use for validation (from llm_profiles section)
+    /// Format: "set:model" or "profile_name"
+    #[serde(default)]
+    pub validation_profile: Option<String>,
+}
+
+impl Default for ValidationConfig {
+    fn default() -> Self {
+        Self {
+            enable_schema_validation: false,
+            enable_plan_validation: false,
+            enable_auto_repair: true,
+            enable_runtime_repair: true,
+            max_repair_attempts: 2,
+            max_runtime_repair_attempts: 5,
+            validation_profile: None,
+        }
+    }
+}
+
+/// Server discovery pipeline configuration (configurable stages + ordering)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServerDiscoveryPipelineConfig {
+    /// Enable the pipeline globally
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Default execution mode: "preview" or "stage_and_queue"
+    #[serde(default = "default_server_discovery_mode")]
+    pub mode: String,
+    /// Ordered stages for query discovery (e.g. registry_search → llm_suggest → rank → dedupe → limit)
+    #[serde(default = "default_query_pipeline_order")]
+    pub query_pipeline_order: Vec<String>,
+    /// Ordered introspection stages (e.g. mcp → openapi → browser)
+    #[serde(default = "default_introspection_order")]
+    pub introspection_order: Vec<String>,
+    /// Max number of candidates returned from discovery stages before ranking
+    #[serde(default = "default_server_discovery_max_candidates")]
+    pub max_candidates: usize,
+    /// Max number of ranked candidates to keep
+    #[serde(default = "default_server_discovery_max_ranked")]
+    pub max_ranked: usize,
+    /// Default relevance threshold
+    #[serde(default = "default_discovery_match_threshold")]
+    pub threshold: f64,
+    /// Source enable/disable configuration
+    #[serde(default)]
+    pub sources: ServerDiscoverySourcesConfig,
+    /// Introspection enable/disable configuration
+    #[serde(default)]
+    pub introspection: ServerDiscoveryIntrospectionConfig,
+    /// Staging configuration
+    #[serde(default)]
+    pub staging: ServerDiscoveryStagingConfig,
+    /// Approvals configuration
+    #[serde(default)]
+    pub approvals: ServerDiscoveryApprovalsConfig,
+}
+
+impl Default for ServerDiscoveryPipelineConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mode: default_server_discovery_mode(),
+            query_pipeline_order: default_query_pipeline_order(),
+            introspection_order: default_introspection_order(),
+            max_candidates: default_server_discovery_max_candidates(),
+            max_ranked: default_server_discovery_max_ranked(),
+            threshold: default_discovery_match_threshold(),
+            sources: ServerDiscoverySourcesConfig::default(),
+            introspection: ServerDiscoveryIntrospectionConfig::default(),
+            staging: ServerDiscoveryStagingConfig::default(),
+            approvals: ServerDiscoveryApprovalsConfig::default(),
+        }
+    }
+}
+
+/// Source enablement and tuning for discovery candidates
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServerDiscoverySourcesConfig {
+    /// Use MCP registry as a discovery source
+    #[serde(default = "default_true")]
+    pub mcp_registry: bool,
+    /// Use NPM registry for MCP-related packages
+    #[serde(default = "default_true")]
+    pub npm: bool,
+    /// Use local overrides.json entries
+    #[serde(default = "default_true")]
+    pub overrides: bool,
+    /// Use APIs.guru OpenAPI catalog
+    #[serde(default = "default_true")]
+    pub apis_guru: bool,
+    /// Use web search discovery (fallback, potentially slow)
+    #[serde(default)]
+    pub web_search: Option<bool>,
+    /// Use LLM to suggest APIs from a query
+    #[serde(default = "default_true")]
+    pub llm_suggest: bool,
+    /// Use known APIs registry (static curated set)
+    #[serde(default = "default_true")]
+    pub known_apis: bool,
+}
+
+impl Default for ServerDiscoverySourcesConfig {
+    fn default() -> Self {
+        Self {
+            mcp_registry: true,
+            npm: true,
+            overrides: true,
+            apis_guru: true,
+            web_search: None,
+            llm_suggest: true,
+            known_apis: true,
+        }
+    }
+}
+
+/// Introspection enablement per protocol
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServerDiscoveryIntrospectionConfig {
+    /// Enable MCP HTTP introspection
+    #[serde(default = "default_true")]
+    pub mcp_http: bool,
+    /// Enable MCP stdio introspection
+    #[serde(default = "default_true")]
+    pub mcp_stdio: bool,
+    /// Enable OpenAPI introspection
+    #[serde(default = "default_true")]
+    pub openapi: bool,
+    /// Enable browser-based docs extraction
+    #[serde(default = "default_true")]
+    pub browser: bool,
+}
+
+impl Default for ServerDiscoveryIntrospectionConfig {
+    fn default() -> Self {
+        Self {
+            mcp_http: true,
+            mcp_stdio: true,
+            openapi: true,
+            browser: true,
+        }
+    }
+}
+
+/// Staging configuration for pipeline outputs
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServerDiscoveryStagingConfig {
+    /// Pending subdirectory for staged capability files
+    #[serde(default = "default_server_discovery_pending_subdir")]
+    pub pending_subdir: String,
+    /// Server ID strategy (e.g. sanitize_filename)
+    #[serde(default = "default_server_discovery_server_id_strategy")]
+    pub server_id_strategy: String,
+    /// Layout name for staged files
+    #[serde(default = "default_server_discovery_layout")]
+    pub layout: String,
+}
+
+impl Default for ServerDiscoveryStagingConfig {
+    fn default() -> Self {
+        Self {
+            pending_subdir: default_server_discovery_pending_subdir(),
+            server_id_strategy: default_server_discovery_server_id_strategy(),
+            layout: default_server_discovery_layout(),
+        }
+    }
+}
+
+/// Approval settings for staged server discoveries
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServerDiscoveryApprovalsConfig {
+    /// Whether to create approval requests for discoveries
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Expiry (hours) for approval requests
+    #[serde(default = "default_server_discovery_expiry_hours")]
+    pub expiry_hours: i64,
+    /// Default risk level label (low/medium/high)
+    #[serde(default = "default_server_discovery_risk_default")]
+    pub risk_default: String,
+}
+
+impl Default for ServerDiscoveryApprovalsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            expiry_hours: default_server_discovery_expiry_hours(),
+            risk_default: default_server_discovery_risk_default(),
+        }
+    }
+}
+
+fn default_max_repair_attempts() -> usize {
+    2
+}
+
+fn default_max_runtime_repair_attempts() -> usize {
+    5
+}
+
 fn default_discovery_match_threshold() -> f64 {
     0.65
 }
@@ -389,6 +624,56 @@ fn default_discovery_action_verb_weight() -> f64 {
 
 fn default_discovery_capability_class_weight() -> f64 {
     0.3
+}
+
+fn default_server_discovery_mode() -> String {
+    "stage_and_queue".to_string()
+}
+
+fn default_query_pipeline_order() -> Vec<String> {
+    vec![
+        "registry_search".to_string(),
+        "llm_suggest".to_string(),
+        "rank".to_string(),
+        "dedupe".to_string(),
+        "limit".to_string(),
+    ]
+}
+
+fn default_introspection_order() -> Vec<String> {
+    vec![
+        "mcp".to_string(),
+        "openapi".to_string(),
+        "browser".to_string(),
+    ]
+}
+
+fn default_server_discovery_max_candidates() -> usize {
+    30
+}
+
+fn default_server_discovery_max_ranked() -> usize {
+    15
+}
+
+fn default_server_discovery_pending_subdir() -> String {
+    "capabilities/servers/pending".to_string()
+}
+
+fn default_server_discovery_server_id_strategy() -> String {
+    "sanitize_filename".to_string()
+}
+
+fn default_server_discovery_layout() -> String {
+    "rtfs_layout_v1".to_string()
+}
+
+fn default_server_discovery_expiry_hours() -> i64 {
+    168
+}
+
+fn default_server_discovery_risk_default() -> String {
+    "medium".to_string()
 }
 
 /// Catalog configuration stored in agent config
