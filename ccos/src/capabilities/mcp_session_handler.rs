@@ -133,7 +133,7 @@ impl MCPSessionHandler {
             return Ok(("stdio".to_string(), Some(client)));
         }
 
-        eprintln!("🔌 Initializing MCP session with {}", server_url);
+        crate::ccos_println!("🔌 Initializing MCP session with {}", server_url);
 
         // Build initialize request
         let init_request = serde_json::json!({
@@ -204,13 +204,13 @@ impl MCPSessionHandler {
             })?
             .to_string();
 
-        eprintln!("✅ MCP session initialized: {}", session_id);
+        crate::ccos_println!("✅ MCP session initialized: {}", session_id);
         Ok((session_id, None))
     }
 
     /// Internal helper to initialize a stdio-based session
     fn initialize_stdio_session(&self, command: &str) -> RuntimeResult<Arc<StdioClient>> {
-        eprintln!("🚀 Spawning stdio MCP server: {}", command);
+        crate::ccos_println!("🚀 Spawning stdio MCP server: {}", command);
 
         tokio::task::block_in_place(|| {
             let handle = tokio::runtime::Handle::current();
@@ -261,14 +261,14 @@ impl MCPSessionHandler {
             });
         }
 
-        eprintln!(
+        crate::ccos_println!(
             "🔧 Calling MCP tool: {} with session {}",
             tool_name, session.session_id
         );
 
         let mcp_args = self.prepare_mcp_args(args)?;
 
-        eprintln!(
+        crate::ccos_println!(
             "📝 MCP Arguments: {}",
             serde_json::to_string_pretty(&mcp_args).unwrap_or_default()
         );
@@ -470,7 +470,7 @@ impl MCPSessionHandler {
 
     /// Terminate MCP session (optional cleanup)
     fn terminate_mcp_session(&self, session: &MCPSession) -> RuntimeResult<()> {
-        eprintln!("🔚 Terminating MCP session: {}", session.session_id);
+        crate::ccos_println!("🔚 Terminating MCP session: {}", session.session_id);
 
         // MCP doesn't have a standard terminate endpoint in the spec,
         // but we can optionally send one if the server supports it.
@@ -485,7 +485,7 @@ impl SessionHandler for MCPSessionHandler {
         capability_id: &str,
         metadata: &HashMap<String, String>,
     ) -> RuntimeResult<SessionId> {
-        // eprintln!("[MCPSessionHandler] initialize_session for {}: metadata keys={:?}", capability_id, metadata.keys());
+        // crate::ccos_println!("[MCPSessionHandler] initialize_session for {}: metadata keys={:?}", capability_id, metadata.keys());
 
         // Extract server URL from metadata (try multiple key variations)
         let server_url = metadata
@@ -496,11 +496,11 @@ impl SessionHandler for MCPSessionHandler {
 
         let server_url = match server_url {
             Some(url) => {
-                // eprintln!("[MCPSessionHandler] Found server_url: {}", url);
+                // crate::ccos_println!("[MCPSessionHandler] Found server_url: {}", url);
                 url.clone()
             }
             None => {
-                // eprintln!("[MCPSessionHandler] Missing server_url in metadata: {:?}", metadata);
+                // crate::ccos_println!("[MCPSessionHandler] Missing server_url in metadata: {:?}", metadata);
                 return Err(RuntimeError::Generic(
                     "Missing server_url in metadata".to_string(),
                 ));
@@ -591,7 +591,7 @@ impl SessionHandler for MCPSessionHandler {
         // Check if session already exists
         let sessions = self.sessions.lock().unwrap();
         if let Some(session) = sessions.get(capability_id) {
-            eprintln!("♻️  Reusing existing MCP session: {}", session.session_id);
+            crate::ccos_println!("♻️  Reusing existing MCP session: {}", session.session_id);
             return Ok(session.session_id.clone());
         }
         drop(sessions);

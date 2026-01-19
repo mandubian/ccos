@@ -5,15 +5,14 @@ use crate::approval::{
     storage_file::FileApprovalStorage, suggest_auth_env_var, ApprovalCategory, DiscoverySource,
     RiskAssessment, RiskLevel, ServerInfo as DiscoveryServerInfo, UnifiedApprovalQueue,
 };
-use crate::capability_marketplace::mcp_discovery::{MCPDiscoveryProvider, MCPServerConfig};
+use crate::capability_marketplace::mcp_discovery::MCPServerConfig;
 use crate::discovery::RegistrySearcher;
 use crate::mcp::core::MCPDiscoveryService;
-use crate::mcp::types::{DiscoveryOptions, MCPTool};
+use crate::mcp::types::DiscoveryOptions;
 use crate::synthesis::introspection::mcp_introspector::{MCPIntrospectionResult, MCPIntrospector};
-use crate::utils::fs::find_workspace_root;
-use crate::{ccos_eprintln, ccos_println};
+use crate::utils::fs::get_workspace_root;
+use crate::ccos_eprintln;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -492,7 +491,7 @@ pub async fn introspect_server_by_url(
 /// Save discovered tools to RTFS capabilities file and link to pending entry
 pub async fn save_discovered_tools(
     storage_path: PathBuf,
-    mcp_tools: Vec<MCPTool>,
+    mcp_tools: Vec<crate::mcp::types::DiscoveredMCPTool>,
     introspection: &MCPIntrospectionResult,
     server_info: &DiscoveryServerInfo,
     pending_id: Option<String>,
@@ -509,12 +508,6 @@ pub async fn save_discovered_tools(
         timeout_seconds: 30,
         protocol_version: introspection.protocol_version.clone(),
     };
-
-    // Create discovery provider
-    let provider = MCPDiscoveryProvider::new(server_config.clone())?;
-
-    // Convert tools to RTFS format
-    let rtfs_capabilities = provider.convert_tools_to_rtfs_format(&mcp_tools)?;
 
     // Find the pending entry to get the server ID
     // Use workspace root to ensure server.json is saved in the correct location
@@ -550,14 +543,14 @@ pub async fn save_discovered_tools(
     let server_id = crate::utils::fs::sanitize_filename(&entry.server_info.name);
 
     // Find workspace root to ensure we save to the correct capabilities/ directory
-    let workspace_root = find_workspace_root();
+    let workspace_root = get_workspace_root();
 
     // Debug: log the workspace root being used (only in debug mode)
     if std::env::var("CCOS_DEBUG").is_ok() {
         ccos_eprintln!("📁 Using workspace root: {}", workspace_root.display());
     }
 
-    // Save to capabilities/servers/pending/{server_id}/capabilities.rtfs
+    // Save to capabilities/servers/pending/{server_id}/server.rtfs
     // This matches the approval flow which moves files from pending to approved
     let pending_dir = workspace_root.join("capabilities/servers/pending");
     let server_dir = pending_dir.join(&server_id);
@@ -570,11 +563,11 @@ pub async fn save_discovered_tools(
         ))
     })?;
 
-    let capabilities_file = server_dir.join("capabilities.rtfs");
-    let capabilities_path = capabilities_file.to_string_lossy().to_string();
+    let server_rtfs_file = server_dir.join("server.rtfs");
+    let capabilities_path = server_rtfs_file.to_string_lossy().to_string();
 
     // Check if capabilities file already exists (from a previous introspection)
-    if capabilities_file.exists() && std::env::var("CCOS_DEBUG").is_ok() {
+    if server_rtfs_file.exists() && std::env::var("CCOS_DEBUG").is_ok() {
         // Check if this is the same server (by comparing server name/endpoint)
         // If it's the same, we can safely overwrite (update)
         // If it's different, we should warn or merge
@@ -586,8 +579,19 @@ pub async fn save_discovered_tools(
         ccos_eprintln!("   Updating with new introspection results...");
     }
 
-    // Save RTFS capabilities (overwrites existing file if present)
-    provider.save_rtfs_capabilities(&rtfs_capabilities, &capabilities_path)?;
+    // Convert tools to manifests
+    let discovery_service = crate::mcp::core::MCPDiscoveryService::new();
+    let manifests: Vec<_> = mcp_tools
+        .iter()
+        .map(|tool| discovery_service.tool_to_manifest(tool, &server_config))
+        .collect();
+
+    // Export as server.rtfs + per-capability files
+    let capability_files = discovery_service.export_manifests_to_rtfs_layout(
+        &server_config,
+        &manifests,
+        &pending_dir,
+    )?;
 
     // Update the pending entry to include capabilities_path - need original ApprovalRequest
     let original_request = pending_requests.iter().find(|r| {
@@ -608,6 +612,7 @@ pub async fn save_discovered_tools(
         } = updated_request.category
         {
             server_info.capabilities_path = Some(capabilities_path.clone());
+            server_info.capability_files = Some(capability_files.clone());
         }
         queue.update_pending_server(&updated_request).await?;
     }

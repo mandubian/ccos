@@ -191,10 +191,10 @@ impl IntrospectionService {
         };
 
         let options = crate::mcp::types::DiscoveryOptions {
-            export_to_rtfs: true,
+            export_to_rtfs: false,
             export_directory: Some(output_dir.to_string_lossy().to_string()),
             register_in_marketplace: false,
-            create_approval_request: true,
+            create_approval_request: false,
             ..Default::default()
         };
 
@@ -284,6 +284,7 @@ impl IntrospectionService {
                     }
                 }
 
+                let browser_error = browser_result.error.clone();
                 Ok(IntrospectionResult {
                     success: browser_result.success,
                     source: IntrospectionSource::Browser,
@@ -292,7 +293,7 @@ impl IntrospectionService {
                     browser_result: Some(browser_result),
                     manifests: Vec::new(),
                     approval_id: None,
-                    error: None,
+                    error: browser_error,
                 })
             }
             Err(e) => Ok(IntrospectionResult {
