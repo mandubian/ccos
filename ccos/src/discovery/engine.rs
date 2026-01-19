@@ -58,7 +58,7 @@ impl DiscoveryEngine {
             config.clone(),
         )));
         if std::env::var("CCOS_DEBUG").is_ok() {
-            eprintln!("🔍 DiscoveryEngine: Discovery agent initialized");
+            crate::ccos_println!("🔍 DiscoveryEngine: Discovery agent initialized");
         }
         Self {
             marketplace,
@@ -173,16 +173,16 @@ impl DiscoveryEngine {
         let need = &enhanced_need;
 
         // Print capability section header
-        eprintln!("\n{}", "═".repeat(80));
-        eprintln!("🔍 DISCOVERY: {}", need.capability_class);
-        eprintln!("{}", "─".repeat(80));
-        eprintln!("  Rationale: {}", need.rationale);
-        eprintln!("  Inputs: {:?}", need.required_inputs);
-        eprintln!("  Outputs: {:?}", need.expected_outputs);
-        eprintln!("{}", "─".repeat(80));
+        crate::ccos_println!("\n{}", "═".repeat(80));
+        crate::ccos_println!("🔍 DISCOVERY: {}", need.capability_class);
+        crate::ccos_println!("{}", "─".repeat(80));
+        crate::ccos_println!("  Rationale: {}", need.rationale);
+        crate::ccos_println!("  Inputs: {:?}", need.required_inputs);
+        crate::ccos_println!("  Outputs: {:?}", need.expected_outputs);
+        crate::ccos_println!("{}", "─".repeat(80));
 
         // 1. Try local marketplace search first
-        eprintln!("  [1/4] Searching local marketplace...");
+        crate::ccos_println!("  [1/4] Searching local marketplace...");
         if let Some(manifest) = self.search_marketplace(need).await? {
             // Check if the capability is incomplete
             let is_incomplete = manifest
@@ -192,19 +192,19 @@ impl DiscoveryEngine {
                 .unwrap_or(false);
 
             if is_incomplete {
-                eprintln!("  ⚠️  Found incomplete capability: {}", manifest.id);
-                eprintln!("{}", "═".repeat(80));
+                crate::ccos_println!("  ⚠️  Found incomplete capability: {}", manifest.id);
+                crate::ccos_println!("{}", "═".repeat(80));
                 return Ok(DiscoveryResult::Incomplete(manifest));
             } else {
-                eprintln!("  ✓ Found: {}", manifest.id);
-                eprintln!("{}", "═".repeat(80));
+                crate::ccos_println!("  ✓ Found: {}", manifest.id);
+                crate::ccos_println!("{}", "═".repeat(80));
                 return Ok(DiscoveryResult::Found(manifest));
             }
         }
-        eprintln!("  ✗ Not found");
+        crate::ccos_println!("  ✗ Not found");
 
         // 2. Try MCP registry search (before local synthesis - MCP capabilities are real implementations)
-        eprintln!("  [2/4] Searching MCP registry...");
+        crate::ccos_println!("  [2/4] Searching MCP registry...");
         if let Some(manifest) = self.search_mcp_registry(need).await? {
             // Check if the capability is incomplete (shouldn't happen for MCP, but check anyway)
             let is_incomplete = manifest
@@ -215,9 +215,9 @@ impl DiscoveryEngine {
 
             // Save the discovered MCP capability to disk for persistence
             if let Err(e) = self.save_mcp_capability(&manifest).await {
-                eprintln!("  ⚠️  Failed to save MCP capability to disk: {}", e);
+                crate::ccos_println!("  ⚠️  Failed to save MCP capability to disk: {}", e);
             } else {
-                eprintln!("  💾 Saved MCP capability to disk");
+                crate::ccos_println!("  💾 Saved MCP capability to disk");
             }
 
             // Register the discovered MCP capability in marketplace for future searches
@@ -226,25 +226,25 @@ impl DiscoveryEngine {
                 .register_capability_manifest(manifest.clone())
                 .await
             {
-                eprintln!("  ⚠  Warning: Failed to register MCP capability: {}", e);
+                crate::ccos_println!("  ⚠  Warning: Failed to register MCP capability: {}", e);
             } else {
-                eprintln!("       Registered MCP capability in marketplace");
+                crate::ccos_println!("       Registered MCP capability in marketplace");
             }
-            eprintln!("{}", "═".repeat(80));
+            crate::ccos_println!("{}", "═".repeat(80));
 
             if is_incomplete {
-                eprintln!("  ⚠️  Found incomplete MCP capability: {}", manifest.id);
+                crate::ccos_println!("  ⚠️  Found incomplete MCP capability: {}", manifest.id);
                 return Ok(DiscoveryResult::Incomplete(manifest));
             } else {
-                eprintln!("  ✓ Found: {}", manifest.id);
+                crate::ccos_println!("  ✓ Found: {}", manifest.id);
                 return Ok(DiscoveryResult::Found(manifest));
             }
         }
-        eprintln!("  ✗ Not found");
+        crate::ccos_println!("  ✗ Not found");
 
         // Note: LocalSynthesizer (rule-based) has been removed.
         // Step 3 now relies on recursive synthesis which uses LLM-based approach.
-        eprintln!(
+        crate::ccos_println!(
             "  [3/4] Rule-based local synthesis removed, proceeding to recursive synthesis..."
         );
 
@@ -252,13 +252,13 @@ impl DiscoveryEngine {
         // Discovery only finds existing capabilities (marketplace, MCP).
         // Missing capabilities are returned as NotFound for the planner
         // to handle via planner.synthesize_capability.
-        eprintln!("  [4/4] Discovery complete - capability not found");
-        eprintln!("{}", "═".repeat(80));
-        eprintln!(
+        crate::ccos_println!("  [4/4] Discovery complete - capability not found");
+        crate::ccos_println!("{}", "═".repeat(80));
+        crate::ccos_println!(
             "  ✗ Discovery failed for: {} (delegate to synthesis)",
             need.capability_class
         );
-        eprintln!("{}", "═".repeat(80));
+        crate::ccos_println!("{}", "═".repeat(80));
 
         // Not found - let planner handle synthesis
         Ok(DiscoveryResult::NotFound)
@@ -292,7 +292,7 @@ impl DiscoveryEngine {
             .collect();
 
         if !tokens.is_empty() {
-            eprintln!(
+            crate::ccos_println!(
                 "  [TOKEN MATCH] Tokens for {} → {:?}",
                 need.capability_class, tokens
             );
@@ -303,20 +303,20 @@ impl DiscoveryEngine {
 
                 if tokens.iter().all(|tok| haystack.contains(tok)) {
                     if self.is_compatible(manifest, need) {
-                        eprintln!(
+                        crate::ccos_println!(
                             "  [TOKEN MATCH] {} matched manifest {}",
                             need.capability_class, manifest.id
                         );
                         return Ok(Some(manifest.clone()));
                     } else {
-                        eprintln!(
+                        crate::ccos_println!(
                             "  [TOKEN MATCH] Candidate {} matched tokens but failed schema compatibility",
                             manifest.id
                         );
                     }
                 }
             }
-            eprintln!(
+            crate::ccos_println!(
                 "  [TOKEN MATCH] No compatible manifest found for {} using tokens {:?}",
                 need.capability_class, tokens
             );
@@ -361,12 +361,12 @@ impl DiscoveryEngine {
                 || manifest.id.contains("github")
                 || manifest.description.contains("issue")
             {
-                eprintln!(
+                crate::ccos_println!(
                     "  [DEBUG] Description match: {} → {} (score: {:.3})",
                     need.rationale, manifest.id, desc_score
                 );
-                eprintln!("         Need rationale: {}", need.rationale);
-                eprintln!("         Manifest desc: {}", manifest.description);
+                crate::ccos_println!("         Need rationale: {}", need.rationale);
+                crate::ccos_println!("         Manifest desc: {}", manifest.description);
             }
 
             if desc_score >= threshold {
@@ -456,7 +456,7 @@ impl DiscoveryEngine {
         }
 
         if let Some((manifest, score, match_type)) = best_match {
-            eprintln!(
+            crate::ccos_println!(
                 "  ✓ Marketplace semantic match ({}): {} (score: {:.2})",
                 match_type, manifest.id, score
             );
@@ -515,39 +515,39 @@ impl DiscoveryEngine {
         &self,
         need: &CapabilityNeed,
     ) -> RuntimeResult<Option<CapabilityManifest>> {
-        eprintln!(
+        crate::ccos_println!(
             "  → search_mcp_registry called for: {}",
             need.capability_class
         );
-        eprintln!(
+        crate::ccos_println!(
             "  → Discovery agent available: {}",
             self.discovery_agent.is_some()
         );
 
         // Use discovery agent if available to get intelligent suggestions
         let (keywords, registry_queries) = if let Some(ref agent) = self.discovery_agent {
-            eprintln!("  → Using discovery agent for intelligent query generation...");
+            crate::ccos_println!("  → Using discovery agent for intelligent query generation...");
             // Learn vocabulary if not already done (lazy initialization)
             if let Err(e) = agent.learn_vocabulary().await {
-                eprintln!("  ⚠️  Discovery agent vocabulary learning failed: {}", e);
+                crate::ccos_println!("  ⚠️  Discovery agent vocabulary learning failed: {}", e);
             } else {
-                eprintln!("  → Discovery agent vocabulary loaded");
+                crate::ccos_println!("  → Discovery agent vocabulary loaded");
             }
 
             // Get suggestions from agent (we'll use goal from rationale for now)
             // TODO: Pass actual goal and intent when available
             match agent.suggest(&need.rationale, None, need).await {
                 Ok(suggestion) => {
-                    eprintln!(
+                    crate::ccos_println!(
                         "  → Discovery agent suggested {} hint(s) and {} query(ies)",
                         suggestion.hints.len(),
                         suggestion.registry_queries.len()
                     );
                     if !suggestion.hints.is_empty() {
-                        eprintln!("  → Hints: {:?}", suggestion.hints);
+                        crate::ccos_println!("  → Hints: {:?}", suggestion.hints);
                     }
                     if !suggestion.registry_queries.is_empty() {
-                        eprintln!("  → Registry queries: {:?}", suggestion.registry_queries);
+                        crate::ccos_println!("  → Registry queries: {:?}", suggestion.registry_queries);
                     }
 
                     // Use first registry query as primary, extract keywords from it
@@ -561,7 +561,7 @@ impl DiscoveryEngine {
                     (keywords, suggestion.registry_queries)
                 }
                 Err(e) => {
-                    eprintln!("  ⚠️  Discovery agent suggestion failed: {}, falling back to legacy method", e);
+                    crate::ccos_println!("  ⚠️  Discovery agent suggestion failed: {}, falling back to legacy method", e);
                     // Fallback to old method if agent fails
                     let mut keywords: Vec<String> =
                         need.capability_class.split('.').map(String::from).collect();
@@ -576,7 +576,7 @@ impl DiscoveryEngine {
                 }
             }
         } else {
-            eprintln!("  → Discovery agent not available, using legacy extraction method");
+            crate::ccos_println!("  → Discovery agent not available, using legacy extraction method");
             // Fallback: use old extraction method
             let mut keywords: Vec<String> =
                 need.capability_class.split('.').map(String::from).collect();
@@ -595,12 +595,12 @@ impl DiscoveryEngine {
 
         let search_query = keywords.join(" "); // Use space-separated keywords for search
 
-        eprintln!("  → MCP registry search query: '{}'", search_query);
+        crate::ccos_println!("  → MCP registry search query: '{}'", search_query);
 
         // First, check curated overrides (capabilities/mcp/overrides.json)
         let curated_servers = self.load_curated_overrides_for(&need.capability_class)?;
         let mut servers = if !curated_servers.is_empty() {
-            eprintln!(
+            crate::ccos_println!(
                 "  → Found {} curated override(s) for '{}'",
                 curated_servers.len(),
                 need.capability_class
@@ -613,7 +613,7 @@ impl DiscoveryEngine {
         // Then search MCP registry for matching servers
         let registry_servers = match registry_client.search_servers(&search_query).await {
             Ok(registry_servers) => {
-                eprintln!(
+                crate::ccos_println!(
                     "  → Found {} MCP server(s) from registry for '{}'",
                     registry_servers.len(),
                     search_query
@@ -621,8 +621,8 @@ impl DiscoveryEngine {
                 registry_servers
             }
             Err(e) => {
-                eprintln!("  → MCP registry search failed: {}", e);
-                eprintln!("     ⚠️  Could not connect to MCP registry or search failed");
+                crate::ccos_println!("  → MCP registry search failed: {}", e);
+                crate::ccos_println!("     ⚠️  Could not connect to MCP registry or search failed");
                 Vec::new()
             }
         };
@@ -642,13 +642,13 @@ impl DiscoveryEngine {
         if servers.is_empty() && !registry_queries.is_empty() {
             // Try remaining registry queries from agent
             for query in registry_queries.iter().skip(1).take(3) {
-                eprintln!(
+                crate::ccos_println!(
                     "  → No servers found, trying agent-suggested query: '{}'",
                     query
                 );
                 if let Ok(fallback_servers) = registry_client.search_servers(query).await {
                     if !fallback_servers.is_empty() {
-                        eprintln!(
+                        crate::ccos_println!(
                             "  → Found {} MCP server(s) for '{}'",
                             fallback_servers.len(),
                             query
@@ -667,14 +667,14 @@ impl DiscoveryEngine {
             // Try with 2 keywords first (more specific than just one)
             if keywords.len() >= 2 {
                 let two_keyword_query = format!("{} {}", keywords[0], keywords[1]);
-                eprintln!(
+                crate::ccos_println!(
                     "  → No servers found, trying simpler query: '{}'",
                     two_keyword_query
                 );
                 if let Ok(fallback_servers) =
                     registry_client.search_servers(&two_keyword_query).await
                 {
-                    eprintln!(
+                    crate::ccos_println!(
                         "  → Found {} MCP server(s) for '{}'",
                         fallback_servers.len(),
                         two_keyword_query
@@ -688,13 +688,13 @@ impl DiscoveryEngine {
             if servers.is_empty() && keywords.len() >= 2 {
                 // Use the last keyword (usually the action word) instead of first
                 let action_keyword = keywords.last().unwrap();
-                eprintln!(
+                crate::ccos_println!(
                     "  → No servers found, trying action keyword: '{}'",
                     action_keyword
                 );
                 let fallback_servers = match registry_client.search_servers(action_keyword).await {
                     Ok(fallback_servers) => {
-                        eprintln!(
+                        crate::ccos_println!(
                             "  → Found {} MCP server(s) for '{}'",
                             fallback_servers.len(),
                             action_keyword
@@ -709,13 +709,13 @@ impl DiscoveryEngine {
             // If still no servers, try the first keyword (often the context/platform)
             if servers.is_empty() {
                 let first_keyword = &keywords[0];
-                eprintln!(
+                crate::ccos_println!(
                     "  → No servers found, trying first keyword: '{}'",
                     first_keyword
                 );
                 let fallback_servers = match registry_client.search_servers(first_keyword).await {
                     Ok(fallback_servers) => {
-                        eprintln!(
+                        crate::ccos_println!(
                             "  → Found {} MCP server(s) for '{}'",
                             fallback_servers.len(),
                             first_keyword
@@ -773,7 +773,7 @@ impl DiscoveryEngine {
             });
 
             if servers.len() < total_before_filter {
-                eprintln!(
+                crate::ccos_println!(
                     "  → Filtered to {} relevant server(s) based on description matching (from {})",
                     servers.len(),
                     total_before_filter
@@ -782,9 +782,9 @@ impl DiscoveryEngine {
         }
 
         if servers.is_empty() {
-            eprintln!("     ⚠️  No MCP servers found in registry");
-            eprintln!("     💡 The MCP registry may not have GitHub servers configured");
-            eprintln!("     💡 Alternative: Use known MCP server URLs directly");
+            crate::ccos_println!("     ⚠️  No MCP servers found in registry");
+            crate::ccos_println!("     💡 The MCP registry may not have GitHub servers configured");
+            crate::ccos_println!("     💡 Alternative: Use known MCP server URLs directly");
             return Ok(None);
         }
 
@@ -805,7 +805,7 @@ impl DiscoveryEngine {
         };
 
         if servers.len() > 1 {
-            eprintln!("  → Searching {} MCP server(s)...", servers.len());
+            crate::ccos_println!("  → Searching {} MCP server(s)...", servers.len());
         }
 
         for server in servers.iter() {
@@ -846,7 +846,7 @@ impl DiscoveryEngine {
                 for env_var in env_vars_to_check {
                     if let Ok(url) = std::env::var(&env_var) {
                         if !url.is_empty() {
-                            eprintln!(
+                            crate::ccos_println!(
                                 "     → Found server URL from environment: {} = {}",
                                 env_var, url
                             );
@@ -861,10 +861,10 @@ impl DiscoveryEngine {
                     stats.skipped_no_url += 1;
                     // Only log details for single server searches
                     if servers.len() == 1 {
-                        eprintln!("     ⚠️  No remote URL found (stdio-based server, requires local npm package)");
+                        crate::ccos_println!("     ⚠️  No remote URL found (stdio-based server, requires local npm package)");
                         if let Some(ref packages) = server.packages {
                             if let Some(pkg) = packages.first() {
-                                eprintln!(
+                                crate::ccos_println!(
                                     "     → Package: {}@{} (registry: {})",
                                     pkg.identifier,
                                     pkg.version.as_ref().unwrap_or(&"latest".to_string()),
@@ -885,8 +885,8 @@ impl DiscoveryEngine {
                                             server.name.replace("-", "_").to_uppercase()
                                         )
                                     };
-                                eprintln!("     💡 Set {} environment variable to point to a remote MCP endpoint", suggested_env_var);
-                                eprintln!("     💡 Or add a 'remotes' entry to overrides.json with an HTTP/HTTPS URL");
+                                crate::ccos_println!("     💡 Set {} environment variable to point to a remote MCP endpoint", suggested_env_var);
+                                crate::ccos_println!("     💡 Or add a 'remotes' entry to overrides.json with an HTTP/HTTPS URL");
                             }
                         }
                     }
@@ -900,8 +900,8 @@ impl DiscoveryEngine {
                 if url.starts_with("ws://") || url.starts_with("wss://") {
                     stats.skipped_websocket += 1;
                     if servers.len() == 1 {
-                        eprintln!("     ⚠️  Skipping: WebSocket URLs not supported for HTTP-based introspection");
-                        eprintln!("     → URL: {}", url);
+                        crate::ccos_println!("     ⚠️  Skipping: WebSocket URLs not supported for HTTP-based introspection");
+                        crate::ccos_println!("     → URL: {}", url);
                     }
                     continue;
                 }
@@ -913,7 +913,7 @@ impl DiscoveryEngine {
                 {
                     stats.skipped_invalid += 1;
                     if servers.len() == 1 {
-                        eprintln!(
+                        crate::ccos_println!(
                             "     ⚠️  Skipping: Invalid URL scheme (expected http/https): {}",
                             url
                         );
@@ -925,15 +925,15 @@ impl DiscoveryEngine {
                 if url.contains("github.com/") && !url.contains("/api/") && !url.contains("mcp") {
                     stats.skipped_invalid += 1;
                     if servers.len() == 1 {
-                        eprintln!("     ⚠️  Skipping: Appears to be a repository URL, not an MCP endpoint");
-                        eprintln!("     → URL: {}", url);
+                        crate::ccos_println!("     ⚠️  Skipping: Appears to be a repository URL, not an MCP endpoint");
+                        crate::ccos_println!("     → URL: {}", url);
                     }
                     continue;
                 }
 
                 // Only show detailed URL for single server
                 if servers.len() == 1 {
-                    eprintln!("     → Server: {} ({})", server.name, url);
+                    crate::ccos_println!("     → Server: {} ({})", server.name, url);
                 }
 
                 // Build auth headers from environment (if available)
@@ -946,7 +946,7 @@ impl DiscoveryEngine {
                     // All MCP servers (including GitHub Copilot) use standard Authorization: Bearer
                     auth_headers.insert("Authorization".to_string(), format!("Bearer {}", token));
                     if servers.len() == 1 {
-                        eprintln!("     ✓ Using authentication token from environment");
+                        crate::ccos_println!("     ✓ Using authentication token from environment");
                         // Show which env var was used (without revealing token value)
                         let env_var_used = if std::env::var("GITHUB_MCP_TOKEN").is_ok() {
                             "GITHUB_MCP_TOKEN"
@@ -959,15 +959,15 @@ impl DiscoveryEngine {
                         } else {
                             "unknown"
                         };
-                        eprintln!("     → Token source: {}", env_var_used);
-                        eprintln!(
+                        crate::ccos_println!("     → Token source: {}", env_var_used);
+                        crate::ccos_println!(
                             "     → Using Authorization: Bearer header (standard MCP format)"
                         );
                     }
                 } else if servers.len() == 1 {
-                    eprintln!("     ⚠️  No authentication token found in environment");
+                    crate::ccos_println!("     ⚠️  No authentication token found in environment");
                     let suggested_var = self.suggest_mcp_token_env_var(&server.name);
-                    eprintln!(
+                    crate::ccos_println!(
                         "     💡 Set {} or MCP_AUTH_TOKEN for authenticated MCP servers",
                         suggested_var
                     );
@@ -986,7 +986,7 @@ impl DiscoveryEngine {
                             stats.cached += 1;
                             stats.tools_found += cached.tools.len();
                             if servers.len() == 1 {
-                                eprintln!(
+                                crate::ccos_println!(
                                     "     ✓ Using cached introspection ({} tools)",
                                     cached.tools.len()
                                 );
@@ -1012,7 +1012,7 @@ impl DiscoveryEngine {
                                     stats.introspected += 1;
                                     stats.tools_found += introspection.tools.len();
                                     if servers.len() == 1 {
-                                        eprintln!(
+                                        crate::ccos_println!(
                                             "     ✓ Introspected successfully ({} tools)",
                                             introspection.tools.len()
                                         );
@@ -1022,7 +1022,7 @@ impl DiscoveryEngine {
                                 Err(_) => {
                                     stats.failed += 1;
                                     if servers.len() == 1 {
-                                        eprintln!("     ✗ Introspection failed");
+                                        crate::ccos_println!("     ✗ Introspection failed");
                                     }
                                 }
                             }
@@ -1047,7 +1047,7 @@ impl DiscoveryEngine {
                             stats.introspected += 1;
                             stats.tools_found += introspection.tools.len();
                             if servers.len() == 1 {
-                                eprintln!(
+                                crate::ccos_println!(
                                     "     ✓ Introspected successfully ({} tools)",
                                     introspection.tools.len()
                                 );
@@ -1056,7 +1056,7 @@ impl DiscoveryEngine {
                         Err(_) => {
                             stats.failed += 1;
                             if servers.len() == 1 {
-                                eprintln!("     ✗ Introspection failed");
+                                crate::ccos_println!("     ✗ Introspection failed");
                             }
                         }
                     }
@@ -1090,7 +1090,7 @@ impl DiscoveryEngine {
                                 let semantic_terms = crate::discovery::discovery_agent::DiscoveryAgent::extract_semantic_terms(&goal_text);
 
                                 if !semantic_terms.is_empty() {
-                                    eprintln!(
+                                    crate::ccos_println!(
                                         "  → Using semantic terms for tool matching: {:?}",
                                         semantic_terms
                                     );
@@ -1136,7 +1136,7 @@ impl DiscoveryEngine {
                                             let semantic_boost =
                                                 (semantic_matches as f64 * 0.15).min(0.5);
                                             desc_score += semantic_boost;
-                                            eprintln!("  → Boosted '{}' by {:.2} for semantic term matches ({}/{})", 
+                                            crate::ccos_println!("  → Boosted '{}' by {:.2} for semantic term matches ({}/{})", 
                                                 manifest.name, semantic_boost, semantic_matches, semantic_terms.len());
                                         }
                                     }
@@ -1266,7 +1266,7 @@ impl DiscoveryEngine {
                                     )
                                     .await;
                                     if servers.len() == 1 {
-                                        eprintln!(
+                                        crate::ccos_println!(
                                             "  ✓ Semantic match found ({}): {} (score: {:.2})",
                                             match_type, manifest.id, score
                                         );
@@ -1330,7 +1330,7 @@ impl DiscoveryEngine {
                                         }
                                         stats.matched_servers.push(server.name.clone());
                                         if servers.len() == 1 {
-                                            eprintln!("  ✓ Substring match found: {}", manifest.id);
+                                            crate::ccos_println!("  ✓ Substring match found: {}", manifest.id);
                                         }
                                         let mut matched_manifest = manifest.clone();
                                         self.enrich_manifest_output_schema(
@@ -1349,7 +1349,7 @@ impl DiscoveryEngine {
                             }
                             Err(e) => {
                                 if servers.len() == 1 {
-                                    eprintln!(
+                                    crate::ccos_println!(
                                         "     ✗ Failed to create capabilities from MCP: {}",
                                         e
                                     );
@@ -1359,7 +1359,7 @@ impl DiscoveryEngine {
                     }
                     Err(e) => {
                         if servers.len() == 1 {
-                            eprintln!("     ✗ Server introspection failed: {}", e);
+                            crate::ccos_println!("     ✗ Server introspection failed: {}", e);
                         }
                     }
                 }
@@ -1368,38 +1368,38 @@ impl DiscoveryEngine {
 
         // Print summary for multiple servers
         if stats.total_servers > 1 {
-            eprintln!("  → Summary: {} server(s) searched", stats.total_servers);
+            crate::ccos_println!("  → Summary: {} server(s) searched", stats.total_servers);
             if stats.introspected > 0 {
-                eprintln!(
+                crate::ccos_println!(
                     "     • {} introspected successfully ({} tools)",
                     stats.introspected, stats.tools_found
                 );
             }
             if stats.cached > 0 {
-                eprintln!("     • {} from cache", stats.cached);
+                crate::ccos_println!("     • {} from cache", stats.cached);
             }
             if stats.failed > 0 {
-                eprintln!("     • {} failed", stats.failed);
+                crate::ccos_println!("     • {} failed", stats.failed);
             }
             if stats.skipped_no_url > 0 {
-                eprintln!("     • {} skipped (no remote URL)", stats.skipped_no_url);
+                crate::ccos_println!("     • {} skipped (no remote URL)", stats.skipped_no_url);
             }
             if stats.skipped_websocket > 0 {
-                eprintln!(
+                crate::ccos_println!(
                     "     • {} skipped (WebSocket not supported)",
                     stats.skipped_websocket
                 );
             }
             if stats.skipped_invalid > 0 {
-                eprintln!("     • {} skipped (invalid URL)", stats.skipped_invalid);
+                crate::ccos_println!("     • {} skipped (invalid URL)", stats.skipped_invalid);
             }
             if !stats.matched_servers.is_empty() {
-                eprintln!("     • Matched: {}", stats.matched_servers.join(", "));
+                crate::ccos_println!("     • Matched: {}", stats.matched_servers.join(", "));
             } else {
-                eprintln!("     ✗ No match found");
+                crate::ccos_println!("     ✗ No match found");
             }
         } else if stats.total_servers == 1 {
-            eprintln!("  → No match found");
+            crate::ccos_println!("  → No match found");
         }
 
         Ok(None)
@@ -2759,7 +2759,7 @@ impl DiscoveryEngine {
                 Ok((None, None)) => {}
                 Err(err) => {
                     if log_errors {
-                        eprintln!(
+                        crate::ccos_println!(
                             "     ⚠️ Output schema introspection failed for '{}': {}",
                             manifest.name, err
                         );

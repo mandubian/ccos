@@ -71,7 +71,7 @@ impl RateLimiter {
         if self.request_count >= self.requests_per_minute {
             let wait_time = Duration::from_secs(60) - now.duration_since(self.window_start);
             if wait_time > Duration::from_secs(0) {
-                eprintln!("⏳ Rate limiting: waiting {}ms", wait_time.as_millis());
+                ccos_println!("⏳ Rate limiting: waiting {}ms", wait_time.as_millis());
                 sleep(wait_time).await;
                 self.request_count = 0;
                 self.window_start = Instant::now();
@@ -199,7 +199,7 @@ impl SearchCache {
     pub fn clear(&mut self) {
         self.cache.clear();
         self.save_to_file();
-        eprintln!("🗑️  Search cache cleared");
+        ccos_println!("🗑️  Search cache cleared");
     }
 
     /// Remove expired entries
@@ -209,7 +209,7 @@ impl SearchCache {
         let removed = before_count - self.cache.len();
         if removed > 0 {
             self.save_to_file();
-            eprintln!("🧹 Cleaned up {} expired cache entries", removed);
+            ccos_println!("🧹 Cleaned up {} expired cache entries", removed);
         }
     }
 
@@ -315,7 +315,7 @@ impl WebSearchDiscovery {
         if let Some(ref mut cache) = self.cache {
             cache.clear();
         } else {
-            eprintln!("ℹ️  No cache to clear (caching disabled)");
+            ccos_println!("ℹ️  No cache to clear (caching disabled)");
         }
     }
 
@@ -369,7 +369,7 @@ impl WebSearchDiscovery {
             match self.perform_search(&query).await {
                 Ok(mut results) => all_results.append(&mut results),
                 Err(e) => {
-                    eprintln!("Search error for query '{}': {}", query, e);
+                    ccos_println!("Search error for query '{}': {}", query, e);
                 }
             }
         }
@@ -391,12 +391,12 @@ impl WebSearchDiscovery {
         // Check cache first
         if let Some(ref cache) = self.cache {
             if let Some(cached_results) = cache.get(query) {
-                eprintln!("📦 CACHE HIT: Using cached results for '{}'", query);
+                ccos_println!("📦 CACHE HIT: Using cached results for '{}'", query);
                 return Ok(cached_results);
             }
         }
 
-        eprintln!(
+        ccos_println!(
             "🔍 WEB SEARCH: Searching for '{}'{}",
             query,
             if self.cache.is_some() {
@@ -411,7 +411,7 @@ impl WebSearchDiscovery {
             |s: &mut Self, q: &str, results: Vec<WebSearchResult>| -> Vec<WebSearchResult> {
                 if let Some(ref mut cache) = s.cache {
                     cache.set(q, results.clone());
-                    eprintln!("💾 Cached {} results for '{}'", results.len(), q);
+                    ccos_println!("💾 Cached {} results for '{}'", results.len(), q);
                 }
                 results
             };
@@ -420,7 +420,7 @@ impl WebSearchDiscovery {
         // DuckDuckGo first (free, no API key)
         match self.search_duckduckgo_api(query).await {
             Ok(results) if !results.is_empty() => {
-                eprintln!("✅ Found {} results via DuckDuckGo", results.len());
+                ccos_println!("✅ Found {} results via DuckDuckGo", results.len());
                 let cached = cache_results(self, query, results);
                 return Ok(cached);
             }
@@ -430,7 +430,7 @@ impl WebSearchDiscovery {
             Err(e) => {
                 // Only log if it's not a timeout (timeouts are expected and we'll try other methods)
                 if !e.to_string().contains("timeout") && !e.to_string().contains("timed out") {
-                    eprintln!("⚠️ DuckDuckGo search failed: {}", e);
+                    ccos_println!("⚠️ DuckDuckGo search failed: {}", e);
                 }
             }
         }
@@ -438,37 +438,37 @@ impl WebSearchDiscovery {
         // Google Custom Search (free tier: 100 queries/day)
         match self.search_google_api(query).await {
             Ok(results) if !results.is_empty() => {
-                eprintln!("✅ Found {} results via Google", results.len());
+                ccos_println!("✅ Found {} results via Google", results.len());
                 let cached = cache_results(self, query, results);
                 return Ok(cached);
             }
-            Ok(_) => eprintln!("⚠️ No results from Google"),
-            Err(e) => eprintln!("❌ Google failed: {}", e),
+            Ok(_) => ccos_println!("⚠️ No results from Google"),
+            Err(e) => ccos_println!("❌ Google failed: {}", e),
         }
 
         // Bing Search (free tier: 1000 queries/month)
         match self.search_bing_api(query).await {
             Ok(results) if !results.is_empty() => {
-                eprintln!("✅ Found {} results via Bing", results.len());
+                ccos_println!("✅ Found {} results via Bing", results.len());
                 let cached = cache_results(self, query, results);
                 return Ok(cached);
             }
-            Ok(_) => eprintln!("⚠️ No results from Bing"),
-            Err(e) => eprintln!("❌ Bing failed: {}", e),
+            Ok(_) => ccos_println!("⚠️ No results from Bing"),
+            Err(e) => ccos_println!("❌ Bing failed: {}", e),
         }
 
         // Web scraping fallback (free but slower)
         match self.search_via_scraping(query).await {
             Ok(results) if !results.is_empty() => {
-                eprintln!("✅ Found {} results via scraping", results.len());
+                ccos_println!("✅ Found {} results via scraping", results.len());
                 let cached = cache_results(self, query, results);
                 return Ok(cached);
             }
-            Ok(_) => eprintln!("⚠️ No results from scraping"),
-            Err(e) => eprintln!("❌ Scraping failed: {}", e),
+            Ok(_) => ccos_println!("⚠️ No results from scraping"),
+            Err(e) => ccos_println!("❌ Scraping failed: {}", e),
         }
 
-        eprintln!("❌ All search methods failed for query: {}", query);
+        ccos_println!("❌ All search methods failed for query: {}", query);
         Ok(Vec::new())
     }
 
@@ -711,7 +711,7 @@ impl WebSearchDiscovery {
                 .await
             {
                 Ok(results) if !results.is_empty() => {
-                    eprintln!(
+                    ccos_println!(
                         "✅ Scraping {} found {} results",
                         engine_name,
                         results.len()
@@ -719,10 +719,10 @@ impl WebSearchDiscovery {
                     return Ok(results);
                 }
                 Ok(_) => {
-                    eprintln!("⚠️ No results from scraping {}", engine_name);
+                    ccos_println!("⚠️ No results from scraping {}", engine_name);
                 }
                 Err(e) => {
-                    eprintln!("❌ Scraping {} failed: {}", engine_name, e);
+                    ccos_println!("❌ Scraping {} failed: {}", engine_name, e);
                 }
             }
         }

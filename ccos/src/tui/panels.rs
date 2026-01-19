@@ -6,16 +6,17 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 
 use super::state::{
     ActivePanel, AppState, ApprovalsTab, AuthStatus, CapabilityCategory, DiscoverPopup,
-    DiscoveryEntry, DiscoverySearchResult, ExecutionMode, NodeStatus, ServerStatus, TraceEventType,
-    View,
+    DiscoveryEntry, ExecutionMode, NodeStatus, ServerStatus, TraceEventType, View,
 };
 use super::theme;
+use crate::discovery::registry_search::{DiscoveryCategory, RegistrySearchResult};
+use serde_json;
 
 /// Render the complete TUI
 pub fn render(f: &mut Frame, state: &mut AppState) {
@@ -316,6 +317,7 @@ fn render_server_list(f: &mut Frame, state: &mut AppState, area: Rect) {
                 ServerStatus::Disconnected => theme::SUBTEXT0,
                 ServerStatus::Connecting => theme::STATUS_WARNING,
                 ServerStatus::Error => theme::STATUS_ERROR,
+                ServerStatus::Timeout => theme::STATUS_WARNING,
                 ServerStatus::Unknown => theme::SUBTEXT0,
                 ServerStatus::Pending => theme::STATUS_WARNING,
                 ServerStatus::Rejected => theme::STATUS_ERROR,
@@ -418,6 +420,7 @@ fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
         ServerStatus::Disconnected => theme::SUBTEXT0,
         ServerStatus::Connecting => theme::STATUS_WARNING,
         ServerStatus::Error => theme::STATUS_ERROR,
+        ServerStatus::Timeout => theme::STATUS_WARNING,
         ServerStatus::Unknown => theme::SUBTEXT0,
         ServerStatus::Pending => theme::STATUS_WARNING,
         ServerStatus::Rejected => theme::STATUS_ERROR,
@@ -428,6 +431,7 @@ fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
         ServerStatus::Disconnected => "Disconnected",
         ServerStatus::Connecting => "Connecting...",
         ServerStatus::Error => "Error",
+        ServerStatus::Timeout => "Timed out",
         ServerStatus::Unknown => "Unknown",
         ServerStatus::Pending => "Pending Approval",
         ServerStatus::Rejected => "Rejected",
@@ -534,8 +538,8 @@ fn render_server_details(f: &mut Frame, state: &mut AppState, area: Rect) {
     let bottom_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Min(0),      // Spacer (takes remaining space)
-            Constraint::Length(25),  // Actions width (enough for action text)
+            Constraint::Min(0),     // Spacer (takes remaining space)
+            Constraint::Length(25), // Actions width (enough for action text)
         ])
         .split(chunks[2]);
 
@@ -607,10 +611,10 @@ fn render_approvals_tabs(f: &mut Frame, state: &AppState, area: Rect) {
     let loading_indicator = if state.approvals_loading { " ⟳" } else { "" };
 
     let tabs = Line::from(vec![
-        Span::styled(format!(" [1] Pending ({}) ", pending_count), pending_style),
+        Span::styled(format!(" [[] Pending ({}) ", pending_count), pending_style),
         Span::raw("  "),
         Span::styled(
-            format!(" [2] Approved ({}) ", approved_count),
+            format!(" []] Approved ({}) ", approved_count),
             approved_style,
         ),
         Span::styled(loading_indicator, Style::default().fg(theme::YELLOW)),
@@ -1303,6 +1307,8 @@ fn render_capability_list(f: &mut Frame, state: &mut AppState, area: Rect) {
                     let prefix = if is_selected { "► " } else { "  " };
                     let category_icon = match cap.category {
                         CapabilityCategory::McpTool => "🔧",
+                        CapabilityCategory::OpenApiTool => "📡",
+                        CapabilityCategory::BrowserApiTool => "🌐",
                         CapabilityCategory::RtfsFunction => "λ",
                         CapabilityCategory::Builtin => "⚙️",
                         CapabilityCategory::Synthesized => "✨",
@@ -1346,10 +1352,17 @@ fn render_capability_list(f: &mut Frame, state: &mut AppState, area: Rect) {
 
 /// Render capability details panel
 fn render_capability_details(f: &mut Frame, state: &mut AppState, area: Rect) {
+    let is_focused = state.active_panel == ActivePanel::DiscoverDetails;
+    let border_style = if is_focused {
+        Style::default().fg(theme::MAUVE)
+    } else {
+        Style::default().fg(theme::PANEL_BORDER)
+    };
+
     let block = Block::default()
         .title("Capability Details")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::PANEL_BORDER));
+        .border_style(border_style);
 
     let filtered_caps = state.filtered_discovered_caps();
 
@@ -1400,12 +1413,7 @@ fn render_capability_details(f: &mut Frame, state: &mut AppState, area: Rect) {
                     "Input Schema:",
                     Style::default().fg(theme::SUBTEXT0),
                 )]));
-                for schema_line in schema.lines() {
-                    lines.push(Line::from(vec![Span::styled(
-                        schema_line.to_string(),
-                        Style::default().fg(theme::MAROON),
-                    )]));
-                }
+                lines.extend(format_schema_content(schema));
             }
 
             if let Some(schema) = &cap.output_schema {
@@ -1414,12 +1422,7 @@ fn render_capability_details(f: &mut Frame, state: &mut AppState, area: Rect) {
                     "Output Schema:",
                     Style::default().fg(theme::SUBTEXT0),
                 )]));
-                for schema_line in schema.lines() {
-                    lines.push(Line::from(vec![Span::styled(
-                        schema_line.to_string(),
-                        Style::default().fg(theme::SAPPHIRE),
-                    )]));
-                }
+                lines.extend(format_schema_content(schema));
             }
 
             lines
@@ -1455,8 +1458,170 @@ fn render_capability_details(f: &mut Frame, state: &mut AppState, area: Rect) {
 
     let paragraph = Paragraph::new(lines)
         .block(block)
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((state.discover_details_scroll as u16, 0));
     f.render_widget(paragraph, area);
+}
+
+/// Helper to format schema content for display
+fn format_schema_content(schema_str: &str) -> Vec<Line> {
+    // Try to parse as JSON
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(schema_str) {
+        // Check if it's an object with properties (like a JSON schema)
+        if let Some(obj) = json.as_object() {
+            if let Some(props) = obj.get("properties").and_then(|p| p.as_object()) {
+                let mut lines = Vec::new();
+
+                // If there's a type, show it
+                if let Some(type_val) = obj.get("type").and_then(|t| t.as_str()) {
+                    lines.push(Line::from(vec![
+                        Span::styled("Type: ", Style::default().fg(theme::SUBTEXT0)),
+                        Span::styled(type_val.to_string(), Style::default().fg(theme::TEXT)),
+                    ]));
+                }
+
+                lines.push(Line::from(vec![Span::styled(
+                    "Properties:",
+                    Style::default().fg(theme::SUBTEXT0),
+                )]));
+
+                for (key, value) in props {
+                    let mut spans = vec![
+                        Span::raw("  - "),
+                        Span::styled(
+                            key.to_string(),
+                            Style::default()
+                                .fg(theme::BLUE)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ];
+
+                    // Try to get type of property
+                    if let Some(prop_obj) = value.as_object() {
+                        if let Some(prop_type) = prop_obj.get("type").and_then(|t| t.as_str()) {
+                            spans.push(Span::styled(": ", Style::default().fg(theme::SUBTEXT0)));
+                            spans.push(Span::styled(
+                                prop_type.to_string(),
+                                Style::default().fg(theme::YELLOW),
+                            ));
+                        }
+
+                        // Check if required
+                        if let Some(req) = obj.get("required").and_then(|r| r.as_array()) {
+                            if req.iter().any(|r| r.as_str() == Some(key)) {
+                                spans.push(Span::raw(" "));
+                                spans.push(Span::styled("*", Style::default().fg(theme::RED)));
+                            }
+                        }
+
+                        // Description
+                        if let Some(desc) = prop_obj.get("description").and_then(|d| d.as_str()) {
+                            spans.push(Span::raw("  "));
+                            spans.push(Span::styled(
+                                format!("({})", desc),
+                                Style::default()
+                                    .fg(theme::SUBTEXT0)
+                                    .add_modifier(Modifier::ITALIC),
+                            ));
+                        }
+                    }
+
+                    lines.push(Line::from(spans));
+                }
+
+                return lines;
+            }
+        }
+
+        // Fallback to pretty printed JSON for other structures
+        if let Ok(pretty) = serde_json::to_string_pretty(&json) {
+            return pretty
+                .lines()
+                .map(|l| {
+                    Line::from(vec![Span::styled(
+                        l.to_string(),
+                        Style::default().fg(theme::TEXT),
+                    )])
+                })
+                .collect();
+        }
+    }
+
+    // Fallback: assume RTFS format and apply syntax highlighting
+    schema_str
+        .lines()
+        .map(|l| {
+            let mut spans = Vec::new();
+
+            // Handle comments
+            let (code, comment) = if let Some(idx) = l.find(";;") {
+                (&l[0..idx], Some(&l[idx..]))
+            } else {
+                (l, None)
+            };
+
+            // Basic tokenizer for code part
+            let mut last_idx = 0;
+            // Split by typical delimiters and whitespace for RTFS/Clojure-like syntax
+            // We want to preserve delimiters like [ ] { }
+
+            // Function to classify token color
+            let get_token_style = |token: &str| -> Style {
+                if token.starts_with(':') {
+                    // Check for known types vs keys
+                    // Strip optional suffix for checking
+                    let base_token = token.strip_suffix('?').unwrap_or(token);
+
+                    match base_token {
+                        ":string" | ":int" | ":float" | ":bool" | ":nil" | ":any" | ":never"
+                        | ":vector" | ":map" | ":set" | ":list" => {
+                            Style::default().fg(theme::YELLOW)
+                        }
+                        _ => Style::default().fg(theme::BLUE), // Keywords/Keys
+                    }
+                } else if token == "{" || token == "}" || token == "[" || token == "]" {
+                    Style::default().fg(theme::TEXT) // Brackets
+                } else {
+                    Style::default().fg(theme::TEXT)
+                }
+            };
+
+            // Tokenize by splitting on whitespace but handling brackets
+            for (idx, char) in code.char_indices() {
+                if char.is_whitespace() || "[]{}".contains(char) {
+                    // Flush previous token if any
+                    if idx > last_idx {
+                        let token = &code[last_idx..idx];
+                        spans.push(Span::styled(token, get_token_style(token)));
+                    }
+
+                    // Add the delimiter/whitespace itself
+                    let delimiter = &code[idx..idx + 1];
+                    // Whitespace is just styled as text (invisible mostly), brackets handled
+                    spans.push(Span::styled(delimiter, get_token_style(delimiter)));
+
+                    last_idx = idx + 1;
+                }
+            }
+            // Flush remaining code
+            if last_idx < code.len() {
+                let token = &code[last_idx..];
+                spans.push(Span::styled(token, get_token_style(token)));
+            }
+
+            // Add comment if present
+            if let Some(c) = comment {
+                spans.push(Span::styled(
+                    c,
+                    Style::default()
+                        .fg(theme::SUBTEXT0)
+                        .add_modifier(Modifier::ITALIC),
+                ));
+            }
+
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// Render the Goals view with RTFS Plan, Decomposition Tree, etc.
@@ -2107,6 +2272,51 @@ fn render_help_overlay(f: &mut Frame) {
             Span::styled("q          ", Style::default().fg(theme::GREEN)),
             Span::styled("Quit", Style::default().fg(theme::TEXT)),
         ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Discovery View",
+            Style::default()
+                .fg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![
+            Span::styled("/ or f     ", Style::default().fg(theme::GREEN)),
+            Span::styled("Search / Find Servers", Style::default().fg(theme::TEXT)),
+        ]),
+        Line::from(vec![
+            Span::styled("Shift+S    ", Style::default().fg(theme::GREEN)),
+            Span::styled("Refresh server schema", Style::default().fg(theme::TEXT)),
+        ]),
+        Line::from(vec![
+            Span::styled("Space      ", Style::default().fg(theme::GREEN)),
+            Span::styled("Toggle group collapse", Style::default().fg(theme::TEXT)),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Approvals View",
+            Style::default()
+                .fg(theme::MAUVE)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![
+            Span::styled("[ / ]      ", Style::default().fg(theme::GREEN)),
+            Span::styled(
+                "Switch Pending / Approved tabs",
+                Style::default().fg(theme::TEXT),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("a / r      ", Style::default().fg(theme::GREEN)),
+            Span::styled("Approve / Reject server", Style::default().fg(theme::TEXT)),
+        ]),
+        Line::from(vec![
+            Span::styled("t          ", Style::default().fg(theme::GREEN)),
+            Span::styled("Set auth token", Style::default().fg(theme::TEXT)),
+        ]),
+        Line::from(vec![
+            Span::styled("d          ", Style::default().fg(theme::GREEN)),
+            Span::styled("Dismiss approved server", Style::default().fg(theme::TEXT)),
+        ]),
     ];
 
     let block = Block::default()
@@ -2248,19 +2458,20 @@ fn render_discover_popup(f: &mut Frame, state: &mut AppState) {
             render_server_search_input_popup(f, query, *cursor_position, state);
         }
         DiscoverPopup::ServerSuggestions {
-            suggestions,
-            selected,
-            ..
+            results, selected, ..
         } => {
-            render_server_suggestions_popup(f, suggestions, *selected);
+            render_server_suggestions_popup(f, results, *selected);
         }
-        DiscoverPopup::SearchResults { servers, selected } => {
+        DiscoverPopup::SearchResults {
+            servers, selected, ..
+        } => {
             render_search_results_popup(f, servers, *selected);
         }
         DiscoverPopup::Introspecting {
             server_name,
             endpoint,
             logs,
+            ..
         } => {
             render_introspecting_popup(f, server_name, endpoint, logs, state);
         }
@@ -2269,6 +2480,8 @@ fn render_discover_popup(f: &mut Frame, state: &mut AppState) {
             tools,
             selected,
             selected_tools,
+            added_success,
+            pended_success,
             ..
         } => {
             render_introspection_results_popup(
@@ -2277,6 +2490,8 @@ fn render_discover_popup(f: &mut Frame, state: &mut AppState) {
                 tools,
                 *selected,
                 selected_tools,
+                *added_success,
+                *pended_success,
                 state,
             );
         }
@@ -2287,26 +2502,61 @@ fn render_discover_popup(f: &mut Frame, state: &mut AppState) {
             render_success_popup(f, title, message);
         }
         DiscoverPopup::DeleteConfirmation { server } => {
-            render_delete_confirmation_popup(f, &server.name);
+            render_delete_confirmation_popup(f, server);
+        }
+        DiscoverPopup::ToolDetails {
+            name,
+            endpoint,
+            description,
+            ..
+        } => {
+            render_tool_details_popup(f, name, endpoint, description);
         }
     }
 }
 
-fn render_delete_confirmation_popup(f: &mut Frame, server_name: &str) {
+fn render_delete_confirmation_popup(f: &mut Frame, server: &crate::tui::state::ServerInfo) {
     let area = f.size();
     let popup_area = centered_rect(50, 20, area);
 
-    let title = " Confirm Deletion ";
+    let is_queue_server = server.queue_id.is_some();
+    let is_directory_server = server.directory_path.is_some();
+    let is_hide_only = !is_queue_server && !is_directory_server;
+
+    let server_name = server.name.as_str();
+    let title = if is_hide_only {
+        " Confirm Hide "
+    } else {
+        " Confirm Deletion "
+    };
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::RED))
         .style(Style::default().bg(theme::BASE));
 
+    let action_label = if is_hide_only { "Hide" } else { "delete" };
+    let hint_line = if is_hide_only {
+        Line::from(vec![Span::styled(
+            "This only hides the built-in/known server entry.",
+            Style::default().fg(theme::PEACH),
+        )])
+    } else {
+        Line::from(vec![Span::styled(
+            "Deleted servers are archived under capabilities/servers/deleted/.",
+            Style::default().fg(theme::PEACH),
+        )])
+    };
+    let primary_cta = if is_hide_only {
+        "[y] Yes, Hide"
+    } else {
+        "[y] Yes, Delete"
+    };
+
     let content = vec![
         Line::from(""),
         Line::from(vec![
-            Span::raw("Are you sure you want to delete server "),
+            Span::raw(format!("Are you sure you want to {} server ", action_label)),
             Span::styled(
                 server_name,
                 Style::default()
@@ -2316,14 +2566,11 @@ fn render_delete_confirmation_popup(f: &mut Frame, server_name: &str) {
             Span::raw("?"),
         ]),
         Line::from(""),
-        Line::from(vec![Span::styled(
-            "This action cannot be undone.",
-            Style::default().fg(theme::PEACH),
-        )]),
+        hint_line,
         Line::from(""),
         Line::from(vec![
             Span::styled(
-                "[y] Yes, Delete",
+                primary_cta,
                 Style::default().fg(theme::RED).add_modifier(Modifier::BOLD),
             ),
             Span::raw("      "),
@@ -2391,11 +2638,11 @@ fn render_server_search_input_popup(
 
 fn render_server_suggestions_popup(
     f: &mut Frame,
-    suggestions: &[crate::tui::state::ApiSuggestion],
+    suggestions: &[RegistrySearchResult],
     selected: usize,
 ) {
     let area = f.size();
-    let popup_area = centered_rect(70, 60, area);
+    let popup_area = centered_rect(80, 70, area); // Increased size for better info
 
     let items: Vec<ListItem> = suggestions
         .iter()
@@ -2411,22 +2658,67 @@ fn render_server_suggestions_popup(
                 Style::default().fg(theme::TEXT)
             };
 
-            // Show name + endpoint + description (truncated)
-            let endpoint_display = format!(" ({})", truncate(&s.endpoint, 30));
-            let desc = format!(" - {}", truncate(&s.description, 35));
+            // Category Badge
+            let (badge, badge_style) = match s.category {
+                DiscoveryCategory::Mcp => {
+                    ("MCP", Style::default().fg(theme::MAUVE).bg(theme::MANTLE))
+                }
+                DiscoveryCategory::OpenApi => (
+                    "OPENAPI",
+                    Style::default().fg(theme::BLUE).bg(theme::MANTLE),
+                ),
+                DiscoveryCategory::WebDoc => {
+                    ("DOC", Style::default().fg(theme::YELLOW).bg(theme::MANTLE))
+                }
+                DiscoveryCategory::WebApi => {
+                    ("API", Style::default().fg(theme::PEACH).bg(theme::MANTLE))
+                }
+                DiscoveryCategory::OpenApiTool => (
+                    "ENDPOINT",
+                    Style::default().fg(theme::GREEN).bg(theme::MANTLE),
+                ),
+                DiscoveryCategory::BrowserApiTool => (
+                    "BROWSER",
+                    Style::default().fg(theme::TEAL).bg(theme::MANTLE),
+                ),
+                DiscoveryCategory::Other => (
+                    "OTHER",
+                    Style::default().fg(theme::SUBTEXT1).bg(theme::MANTLE),
+                ),
+            };
 
-            ListItem::new(Line::from(vec![
-                Span::styled(prefix, style),
-                Span::styled(&s.name, style),
-                Span::styled(endpoint_display, Style::default().fg(theme::SAPPHIRE)),
-                Span::styled(desc, Style::default().fg(theme::SUBTEXT0)),
-            ]))
+            // Format: [BADGE] name
+            // Strip protocol for cleaner display
+            let mut display_url = s.server_info.endpoint.clone();
+            if display_url.starts_with("http://") {
+                display_url = display_url.replace("http://", "");
+            } else if display_url.starts_with("https://") {
+                display_url = display_url.replace("https://", "");
+            }
+            let endpoint_display = format!(" ({})", display_url);
+            // Ensure description exists
+            let desc_text = s.server_info.description.clone().unwrap_or_default();
+            let desc = format!(" - {}", desc_text);
+
+            ListItem::new(vec![
+                Line::from(vec![
+                    Span::styled(prefix, style),
+                    Span::styled(format!("[{:^7}] ", badge), badge_style),
+                    Span::styled(&s.server_info.name, style),
+                    Span::styled(endpoint_display, Style::default().fg(theme::SAPPHIRE)),
+                ]),
+                Line::from(vec![
+                    Span::styled("     ", Style::default()), // Indent
+                    Span::styled(desc, Style::default().fg(theme::SUBTEXT0)),
+                ]),
+                Line::from(""), // Empty line for spacing
+            ])
         })
         .collect();
 
     let block = Block::default()
         .title(format!(
-            " Suggestions ({} found) - Enter: Introspect, Esc: Close ",
+            " Suggestions ({} found) - Enter: Explorer, Esc: Back/Close ",
             suggestions.len()
         ))
         .borders(Borders::ALL)
@@ -2435,12 +2727,17 @@ fn render_server_suggestions_popup(
 
     let list = List::new(items).block(block);
 
+    let mut list_state = ListState::default();
+    if !suggestions.is_empty() {
+        list_state.select(Some(selected));
+    }
+
     f.render_widget(ratatui::widgets::Clear, popup_area);
-    f.render_widget(list, popup_area);
+    f.render_stateful_widget(list, popup_area, &mut list_state);
 }
 
 /// Render search results popup with server list
-fn render_search_results_popup(f: &mut Frame, servers: &[DiscoverySearchResult], selected: usize) {
+fn render_search_results_popup(f: &mut Frame, servers: &[RegistrySearchResult], selected: usize) {
     let area = f.size();
     let popup_area = centered_rect(70, 60, area);
 
@@ -2458,14 +2755,39 @@ fn render_search_results_popup(f: &mut Frame, servers: &[DiscoverySearchResult],
                 Style::default().fg(theme::TEXT)
             };
 
-            let desc = match &server.description {
-                Some(d) if !d.is_empty() => format!(" - {}", truncate(d, 40)),
+            // Badge for category
+            let (badge_text, badge_color) = match server.category {
+                DiscoveryCategory::Mcp => (" [MCP] ", theme::BLUE),
+                DiscoveryCategory::OpenApi => (" [API] ", theme::MAUVE),
+                DiscoveryCategory::WebDoc => (" [DOC] ", theme::YELLOW),
+                DiscoveryCategory::WebApi => (" [WEB] ", theme::PEACH),
+                DiscoveryCategory::OpenApiTool => (" [EP] ", theme::GREEN),
+                DiscoveryCategory::BrowserApiTool => (" [BR] ", theme::TEAL),
+                DiscoveryCategory::Other => (" [???] ", theme::SUBTEXT0),
+            };
+
+            let badge_span =
+                Span::styled(badge_text, Style::default().fg(theme::BASE).bg(badge_color));
+
+            let desc = match &server.server_info.description {
+                Some(d) if !d.is_empty() => format!(" - {}", d),
                 _ => String::new(),
             };
 
+            // Strip protocol for cleaner display
+            let mut display_url = server.server_info.endpoint.clone();
+            if display_url.starts_with("http://") {
+                display_url = display_url.replace("http://", "");
+            } else if display_url.starts_with("https://") {
+                display_url = display_url.replace("https://", "");
+            }
+            let endpoint_display = format!(" ({})", display_url);
+
             ListItem::new(Line::from(vec![
                 Span::styled(prefix, style),
-                Span::styled(&server.name, style),
+                badge_span,
+                Span::styled(format!(" {} ", server.server_info.name), style),
+                Span::styled(endpoint_display, Style::default().fg(theme::SAPPHIRE)),
                 Span::styled(desc, Style::default().fg(theme::SUBTEXT0)),
             ]))
         })
@@ -2482,8 +2804,11 @@ fn render_search_results_popup(f: &mut Frame, servers: &[DiscoverySearchResult],
 
     let list = List::new(items).block(block);
 
+    let mut list_state = ListState::default();
+    list_state.select(Some(selected));
+
     f.render_widget(ratatui::widgets::Clear, popup_area);
-    f.render_widget(list, popup_area);
+    f.render_stateful_widget(list, popup_area, &mut list_state);
 }
 
 /// Render introspecting popup with spinner
@@ -2564,10 +2889,17 @@ fn render_introspection_results_popup(
     tools: &[super::state::DiscoveredCapability],
     selected: usize,
     selected_tools: &std::collections::HashSet<usize>,
+    added_success: bool,
+    pended_success: bool,
     state: &mut AppState,
 ) {
     let area = f.size();
-    let popup_area = centered_rect(75, 70, area);
+    let popup_area = centered_rect(75, 75, area); // Slightly taller for name editing
+
+    let is_editing = match &state.discover_popup {
+        DiscoverPopup::IntrospectionResults { editing_name, .. } => *editing_name,
+        _ => false,
+    };
 
     let items: Vec<ListItem> = tools
         .iter()
@@ -2599,21 +2931,77 @@ fn render_introspection_results_popup(
         .collect();
 
     let selected_count = selected_tools.len();
-    let title = format!(
-        " {} Tools ({} selected) - Space: Toggle | Enter: Add | p: Add to Pending | Esc: Back ",
-        server_name, selected_count
-    );
+    let mut title = format!(" {} Tools ({} selected) ", server_name, selected_count);
+
+    if added_success && pended_success {
+        title = format!("{} - [ADDED & PENDED] ", title);
+    } else if added_success {
+        title = format!("{} - [ADDED] ", title);
+    } else if pended_success {
+        title = format!("{} - [PENDED] ", title);
+    }
+
+    let legend = if is_editing {
+        " Backspace: Delete | Esc/Enter: Stop Editing "
+    } else {
+        " Space: Toggle | a: Select All | c: Select None | n: Edit Name | Enter: Add/Save | Esc: Back "
+    };
 
     let block = Block::default()
         .title(title)
+        .title_bottom(Line::from(legend).alignment(Alignment::Center))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::LAVENDER))
         .style(Style::default().bg(theme::BASE));
 
-    let list = List::new(items).block(block);
+    // Split popup into Name area and Tools list
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Server Name field
+            Constraint::Min(0),    // Tools list
+        ])
+        .margin(1)
+        .split(popup_area);
+
+    let name_color = if is_editing {
+        theme::YELLOW
+    } else {
+        theme::PEACH
+    };
+    let name_field = Paragraph::new(Line::from(vec![
+        Span::styled(" Server Name: ", Style::default().fg(theme::SUBTEXT0)),
+        Span::styled(
+            server_name,
+            Style::default().fg(name_color).add_modifier(Modifier::BOLD),
+        ),
+        if is_editing {
+            Span::styled("█", Style::default().fg(theme::YELLOW)) // Caret
+        } else {
+            Span::raw("")
+        },
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(if is_editing {
+                theme::YELLOW
+            } else {
+                theme::SURFACE1
+            })),
+    );
+
+    let list = List::new(items).block(Block::default());
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(selected));
 
     f.render_widget(ratatui::widgets::Clear, popup_area);
-    f.render_widget(list, popup_area);
+    f.render_widget(block, popup_area);
+    f.render_widget(name_field, layout[0]);
+
+    let list_area = layout[1];
+    f.render_stateful_widget(list, list_area, &mut list_state);
 }
 
 /// Render error popup
@@ -2718,6 +3106,84 @@ fn render_success_popup(f: &mut Frame, title: &str, message: &str) {
 
     let block = Block::default()
         .title(format!(" ✓ {} ", title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::GREEN))
+        .style(Style::default().bg(theme::BASE));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+    f.render_widget(paragraph, popup_area);
+}
+
+/// Render tool details popup for discovered API endpoints
+fn render_tool_details_popup(f: &mut Frame, name: &str, endpoint: &str, description: &str) {
+    let area = f.size();
+    let popup_area = centered_rect(70, 50, area);
+    let inner_width = popup_area.width.saturating_sub(4) as usize;
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "  Endpoint: ",
+                Style::default()
+                    .fg(theme::SUBTEXT0)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                name,
+                Style::default()
+                    .fg(theme::GREEN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Base URL: ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(endpoint, Style::default().fg(theme::BLUE)),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "  Description: ",
+            Style::default().fg(theme::SUBTEXT0),
+        )]),
+    ];
+
+    // Word-wrap the description
+    let words: Vec<&str> = description.split_whitespace().collect();
+    let mut current_line = String::new();
+    for word in words {
+        if current_line.is_empty() {
+            current_line = word.to_string();
+        } else if current_line.len() + 1 + word.len() <= inner_width.saturating_sub(6) {
+            current_line.push(' ');
+            current_line.push_str(word);
+        } else {
+            lines.push(Line::from(vec![Span::styled(
+                format!("    {}", current_line),
+                Style::default().fg(theme::TEXT),
+            )]));
+            current_line = word.to_string();
+        }
+    }
+    if !current_line.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            format!("    {}", current_line),
+            Style::default().fg(theme::TEXT),
+        )]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled(
+        "  Press Esc to go back, Enter to close",
+        Style::default().fg(theme::SUBTEXT0),
+    )]));
+
+    let block = Block::default()
+        .title(" API Endpoint Details ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::GREEN))
         .style(Style::default().bg(theme::BASE));

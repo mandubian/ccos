@@ -9,7 +9,10 @@
 //! planning. A "goal" in this context is a discovery intent like "track project progress"
 //! or "send SMS notifications" that maps to servers and capabilities.
 
-use crate::arbiter::{get_default_llm_provider, LlmProvider};
+use crate::arbiter::{
+    get_default_llm_provider, LlmProvider, LlmProviderConfig, LlmProviderFactory, LlmProviderType,
+};
+use crate::config::types::AgentConfig;
 use crate::discovery::registry_search::RegistrySearchResult;
 use crate::ops::browser_discovery::extract_mcp_server_command_from_html;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
@@ -53,7 +56,7 @@ pub struct LlmDiscoveryService {
 }
 
 impl LlmDiscoveryService {
-    /// Create a new LlmDiscoveryService with the default LLM provider
+    /// Create a new LlmDiscoveryService with the default LLM provider (env vars only)
     pub async fn new() -> RuntimeResult<Self> {
         let provider = get_default_llm_provider()
             .await
@@ -62,6 +65,110 @@ impl LlmDiscoveryService {
             ))?;
 
         Ok(Self { provider })
+    }
+
+    /// Create a new LlmDiscoveryService from AgentConfig's llm_profiles section
+    pub async fn from_config(config: &AgentConfig) -> RuntimeResult<Self> {
+        // Try to get provider from llm_profiles in config
+        if let Some(ref profiles) = config.llm_profiles {
+            // Determine which profile name to use
+            let profile_name = if let Some(ref default_name) = profiles.default {
+                default_name.clone()
+            } else if let Some(first_profile) = profiles.profiles.first() {
+                first_profile.name.clone()
+            } else if let Some(ref model_sets) = profiles.model_sets {
+                if let Some(first_set) = model_sets.first() {
+                    if let Some(ref default_spec) = first_set.default {
+                        format!("{}:{}", first_set.name, default_spec)
+                    } else if let Some(first_spec) = first_set.models.first() {
+                        format!("{}:{}", first_set.name, first_spec.name)
+                    } else {
+                        return Self::new().await;
+                    }
+                } else {
+                    return Self::new().await;
+                }
+            } else {
+                return Self::new().await;
+            };
+
+            // Find the profile (explicit or from model set)
+            let profile = Self::find_llm_profile(profiles, &profile_name)?;
+
+            let provider_type = match profile.provider.to_lowercase().as_str() {
+                "openai" => LlmProviderType::OpenAI,
+                "anthropic" | "claude" => LlmProviderType::Anthropic,
+                "openrouter" => LlmProviderType::OpenAI, // OpenRouter is OpenAI-compatible
+                "local" | "ollama" => LlmProviderType::Local,
+                "stub" | "test" => LlmProviderType::Stub,
+                _ => LlmProviderType::OpenAI,
+            };
+
+            // Get API key from env var or inline
+            let api_key = profile
+                .api_key_env
+                .as_ref()
+                .and_then(|env_var| std::env::var(env_var).ok())
+                .or_else(|| profile.api_key.clone());
+
+            let llm_config = LlmProviderConfig {
+                provider_type,
+                model: profile.model.clone(),
+                api_key,
+                base_url: profile.base_url.clone(),
+                max_tokens: profile.max_tokens,
+                temperature: profile.temperature,
+                timeout_seconds: Some(120),
+                retry_config: Default::default(),
+            };
+
+            let provider = LlmProviderFactory::create_provider(llm_config).await?;
+            return Ok(Self { provider });
+        }
+
+        // Fallback to environment variable-based initialization
+        Self::new().await
+    }
+
+    /// Find an LLM profile by name (supports both explicit profiles and model_sets)
+    fn find_llm_profile(
+        profiles_config: &crate::config::types::LlmProfilesConfig,
+        profile_name: &str,
+    ) -> RuntimeResult<crate::config::types::LlmProfile> {
+        // 1. Check explicit profiles first
+        if let Some(profile) = profiles_config
+            .profiles
+            .iter()
+            .find(|p| p.name == profile_name)
+        {
+            return Ok(profile.clone());
+        }
+
+        // 2. Check model sets (format: "set_name:spec_name")
+        if let Some(model_sets) = &profiles_config.model_sets {
+            if let Some((set_name, spec_name)) = profile_name.split_once(':') {
+                if let Some(set) = model_sets.iter().find(|s| s.name == set_name) {
+                    if let Some(spec) = set.models.iter().find(|m| m.name == spec_name) {
+                        // Construct synthetic profile from model set
+                        return Ok(crate::config::types::LlmProfile {
+                            name: profile_name.to_string(),
+                            provider: set.provider.clone(),
+                            model: spec.model.clone(),
+                            base_url: set.base_url.clone(),
+                            api_key_env: set.api_key_env.clone(),
+                            api_key: set.api_key.clone(),
+                            temperature: None,
+                            max_tokens: spec.max_output_tokens,
+                        });
+                    }
+                }
+            }
+        }
+
+        Err(RuntimeError::Generic(format!(
+            "LLM profile '{}' not found in llm_profiles.",
+            profile_name
+        )))
     }
 
     /// Create a new LlmDiscoveryService with a specific provider
