@@ -3,7 +3,6 @@
 //! This module provides common functions for converting RTFS TypeExpr AST nodes
 //! into human-readable RTFS schema strings for capability definitions.
 
-use crate::utils::value_conversion;
 use rtfs::ast::TypeExpr;
 
 /// Convert TypeExpr to compact RTFS schema string (uses built-in Display)
@@ -29,6 +28,13 @@ pub fn type_expr_to_rtfs_compact(expr: &TypeExpr) -> String {
 /// }
 /// ```
 pub fn type_expr_to_rtfs_pretty(expr: &TypeExpr) -> String {
+    type_expr_to_rtfs_pretty_indented(expr, 0)
+}
+
+fn type_expr_to_rtfs_pretty_indented(expr: &TypeExpr, indent_level: usize) -> String {
+    let indent = " ".repeat(indent_level * 2);
+    let child_indent = " ".repeat((indent_level + 1) * 2);
+
     match expr {
         TypeExpr::Primitive(prim) => match prim {
             rtfs::ast::PrimitiveType::Int => ":int".to_string(),
@@ -36,43 +42,71 @@ pub fn type_expr_to_rtfs_pretty(expr: &TypeExpr) -> String {
             rtfs::ast::PrimitiveType::String => ":string".to_string(),
             rtfs::ast::PrimitiveType::Bool => ":bool".to_string(),
             rtfs::ast::PrimitiveType::Nil => ":nil".to_string(),
-            _ => format!("{}", expr), // Use Display for other primitives
+            _ => format!("{}", expr),
         },
         TypeExpr::Vector(inner) => {
-            format!("[:vector {}]", type_expr_to_rtfs_pretty(inner))
+            let inner_str = type_expr_to_rtfs_pretty_indented(inner, indent_level);
+            if inner_str.contains('\n') {
+                format!(
+                    "[:vector\n{}{}\n{}]",
+                    child_indent,
+                    inner_str.trim(),
+                    indent
+                )
+            } else {
+                format!("[:vector {}]", inner_str)
+            }
         }
         TypeExpr::Map { entries, wildcard } => {
             if entries.is_empty() && wildcard.is_none() {
                 return ":map".to_string();
             }
 
-            let mut map_parts = vec!["{".to_string()];
+            let mut lines = Vec::new();
+            lines.push("[:map".to_string());
 
             for entry in entries {
-                let key_str = value_conversion::map_key_to_string(&rtfs::ast::MapKey::Keyword(
-                    entry.key.clone(),
-                ));
-                let value_str = type_expr_to_rtfs_pretty(&entry.value_type);
-                if entry.optional {
-                    map_parts.push(format!("    :{} {} ;; optional", key_str, value_str));
+                let key_str = entry.key.to_string();
+                let value_str =
+                    type_expr_to_rtfs_pretty_indented(&entry.value_type, indent_level + 1);
+                let optional_suffix = if entry.optional { "?" } else { "" };
+
+                if value_str.contains('\n') {
+                    // If value is multiline, we format like:
+                    //   [:key
+                    //     [:vector
+                    //       ...
+                    //     ]
+                    //   ]
+                    lines.push(format!("{}[{}{}", child_indent, key_str, optional_suffix));
+                    lines.push(format!(" {}", value_str.trim_start())); // Value indented
+                    lines.push(format!("{}]", child_indent));
                 } else {
-                    map_parts.push(format!("    :{} {}", key_str, value_str));
+                    lines.push(format!(
+                        "{}[{} {}{}]",
+                        child_indent,
+                        key_str,
+                        value_str.trim_start(),
+                        optional_suffix
+                    ));
                 }
             }
 
             if let Some(wildcard_type) = wildcard {
-                map_parts.push(format!(
-                    "    :* {}",
-                    type_expr_to_rtfs_pretty(wildcard_type)
+                let value_str = type_expr_to_rtfs_pretty_indented(wildcard_type, indent_level + 1);
+                lines.push(format!(
+                    "{}[{} {}]",
+                    child_indent,
+                    ":*",
+                    value_str.trim_start()
                 ));
             }
 
-            map_parts.push("  }".to_string());
-            map_parts.join("\n")
+            lines.push(format!("{}]", indent));
+            lines.join("\n")
         }
         TypeExpr::Any => ":any".to_string(),
         TypeExpr::Never => ":never".to_string(),
-        // For other complex types, fall back to Display
         _ => format!("{}", expr),
     }
 }
@@ -117,10 +151,10 @@ mod tests {
         };
 
         let result = type_expr_to_rtfs_pretty(&map_type);
-        assert!(result.contains(":userId :string"));
-        assert!(result.contains(":expand :bool ;; optional"));
-        assert!(result.starts_with("{"));
-        assert!(result.ends_with("}"));
+        assert!(result.contains("[:userId :string]"));
+        assert!(result.contains("[:expand :bool?]"));
+        assert!(result.starts_with("[:map"));
+        assert!(result.ends_with("]"));
     }
 
     #[test]
