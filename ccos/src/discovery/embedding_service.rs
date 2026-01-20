@@ -91,23 +91,36 @@ impl EmbeddingService {
 
     /// Generate embedding for a text string
     pub async fn embed(&mut self, text: &str) -> RuntimeResult<Vec<f32>> {
+        // Truncate text to avoid context length limits (e.g., Ollama/local models often have 2k-8k limits)
+        // embeddinggemma has a 2048 token context limit, so 1500 chars (~400-500 tokens) is a safe limit
+        const MAX_EMBEDDING_TEXT_LEN: usize = 1500;
+
+        let text_to_embed = if text.len() > MAX_EMBEDDING_TEXT_LEN {
+            // eprintln!("[EmbeddingService] Warning: Truncating text from {} to {} chars", text.len(), MAX_EMBEDDING_TEXT_LEN);
+            &text[..MAX_EMBEDDING_TEXT_LEN]
+        } else {
+            text
+        };
+
         // Check cache first
-        if let Some(cached) = self.cache.get(text) {
+        if let Some(cached) = self.cache.get(text_to_embed) {
             return Ok(cached.clone());
         }
 
         // Generate embedding based on provider
         let embedding = match &self.provider {
             EmbeddingProvider::OpenRouter { api_key, model } => {
-                self.embed_via_openrouter(api_key, model, text).await?
+                self.embed_via_openrouter(api_key, model, text_to_embed)
+                    .await?
             }
             EmbeddingProvider::Local { base_url, model } => {
-                self.embed_via_local(base_url, model, text).await?
+                self.embed_via_local(base_url, model, text_to_embed).await?
             }
         };
 
-        // Cache the result
-        self.cache.insert(text.to_string(), embedding.clone());
+        // Cache the result (using truncated text as key to avoid re-embedding same truncated content)
+        self.cache
+            .insert(text_to_embed.to_string(), embedding.clone());
 
         Ok(embedding)
     }
