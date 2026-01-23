@@ -4,7 +4,7 @@
 //! based on a TypeExpr::Map schema. This allows capabilities to use map-only schemas
 //! while still accepting positional arguments for convenience.
 
-use rtfs::ast::{Keyword, MapKey, MapTypeEntry, TypeExpr};
+use rtfs::ast::{MapKey, MapTypeEntry, TypeExpr};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::Value;
 use std::collections::HashMap;
@@ -135,6 +135,15 @@ fn validate_trailing_optionals(entries: &[MapTypeEntry]) -> bool {
 
 /// Check if a map value should be treated as passthrough (already has expected keys)
 fn is_passthrough_map(map: &HashMap<MapKey, Value>, entries: &[MapTypeEntry]) -> bool {
+    // If the schema has no required fields (i.e., optional-only), any map is valid passthrough.
+    //
+    // This is important for many OpenAPI-derived capabilities where all query params are optional,
+    // but callers still need to pass a map containing those optional keys.
+    let has_required_fields = entries.iter().any(|e| !e.optional);
+    if !has_required_fields {
+        return true;
+    }
+
     // If any required field key is present, treat as passthrough
     entries
         .iter()
@@ -175,7 +184,7 @@ fn field_names_string(fields: &[&MapTypeEntry]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rtfs::ast::PrimitiveType;
+    use rtfs::ast::{Keyword, PrimitiveType};
 
     fn make_map_schema(fields: &[(&str, bool)]) -> TypeExpr {
         TypeExpr::Map {

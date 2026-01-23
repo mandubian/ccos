@@ -68,6 +68,7 @@ impl<S: ApprovalStorage + 'static> ApprovalStorage for CausalChainApprovalStorag
             ApprovalStatus::Approved { .. } => "approval_granted",
             ApprovalStatus::Rejected { .. } => "approval_rejected",
             ApprovalStatus::Expired { .. } => "approval_expired",
+            ApprovalStatus::Superseded { .. } => "approval_superseded",
         };
         self.log_event(event_type, request);
         self.inner.update(request).await

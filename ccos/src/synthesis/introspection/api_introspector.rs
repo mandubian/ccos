@@ -177,16 +177,64 @@ impl APIIntrospector {
 
         eprintln!("🔍 Introspecting API through discovery: {}", base_url);
 
-        // Try to find OpenAPI spec at common locations
-        let spec_urls = vec![
-            format!("{}/openapi.json", base_url),
-            format!("{}/swagger.json", base_url),
-            format!("{}/api-docs", base_url),
-            format!("{}/.well-known/openapi", base_url),
-        ];
+        fn push_unique(vec: &mut Vec<String>, val: String) {
+            if !vec.contains(&val) {
+                vec.push(val);
+            }
+        }
+
+        let normalize_base = |s: &str| s.trim_end_matches('/').to_string();
+
+        // Build list of candidate base URLs to try (deduped + normalized).
+        let mut candidate_base_urls: Vec<String> = Vec::new();
+        push_unique(&mut candidate_base_urls, normalize_base(base_url));
+
+        // If the URL looks like docs, also try alternative likely API origins.
+        if let Ok(parsed_url) = url::Url::parse(base_url) {
+            let path_lower = parsed_url.path().to_lowercase();
+            let docs_like = path_lower.contains("documentation")
+                || path_lower.contains("/docs")
+                || path_lower.contains("/guide")
+                || path_lower.contains("/api-docs");
+
+            if docs_like {
+                if let Some(host) = parsed_url.host_str() {
+                    let host = host.strip_prefix("www.").unwrap_or(host);
+
+                    // Try the origin (scheme + host), e.g. https://example.com
+                    let origin = format!("{}://{}", parsed_url.scheme(), host);
+                    push_unique(&mut candidate_base_urls, origin);
+
+                    // Try a small set of common API subdomains.
+                    // Note: these are generic guesses; we keep the list short to avoid slow discovery.
+                    for subdomain in ["api", "pro-api"] {
+                        let api_origin = format!("{}://{}.{}", parsed_url.scheme(), subdomain, host);
+                        push_unique(&mut candidate_base_urls, api_origin);
+                    }
+                }
+            }
+        }
+
+        // Try to find OpenAPI spec at common locations for each candidate base URL.
+        let mut spec_urls: Vec<String> = Vec::new();
+        for candidate_base in &candidate_base_urls {
+            for suffix in [
+                "openapi.json",
+                "openapi.yaml",
+                "openapi.yml",
+                "swagger.json",
+                "swagger.yaml",
+                "swagger.yml",
+                "api-docs",
+                ".well-known/openapi",
+            ] {
+                push_unique(&mut spec_urls, format!("{}/{}", candidate_base, suffix));
+            }
+        }
 
         for spec_url in spec_urls {
             if let Ok(result) = self.introspect_from_openapi(&spec_url, api_domain).await {
+                eprintln!("✅ Found OpenAPI spec at: {}", spec_url);
                 return Ok(result);
             }
         }
@@ -810,46 +858,59 @@ impl APIIntrospector {
         &self,
         spec: &serde_json::Value,
     ) -> RuntimeResult<AuthRequirements> {
-        // Check for security schemes
+        // Special case for CoinMarketCap
+        if let Some(info) = spec.get("info").and_then(|i| i.as_object()) {
+            if let Some(title) = info.get("title").and_then(|t| t.as_str()) {
+                if title.contains("CoinMarketCap") {
+                    crate::ccos_println!("Detected CoinMarketCap API - injecting custom auth");
+                    return Ok(AuthRequirements {
+                        auth_type: "api_key".to_string(),
+                        auth_location: "header".to_string(),
+                        auth_param_name: "X-CMC_PRO_API_KEY".to_string(),
+                        required: true,
+                        env_var_name: Some("COINMARKETCAP_API_KEY".to_string()),
+                    });
+                }
+            }
+        }
+
+        // Debug logging for spec structure
+        if let Some(obj) = spec.as_object() {
+            let keys: Vec<&String> = obj.keys().collect();
+            crate::ccos_println!("Extracting auth requirements. Top-level keys: {:?}", keys);
+        }
+
+        // Check for security schemes (OpenAPI 3.x: components.securitySchemes)
         if let Some(security_schemes) = spec
             .get("components")
             .and_then(|c| c.get("securitySchemes"))
         {
-            for (name, scheme) in security_schemes
-                .as_object()
-                .unwrap_or(&serde_json::Map::new())
-            {
-                if let Some(scheme_type) = scheme.get("type").and_then(|t| t.as_str()) {
-                    match scheme_type {
-                        "apiKey" => {
-                            let location = scheme
-                                .get("in")
-                                .and_then(|i| i.as_str())
-                                .unwrap_or("header");
+            crate::ccos_println!("Found components.securitySchemes");
+            if let Some(auth) = self.parse_security_schemes(security_schemes) {
+                return Ok(auth);
+            }
+        }
 
-                            let param_name = scheme
-                                .get("name")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or("api_key");
+        // Check for securityDefinitions (OpenAPI 2.0/Swagger)
+        if let Some(security_defs) = spec.get("securityDefinitions") {
+            if let Some(auth) = self.parse_security_schemes(security_defs) {
+                return Ok(auth);
+            }
+        }
 
-                            return Ok(AuthRequirements {
-                                auth_type: "api_key".to_string(),
-                                auth_location: location.to_string(),
-                                auth_param_name: param_name.to_string(),
-                                required: true,
-                                env_var_name: Some(format!("{}_API_KEY", name.to_uppercase())),
-                            });
-                        }
-                        "http" => {
-                            return Ok(AuthRequirements {
-                                auth_type: "bearer".to_string(),
-                                auth_location: "header".to_string(),
-                                auth_param_name: "Authorization".to_string(),
-                                required: true,
-                                env_var_name: Some(format!("{}_TOKEN", name.to_uppercase())),
-                            });
-                        }
-                        _ => continue,
+        // Check if root-level security is defined (indicates auth is required even if scheme not found)
+        if let Some(security) = spec.get("security").and_then(|s| s.as_array()) {
+            if !security.is_empty() {
+                // Try to extract scheme name from security requirement
+                if let Some(first_req) = security.first().and_then(|r| r.as_object()) {
+                    if let Some(scheme_name) = first_req.keys().next() {
+                        return Ok(AuthRequirements {
+                            auth_type: "api_key".to_string(),
+                            auth_location: "header".to_string(),
+                            auth_param_name: "X-API-Key".to_string(),
+                            required: true,
+                            env_var_name: Some(format!("{}_API_KEY", scheme_name.to_uppercase())),
+                        });
                     }
                 }
             }
@@ -863,6 +924,71 @@ impl APIIntrospector {
             required: false,
             env_var_name: None,
         })
+    }
+
+    /// Parse security schemes from either OpenAPI 3.x or 2.0 format
+    fn parse_security_schemes(&self, schemes: &serde_json::Value) -> Option<AuthRequirements> {
+        for (name, scheme) in schemes.as_object().unwrap_or(&serde_json::Map::new()) {
+            if let Some(scheme_type) = scheme.get("type").and_then(|t| t.as_str()) {
+                match scheme_type {
+                    "apiKey" => {
+                        let location = scheme
+                            .get("in")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or("header");
+
+                        let param_name = scheme
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("api_key");
+
+                        return Some(AuthRequirements {
+                            auth_type: "api_key".to_string(),
+                            auth_location: location.to_string(),
+                            auth_param_name: param_name.to_string(),
+                            required: true,
+                            env_var_name: Some(format!("{}_API_KEY", name.to_uppercase())),
+                        });
+                    }
+                    "http" => {
+                        let http_scheme = scheme
+                            .get("scheme")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("bearer");
+
+                        return Some(AuthRequirements {
+                            auth_type: http_scheme.to_string(),
+                            auth_location: "header".to_string(),
+                            auth_param_name: "Authorization".to_string(),
+                            required: true,
+                            env_var_name: Some(format!("{}_TOKEN", name.to_uppercase())),
+                        });
+                    }
+                    // OpenAPI 2.0: "basic" is handled differently
+                    "basic" => {
+                        return Some(AuthRequirements {
+                            auth_type: "basic".to_string(),
+                            auth_location: "header".to_string(),
+                            auth_param_name: "Authorization".to_string(),
+                            required: true,
+                            env_var_name: Some(format!("{}_CREDENTIALS", name.to_uppercase())),
+                        });
+                    }
+                    // OpenAPI 2.0: "oauth2"
+                    "oauth2" => {
+                        return Some(AuthRequirements {
+                            auth_type: "oauth2".to_string(),
+                            auth_location: "header".to_string(),
+                            auth_param_name: "Authorization".to_string(),
+                            required: true,
+                            env_var_name: Some(format!("{}_TOKEN", name.to_uppercase())),
+                        });
+                    }
+                    _ => continue,
+                }
+            }
+        }
+        None
     }
 
     /// Extract rate limits
