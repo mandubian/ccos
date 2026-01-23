@@ -733,6 +733,7 @@ Instructions:
 
     // 7. planner.synthesize_agent_from_trace
     // Synthesize a new agent capability from a session trace.
+    let marketplace_for_synth = Arc::clone(&marketplace);
     let synthesize_agent_handler = Arc::new(move |input: &Value| {
         let payload: SynthesizeAgentFromTraceInput =
             parse_payload("planner.synthesize_agent_from_trace", input)?;
@@ -743,6 +744,7 @@ Instructions:
         let description = payload.description.clone();
 
         let rt_handle = tokio::runtime::Handle::current();
+        let marketplace = Arc::clone(&marketplace_for_synth);
 
         let result = std::thread::spawn(move || {
             rt_handle.block_on(async {
@@ -758,34 +760,98 @@ Instructions:
                     .unwrap_or_else(|| format!("Synthesized from session {}", session_id))
                     .replace("\"", "\\\"");
 
-                let steps_logic = if session.steps.is_empty() {
+                // Build an implementation that *returns* all step results (not only the last one).
+                //
+                // RTFS `do` returns only the last expression, which makes multi-step agents lose
+                // intermediate results. Generate a `let` binding for each step and return a map
+                // of all results (including :last).
+                let steps_count = session.steps.len();
+                let steps_logic = if steps_count == 0 {
                     "nil".to_string()
-                } else if session.steps.len() > 1 {
-                    let mut lines = Vec::new();
-                    lines.push("(do".to_string());
-                    for step in &session.steps {
-                        lines.push(format!("    {}", step.rtfs_code));
-                    }
-                    lines.push("  )".to_string());
-                    lines.join("\n")
                 } else {
-                    session.steps[0].rtfs_code.clone()
+                    let mut lines = Vec::new();
+                    lines.push("(let [".to_string());
+                    for (i, step) in session.steps.iter().enumerate() {
+                        // Bind as step_1, step_2, ...
+                        lines.push(format!("      step_{} {}", i + 1, step.rtfs_code));
+                    }
+                    lines.push("    ]".to_string());
+                    lines.push("    {".to_string());
+                    for i in 1..=steps_count {
+                        lines.push(format!("      :step_{} step_{}", i, i));
+                    }
+                    lines.push(format!("      :last step_{}", steps_count));
+                    lines.push("    })".to_string());
+                    lines.join("\n")
                 };
 
+                // Best-effort "real schema" propagation:
+                // - Extract the called capability id from each step's RTFS `(call "...")`
+                // - Look up the capability in the marketplace
+                // - Use its output_schema when available, otherwise fall back to :any
+                fn extract_called_capability_id(rtfs_code: &str) -> Option<String> {
+                    let needle = "(call \"";
+                    let start = rtfs_code.find(needle)? + needle.len();
+                    let rest = &rtfs_code[start..];
+                    let end = rest.find('"')?;
+                    Some(rest[..end].to_string())
+                }
+
+                let mut step_schemas: Vec<String> = Vec::new();
+                for step in &session.steps {
+                    let schema_str = if let Some(cap_id) =
+                        extract_called_capability_id(&step.rtfs_code)
+                    {
+                        if let Some(cap) = marketplace.get_capability(&cap_id).await {
+                            cap.output_schema
+                                .as_ref()
+                                .map(crate::synthesis::core::schema_serializer::type_expr_to_rtfs_compact)
+                                .unwrap_or_else(|| ":any".to_string())
+                        } else {
+                            ":any".to_string()
+                        }
+                    } else {
+                        ":any".to_string()
+                    };
+                    step_schemas.push(schema_str);
+                }
+
+                // Generate an output schema that matches the synthesized return map.
+                let output_schema = if steps_count == 0 {
+                    ":any".to_string()
+                } else {
+                    let mut s = Vec::new();
+                    s.push("[:map".to_string());
+                    for (i, schema) in step_schemas.iter().enumerate() {
+                        s.push(format!("  [:step_{} {}]", i + 1, schema));
+                    }
+                    let last_schema = step_schemas
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| ":any".to_string());
+                    s.push(format!("  [:last {}]]", last_schema));
+                    s.join("\n")
+                };
+                let output_schema_indented = output_schema.replace("\n", "\n  ");
+
+                // IMPORTANT: this must use keyword-value pairs for capability properties
+                // (the RTFS loader rejects list-based forms like `(description "...")`).
                 let rtfs_content = format!(
                     r#";; Synthesized Agent
 (capability "{}"
-  (description "{}")
-  (meta {{
+  :description "{}"
+  :input-schema :any
+  :output-schema {}
+  :meta {{
     :kind :agent
     :planning false
     :source-session "{}"
-  }})
-  (action [inputs]
+  }}
+  :implementation (fn [inputs]
     {}
   ))
 "#,
-                    agent_id, sanitized_desc, session_id, steps_logic
+                    agent_id, sanitized_desc, output_schema_indented, session_id, steps_logic
                 );
 
                 // Write to disk
@@ -799,6 +865,13 @@ Instructions:
 
                 std::fs::write(&filepath, rtfs_content)
                     .map_err(|e| RuntimeError::Generic(e.to_string()))?;
+
+                // Make it immediately available in the marketplace (no MCP restart required).
+                // We import the whole agents/ directory to support multiple consolidated agents.
+                let _loaded_count = marketplace
+                    .import_capabilities_from_rtfs_dir_recursive(&agents_dir)
+                    .await
+                    .map_err(|e| RuntimeError::Generic(format!("Failed to import agents dir: {}", e)))?;
 
                 Ok::<SynthesizeAgentFromTraceOutput, RuntimeError>(SynthesizeAgentFromTraceOutput {
                     agent_id,

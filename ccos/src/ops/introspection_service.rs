@@ -284,6 +284,40 @@ impl IntrospectionService {
                     }
                 }
 
+                // Fallback: If browser discovery found 0 endpoints but the URL looks like docs,
+                // try enhanced discovery logic that attempts alternative base URLs
+                if browser_result.discovered_endpoints.is_empty() {
+                    let url_lower = url.to_lowercase();
+                    let looks_like_docs = url_lower.contains("documentation")
+                        || url_lower.contains("/docs")
+                        || url_lower.contains("/guide")
+                        || url_lower.contains("/api-docs");
+                    
+                    if looks_like_docs {
+                        ccos_println!("🔄 Browser found 0 endpoints but URL looks like docs, trying enhanced discovery...");
+                        // Try enhanced discovery which attempts alternative base URLs
+                        let introspector = crate::synthesis::introspection::api_introspector::APIIntrospector::new();
+                        match introspector.introspect_from_discovery(url, server_name).await {
+                            Ok(api_result) => {
+                                ccos_println!("✅ Enhanced discovery found {} endpoints", api_result.endpoints.len());
+                                return Ok(IntrospectionResult {
+                                    success: true,
+                                    source: IntrospectionSource::OpenApi,
+                                    server_name: server_name.to_string(),
+                                    api_result: Some(api_result),
+                                    browser_result: Some(browser_result),
+                                    manifests: Vec::new(),
+                                    approval_id: None,
+                                    error: None,
+                                });
+                            }
+                            Err(e) => {
+                                ccos_println!("⚠️ Enhanced discovery failed: {}", e);
+                            }
+                        }
+                    }
+                }
+
                 let browser_error = browser_result.error.clone();
                 Ok(IntrospectionResult {
                     success: browser_result.success,
@@ -367,8 +401,20 @@ impl IntrospectionService {
                             );
 
                             let cap_file = tag_dir.join(format!("{}.rtfs", cap_name));
-                            if std::fs::write(&cap_file, &rtfs_content).is_ok() {
-                                capability_files.push(format!("openapi/{}/{}.rtfs", tag, cap_name));
+                            // Debug logging for file writing
+                            crate::ccos_println!("Writing capability file to: {:?}", cap_file);
+                            match std::fs::write(&cap_file, &rtfs_content) {
+                                Ok(_) => {
+                                    capability_files
+                                        .push(format!("openapi/{}/{}.rtfs", tag, cap_name));
+                                }
+                                Err(e) => {
+                                    crate::ccos_eprintln!(
+                                        "Failed to write capability file {:?}: {}",
+                                        cap_file,
+                                        e
+                                    );
+                                }
                             }
                         }
                     }

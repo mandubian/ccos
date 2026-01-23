@@ -74,6 +74,7 @@ impl FileApprovalStorage {
             super::types::ApprovalStatus::Approved { .. } => "approved",
             super::types::ApprovalStatus::Rejected { .. } => "rejected",
             super::types::ApprovalStatus::Expired { .. } => "expired",
+            super::types::ApprovalStatus::Superseded { .. } => "archived",
         }
     }
 
@@ -393,7 +394,9 @@ impl FileApprovalStorage {
             id: id.to_string(),
             category: ApprovalCategory::ServerDiscovery {
                 source: discovery_source.clone(),
-                server_info,
+                server_info: server_info.clone(),
+                server_id: Some(crate::utils::fs::sanitize_filename(&server_info.name)),
+                version: Some(1),
                 domain_match: vec![],
                 requesting_goal: None,
                 health: None,
@@ -631,6 +634,8 @@ mod tests {
                     alternative_endpoints: vec![],
                     capability_files: None,
                 },
+                server_id: Some("test-server".to_string()),
+                version: Some(1),
                 domain_match: vec!["test".to_string()],
                 requesting_goal: None,
                 health: None,

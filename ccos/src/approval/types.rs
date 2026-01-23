@@ -22,6 +22,13 @@ pub enum ApprovalCategory {
         source: DiscoverySource,
         /// Full server information
         server_info: ServerInfo,
+        /// Stable server identifier (derived from name/endpoint)
+        /// Used for linking approvals to server directories
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server_id: Option<String>,
+        /// Introspection version (increments on re-introspection)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<u32>,
         /// Domain keywords this server matched
         domain_match: Vec<String>,
         /// Goal that requested this server
@@ -122,6 +129,11 @@ pub enum ApprovalStatus {
     Expired {
         at: DateTime<Utc>,
     },
+    /// Superseded by a newer version
+    Superseded {
+        by_version: u32,
+        at: DateTime<Utc>,
+    },
 }
 
 impl ApprovalStatus {
@@ -139,6 +151,10 @@ impl ApprovalStatus {
 
     pub fn is_expired(&self) -> bool {
         matches!(self, ApprovalStatus::Expired { .. })
+    }
+
+    pub fn is_superseded(&self) -> bool {
+        matches!(self, ApprovalStatus::Superseded { .. })
     }
 
     pub fn is_resolved(&self) -> bool {

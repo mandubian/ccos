@@ -757,10 +757,34 @@ async fn handle_api_approval_approve(
         }
 
         // Approve the request
-        match queue
-            .approve(&id, ApprovalAuthority::User("web".to_string()), body.reason)
-            .await
-        {
+        //
+        // IMPORTANT: For ServerDiscovery approvals, use `approve_server` so that
+        // versioning (archiving old approved versions) and filesystem moves
+        // (pending/ -> approved/) are performed.
+        let req_for_category = queue.get(&id).await.ok().flatten();
+        let approve_result = if let Some(req) = req_for_category {
+            match req.category {
+                crate::approval::types::ApprovalCategory::ServerDiscovery { .. } => {
+                    queue.approve_server(
+                        &id,
+                        ApprovalAuthority::User("web".to_string()),
+                        body.reason,
+                    )
+                    .await
+                }
+                _ => {
+                    queue.approve(&id, ApprovalAuthority::User("web".to_string()), body.reason)
+                        .await
+                }
+            }
+        } else {
+            Err(rtfs::runtime::error::RuntimeError::Generic(format!(
+                "Approval request not found: {}",
+                id
+            )))
+        };
+
+        match approve_result {
             Ok(()) => {
                 // NEW: If this was a server discovery approval, automatically register the server
                 if let (Some(req), Some(mp)) =

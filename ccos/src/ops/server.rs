@@ -813,6 +813,37 @@ pub async fn register_approved_server(
         ));
     }
 
+    // Ensure filesystem artifacts are promoted + versioned correctly (pending -> approved,
+    // archive previous approved version if this is version>1).
+    //
+    // NOTE: approvals coming from the HTTP UI may have been approved using the generic
+    // `approve` API, which does not move directories. Calling `approve_server` here makes
+    // registration deterministic and enables server versioning on disk.
+    //
+    // However, if the server was already approved via the UI, the files should already be
+    // in approved/. Only call approve_server if files are not already in approved/.
+    let server_id_check = crate::utils::fs::sanitize_filename(&match &request.category {
+        crate::approval::types::ApprovalCategory::ServerDiscovery { server_info, .. } => {
+            server_info.name.clone()
+        }
+        _ => return Err(RuntimeError::Generic("Not a server discovery".into())),
+    });
+    let workspace_root_check = crate::utils::fs::get_workspace_root();
+    let approved_dir_check = workspace_root_check
+        .join("capabilities/servers/approved")
+        .join(&server_id_check);
+    
+    if !approved_dir_check.exists() {
+        // Files not in approved yet, call approve_server to move them
+        let _ = approval_queue
+            .approve_server(
+                &approval_id,
+                crate::approval::types::ApprovalAuthority::User("register_server".to_string()),
+                Some("Register server into marketplace".to_string()),
+            )
+            .await;
+    }
+
     // Extract server info
     let (server_name, _endpoint, _auth_env_var) = match &request.category {
         crate::approval::types::ApprovalCategory::ServerDiscovery { server_info, .. } => (
@@ -827,29 +858,12 @@ pub async fn register_approved_server(
         }
     };
 
-    // Check for RTFS files in pending or approved directories
+    // Check for RTFS files in approved directory
     let server_id = crate::utils::fs::sanitize_filename(&server_name);
     let workspace_root = crate::utils::fs::get_workspace_root();
-    let pending_dir = workspace_root
-        .join("capabilities/servers/pending")
-        .join(&server_id);
     let approved_dir = workspace_root
         .join("capabilities/servers/approved")
         .join(&server_id);
-
-    // If files exist in pending, move them to approved (since we're now approved)
-    if pending_dir.exists() && !approved_dir.exists() {
-        let _ = std::fs::create_dir_all(&approved_dir);
-        if let Ok(entries) = std::fs::read_dir(&pending_dir) {
-            for entry in entries.flatten() {
-                let src = entry.path();
-                let dst = approved_dir.join(entry.file_name());
-                let _ = std::fs::copy(&src, &dst);
-            }
-        }
-        // Remove pending dir after move
-        let _ = std::fs::remove_dir_all(&pending_dir);
-    }
 
     if approved_dir.exists() {
         let loaded_count = marketplace

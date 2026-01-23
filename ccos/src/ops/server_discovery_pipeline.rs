@@ -507,6 +507,18 @@ impl ApprovalStage for DefaultApprovalStage {
                 ctx.approvals_config.expiry_hours,
             )
             .await?;
+
+        // Create approval_link.json to link filesystem artifacts to approval ID
+        let base_path = std::path::Path::new(ctx.capabilities_path);
+        let link_path = base_path.join("approval_link.json");
+        let link_data = serde_json::json!({
+            "approval_id": approval_id,
+            "created_at": chrono::Utc::now().to_rfc3339()
+        });
+        if let Ok(content) = serde_json::to_string_pretty(&link_data) {
+            let _ = std::fs::write(&link_path, &content);
+        }
+
         Ok(approval_id)
     }
 }

@@ -451,6 +451,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _ = marketplace
         .import_capabilities_from_rtfs_dir_recursive(workspace_root.join("capabilities/learned"))
         .await;
+    let _ = marketplace
+        .import_capabilities_from_rtfs_dir_recursive(workspace_root.join("capabilities/agents"))
+        .await;
+
+    // Register Planner v2 capabilities in the MCP server marketplace.
+    //
+    // `ccos_consolidate_session` depends on `planner.synthesize_agent_from_trace`, which is a
+    // Planner v2 capability. Without this, MCP consolidation fails with:
+    // "Unknown capability: planner.synthesize_agent_from_trace".
+    //
+    // We keep this best-effort (warn, don't abort) so MCP can still run in reduced mode.
+    if let Err(e) = ccos::planner::capabilities_v2::register_planner_capabilities_v2(
+        Arc::clone(&marketplace),
+        ccos.get_catalog(),
+        Arc::clone(&ccos),
+    )
+    .await
+    {
+        eprintln!(
+            "[ccos-mcp] Warning: failed to register planner v2 capabilities: {}",
+            e
+        );
+    }
 
     // Create discovery services
     let llm_discovery = if let Some(config) = &agent_config {
@@ -542,11 +565,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Create shared approval queue for both executor and HTTP UI
     let approval_queue = {
-        let storage = ccos::approval::storage_file::FileApprovalStorage::new(
-            std::path::PathBuf::from(".ccos/approvals"),
-        )
-        .expect("Failed to create approval storage");
-        UnifiedApprovalQueue::new(std::sync::Arc::new(storage))
+        let storage_path = agent_config
+            .as_ref()
+            .map(|cfg| ccos::utils::fs::resolve_workspace_path(&cfg.storage.approvals_dir))
+            .unwrap_or_else(|| std::path::PathBuf::from(".ccos/approvals"));
+
+        if args.verbose {
+            eprintln!("[ccos-mcp] Using approval storage at: {}", storage_path.display());
+        }
+
+        let storage = ccos::approval::storage_file::FileApprovalStorage::new(storage_path)
+            .expect("Failed to create approval storage");
+        let queue = UnifiedApprovalQueue::new(std::sync::Arc::new(storage));
+
+        // Spawn filesystem sync as a background task to recover orphaned server directories
+        // This runs asynchronously to avoid blocking startup
+        let sync_queue = queue.clone();
+        let verbose = args.verbose;
+        tokio::spawn(async move {
+            if verbose {
+                eprintln!("[ccos-mcp] Running filesystem sync to recover orphaned server directories...");
+            }
+            match sync_queue.sync_with_filesystem().await {
+                Ok(report) => {
+                    if !report.created_pending.is_empty() || !report.created_approved.is_empty() {
+                        eprintln!(
+                            "[ccos-mcp] Filesystem sync: recovered {} pending, {} approved servers",
+                            report.created_pending.len(),
+                            report.created_approved.len()
+                        );
+                    }
+                    for warning in &report.warnings {
+                        eprintln!("[ccos-mcp] Sync warning: {}", warning);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[ccos-mcp] Warning: filesystem sync failed: {}", e);
+                }
+            }
+        });
+
+        queue
     };
 
     // Create MCP server with tool handlers
@@ -628,7 +687,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 // ============================================================================
 
 /// Helper to register a tool with both the MCP Server (for direct client access)
-/// and the CapabilityMarketplace (for agent discovery via ccos_search and internal execution)
+/// and the CapabilityMarketplace (for agent discovery via ccos_search_capabilities and internal execution)
 fn register_ecosystem_tool(
     server: &mut MCPServer,
     marketplace: Arc<CapabilityMarketplace>,
@@ -702,7 +761,12 @@ fn register_ccos_tools(
     agent_memory: Arc<RwLock<AgentMemory>>,
     agent_config: Option<AgentConfig>,
 ) {
-    // ccos_search
+    // Hide low-level/internal capabilities from MCP discovery surfaces.
+    // They may still be callable by specific higher-level tools (e.g. consolidation),
+    // but should not appear in ccos_list_capabilities / ccos_search_capabilities.
+    let is_hidden_capability_id = |id: &str| -> bool { id.starts_with("planner.") };
+
+    // ccos_search_capabilities
     let mp = marketplace.clone();
     let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
         let mp = mp.clone();
@@ -778,6 +842,9 @@ fn register_ccos_tools(
             // Sort by score descending
             scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
+            // Filter out low-level/internal capabilities from discovery surfaces
+            scored_results.retain(|(c, _)| !is_hidden_capability_id(&c.id));
+
             let total = scored_results.len();
             let limited: Vec<_> = scored_results.into_iter().take(limit).collect();
 
@@ -794,10 +861,97 @@ fn register_ccos_tools(
             }))
         })
     });
+
+
+    // ccos_search_servers
+    let aq_search = approval_queue.clone();
+    let handler_servers = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        let aq = aq_search.clone();
+        Box::pin(async move {
+            let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+            let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+
+            // List all approvals
+            let all_approvals = aq.list(ccos::approval::types::ApprovalFilter::default()).await
+                .map_err(|e| format!("Failed to list approvals: {}", e))?;
+
+            #[derive(serde::Serialize)]
+            struct ServerSummary {
+                name: String,
+                description: String,
+                status: String,
+                tags: Vec<String>,
+                capability_count: usize,
+                source: String,
+            }
+
+            let mut results: Vec<ServerSummary> = all_approvals
+                .into_iter()
+                .filter_map(|req| {
+                    // Only consider ServerDiscovery requests
+                    if let ccos::approval::types::ApprovalCategory::ServerDiscovery { 
+                        server_info, 
+                        domain_match,
+                        source,
+                        capability_files,
+                        .. 
+                    } = req.category {
+                        // Filter by status (only Approved or Pending)
+                        let status_str = if req.status.is_approved() {
+                            "approved"
+                        } else if req.status.is_pending() {
+                            "pending"
+                        } else {
+                            return None;
+                        };
+
+                        // Check matches
+                        let name_match = server_info.name.to_lowercase().contains(&query);
+                        let desc_match = server_info.description.as_ref()
+                            .map(|d| d.to_lowercase().contains(&query))
+                            .unwrap_or(false);
+                        let tag_match = domain_match.iter().any(|d| d.to_lowercase().contains(&query));
+
+                        if query.is_empty() || name_match || desc_match || tag_match {
+                            Some(ServerSummary {
+                                name: server_info.name,
+                                description: server_info.description.unwrap_or_default(),
+                                status: status_str.to_string(),
+                                tags: domain_match,
+                                capability_count: capability_files.map(|f| f.len()).unwrap_or(0),
+                                source: source.name(),
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .take(limit)
+                .collect();
+
+            // Sort by status (approved first) then name
+            results.sort_by(|a, b| {
+                match (a.status.as_str(), b.status.as_str()) {
+                    ("approved", "pending") => std::cmp::Ordering::Less,
+                    ("pending", "approved") => std::cmp::Ordering::Greater,
+                    _ => a.name.cmp(&b.name),
+                }
+            });
+
+            Ok(json!({
+                "servers": results,
+                "count": results.len(),
+                "hint": "Use ccos_list_capabilities to see details or ccos_search_capabilities to find specific tools."
+            }))
+        })
+    });
+
     register_ecosystem_tool(
         server,
         marketplace.clone(),
-        "ccos_search",
+        "ccos_search_capabilities",
         "Search for capabilities by query, ID pattern, or domain. Use this to find capabilities before executing them.",
         json!({
             "type": "object",
@@ -825,6 +979,28 @@ fn register_ccos_tools(
             "required": ["query"]
         }),
         handler,
+    );
+
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos_search_servers",
+        "Search for available server integrations. Use this to find servers to introspect or use.",
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional search query to filter by name, description, or tags"
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 20,
+                    "description": "Maximum number of results (default: 20)"
+                }
+            }
+        }),
+        handler_servers,
     );
 
     // ccos_suggest_apis - Pure LLM suggestions for external APIs (no auto-approval)
@@ -1044,6 +1220,8 @@ fn register_ccos_tools(
                             url: format!("llm-discovery:{}", query),
                         },
                         server_info: server_info.clone(),
+                        server_id: Some(ccos::utils::fs::sanitize_filename(&api.name)),
+                        version: Some(1),
                         domain_match: vec![query.to_string()],
                         requesting_goal: Some(query.to_string()),
                         health: None,
@@ -1324,7 +1502,12 @@ fn register_ccos_tools(
     let handler = Arc::new(move |_params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
         let mp = mp3.clone();
         Box::pin(async move {
-            let caps = mp.list_capabilities().await;
+            let caps = mp
+                .list_capabilities()
+                .await
+                .into_iter()
+                .filter(|c| !is_hidden_capability_id(&c.id))
+                .collect::<Vec<_>>();
 
             Ok(json!({
                 "capabilities": caps.iter().map(|c| json!({
@@ -1333,7 +1516,7 @@ fn register_ccos_tools(
                     "description": c.description
                 })).collect::<Vec<_>>(),
                 "count": caps.len(),
-                "note": "These are internal CCOS capabilities. For MCP tools exposed by this server, use the tools/list MCP method."
+                "note": "These are internal CCOS capabilities. Some low-level capabilities are intentionally hidden from this list. For MCP tools exposed by this server, use the tools/list MCP method."
             }))
         })
     });
@@ -1908,7 +2091,7 @@ fn register_ccos_tools(
                 } else {
                     // No steps at all
                     json!({
-                        "tool": "ccos_search",
+                        "tool": "ccos_search_capabilities",
                         "args": { "query": goal },
                         "reason": "Could not decompose goal into actionable steps. Try searching for related capabilities."
                     })

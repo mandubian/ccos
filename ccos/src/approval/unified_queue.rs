@@ -140,6 +140,11 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
     // ========================================================================
 
     /// Add a server discovery request
+    ///
+    /// Deduplication logic based on `server_id`:
+    /// - If **pending** with same server_id exists → update in place (bump version)
+    /// - If **approved** with same server_id exists → create NEW pending with version+1
+    /// - If **rejected/expired** with same server_id → create fresh pending
     pub async fn add_server_discovery(
         &self,
         source: DiscoverySource,
@@ -149,29 +154,68 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
         requesting_goal: Option<String>,
         expires_in_hours: i64,
     ) -> RuntimeResult<String> {
-        // Check for existing pending or approved requests for the same endpoint
+        let new_server_id = crate::utils::fs::sanitize_filename(&server_info.name);
+
+        // Find existing approvals for this server_id
         let all = self.list(Default::default()).await?;
+        let mut existing_pending: Option<ApprovalRequest> = None;
+        let mut existing_approved: Option<ApprovalRequest> = None;
+        let mut highest_version: u32 = 0;
+
         for r in all {
             if let ApprovalCategory::ServerDiscovery {
-                server_info: si, ..
+                server_id: Some(ref sid),
+                version,
+                ..
             } = &r.category
             {
-                if si.endpoint == server_info.endpoint {
-                    // If pending or approved, don't add duplicate
-                    if matches!(
-                        r.status,
-                        ApprovalStatus::Pending | ApprovalStatus::Approved { .. }
-                    ) {
-                        return Ok(r.id);
+                if sid == &new_server_id {
+                    let ver = version.unwrap_or(1);
+                    if ver > highest_version {
+                        highest_version = ver;
+                    }
+
+                    if r.status.is_pending() {
+                        existing_pending = Some(r);
+                    } else if r.status.is_approved() {
+                        existing_approved = Some(r);
+                    }
+                }
+            } else if let ApprovalCategory::ServerDiscovery {
+                ref server_info, ..
+            } = &r.category
+            {
+                // Legacy: derive server_id from name
+                let derived_id = crate::utils::fs::sanitize_filename(&server_info.name);
+                if derived_id == new_server_id {
+                    if r.status.is_pending() {
+                        existing_pending = Some(r);
+                    } else if r.status.is_approved() {
+                        existing_approved = Some(r);
                     }
                 }
             }
         }
 
+        // Case 1: Pending exists → return existing ID (don't create duplicate pending)
+        if let Some(pending) = existing_pending {
+            // Return the existing pending ID - user should approve that one
+            return Ok(pending.id);
+        }
+
+        // Case 2: Approved exists → create NEW pending with version+1
+        let new_version = if existing_approved.is_some() {
+            highest_version + 1
+        } else {
+            1
+        };
+
         let request = ApprovalRequest::new(
             ApprovalCategory::ServerDiscovery {
                 source,
                 server_info,
+                server_id: Some(new_server_id),
+                version: Some(new_version),
                 domain_match,
                 requesting_goal,
                 health: None,
@@ -179,7 +223,11 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             },
             risk_assessment,
             expires_in_hours,
-            None,
+            if existing_approved.is_some() {
+                Some(format!("Re-introspection (version {})", new_version))
+            } else {
+                None
+            },
         );
         self.add(request).await
     }
@@ -208,6 +256,7 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
 
     /// Approve a server with optional health initialization
     /// Also moves capability files from pending/ to approved/
+    /// If approving a new version, archives the old version first
     pub async fn approve_server(
         &self,
         id: &str,
@@ -218,6 +267,65 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             self.storage.get(id).await?.ok_or_else(|| {
                 RuntimeError::Generic(format!("Server discovery not found: {}", id))
             })?;
+
+        // Get server_id and version for archiving logic
+        let (server_id, new_version) = if let ApprovalCategory::ServerDiscovery {
+            ref server_id,
+            ref version,
+            ref server_info,
+            ..
+        } = request.category
+        {
+            let sid = server_id
+                .clone()
+                .unwrap_or_else(|| crate::utils::fs::sanitize_filename(&server_info.name));
+            (sid, version.unwrap_or(1))
+        } else {
+            return Err(RuntimeError::Generic(
+                "Not a server discovery request".to_string(),
+            ));
+        };
+
+        // Archive any existing approved version with the same server_id
+        if new_version > 1 {
+            if let Ok(all) = self.list_approved_servers().await {
+                for old in all {
+                    if let ApprovalCategory::ServerDiscovery {
+                        server_id: Some(ref sid),
+                        version,
+                        ..
+                    } = old.category
+                    {
+                        if sid == &server_id && old.id != id {
+                            let old_version = version.unwrap_or(1);
+                            // Archive the old approval
+                            crate::ccos_println!(
+                                "Archiving previous version {} of server {}",
+                                old_version,
+                                server_id
+                            );
+
+                            // Move old files to archived/ under a versioned directory name.
+                            //
+                            // NOTE: `move_server_directory()` derives the directory name from the
+                            // provided `name` by sanitizing it, so we cannot pass a synthetic
+                            // name like "{server_id}__v{old_version}" and expect it to find
+                            // approved/{server_id}. Instead, explicitly rename approved/{server_id}
+                            // -> archived/{server_id}__v{old_version}.
+                            let _ = self.archive_approved_server_dir(&server_id, old_version);
+
+                            // Update old approval status to superseded
+                            let mut old_req = old;
+                            old_req.status = ApprovalStatus::Superseded {
+                                by_version: new_version,
+                                at: Utc::now(),
+                            };
+                            let _ = self.storage.update(&old_req).await;
+                        }
+                    }
+                }
+            }
+        }
 
         // Initialize health tracking for newly approved servers
         if let ApprovalCategory::ServerDiscovery { ref mut health, .. } = request.category {
@@ -247,10 +355,84 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
                     *capability_files = Some(files);
                 }
             }
+
+            // Create an approval link file in the approved directory (if it exists).
+            // This is used by the versioning + filesystem-sync tooling to correlate artifacts
+            // with approval IDs.
+            let workspace_root = crate::utils::fs::get_workspace_root();
+            let approved_dir = workspace_root
+                .join("capabilities/servers/approved")
+                .join(&server_id);
+            if approved_dir.exists() {
+                self.write_approval_link_files(&approved_dir, &request.id, &server_id, new_version);
+            }
         }
 
         request.approve(by, reason);
         self.storage.update(&request).await
+    }
+
+    /// Archive the current approved server directory into `archived/` with a version suffix.
+    fn archive_approved_server_dir(&self, server_id: &str, old_version: u32) -> RuntimeResult<()> {
+        let workspace_root = crate::utils::fs::get_workspace_root();
+        let approved_dir = workspace_root
+            .join("capabilities/servers/approved")
+            .join(server_id);
+        if !approved_dir.exists() {
+            return Ok(());
+        }
+
+        let archived_name = format!("{}__v{}", server_id, old_version);
+        let archived_dir = workspace_root
+            .join("capabilities/servers/archived")
+            .join(archived_name);
+
+        if let Some(parent) = archived_dir.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                RuntimeError::IoError(format!(
+                    "Failed to create directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+
+        if archived_dir.exists() {
+            let _ = std::fs::remove_dir_all(&archived_dir);
+        }
+
+        std::fs::rename(&approved_dir, &archived_dir).map_err(|e| {
+            RuntimeError::IoError(format!(
+                "Failed to archive server directory from {} to {}: {}",
+                approved_dir.display(),
+                archived_dir.display(),
+                e
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    /// Write approval link metadata file into a server directory.
+    ///
+    /// Canonical filename: `approval_link.json`.
+    fn write_approval_link_files(
+        &self,
+        dir: &std::path::Path,
+        approval_id: &str,
+        server_id: &str,
+        version: u32,
+    ) {
+        let link_data = serde_json::json!({
+            "approval_id": approval_id,
+            "server_id": server_id,
+            "version": version,
+            "created_at": chrono::Utc::now().to_rfc3339()
+        });
+
+        if let Ok(content) = serde_json::to_string_pretty(&link_data) {
+            let _ = std::fs::write(dir.join("approval_link.json"), &content);
+        }
     }
 
     /// Update health metrics for an approved server
@@ -332,6 +514,274 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
                 server_id
             )))
         }
+    }
+}
+
+/// Result of filesystem synchronization
+#[derive(Debug, Default)]
+pub struct FilesystemSyncReport {
+    /// IDs of approval records created for orphaned pending directories
+    pub created_pending: Vec<String>,
+    /// IDs of approval records created for orphaned approved directories
+    pub created_approved: Vec<String>,
+    /// Warnings about inconsistencies (e.g., approval says pending but files in approved/)
+    pub warnings: Vec<String>,
+}
+
+impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
+    // ========================================================================
+    // Filesystem Synchronization
+    // ========================================================================
+
+    /// Scan pending/ and approved/ directories and reconcile with approval registry.
+    /// Creates approval records for orphaned server directories.
+    pub async fn sync_with_filesystem(&self) -> RuntimeResult<FilesystemSyncReport> {
+        let workspace_root = crate::utils::fs::get_workspace_root();
+        let pending_dir = workspace_root.join("capabilities/servers/pending");
+        let approved_dir = workspace_root.join("capabilities/servers/approved");
+
+        let mut report = FilesystemSyncReport::default();
+
+        // Get all existing ServerDiscovery approvals for lookup
+        let all_approvals = self
+            .list(ApprovalFilter {
+                category_type: Some("ServerDiscovery".to_string()),
+                ..Default::default()
+            })
+            .await?;
+
+        // Build a set of known server_ids
+        let mut known_server_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for req in &all_approvals {
+            if let ApprovalCategory::ServerDiscovery {
+                server_id: Some(ref sid),
+                ..
+            } = req.category
+            {
+                known_server_ids.insert(sid.clone());
+            } else if let ApprovalCategory::ServerDiscovery {
+                ref server_info, ..
+            } = req.category
+            {
+                // Derive server_id from name for legacy approvals
+                known_server_ids.insert(crate::utils::fs::sanitize_filename(&server_info.name));
+            }
+        }
+
+        // 1. Scan pending directories for orphans
+        if pending_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&pending_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_dir() {
+                        continue;
+                    }
+                    let server_id = entry.file_name().to_string_lossy().to_string();
+
+                    // Skip if already known
+                    if known_server_ids.contains(&server_id) {
+                        continue;
+                    }
+
+                    // Try to create approval from server.rtfs
+                    if let Some(approval) =
+                        Self::create_approval_from_server_directory(&path, false)
+                    {
+                        let id = approval.id.clone();
+                        self.storage.add(approval).await?;
+                        report.created_pending.push(id);
+                        known_server_ids.insert(server_id);
+                    }
+                }
+            }
+        }
+
+        // 2. Scan approved directories for orphans
+        if approved_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&approved_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_dir() {
+                        continue;
+                    }
+                    let server_id = entry.file_name().to_string_lossy().to_string();
+
+                    // Skip if already known
+                    if known_server_ids.contains(&server_id) {
+                        // Check for inconsistency: approval says pending but files are in approved/
+                        for req in &all_approvals {
+                            if let ApprovalCategory::ServerDiscovery {
+                                server_id: Some(ref sid),
+                                ..
+                            } = req.category
+                            {
+                                if sid == &server_id && req.status.is_pending() {
+                                    report.warnings.push(format!(
+                                        "{}: approval says pending, but files are in approved/",
+                                        server_id
+                                    ));
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Try to create synthetic approved approval from server.rtfs
+                    if let Some(approval) = Self::create_approval_from_server_directory(&path, true)
+                    {
+                        let id = approval.id.clone();
+                        self.storage.add(approval).await?;
+                        report.created_approved.push(id.clone());
+                        known_server_ids.insert(server_id.clone());
+
+                        // Write approval_link.json immediately for the new recovery
+                        let link_path = path.join("approval_link.json");
+                        let link_data = serde_json::json!({
+                            "approval_id": id,
+                            "created_at": chrono::Utc::now().to_rfc3339(),
+                            "migrated": true,
+                            "recovered": true
+                        });
+                        if let Ok(content) = serde_json::to_string_pretty(&link_data) {
+                            let _ = std::fs::write(link_path, content);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Backfill missing approval_link.json for existing approved servers
+        for req in &all_approvals {
+            if let ApprovalCategory::ServerDiscovery {
+                server_id,
+                server_info,
+                ..
+            } = &req.category
+            {
+                // Determine directory name (server_id or sanitized name)
+                let dir_name = server_id
+                    .clone()
+                    .unwrap_or_else(|| crate::utils::fs::sanitize_filename(&server_info.name));
+
+                let approved_path = approved_dir.join(&dir_name);
+                if approved_path.exists() && approved_path.is_dir() {
+                    let link_path = approved_path.join("approval_link.json");
+                    if !link_path.exists() {
+                        let link_data = serde_json::json!({
+                            "approval_id": req.id,
+                            "created_at": chrono::Utc::now().to_rfc3339(),
+                            "migrated": true
+                        });
+                        if let Ok(content) = serde_json::to_string_pretty(&link_data) {
+                            if std::fs::write(&link_path, content).is_ok() {
+                                crate::ccos_println!(
+                                    "Migrated: Created approval_link.json for server {}",
+                                    dir_name
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(report)
+    }
+
+    /// Create an ApprovalRequest from a server directory's server.rtfs file
+    fn create_approval_from_server_directory(
+        dir: &std::path::Path,
+        is_approved: bool,
+    ) -> Option<ApprovalRequest> {
+        let server_rtfs = dir.join("server.rtfs");
+        if !server_rtfs.exists() {
+            return None;
+        }
+
+        let content = std::fs::read_to_string(&server_rtfs).ok()?;
+
+        // Extract name from server.rtfs
+        let name = Self::extract_rtfs_field(&content, "name")
+            .or_else(|| dir.file_name().map(|f| f.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        // Extract endpoint
+        let endpoint = Self::extract_rtfs_field(&content, "endpoint").unwrap_or_default();
+
+        // Extract description
+        let description = Self::extract_rtfs_field(&content, "description");
+
+        // Extract auth_env_var
+        let auth_env_var = Self::extract_rtfs_field(&content, "auth_env_var");
+
+        // Extract version from server.rtfs (default to 1 for legacy servers without version)
+        let version = Self::extract_rtfs_field(&content, "version")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1);
+
+        let server_id = crate::utils::fs::sanitize_filename(&name);
+
+        let server_info = ServerInfo {
+            name: name.clone(),
+            endpoint,
+            description,
+            auth_env_var,
+            capabilities_path: Some(dir.to_string_lossy().to_string()),
+            alternative_endpoints: vec![],
+            capability_files: None,
+        };
+
+        let status = if is_approved {
+            ApprovalStatus::Approved {
+                by: ApprovalAuthority::Auto,
+                reason: Some(
+                    "Created from orphaned approved directory by filesystem_sync".to_string(),
+                ),
+                at: Utc::now(),
+            }
+        } else {
+            ApprovalStatus::Pending
+        };
+
+        Some(ApprovalRequest {
+            id: uuid::Uuid::new_v4().to_string(),
+            category: ApprovalCategory::ServerDiscovery {
+                source: DiscoverySource::Manual {
+                    user: "filesystem_sync".to_string(),
+                },
+                server_info,
+                server_id: Some(server_id),
+                version: Some(version),
+                domain_match: vec!["recovered".to_string()],
+                requesting_goal: None,
+                health: None,
+                capability_files: None,
+            },
+            risk_assessment: RiskAssessment {
+                level: RiskLevel::Low,
+                reasons: vec!["Recovered from filesystem".to_string()],
+            },
+            requested_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::hours(168), // 1 week
+            status,
+            context: Some("Created by filesystem sync".to_string()),
+        })
+    }
+
+    /// Extract a quoted field value from RTFS content
+    fn extract_rtfs_field(content: &str, field: &str) -> Option<String> {
+        // Look for :field "value" or "field" "value" patterns
+        let patterns = [format!(":{}\\s+\"", field), format!("\"{}\"\\s+\"", field)];
+
+        for pattern in patterns {
+            if let Ok(re) = regex::Regex::new(&format!("{}([^\"]*)", pattern)) {
+                if let Some(cap) = re.captures(content) {
+                    return cap.get(1).map(|m| m.as_str().to_string());
+                }
+            }
+        }
+        None
     }
 
     // ========================================================================
@@ -586,6 +1036,7 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             .join(&server_id);
 
         if from_dir.exists() {
+            crate::ccos_println!("Moving server from {:?} to {:?}", from_dir, to_dir);
             // Create target parent directory structure
             if let Some(parent) = to_dir.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
@@ -603,6 +1054,7 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             }
 
             // Move
+            crate::ccos_println!("Renaming {:?} -> {:?}", from_dir, to_dir);
             std::fs::rename(&from_dir, &to_dir).map_err(|e| {
                 RuntimeError::IoError(format!(
                     "Failed to move server directory from {} to {}: {}",
@@ -613,6 +1065,7 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             })?;
 
             // Collect RTFS files
+            crate::ccos_println!("Collecting files from {:?}", to_dir);
             let mut files = Vec::new();
 
             fn collect_rtfs_files_recursive(
@@ -635,9 +1088,13 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             }
 
             collect_rtfs_files_recursive(&to_dir, &mut files, &to_dir);
+            crate::ccos_println!("Collected {} files", files.len());
             if !files.is_empty() {
                 return Ok(Some(files));
             }
+        }
+        if !from_dir.exists() {
+            crate::ccos_eprintln!("Source directory {:?} does NOT exist", from_dir);
         }
         Ok(None)
     }
@@ -681,6 +1138,8 @@ impl ApprovalRequest {
         if let ApprovalCategory::ServerDiscovery {
             source,
             server_info,
+            server_id: _,
+            version: _,
             domain_match,
             requesting_goal,
             health,
@@ -721,6 +1180,8 @@ impl ApprovalRequest {
             category: ApprovalCategory::ServerDiscovery {
                 source: pd.source.clone(),
                 server_info: pd.server_info.clone(),
+                server_id: Some(crate::utils::fs::sanitize_filename(&pd.server_info.name)),
+                version: Some(1),
                 domain_match: if pd.domain_match {
                     vec!["legacy_match".to_string()]
                 } else {
