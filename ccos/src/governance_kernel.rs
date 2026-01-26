@@ -662,54 +662,38 @@ impl GovernanceKernel {
 
                 // Try LLM repair for parse errors
                 use crate::config::ValidationConfig;
-                use crate::synthesis::validation::llm_repair_runtime_error;
+                use crate::synthesis::validation::repair_runtime_error_with_retry;
                 let validation_config = ValidationConfig::default();
 
                 if validation_config.enable_runtime_repair {
                     let error_msg = format!("RTFS parse error: {:?}", parse_err);
-                    let mut current_code = rtfs_code.clone();
+                    let current_code = rtfs_code.clone();
 
-                    for attempt in 1..=validation_config.max_runtime_repair_attempts {
-                        log::info!(
-                            "[GovernanceKernel] LLM parse-error repair attempt {}/{}",
-                            attempt,
-                            validation_config.max_runtime_repair_attempts
-                        );
-
-                        match llm_repair_runtime_error(
-                            &current_code,
-                            &error_msg,
-                            attempt,
-                            &validation_config,
-                        )
-                        .await
-                        {
-                            Ok(Some(repaired_code)) => {
-                                // Validate repaired code parses
-                                if parse_expression(repaired_code.trim()).is_ok() {
-                                    log::info!(
-                                        "[GovernanceKernel] LLM parse repair succeeded on attempt {}",
-                                        attempt
-                                    );
-                                    plan_to_execute.body = PlanBody::Rtfs(repaired_code);
-                                    break;
-                                } else {
-                                    log::warn!(
-                                        "[GovernanceKernel] LLM repair still has parse errors, continuing"
-                                    );
-                                    current_code = repaired_code;
-                                }
-                            }
-                            Ok(None) => {
-                                log::info!(
-                                    "[GovernanceKernel] LLM parse repair returned no fix, stopping"
+                    match repair_runtime_error_with_retry(
+                        &current_code,
+                        &error_msg,
+                        &validation_config,
+                    )
+                    .await
+                    {
+                        Ok(Some(repaired_code)) => {
+                            // Validate repaired code parses as a single expression before execution.
+                            if parse_expression(repaired_code.trim()).is_ok() {
+                                log::info!("[GovernanceKernel] LLM parse repair succeeded");
+                                plan_to_execute.body = PlanBody::Rtfs(repaired_code);
+                            } else {
+                                log::warn!(
+                                    "[GovernanceKernel] LLM parse repair returned non-expression RTFS; skipping"
                                 );
-                                break;
                             }
-                            Err(e) => {
-                                log::warn!("[GovernanceKernel] LLM parse repair error: {}", e);
-                                break;
-                            }
+                        }
+                        Ok(None) => {
+                            log::info!(
+                                "[GovernanceKernel] LLM parse repair returned no parsable fix"
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!("[GovernanceKernel] LLM parse repair error: {}", e);
                         }
                     }
                 }
@@ -771,7 +755,8 @@ impl GovernanceKernel {
                 };
 
                 if let Some(arbiter) = arbiter_opt {
-                    let max_repair_attempts = 3;
+                    let max_repair_attempts = crate::config::ValidationConfig::default()
+                        .max_runtime_repair_attempts;
                     let mut current_plan = rtfs_code.clone();
                     let mut last_error = error_msg.clone();
 
@@ -813,14 +798,24 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
                                 // Extract RTFS code from response
                                 let repaired = Self::extract_rtfs_code(&response);
 
-                                // Basic sanity check
-                                if repaired.contains("(let")
-                                    || repaired.contains("(call")
-                                    || repaired.contains("(do")
-                                {
+                                // Parse-check before we even try constitution validation or execution.
+                                // This prevents burning attempts on non-RTFS output and gives the
+                                // model actionable feedback for the next turn.
+                                use rtfs::parser::parse_expression;
+                                if let Err(parse_err) = parse_expression(repaired.trim()) {
                                     ccos_eprintln!(
-                                        "🔧 [GovernanceKernel] LLM produced candidate fix"
+                                        "⚠️  [GovernanceKernel] Candidate fix failed to parse: {:?}",
+                                        parse_err
                                     );
+                                    current_plan = repaired;
+                                    last_error = format!(
+                                        "{}\n\nPrevious candidate failed to parse: {:?}\nReturn ONLY corrected RTFS (no markdown).",
+                                        error_msg, parse_err
+                                    );
+                                    continue;
+                                }
+
+                                ccos_eprintln!("🔧 [GovernanceKernel] LLM produced parsable fix");
 
                                     // Create repaired plan
                                     let mut repaired_plan = safe_plan.clone();
@@ -863,10 +858,6 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
                                             last_error = exec_err.to_string();
                                         }
                                     }
-                                } else {
-                                    ccos_eprintln!("⚠️  [GovernanceKernel] LLM repair produced invalid response");
-                                    break;
-                                }
                             }
                             Err(e) => {
                                 ccos_eprintln!("⚠️  [GovernanceKernel] LLM repair error: {}", e);

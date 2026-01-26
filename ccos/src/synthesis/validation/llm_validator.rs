@@ -9,6 +9,34 @@ use std::collections::HashMap;
 
 use crate::config::types::ValidationConfig;
 
+fn rtfs_candidate_parses(code: &str) -> bool {
+    let trimmed = code.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Accept either multi-form programs or single expressions.
+    rtfs::parser::parse(trimmed).is_ok() || rtfs::parser::parse_expression(trimmed).is_ok()
+}
+
+fn rtfs_candidate_parse_error(code: &str) -> Option<String> {
+    let trimmed = code.trim();
+    if trimmed.is_empty() {
+        return Some("empty RTFS output".to_string());
+    }
+
+    match rtfs::parser::parse(trimmed) {
+        Ok(_) => None,
+        Err(parse_err) => match rtfs::parser::parse_expression(trimmed) {
+            Ok(_) => None,
+            Err(expr_err) => Some(format!(
+                "parse: {:?}; parse_expression: {:?}",
+                parse_err, expr_err
+            )),
+        },
+    }
+}
+
 /// Result of a validation attempt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationResult {
@@ -424,6 +452,49 @@ pub async fn llm_repair_runtime_error(
         }
     };
 
+    llm_repair_runtime_error_with_provider(
+        provider.as_ref(),
+        plan,
+        runtime_error,
+        attempt,
+        config.max_runtime_repair_attempts,
+    )
+    .await
+}
+
+async fn llm_repair_runtime_error_with_provider(
+    provider: &(dyn crate::arbiter::llm_provider::LlmProvider + Send + Sync),
+    plan: &str,
+    runtime_error: &str,
+    attempt: usize,
+    max_attempts: usize,
+) -> Result<Option<String>, String> {
+    let candidate =
+        generate_runtime_repair_candidate(provider, plan, runtime_error, attempt, max_attempts)
+            .await?;
+
+    if rtfs_candidate_parses(&candidate) {
+        log::info!(
+            "Runtime repair attempt {} produced parsable candidate fix",
+            attempt
+        );
+        Ok(Some(candidate))
+    } else {
+        log::warn!(
+            "Runtime repair attempt {} produced non-parsable RTFS candidate",
+            attempt
+        );
+        Ok(None)
+    }
+}
+
+async fn generate_runtime_repair_candidate(
+    provider: &(dyn crate::arbiter::llm_provider::LlmProvider + Send + Sync),
+    plan: &str,
+    runtime_error: &str,
+    attempt: usize,
+    max_attempts: usize,
+) -> Result<String, String> {
     let prompt = format!(
         r#"You are fixing an RTFS plan that failed during execution.
 
@@ -449,26 +520,75 @@ Fix guidelines:
 4. If `step_N` is the result of `map`, it's a vector - don't use (get step_N :key) on it
 
 Respond with ONLY the corrected RTFS plan code, no explanations."#,
-        plan, runtime_error, attempt, config.max_runtime_repair_attempts
+        plan, runtime_error, attempt, max_attempts
     );
 
-    match provider.generate_text(&prompt).await {
-        Ok(response) => {
-            let repaired = extract_rtfs_code(&response);
-            // Basic sanity check - must look like RTFS
-            if repaired.contains("(let") || repaired.contains("(call") || repaired.contains("(do") {
-                log::info!("Runtime repair attempt {} produced candidate fix", attempt);
-                Ok(Some(repaired))
-            } else {
-                log::warn!("Runtime repair produced invalid response");
-                Ok(None)
-            }
+    let response = provider
+        .generate_text(&prompt)
+        .await
+        .map_err(|e| format!("LLM runtime repair failed: {}", e))?;
+
+    Ok(extract_rtfs_code(&response))
+}
+
+/// Repair a runtime error with bounded retries, using parse validation between attempts.
+///
+/// This is a convenience wrapper around `llm_repair_runtime_error` that:
+/// - iterates attempts up to `config.max_runtime_repair_attempts`
+/// - returns the first parsable candidate plan
+pub async fn repair_runtime_error_with_retry(
+    plan: &str,
+    runtime_error: &str,
+    config: &ValidationConfig,
+) -> Result<Option<String>, String> {
+    // Get LLM provider based on config
+    let provider = match get_validation_provider(config).await {
+        Some(p) => p,
+        None => {
+            log::debug!("No LLM provider available, cannot repair runtime error");
+            return Ok(None);
         }
-        Err(e) => {
-            log::warn!("LLM runtime repair failed: {}", e);
-            Ok(None)
+    };
+
+    repair_runtime_error_with_retry_with_provider(
+        provider.as_ref(),
+        plan,
+        runtime_error,
+        config.max_runtime_repair_attempts,
+    )
+    .await
+}
+
+async fn repair_runtime_error_with_retry_with_provider(
+    provider: &(dyn crate::arbiter::llm_provider::LlmProvider + Send + Sync),
+    plan: &str,
+    runtime_error: &str,
+    max_attempts: usize,
+) -> Result<Option<String>, String> {
+    let mut current_plan = plan.to_string();
+    let mut last_error = runtime_error.to_string();
+
+    for attempt in 1..=max_attempts {
+        let candidate =
+            generate_runtime_repair_candidate(provider, &current_plan, &last_error, attempt, max_attempts)
+                .await?;
+
+        if rtfs_candidate_parses(&candidate) {
+            return Ok(Some(candidate));
         }
+
+        let parse_err = rtfs_candidate_parse_error(&candidate)
+            .unwrap_or_else(|| "unknown parse error".to_string());
+
+        // Feed the model its own failed output + the parse diagnostic to converge on valid RTFS.
+        current_plan = candidate;
+        last_error = format!(
+            "{}\n\nPrevious candidate failed to parse: {}\nReturn ONLY corrected RTFS (no markdown).",
+            runtime_error, parse_err
+        );
     }
+
+    Ok(None)
 }
 
 /// Parse LLM validation response JSON
@@ -560,6 +680,99 @@ fn extract_rtfs_code(response: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use rtfs::runtime::error::RuntimeError;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    use crate::arbiter::llm_provider::{
+        LlmProvider, LlmProviderInfo, ValidationResult as ProviderValidationResult,
+    };
+    use crate::types::{Plan, StorableIntent};
+
+    struct SequenceLlmProvider {
+        responses: Arc<Mutex<Vec<String>>>,
+        prompts: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl SequenceLlmProvider {
+        fn new(responses: Vec<String>) -> Self {
+            Self {
+                responses: Arc::new(Mutex::new(responses)),
+                prompts: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn prompts(&self) -> Vec<String> {
+            self.prompts
+                .lock()
+                .map(|p| p.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for SequenceLlmProvider {
+        async fn generate_intent(
+            &self,
+            _prompt: &str,
+            _context: Option<HashMap<String, String>>,
+        ) -> Result<StorableIntent, RuntimeError> {
+            Err(RuntimeError::Generic(
+                "SequenceLlmProvider: generate_intent not implemented".to_string(),
+            ))
+        }
+
+        async fn generate_plan(
+            &self,
+            _intent: &StorableIntent,
+            _context: Option<HashMap<String, String>>,
+        ) -> Result<Plan, RuntimeError> {
+            Err(RuntimeError::Generic(
+                "SequenceLlmProvider: generate_plan not implemented".to_string(),
+            ))
+        }
+
+        async fn validate_plan(
+            &self,
+            _plan_content: &str,
+        ) -> Result<ProviderValidationResult, RuntimeError> {
+            Ok(ProviderValidationResult {
+                is_valid: true,
+                confidence: 1.0,
+                reasoning: "stub".to_string(),
+                suggestions: vec![],
+                errors: vec![],
+            })
+        }
+
+        async fn generate_text(&self, prompt: &str) -> Result<String, RuntimeError> {
+            // Capture prompt so tests can assert retry feedback is included.
+            if let Ok(mut prompts) = self.prompts.lock() {
+                prompts.push(prompt.to_string());
+            }
+
+            let mut guard = self
+                .responses
+                .lock()
+                .map_err(|_| RuntimeError::Generic("poisoned responses mutex".to_string()))?;
+            if guard.is_empty() {
+                return Err(RuntimeError::Generic(
+                    "SequenceLlmProvider: no more responses".to_string(),
+                ));
+            }
+            Ok(guard.remove(0))
+        }
+
+        fn get_info(&self) -> LlmProviderInfo {
+            LlmProviderInfo {
+                name: "SequenceLlmProvider".to_string(),
+                version: "test".to_string(),
+                model: "test".to_string(),
+                capabilities: vec!["generate_text".to_string()],
+            }
+        }
+    }
 
     #[test]
     fn test_default_config() {
@@ -576,5 +789,51 @@ mod tests {
         let result = validate_schema("[:map]", "test capability", None, &config).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_valid);
+    }
+
+    #[tokio::test]
+    async fn test_llm_repair_runtime_error_rejects_non_parsable_candidate() {
+        let provider = SequenceLlmProvider::new(vec![
+            // Missing closing paren -> should fail parse validation.
+            "(do (step \"Divide\" (/ 42 0))".to_string(),
+        ]);
+
+        let repaired = llm_repair_runtime_error_with_provider(
+            &provider,
+            "(do (step \"Divide\" (/ 42 0)))",
+            "division by zero",
+            1,
+            3,
+        )
+        .await
+        .expect("repair attempt should not error");
+
+        assert!(repaired.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_runtime_repair_with_retry_uses_parse_feedback() {
+        let provider = SequenceLlmProvider::new(vec![
+            // First response: invalid RTFS
+            "(do (step \"Divide\" (/ 42 0))".to_string(),
+            // Second response: valid RTFS (still has the runtime bug, but parses)
+            "```rtfs\n(do (step \"Divide\" (/ 42 0)))\n```".to_string(),
+        ]);
+
+        let repaired = repair_runtime_error_with_retry_with_provider(
+            &provider,
+            "(do (step \"Divide\" (/ 42 0)))",
+            "division by zero",
+            2,
+        )
+        .await
+        .expect("retry repair should not error")
+        .expect("should return a parsable candidate on second attempt");
+
+        assert!(rtfs_candidate_parses(&repaired));
+
+        let prompts = provider.prompts();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[1].contains("Previous candidate failed to parse"));
     }
 }

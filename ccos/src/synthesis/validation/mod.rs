@@ -7,6 +7,6 @@ pub mod llm_validator;
 
 pub use crate::config::types::ValidationConfig;
 pub use llm_validator::{
-    auto_repair_plan, llm_repair_runtime_error, validate_plan, validate_schema,
-    ValidationError, ValidationErrorType, ValidationResult,
+    auto_repair_plan, llm_repair_runtime_error, repair_runtime_error_with_retry, validate_plan,
+    validate_schema, ValidationError, ValidationErrorType, ValidationResult,
 };
