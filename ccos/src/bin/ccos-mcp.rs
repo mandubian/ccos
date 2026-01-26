@@ -3761,7 +3761,7 @@ async fn repair_rtfs_code_with_llm(
 ) -> serde_json::Value {
     use ccos::config::types::ValidationConfig as _;
     use ccos::synthesis::validation::{
-        auto_repair_plan, ValidationError, ValidationErrorType,
+        auto_repair_plan, repair_runtime_error_with_retry, ValidationError, ValidationErrorType,
     };
 
     // Convert error message to validation errors for the template
@@ -3792,6 +3792,32 @@ async fn repair_rtfs_code_with_llm(
             "original_code": code,
             "repaired_code": null
         });
+    }
+
+    // First try the runtime-repair loop with parse-feedback retries. This is a good default
+    // when the caller provides an error message (including runtime errors), and it is more
+    // robust than a single-shot template render.
+    if let Some(err) = error_message {
+        match repair_runtime_error_with_retry(code, err, config).await {
+            Ok(Some(repaired)) => {
+                let repair_valid = rtfs::parser::parse(&repaired).is_ok();
+                return json!({
+                    "success": true,
+                    "original_code": code,
+                    "repaired_code": repaired,
+                    "repair_valid": repair_valid,
+                    "method": "llm_runtime_retry",
+                    "note": "Repaired using LLM runtime-repair loop with parse-feedback retries."
+                });
+            }
+            Ok(None) => {
+                // fall through to template approach
+            }
+            Err(e) => {
+                // fall through to template approach but preserve error for debugging
+                eprintln!("[ccos-mcp] runtime repair retry failed: {}", e);
+            }
+        }
     }
 
     match auto_repair_plan(code, &errors, 1, config).await {
