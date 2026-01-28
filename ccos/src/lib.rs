@@ -33,6 +33,7 @@ pub mod approval;
 pub mod cognitive_engine;
 pub use cognitive_engine as arbiter; // Backward compatibility alias
 pub mod archivable_types;
+pub mod budget;
 pub mod catalog;
 pub mod causal_chain;
 pub mod checkpoint_archive;

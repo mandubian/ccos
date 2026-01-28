@@ -9,6 +9,7 @@ CCOS/RTFS already provides a stronger **secure compute core**:
 - session model in interactive mode via MCP (`docs/ccos/specs/007-mcp-server-interactive-mode.md`, `docs/ccos/specs/036-mcp-server-architecture.md`)
 - governance architecture (`docs/ccos/specs/005-security-and-context.md`, `docs/ccos/specs/035-two-tier-governance.md`)
 - sandbox isolation primitives (`docs/ccos/specs/022-sandbox-isolation.md`)
+- **polyglot sandboxed capabilities** (`docs/drafts/spec-polyglot-sandboxed-capabilities.md`) — execute Python, JS, Go, etc. in isolated microVMs/containers with GK-proxied effects
 
 This roadmap focuses on what CCOS is missing to provide “chat-to-local-agent” services **without adopting Moltbot’s broad personal-data exposure model**.
 
@@ -18,6 +19,7 @@ This roadmap focuses on what CCOS is missing to provide “chat-to-local-agent�
 - **No silent escalation**: new effects/permissions/channels/secrets always require explicit approval and are recorded in the causal chain.
 - **Edge enforcement**: governance and data policy must be enforced at the gateway/adapter boundary, not left to an external “brain”.
 - **Loopback-first**: gateway binds to loopback by default; non-loopback requires explicit token + policy + audit.
+- **Resource budget governance**: agents must declare and respect resource budgets; exceeding budget triggers stop or approval flow, never silent continuation.
 
 ## Completion Contract (How “Autonomous” Runs End)
 Moltbot-style gateways can feel “autonomous” because the daemon stays up and keeps reacting to events, but each **run** must have explicit stop conditions. For CCOS chat gateway, completion must be **first-class, explicit, and governed**.
@@ -55,6 +57,116 @@ CCOS must not rely on a model “feeling done” as the only termination signal.
 - Governance & context budgets: `docs/ccos/specs/005-security-and-context.md`
 - Governance checkpoints (per-step): `docs/ccos/specs/035-two-tier-governance.md`
 
+## Resource Budget Contract (Agent Controllability)
+Every agent run must be **controllable end-to-end** through explicit resource budgets. CCOS does not allow "infinite" or "unbounded" execution under any circumstances.
+
+### Budget Dimensions (Required)
+Each agent run carries an **immutable budget context** with the following dimensions:
+
+| Dimension | Description | Example |
+|-----------|-------------|---------|
+| **Wall-clock time** | Maximum elapsed time for the run | 60s interactive, 10m background |
+| **Step/tool-call count** | Maximum capability invocations | 50 steps |
+| **LLM token budget** | Input + output tokens consumed | 100k tokens |
+| **LLM cost budget** | Monetary cost of LLM calls | $0.50 |
+| **Sandbox CPU-seconds** | Cumulative CPU time in sandboxes | 30 CPU-seconds |
+| **Sandbox memory-MB-seconds** | Memory × time integral | 512 MB × 30s |
+| **Network egress bytes** | Total bytes sent externally | 10 MB |
+| **Storage writes** | Bytes written to persistent storage | 50 MB |
+
+### Upfront Estimation (Optional but Recommended)
+Before execution, an agent **may** provide resource estimates:
+
+```clojure
+(agent "daily-report"
+  :estimated-resources {
+    :llm-tokens [10000 50000]     ; [min, max] range
+    :steps [5 20]
+    :wall-clock-ms [5000 60000]
+    :cost-usd [0.05 0.25]
+  }
+  ...)
+```
+
+The GK can:
+- **Warn** if estimates exceed configured thresholds
+- **Block** if estimates exceed hard limits without pre-approval
+- **Track** actual vs estimated for learning/audit
+
+### Enforcement Behavior
+When any budget is exhausted:
+
+| Policy | Behavior |
+|--------|----------|
+| **hard-stop** (default) | Run ends immediately as `Failed`, logged to causal chain |
+| **approval-required** | Run enters `Paused (Approval Required)`, waits for human |
+| **soft-warn** | Warning logged, run continues (only for monitoring budgets) |
+
+Configuration per budget dimension:
+```clojure
+:budget-policy {
+  :wall-clock    {:limit 60000 :on-exceed :hard-stop}
+  :steps         {:limit 50    :on-exceed :hard-stop}
+  :llm-tokens    {:limit 100000 :on-exceed :approval-required}
+  :cost-usd      {:limit 0.50  :on-exceed :hard-stop}
+  :network-bytes {:limit 10485760 :on-exceed :hard-stop}
+}
+```
+
+### Warning Thresholds
+GK issues warnings before hard limits:
+
+| Threshold | Action |
+|-----------|--------|
+| 50% consumed | Log warning, continue |
+| 80% consumed | Log warning, optional pause for approval |
+| 100% consumed | Enforce policy (stop or require approval) |
+
+### Per-Step Accounting
+Every capability call records resource consumption:
+
+```clojure
+{:step-id "step-7"
+ :capability "places.search"
+ :resources {
+   :wall-clock-ms 1234
+   :llm-tokens {:input 500 :output 200}
+   :sandbox-cpu-ms 150
+   :network-bytes {:egress 2048 :ingress 8192}
+ }
+ :budget-remaining {
+   :steps 43
+   :llm-tokens 92300
+   :cost-usd 0.42
+ }}
+```
+
+### Budget Inheritance
+Budgets propagate hierarchically:
+- **Session budget** → applies to all runs in session
+- **Run budget** → applies to all steps in run
+- **Step budget** → per-capability limits (from manifest `:resources`)
+
+Inner budgets cannot exceed outer budgets. If a capability requests more than the remaining run budget, it is rejected before execution.
+
+### Human Escalation
+When budget exhaustion triggers `approval-required`:
+
+1. Run pauses with state saved
+2. User sees: "Run paused: LLM token budget exhausted (100k used). Approve additional 50k tokens to continue?"
+3. User can:
+   - **Approve**: Grant additional budget, run resumes
+   - **Deny**: Run ends as `Cancelled`
+   - **Modify**: Adjust budget and resume
+
+### Audit Trail
+Every budget event is logged to the causal chain:
+- Budget allocation at run start
+- Warning events at thresholds
+- Exhaustion events with enforcement action
+- Approval/denial of budget extensions
+- Final resource consumption at run end
+
 ## Roadmap Overview (Workstreams)
 To ship “Moltbot-like services” securely, CCOS needs product/ops layers around the existing core:
 
@@ -66,6 +178,10 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
 - **WS6 Packaging/Distribution**: signed bundles for “skills/capabilities”.
 - **WS7 Remote Nodes/Pairing**: secure pairing + scoped remote surfaces.
 - **WS8 Observability**: metrics/logging/tracing for runs, denials, costs.
+- **WS9 Polyglot Sandboxed Capabilities**: execute Python/JS/Go capabilities in microVMs with GK-proxied effects. See [Polyglot Sandboxed Capabilities Spec](./spec-polyglot-sandboxed-capabilities.md).
+- **WS10 Skills Layer**: natural-language teaching docs that map to governed capabilities.
+- **WS11 Resource Budget Governance**: upfront estimation, enforcement, warning thresholds, human escalation for all agent runs.
+- **WS12 Governed Memory**: working memory + long-term memory with PII classification, storage quotas, and governed read/write (not raw workspace files).
 
 ## Phase 0 — Define “Chat Mode” Security Contract (Spec + Minimal Implementation)
 **Goal**: make it impossible to accidentally recreate Moltbot’s unsafe personal-data model.
@@ -91,6 +207,7 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
 - Governance & context: `docs/ccos/specs/005-security-and-context.md`
 - Two-tier governance checkpoints: `docs/ccos/specs/035-two-tier-governance.md`
 - Sandbox isolation: `docs/ccos/specs/022-sandbox-isolation.md`
+- Polyglot sandboxed capabilities: [spec-polyglot-sandboxed-capabilities.md](./spec-polyglot-sandboxed-capabilities.md)
 
 ### Success criteria
 - A “Hello world chat connector” can receive messages but **cannot** expose raw content to tools without an explicit, audited approval and a narrow transform capability.
@@ -132,10 +249,21 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
   - export a session trace (without raw PII by default)
   - replay a trace deterministically (where possible).
 
+### WS9 Polyglot Sandboxed Capabilities (MVP)
+- **D1.7**: container sandbox runtime (nsjail/bubblewrap):
+  - virtual filesystem mounting (read-only source, ephemeral scratch)
+  - network proxy through GK (allowlist enforcement)
+  - secret injection via tmpfs (`/run/secrets/`)
+  - basic CPU/memory/time limits.
+- **D1.8**: capability manifest schema extension for `:runtime`, `:filesystem`, `:network`, `:secrets`, `:resources`.
+
+See [Polyglot Sandboxed Capabilities Spec](./spec-polyglot-sandboxed-capabilities.md) for full details.
+
 ### References / Alignment
 - Interactive mode session model: `docs/ccos/specs/007-mcp-server-interactive-mode.md`
 - MCP server tool surface: `docs/ccos/specs/036-mcp-server-architecture.md`
 - Capability lifecycle + approvals/promotion: `docs/ccos/specs/030-capability-system-architecture.md`
+- Polyglot sandboxed capabilities: [spec-polyglot-sandboxed-capabilities.md](./spec-polyglot-sandboxed-capabilities.md)
 
 ### Success criteria
 - User can run a local gateway, connect one chat channel, and safely perform workflows like:
@@ -180,6 +308,24 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
   - verification on install/update
   - staged rollout and rollback.
 
+### WS9 Polyglot Sandboxed Capabilities (v1)
+- **D2.8**: Firecracker microVM runtime:
+  - hardware-level isolation for untrusted community code
+  - warm pool for fast startup (~125ms)
+  - health checks and lifecycle management.
+- **D2.9**: sandbox manager with multiple runtime backends:
+  - `:rtfs` (no sandbox), `:wasm`, `:container`, `:microvm`
+  - trust tier hierarchy (pure → wasm → container → microvm).
+
+### WS10 Skills Layer (v1)
+- **D2.10**: skill YAML schema:
+  - natural-language teaching docs
+  - `ccos.capabilities` field mapping to governed capabilities
+  - data classification declarations for chat gateway.
+- **D2.11**: skill → capability mapping engine:
+  - LLM interprets skill, selects capability
+  - all execution goes through GK.
+
 ### Success criteria
 - Non-technical user can install and operate CCOS chat gateway with:
   - clear approvals, clear risk explanations, and safe defaults
@@ -206,6 +352,14 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
 ### Success criteria
 - Safe remote access via pairing without expanding default data access; “least privilege” holds even across devices.
 
+## Deferred to Later Phases
+The following are important but **not blocking for Phase 0-2**:
+
+- **WS12 Governed Memory**: Full memory system with vector search, session memory indexing, and long-term preferences. For now, use existing `ccos_record_learning` / `ccos_recall_memories` with causal chain.
+- **Learning from failures**: Automated capability improvement based on run outcomes.
+- **Multi-agent coordination**: Agents delegating to other agents with budget splitting.
+- **Cost optimization**: Automatic model selection and batching for cost efficiency.
+
 ## Out of Scope (Explicit Non-Goals)
 - “Full raw-chat access by default” or “LLM can read everything in your chats” modes.
 - Silent tool acquisition/installation/auto-approval.
@@ -222,3 +376,12 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
 - Choose MVP connector target based on lowest-risk onboarding and strongest allowlist/activation controls.
 - Define the normalized message/event schema and the adapter interface once, then implement the first connector against it.
 
+- Review and finalize [Polyglot Sandboxed Capabilities Spec](./spec-polyglot-sandboxed-capabilities.md):
+  - confirm sandbox technology choice (Firecracker vs gVisor vs nsjail)
+  - define capability manifest schema for `:runtime` field
+  - prototype GK network proxy with allowlist enforcement.
+- Design skill YAML schema and skill → capability mapping.
+
+## Related Specifications
+- [Polyglot Sandboxed Capabilities](./spec-polyglot-sandboxed-capabilities.md) — execute Python/JS/Go capabilities in isolated sandboxes with GK-governed effects.
+- [Resource Budget Enforcement](./spec-resource-budget-enforcement.md) — runtime budget tracking, enforcement, and human escalation.

@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::budget::{BudgetCheckResult, BudgetContext, ExhaustionPolicy, StepConsumption};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::causal_chain::CausalChain;
 use crate::orchestrator::Orchestrator;
@@ -41,6 +42,8 @@ pub struct RuntimeHost {
     execution_hints: Mutex<HashMap<String, Value>>,
     // Optional orchestrator for unified governance path
     orchestrator: Option<Arc<Orchestrator>>,
+    // Budget context for resource governance
+    budget_context: Mutex<Option<Arc<Mutex<BudgetContext>>>>,
 }
 
 impl RuntimeHost {
@@ -57,6 +60,7 @@ impl RuntimeHost {
             step_exposure_override: Mutex::new(Vec::new()),
             execution_hints: Mutex::new(HashMap::new()),
             orchestrator: None,
+            budget_context: Mutex::new(None),
         }
     }
 
@@ -95,6 +99,142 @@ impl RuntimeHost {
             guard.recent_logs(max)
         } else {
             Vec::new()
+        }
+    }
+
+    /// Sets the budget context for the run
+    pub fn with_budget(self, budget: Arc<Mutex<BudgetContext>>) -> Self {
+        if let Ok(mut guard) = self.budget_context.lock() {
+            *guard = Some(budget);
+        }
+        self
+    }
+
+    fn check_budget_pre_call(&self) -> RuntimeResult<()> {
+        let budget_ctx_arc = {
+            let guard = self.budget_context.lock().map_err(|_| {
+                RuntimeError::Generic("RuntimeHost budget_context lock poisoned".to_string())
+            })?;
+            guard.clone()
+        };
+
+        if let Some(ctx_mutex) = budget_ctx_arc {
+            let mut ctx = ctx_mutex
+                .lock()
+                .map_err(|_| RuntimeError::Generic("BudgetContext lock poisoned".to_string()))?;
+
+            match ctx.check() {
+                BudgetCheckResult::Ok => {}
+                BudgetCheckResult::Warning { dimension, percent } => {
+                    let mut chain = self.get_causal_chain()?;
+
+                    // Log as a generic system action in causal chain for now
+                    let plan_ctx = self.get_context().ok();
+                    let action = Action::new(
+                        ActionType::BudgetWarningIssued,
+                        plan_ctx
+                            .as_ref()
+                            .map(|c| c.plan_id.clone())
+                            .unwrap_or_default(),
+                        plan_ctx
+                            .as_ref()
+                            .and_then(|c| c.intent_ids.first())
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
+                    .with_metadata("dimension", &dimension)
+                    .with_metadata("percent", &percent.to_string());
+
+                    chain.append(&action).ok();
+                }
+                BudgetCheckResult::Exhausted { dimension, policy } => {
+                    let mut chain = self.get_causal_chain()?;
+                    let plan_ctx = self.get_context().ok();
+                    let action = Action::new(
+                        ActionType::BudgetExhausted,
+                        plan_ctx
+                            .as_ref()
+                            .map(|c| c.plan_id.clone())
+                            .unwrap_or_default(),
+                        plan_ctx
+                            .as_ref()
+                            .and_then(|c| c.intent_ids.first())
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
+                    .with_metadata("dimension", &dimension)
+                    .with_metadata("policy", &format!("{:?}", policy));
+
+                    chain.append(&action).ok();
+
+                    match policy {
+                        ExhaustionPolicy::HardStop => {
+                            return Err(RuntimeError::Generic(format!(
+                                "Resource budget exhausted: {}",
+                                dimension
+                            )));
+                        }
+                        ExhaustionPolicy::ApprovalRequired => {
+                            return Err(RuntimeError::Generic(format!(
+                                "Resource budget exhausted (approval required): {}",
+                                dimension
+                            )));
+                        }
+                        ExhaustionPolicy::SoftWarn => {
+                            // Log and continue
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn record_budget_consumption(
+        &self,
+        capability_id: &str,
+        duration_ms: u64,
+        result: &RuntimeResult<Value>,
+    ) {
+        let budget_ctx_arc = {
+            if let Ok(guard) = self.budget_context.lock() {
+                guard.clone()
+            } else {
+                None
+            }
+        };
+
+        if let Some(ctx_mutex) = budget_ctx_arc {
+            if let Ok(mut ctx) = ctx_mutex.lock() {
+                let consumption = StepConsumption {
+                    capability_id: Some(capability_id.to_string()),
+                    duration_ms,
+                    ..Default::default()
+                };
+
+                ctx.record_step(consumption);
+
+                // Log to causal chain
+                if let Ok(mut chain) = self.get_causal_chain() {
+                    let plan_ctx = self.get_context().ok();
+                    let action = Action::new(
+                        ActionType::BudgetConsumptionRecorded,
+                        plan_ctx
+                            .as_ref()
+                            .map(|c| c.plan_id.clone())
+                            .unwrap_or_default(),
+                        plan_ctx
+                            .as_ref()
+                            .and_then(|c| c.intent_ids.first())
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
+                    .with_name(capability_id)
+                    .with_metadata("duration_ms", &duration_ms.to_string());
+
+                    chain.append(&action).ok();
+                }
+            }
         }
     }
 
@@ -326,6 +466,10 @@ impl RuntimeHost {
 
 impl HostInterface for RuntimeHost {
     fn execute_capability(&self, name: &str, args: &[Value]) -> RuntimeResult<Value> {
+        // --- Resource Budget Enforcement ---
+        self.check_budget_pre_call()?;
+        let step_start_time = std::time::Instant::now();
+
         // 1. Security Validation
         if !self.security_context.is_capability_allowed(name) {
             return Err(RuntimeError::SecurityViolation {
@@ -541,6 +685,10 @@ impl HostInterface for RuntimeHost {
 
         self.get_causal_chain()?
             .record_result(action, execution_result)?;
+
+        // --- Resource Budget Metering ---
+        let duration_ms = step_start_time.elapsed().as_millis() as u64;
+        self.record_budget_consumption(name, duration_ms, &result);
 
         result
     }
