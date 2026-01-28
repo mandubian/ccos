@@ -235,6 +235,18 @@ pub enum ActionType {
     GovernanceCheckpointOutcome,
     /// Execution hint applied (retry, timeout, fallback)
     HintApplied,
+
+    // Budget & Resource Governance
+    /// Budget allocated at run start
+    BudgetAllocated,
+    /// Resources consumed by a step
+    BudgetConsumptionRecorded,
+    /// Warning threshold crossed
+    BudgetWarningIssued,
+    /// Budget exhausted (hard stop or approval pause)
+    BudgetExhausted,
+    /// Budget extended after human approval
+    BudgetExtended,
 }
 
 /// Represents the outcome of an executed action or plan.
