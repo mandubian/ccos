@@ -8,6 +8,7 @@
 //! These types were migrated from `rtfs::config::types` as part of issue #166
 //! to properly separate language concerns (RTFS) from runtime concerns (CCOS).
 
+use crate::budget::{BudgetLimits, BudgetPolicies, ExhaustionPolicy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -988,10 +989,10 @@ pub struct PolicyConfig {
 /// Budget configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct BudgetConfig {
-    /// Maximum cost in USD
-    pub max_cost_usd: f64,
-    /// Token budget
-    pub token_budget: f64,
+    /// Budget limits
+    pub limits: BudgetLimits,
+    /// Budget policies
+    pub policies: BudgetPolicies,
 }
 
 /// Key configuration
@@ -1198,24 +1199,48 @@ impl<'de> Deserialize<'de> for PolicyConfig {
                         "low".to_string(),
                         0,
                         BudgetConfig {
-                            max_cost_usd: 1.0,
-                            token_budget: 10_000.0,
+                            limits: BudgetLimits {
+                                llm_tokens: 10_000,
+                                cost_usd: 1.0,
+                                ..Default::default()
+                            },
+                            policies: BudgetPolicies {
+                                llm_tokens: ExhaustionPolicy::SoftWarn,
+                                cost_usd: ExhaustionPolicy::SoftWarn,
+                                ..Default::default()
+                            },
                         },
                     ),
                     "moderate" => (
                         "medium".to_string(),
                         1,
                         BudgetConfig {
-                            max_cost_usd: 5.0,
-                            token_budget: 50_000.0,
+                            limits: BudgetLimits {
+                                llm_tokens: 50_000,
+                                cost_usd: 5.0,
+                                ..Default::default()
+                            },
+                            policies: BudgetPolicies {
+                                llm_tokens: ExhaustionPolicy::ApprovalRequired,
+                                cost_usd: ExhaustionPolicy::ApprovalRequired,
+                                ..Default::default()
+                            },
                         },
                     ),
                     "strict" | "deny" => (
                         "high".to_string(),
                         2,
                         BudgetConfig {
-                            max_cost_usd: 0.0,
-                            token_budget: 0.0,
+                            limits: BudgetLimits {
+                                llm_tokens: 0,
+                                cost_usd: 0.0,
+                                ..Default::default()
+                            },
+                            policies: BudgetPolicies {
+                                llm_tokens: ExhaustionPolicy::HardStop,
+                                cost_usd: ExhaustionPolicy::HardStop,
+                                ..Default::default()
+                            },
                         },
                     ),
                     other => {

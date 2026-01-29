@@ -48,6 +48,7 @@ pub enum ApprovalType {
     Effect,
     LlmPrompt,
     Synthesis,
+    Budget,
 }
 
 /// Approval queue item

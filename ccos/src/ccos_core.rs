@@ -107,7 +107,8 @@ static DEFAULT_REPAIR_GRAMMAR_HINTS: Lazy<Vec<String>> = Lazy::new(|| {
 });
 
 fn load_grammar_hints_from_prompt_store() -> Result<Vec<String>, String> {
-    let base_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/cognitive_engine");
+    let base_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/prompts/cognitive_engine");
     let store = FilePromptStore::new(&base_dir);
     let template = store
         .get_template(AUTO_REPAIR_PROMPT_ID, AUTO_REPAIR_PROMPT_VERSION)
@@ -369,12 +370,19 @@ impl CCOS {
             Arc::clone(&plan_archive),
         ));
 
+        // Create GovernanceKernel before the host factory so it can be wired in
+        let governance_kernel = Arc::new(GovernanceKernel::new(
+            Arc::clone(&orchestrator),
+            Arc::clone(&intent_graph),
+            agent_config.governance.policies.clone(),
+        ));
+
         // Provide a CCOS-aware host for executing RTFS capabilities loaded into the marketplace
-        // This is set after Orchestrator creation so hints are applied via unified governance path
+        // This is set after GovernanceKernel creation so all capability calls go through governance
         let rtfs_host_factory = {
             let marketplace_clone = Arc::clone(&capability_marketplace);
             let causal_chain_clone = Arc::clone(&causal_chain);
-            let orchestrator_clone = Arc::clone(&orchestrator);
+            let governance_kernel_clone = Arc::clone(&governance_kernel);
             Arc::new(move || {
                 Arc::new(
                     RuntimeHost::new(
@@ -382,16 +390,11 @@ impl CCOS {
                         Arc::clone(&marketplace_clone),
                         RuntimeContext::full(),
                     )
-                    .with_orchestrator(Arc::clone(&orchestrator_clone)),
+                    .with_governance_kernel(Arc::clone(&governance_kernel_clone)),
                 ) as Arc<dyn HostInterface + Send + Sync>
             })
         };
         capability_marketplace.set_rtfs_host_factory(rtfs_host_factory);
-
-        let governance_kernel = Arc::new(GovernanceKernel::new(
-            Arc::clone(&orchestrator),
-            Arc::clone(&intent_graph),
-        ));
 
         // AgentRegistry migration: Agents are now registered as capabilities with :kind :agent
         // TODO: Migrate delegation feedback tracking to CapabilityMarketplace

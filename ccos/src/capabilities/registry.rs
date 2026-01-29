@@ -1898,6 +1898,15 @@ impl CapabilityRegistry {
             .text()
             .map_err(|e| RuntimeError::NetworkError(e.to_string()))?;
 
+        let request_body_len = request.body.as_ref().map(|b| b.len()).unwrap_or(0) as u64;
+        let request_header_len: u64 = request
+            .headers
+            .iter()
+            .map(|(key, value)| key.len() + value.len())
+            .sum::<usize>() as u64;
+        let request_url_len = request.url.as_str().len() as u64;
+        let network_egress_bytes = request_body_len + request_header_len + request_url_len;
+
         // Debug: Log HTTP response for MCP calls
         if request.url.to_string().contains("/mcp/") {
             eprintln!(
@@ -1912,6 +1921,7 @@ impl CapabilityRegistry {
             }
         }
 
+        let resp_body_len = resp_body.len();
         let mut response_map = HashMap::new();
         response_map.insert(MapKey::String("status".to_string()), Value::Integer(status));
         response_map.insert(MapKey::String("body".to_string()), Value::String(resp_body));
@@ -1929,6 +1939,20 @@ impl CapabilityRegistry {
         response_map.insert(
             MapKey::String("headers".to_string()),
             Value::Map(headers_map),
+        );
+
+        let mut usage_map = HashMap::new();
+        usage_map.insert(
+            MapKey::String("network_egress_bytes".to_string()),
+            Value::Integer(network_egress_bytes as i64),
+        );
+        usage_map.insert(
+            MapKey::String("network_ingress_bytes".to_string()),
+            Value::Integer(resp_body_len as i64),
+        );
+        response_map.insert(
+            MapKey::String("usage".to_string()),
+            Value::Map(usage_map),
         );
 
         Ok(Value::Map(response_map))

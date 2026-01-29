@@ -3079,6 +3079,9 @@ fn register_ccos_tools(
                         ccos::approval::types::ApprovalCategory::SecretRequired { capability_id, secret_type, .. } => {
                             json!({ "type": "SecretRequired", "capability_id": capability_id, "secret_type": secret_type })
                         }
+                        ccos::approval::types::ApprovalCategory::BudgetExtension { plan_id, dimension, requested_additional, .. } => {
+                            json!({ "type": "BudgetExtension", "plan_id": plan_id, "dimension": dimension, "requested_additional": requested_additional })
+                        }
                     };
 
                     json!({
@@ -3145,6 +3148,7 @@ fn register_ccos_tools(
                     ccos::approval::types::ApprovalCategory::SynthesisApproval { .. } => "SynthesisApproval",
                     ccos::approval::types::ApprovalCategory::LlmPromptApproval { .. } => "LlmPromptApproval",
                     ccos::approval::types::ApprovalCategory::SecretRequired { .. } => "SecretRequired",
+                    ccos::approval::types::ApprovalCategory::BudgetExtension { .. } => "BudgetExtension",
                 };
 
                 Ok(json!({

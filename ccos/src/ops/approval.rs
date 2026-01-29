@@ -87,6 +87,17 @@ fn to_approval_item(request: &ApprovalRequest) -> ApprovalItem {
             "capability".to_string(),
             None,
         ),
+        ApprovalCategory::BudgetExtension {
+            plan_id,
+            dimension,
+            ..
+        } => (
+            ApprovalType::Budget,
+            format!("Budget Extension: {}", dimension),
+            format!("Plan {} requested budget extension", plan_id),
+            "runtime".to_string(),
+            None,
+        ),
     };
 
     ApprovalItem {

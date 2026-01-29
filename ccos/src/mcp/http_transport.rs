@@ -669,6 +669,24 @@ async fn handle_api_approvals_list(
                         "description": description
                     }),
                 ),
+                ApprovalCategory::BudgetExtension {
+                    plan_id,
+                    intent_id,
+                    dimension,
+                    requested_additional,
+                    consumed,
+                    limit,
+                } => (
+                    "BudgetExtension",
+                    json!({
+                        "plan_id": plan_id,
+                        "intent_id": intent_id,
+                        "dimension": dimension,
+                        "requested_additional": requested_additional,
+                        "consumed": consumed,
+                        "limit": limit
+                    }),
+                ),
             };
 
             // Determine status string for UI filtering
@@ -1103,6 +1121,24 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
         .nav-link { color: #58a6ff; text-decoration: none; font-size: 14px; }
         .nav-link:hover { text-decoration: underline; }
         .header-actions { display: flex; gap: 16px; align-items: center; }
+        .layout { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+        .main-pane { min-width: 0; }
+        .side-pane { min-width: 240px; }
+        .panel { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px; }
+        .panel h2 { margin: 0 0 12px 0; color: #f0f6fc; font-size: 16px; }
+        .panel .panel-counts { display: flex; gap: 8px; margin-bottom: 12px; }
+        .panel .panel-counts span { background: #21262d; border-radius: 999px; padding: 2px 8px; font-size: 12px; color: #c9d1d9; }
+        .panel .budget-item { border-top: 1px solid #30363d; padding: 10px 0; }
+        .panel .budget-item:first-of-type { border-top: none; padding-top: 0; }
+        .panel .budget-item small { color: #8b949e; display: block; margin-top: 4px; }
+        .panel .budget-item .status-tag { font-size: 11px; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; margin-left: 6px; }
+        .panel .status-pending { background: #1f6feb; color: white; }
+        .panel .status-approved { background: #238636; color: white; }
+        .panel .status-rejected { background: #da3633; color: white; }
+        .panel .status-expired { background: #6e7681; color: white; }
+        @media (max-width: 960px) {
+            .layout { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
@@ -1113,12 +1149,22 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
             <a href="/secrets" class="nav-link">🔑 Secrets</a>
         </div>
     </h1>
-    <div class="tabs">
-        <button class="tab active" data-status="pending" onclick="switchTab('pending')">⏳ Pending <span class="count" id="count-pending">0</span></button>
-        <button class="tab" data-status="rejected" onclick="switchTab('rejected')">❌ Rejected <span class="count" id="count-rejected">0</span></button>
-        <button class="tab" data-status="expired" onclick="switchTab('expired')">⏰ Expired <span class="count" id="count-expired">0</span></button>
+    <div class="layout">
+        <div class="main-pane">
+            <div class="tabs">
+                <button class="tab active" data-status="pending" onclick="switchTab('pending')">⏳ Pending <span class="count" id="count-pending">0</span></button>
+                <button class="tab" data-status="rejected" onclick="switchTab('rejected')">❌ Rejected <span class="count" id="count-rejected">0</span></button>
+                <button class="tab" data-status="expired" onclick="switchTab('expired')">⏰ Expired <span class="count" id="count-expired">0</span></button>
+            </div>
+            <div id="approvals"></div>
+        </div>
+        <aside class="side-pane">
+            <div class="panel" id="budget-panel">
+                <h2>Budget Extensions</h2>
+                <p class="empty">Loading budget approvals...</p>
+            </div>
+        </aside>
     </div>
-    <div id="approvals"></div>
     <script>
         let currentTab = 'pending';
         let allApprovals = [];
@@ -1144,7 +1190,8 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
                              a.category_type === 'EffectApproval' ? '⚡' :
                              a.category_type === 'SynthesisApproval' ? '🛠️' :
                              a.category_type === 'LlmPromptApproval' ? '🤖' :
-                             a.category_type === 'SecretRequired' ? '🔑' : '📋';
+                             a.category_type === 'SecretRequired' ? '🔑' :
+                             a.category_type === 'BudgetExtension' ? '💸' : '📋';
                 
                 const title = a.details.server_name || a.details.capability_id || a.category_type;
                 const endpoint = a.details.endpoint ? `<p><strong>Endpoint:</strong> ${a.details.endpoint}</p>` : '';
@@ -1152,6 +1199,13 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
                 const effects = a.details.effects ? `<p><strong>Effects:</strong> ${a.details.effects.join(', ')}</p>` : '';
                 const secretType = a.details.secret_type ? `<p><strong>Type:</strong> ${a.details.secret_type}</p>` : '';
                 const description = a.details.description ? `<p><strong>Description:</strong> ${a.details.description}</p>` : '';
+                const budgetDetails = a.category_type === 'BudgetExtension' ? `
+                    <p><strong>Dimension:</strong> ${a.details.dimension}</p>
+                    <p><strong>Requested:</strong> ${a.details.requested_additional}</p>
+                    <p><strong>Consumed / Limit:</strong> ${a.details.consumed} / ${a.details.limit}</p>
+                    <p><strong>Plan:</strong> ${a.details.plan_id}</p>
+                    <p><strong>Intent:</strong> ${a.details.intent_id}</p>
+                ` : '';
                 
                 const secretInputs = a.category_type === 'SecretRequired' ? `
                     <div class="secret-input">
@@ -1174,13 +1228,53 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
                 return `
                     <div class="approval-card" data-id="${a.id}">
                         <h3>${icon} ${title} <span class="status-badge status-${a.status}">${a.status}</span></h3>
-                        ${endpoint}${domains}${effects}${secretType}${description}
+                        ${endpoint}${domains}${effects}${secretType}${description}${budgetDetails}
                         <p style="font-size: 12px; color: #6e7681;">Requested: ${new Date(a.requested_at).toLocaleString()} | Expires: ${new Date(a.expires_at).toLocaleString()}</p>
                         ${secretInputs}
                         <div class="actions">${actions}</div>
                     </div>
                 `;
             }).join('');
+        }
+
+        function renderBudgetPanel() {
+            const panel = document.getElementById('budget-panel');
+            const budgets = allApprovals.filter(a => a.category_type === 'BudgetExtension');
+            if (budgets.length === 0) {
+                panel.innerHTML = `
+                    <h2>Budget Extensions</h2>
+                    <p class="empty">No budget approvals yet.</p>
+                `;
+                return;
+            }
+
+            const pending = budgets.filter(a => a.status === 'pending').length;
+            const approved = budgets.filter(a => a.status === 'approved').length;
+            const rejected = budgets.filter(a => a.status === 'rejected').length;
+            const expired = budgets.filter(a => a.status === 'expired').length;
+
+            const items = budgets.slice(0, 6).map(a => {
+                const statusClass = `status-${a.status}`;
+                return `
+                    <div class="budget-item">
+                        <div><strong>${a.details.dimension}</strong> <span class="status-tag ${statusClass}">${a.status}</span></div>
+                        <small>Requested ${a.details.requested_additional} • ${a.details.consumed}/${a.details.limit}</small>
+                        <small>Plan ${a.details.plan_id} • Intent ${a.details.intent_id}</small>
+                    </div>
+                `;
+            }).join('');
+
+            panel.innerHTML = `
+                <h2>Budget Extensions</h2>
+                <div class="panel-counts">
+                    <span>Pending ${pending}</span>
+                    <span>Approved ${approved}</span>
+                    <span>Rejected ${rejected}</span>
+                    <span>Expired ${expired}</span>
+                </div>
+                ${items}
+                ${budgets.length > 6 ? `<small>Showing 6 of ${budgets.length} requests</small>` : ''}
+            `;
         }
         
         async function loadApprovals() {
@@ -1198,6 +1292,7 @@ fn generate_approvals_html(_pending: &[ApprovalRequest]) -> String {
                 document.getElementById('count-expired').textContent = expired;
                 
                 renderApprovals();
+                renderBudgetPanel();
             } catch (e) {
                 console.error('Failed to load approvals:', e);
             }

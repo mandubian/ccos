@@ -139,6 +139,12 @@ pub enum RuntimeError {
         expected: String,
         actual: String,
     },
+
+    /// Resource budget exhausted
+    BudgetExhausted {
+        dimension: String,
+        policy: String,
+    },
 }
 
 impl RuntimeError {
@@ -302,6 +308,13 @@ impl fmt::Display for RuntimeError {
                     expected, actual
                 )
             }
+            RuntimeError::BudgetExhausted { dimension, policy } => {
+                write!(
+                    f,
+                    "Resource budget exhausted: {} (policy: {})",
+                    dimension, policy
+                )
+            }
         }
     }
 }
@@ -360,6 +373,12 @@ impl RuntimeError {
             }
             RuntimeError::InvalidArguments { expected, actual } => {
                 format!("Invalid arguments: expected {}, got {}", expected, actual)
+            }
+            RuntimeError::BudgetExhausted { dimension, policy } => {
+                format!(
+                    "Resource budget exhausted: {} (policy: {})",
+                    dimension, policy
+                )
             }
             _ => self.to_string(),
         };

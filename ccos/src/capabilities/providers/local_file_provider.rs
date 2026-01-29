@@ -213,8 +213,22 @@ impl LocalFileProvider {
     fn write_file(input: &Value) -> RuntimeResult<Value> {
         let path = Self::extract_path(input)?;
         let content = Self::extract_content(input)?;
+        let content_len = content.as_bytes().len() as i64;
         fs::write_file(&path, &content)?;
-        Ok(Value::Boolean(true))
+        let mut usage_map = std::collections::HashMap::new();
+        usage_map.insert(
+            MapKey::String("storage_write_bytes".to_string()),
+            Value::Integer(content_len),
+        );
+
+        let mut result_map = std::collections::HashMap::new();
+        result_map.insert(MapKey::String("ok".to_string()), Value::Boolean(true));
+        result_map.insert(
+            MapKey::String("usage".to_string()),
+            Value::Map(usage_map),
+        );
+
+        Ok(Value::Map(result_map))
     }
 
     fn delete(input: &Value) -> RuntimeResult<Value> {
@@ -254,8 +268,22 @@ impl LocalFileProvider {
             .map_err(|e| {
                 RuntimeError::Generic(format!("Failed to decode base64 content: {}", e))
             })?;
+        let content_len = content.len() as i64;
         fs::write_file_bytes(&path, &content)?;
-        Ok(Value::Boolean(true))
+        let mut usage_map = std::collections::HashMap::new();
+        usage_map.insert(
+            MapKey::String("storage_write_bytes".to_string()),
+            Value::Integer(content_len),
+        );
+
+        let mut result_map = std::collections::HashMap::new();
+        result_map.insert(MapKey::String("ok".to_string()), Value::Boolean(true));
+        result_map.insert(
+            MapKey::String("usage".to_string()),
+            Value::Map(usage_map),
+        );
+
+        Ok(Value::Map(result_map))
     }
 }
 

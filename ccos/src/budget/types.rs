@@ -1,7 +1,7 @@
-//! Budget type definitions
+use serde::{Deserialize, Serialize};
 
 /// Immutable budget limits for a run
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BudgetLimits {
     /// Maximum number of capability calls
     pub steps: u32,
@@ -15,6 +15,24 @@ pub struct BudgetLimits {
     pub network_egress_bytes: u64,
     /// Maximum storage write bytes
     pub storage_write_bytes: u64,
+}
+
+impl BudgetLimits {
+    /// Clamp this budget to a parent budget (inheritance enforcement).
+    pub fn clamp_to(&self, parent: &BudgetLimits) -> BudgetLimits {
+        BudgetLimits {
+            steps: self.steps.min(parent.steps),
+            wall_clock_ms: self.wall_clock_ms.min(parent.wall_clock_ms),
+            llm_tokens: self.llm_tokens.min(parent.llm_tokens),
+            cost_usd: self.cost_usd.min(parent.cost_usd),
+            network_egress_bytes: self
+                .network_egress_bytes
+                .min(parent.network_egress_bytes),
+            storage_write_bytes: self
+                .storage_write_bytes
+                .min(parent.storage_write_bytes),
+        }
+    }
 }
 
 impl Default for BudgetLimits {
@@ -31,7 +49,7 @@ impl Default for BudgetLimits {
 }
 
 /// Policy for when budget is exhausted
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ExhaustionPolicy {
     /// Run ends immediately as Failed
     HardStop,
@@ -48,7 +66,7 @@ impl Default for ExhaustionPolicy {
 }
 
 /// Per-dimension exhaustion policies
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BudgetPolicies {
     pub steps: ExhaustionPolicy,
     pub wall_clock: ExhaustionPolicy,

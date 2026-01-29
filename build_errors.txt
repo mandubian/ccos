@@ -1,0 +1,1419 @@
+warning: unused import: `std::sync::Mutex`
+  --> rtfs/src/development_tooling.rs:15:5
+   |
+15 | use std::sync::Mutex;
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `ForExpr`
+  --> rtfs/src/parser/expressions.rs:10:30
+   |
+10 | use crate::ast::{Expression, ForExpr, Keyword, Literal, MapKey, Sym...
+   |                              ^^^^^^^
+
+warning: unused import: `providers::*`
+  --> rtfs/src/runtime/capabilities/mod.rs:13:9
+   |
+13 | pub use providers::*;
+   |         ^^^^^^^^^^^^
+
+warning: unused imports: `File` and `OpenOptions`
+  --> rtfs/src/runtime/microvm/providers/firecracker.rs:20:21
+   |
+20 | use std::fs::{self, File, OpenOptions};
+   |                     ^^^^  ^^^^^^^^^^^
+
+warning: unused import: `Sha256`
+  --> rtfs/src/runtime/module_runtime.rs:13:20
+   |
+13 | use sha2::{Digest, Sha256};
+   |                    ^^^^^^
+
+warning: unused import: `std::fs`
+  --> rtfs/src/runtime/stdlib.rs:31:5
+   |
+31 | use std::fs;
+   |     ^^^^^^^
+
+warning: unused imports: `SystemTime` and `UNIX_EPOCH`
+  --> rtfs/src/runtime/stdlib.rs:33:17
+   |
+33 | use std::time::{SystemTime, UNIX_EPOCH};
+   |                 ^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> rtfs/src/runtime/stubs.rs:4:5
+  |
+4 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Digest`
+  --> rtfs/src/runtime/module_runtime.rs:13:12
+   |
+13 | use sha2::{Digest, Sha256};
+   |            ^^^^^^
+
+warning: unused variable: `content`
+  --> rtfs/src/config/types.rs:99:23
+   |
+99 |             if let Ok(content) = std::fs::read_to_string(&path) {
+   |                       ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_content`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `meta`
+    --> rtfs/src/ir/converter.rs:1066:40
+     |
+1066 |             Expression::WithMetadata { meta, expr } => {
+     |                                        ^^^^ help: try ignoring the field: `meta: _`
+
+warning: unused variable: `for_expr`
+    --> rtfs/src/ir/converter.rs:3185:31
+     |
+3185 | ...nvert_for(&mut self, for_expr: ForExpr) -> IrConversionResult<...
+     |                         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_for_expr`
+
+warning: unused variable: `span`
+   --> rtfs/src/parser/expressions.rs:390:9
+    |
+390 |     let span = pair_to_source_span(&pair);
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unreachable pattern
+   --> rtfs/src/parser/types.rs:214:33
+    |
+214 | ...                   Rule::WHITESPACE | Rule::COMMENT => {
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> rtfs/src/parser/types.rs:214:33
+    |
+189 | ...                   Rule::WHITESPACE | Rule::COMMENT => {}
+    |                       -------------------------------- matches some of the same values
+190 | ...                   _ => {
+    |                       - matches some of the same values
+...
+214 | ...                   Rule::WHITESPACE | Rule::COMMENT => {
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ collectively making this unreachable
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable pattern
+   --> rtfs/src/parser/types.rs:217:33
+    |
+217 | ...                   _ => {
+    |                       ^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> rtfs/src/parser/types.rs:217:33
+    |
+180 | ...                   Rule::keyword => {
+    |                       ------------- matches some of the same values
+...
+183 | ...                   Rule::optional_marker => {
+    |                       --------------------- matches some of the same values
+...
+189 | ...                   Rule::WHITESPACE | Rule::COMMENT => {}
+    |                       -------------------------------- matches some of the same values
+190 | ...                   _ => {
+    |                       - matches some of the same values
+...
+217 | ...                   _ => {
+    |                       ^ collectively making this unreachable
+
+warning: unused variable: `positives`
+   --> rtfs/src/parser_error_reporter.rs:305:9
+    |
+305 |         positives: &[Rule],
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_positives`
+
+warning: value assigned to `child_env_opt` is never read
+   --> rtfs/src/runtime/evaluator.rs:905:17
+    |
+905 |         let mut child_env_opt: Option<Environment> = None;
+    |                 ^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `hc`
+   --> rtfs/src/runtime/evaluator.rs:916:52
+    |
+916 | ...ionOutcome::RequiresHost(hc) => Err(RuntimeError::Generic(
+    |                             ^^ help: if this is intentional, prefix it with an underscore: `_hc`
+
+warning: variable `merge_policy` is assigned to, but never used
+    --> rtfs/src/runtime/evaluator.rs:1319:17
+     |
+1319 |         let mut merge_policy = ConflictResolution::KeepExisting;
+     |                 ^^^^^^^^^^^^
+     |
+     = note: consider using `_merge_policy` instead
+
+warning: value assigned to `merge_policy` is never read
+    --> rtfs/src/runtime/evaluator.rs:1368:25
+     |
+1368 |                         merge_policy = match val {
+     |                         ^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: unused variable: `child_id`
+    --> rtfs/src/runtime/evaluator.rs:1420:17
+     |
+1420 |             let child_id = {
+     |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_child_id`
+
+warning: unused variable: `final_prompt`
+    --> rtfs/src/runtime/evaluator.rs:1689:13
+     |
+1689 |         let final_prompt = if let Some(sys) = system_prompt {
+     |             ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_final_prompt`
+
+warning: unused variable: `temp_env`
+    --> rtfs/src/runtime/evaluator.rs:3596:29
+     |
+3596 |                     let mut temp_env = env.clone();
+     |                             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_temp_env`
+
+warning: variable does not need to be mutable
+    --> rtfs/src/runtime/evaluator.rs:3596:25
+     |
+3596 |                     let mut temp_env = env.clone();
+     |                         ----^^^^^^^^
+     |                         |
+     |                         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `security_context`
+    --> rtfs/src/runtime/microvm/providers/firecracker.rs:2277:13
+     |
+2277 |         let security_context = vm.get_security_context();
+     |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_security_context`
+
+warning: unused variable: `monitoring_stats`
+    --> rtfs/src/runtime/microvm/providers/firecracker.rs:2287:13
+     |
+2287 |         let monitoring_stats = self.get_monitoring_stats()?;
+     |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_monitoring_stats`
+
+warning: unused variable: `runtime_path`
+   --> rtfs/src/runtime/microvm/providers/gvisor.rs:310:13
+    |
+310 |         let runtime_path = format!("/tmp/rtfs-runtime-{}.sh", cont...
+    |             ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_runtime_path`
+
+warning: unused variable: `source`
+   --> rtfs/src/runtime/microvm/providers/process.rs:434:76
+    |
+434 | ...guage, source } => {
+    |           ^^^^^^ help: try ignoring the field: `source: _`
+
+warning: unused variable: `env`
+  --> rtfs/src/runtime/stdlib.rs:92:28
+   |
+92 |     fn load_tool_functions(env: &mut Environment) {
+   |                            ^^^ help: if this is intentional, prefix it with an underscore: `_env`
+
+warning: unused variable: `function`
+   --> rtfs/src/runtime/stdlib.rs:350:25
+    |
+350 |                     let function = &args[0];
+    |                         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_function`
+
+warning: unused variable: `v`
+   --> rtfs/src/runtime/stdlib.rs:365:37
+    |
+365 | ...                   for (k, v) in m {
+    |                               ^ help: if this is intentional, prefix it with an underscore: `_v`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:517:23
+    |
+517 |     fn tool_open_file(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                       ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:765:17
+    |
+765 |     fn tool_log(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:775:21
+    |
+775 |     fn tool_time_ms(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:986:16
+    |
+986 |     fn println(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+   --> rtfs/src/runtime/stdlib.rs:996:21
+    |
+996 |     fn thread_sleep(args: Vec<Value>) -> RuntimeResult<Value> {
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+    --> rtfs/src/runtime/stdlib.rs:1006:20
+     |
+1006 |     fn file_exists(args: Vec<Value>) -> RuntimeResult<Value> {
+     |                    ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+    --> rtfs/src/runtime/stdlib.rs:1016:16
+     |
+1016 |     fn get_env(args: Vec<Value>) -> RuntimeResult<Value> {
+     |                ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+    --> rtfs/src/runtime/stdlib.rs:1026:19
+     |
+1026 |     fn read_lines(args: Vec<Value>) -> RuntimeResult<Value> {
+     |                   ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+    --> rtfs/src/runtime/stdlib.rs:1036:13
+     |
+1036 |     fn step(args: Vec<Value>) -> RuntimeResult<Value> {
+     |             ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `args`
+    --> rtfs/src/runtime/stdlib.rs:1058:18
+     |
+1058 |     fn read_file(args: Vec<Value>) -> RuntimeResult<Value> {
+     |                  ^^^^ help: if this is intentional, prefix it with an underscore: `_args`
+
+warning: unused variable: `meta`
+   --> rtfs/src/runtime/values.rs:487:40
+    |
+487 |             Expression::WithMetadata { meta, expr } => {
+    |                                        ^^^^ help: try ignoring the field: `meta: _`
+
+warning: unused variable: `input_schema`
+   --> rtfs/src/builders/capability_builder.rs:383:21
+    |
+383 |         if let Some(input_schema) = &self.input_schema {
+    |                     ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_input_schema`
+
+warning: unused variable: `output_schema`
+   --> rtfs/src/builders/capability_builder.rs:390:21
+    |
+390 |         if let Some(output_schema) = &self.output_schema {
+    |                     ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_output_schema`
+
+warning: struct `IrStrategy` is never constructed
+  --> rtfs/src/development_tooling.rs:19:8
+   |
+19 | struct IrStrategy {
+   |        ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `new` is never used
+  --> rtfs/src/development_tooling.rs:24:8
+   |
+23 | impl IrStrategy {
+   | --------------- associated function in this implementation
+24 |     fn new() -> Self {
+   |        ^^^
+
+warning: fields `type_aliases` and `constraints` are never read
+  --> rtfs/src/ir/converter.rs:96:5
+   |
+95 | pub struct TypeContext {
+   |            ----------- fields in this struct
+96 |     type_aliases: HashMap<String, IrType>,
+   |     ^^^^^^^^^^^^
+97 |     constraints: Vec<TypeConstraint>,
+   |     ^^^^^^^^^^^
+   |
+   = note: `TypeContext` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `type_context` and `capture_analysis` are never read
+   --> rtfs/src/ir/converter.rs:111:5
+    |
+108 | pub struct IrConverter<'a> {
+    |            ----------- fields in this struct
+...
+111 |     type_context: TypeContext,
+    |     ^^^^^^^^^^^^
+112 |     capture_analysis: HashMap<NodeId, Vec<IrCapture>>,
+    |     ^^^^^^^^^^^^^^^^
+
+warning: field `max_inline_depth` is never read
+  --> rtfs/src/ir/enhanced_optimizer.rs:12:5
+   |
+ 9 | pub struct EnhancedIrOptimizer {
+   |            ------------------- field in this struct
+...
+12 |     max_inline_depth: usize,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: field `max_inline_depth` is never read
+  --> rtfs/src/ir/optimizer.rs:12:5
+   |
+ 9 | pub struct EnhancedIrOptimizer {
+   |            ------------------- field in this struct
+...
+12 |     max_inline_depth: usize,
+   |     ^^^^^^^^^^^^^^^^
+
+warning: function `values_equivalent` is never used
+  --> rtfs/src/runtime/evaluator.rs:50:4
+   |
+50 | fn values_equivalent(a: &Value, b: &Value) -> bool {
+   |    ^^^^^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> rtfs/src/runtime/evaluator.rs:218:8
+     |
+  63 | impl Evaluator {
+     | -------------- methods in this implementation
+...
+ 218 |     fn validate_expression_result(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+3071 |     fn cleanup_resource(
+     |        ^^^^^^^^^^^^^^^^
+...
+3136 |     fn parse_criteria_to_query(
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+3200 |     fn parse_options_to_query(
+     |        ^^^^^^^^^^^^^^^^^^^^^^
+...
+3281 |     fn simple_agent_card_to_value(&self, agent_card: SimpleAgentC...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+3354 |     fn parse_capabilities_list(&self, value: &Value) -> RuntimeRe...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+3382 |     fn parse_string_value(&self, value: &Value) -> RuntimeResult<...
+     |        ^^^^^^^^^^^^^^^^^^
+
+warning: method `get_or_create_persistent_env` is never used
+  --> rtfs/src/runtime/ir_runtime.rs:63:8
+   |
+35 | impl IrStrategy {
+   | --------------- method in this implementation
+...
+63 |     fn get_or_create_persistent_env(&mut self) -> Result<&mut IrEnv...
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> rtfs/src/runtime/microvm/providers/firecracker.rs:839:8
+     |
+ 815 | impl FirecrackerMicroVMProvider {
+     | ------------------------------- methods in this implementation
+...
+ 839 |     fn deploy_rtfs_runtime(&self, vm: &mut FirecrackerVM) -> Runt...
+     |        ^^^^^^^^^^^^^^^^^^^
+...
+1582 |     fn execute_rtfs_in_vm(
+     |        ^^^^^^^^^^^^^^^^^^
+...
+1709 |     fn perform_security_checks(&self, vm: &mut FirecrackerVM) -> ...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+1738 |     fn perform_resource_checks(&self, vm: &mut FirecrackerVM) -> ...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^
+...
+1756 |     fn update_performance_metrics(&self, execution_time: Duration...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1766 |     fn update_resource_usage(&self, vm: &mut FirecrackerVM) -> Ru...
+     |        ^^^^^^^^^^^^^^^^^^^^^
+...
+1778 |     fn calculate_security_score(&self, vm: &FirecrackerVM) -> f64 {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1799 |     fn get_vm(&mut self) -> RuntimeResult<&mut FirecrackerVM> {
+     |        ^^^^^^
+...
+1824 |     fn is_vm_healthy(&self, vm: &FirecrackerVM) -> bool {
+     |        ^^^^^^^^^^^^^
+
+warning: method `get_enhanced_metadata` is never used
+    --> rtfs/src/runtime/microvm/providers/firecracker.rs:2268:8
+     |
+2266 | impl FirecrackerMicroVMProvider {
+     | ------------------------------- method in this implementation
+2267 |     /// Get enhanced metadata from monitoring systems
+2268 |     fn get_enhanced_metadata(
+     |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `config` and `rtfs_runtime_path` are never read
+  --> rtfs/src/runtime/microvm/providers/gvisor.rs:74:5
+   |
+73 | pub struct GvisorMicroVMProvider {
+   |            --------------------- fields in this struct
+74 |     config: GvisorConfig,
+   |     ^^^^^^
+75 |     containers: HashMap<String, GvisorContainer>,
+76 |     rtfs_runtime_path: PathBuf,
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: methods `create_container`, `start_container`, `execute_in_container`, `deploy_rtfs_runtime`, `execute_rtfs_in_container`, and `get_container` are never used
+   --> rtfs/src/runtime/microvm/providers/gvisor.rs:101:8
+    |
+ 80 | impl GvisorMicroVMProvider {
+    | -------------------------- methods in this implementation
+...
+101 |     fn create_container(&mut self, container_id: &str) -> RuntimeR...
+    |        ^^^^^^^^^^^^^^^^
+...
+179 |     fn start_container(&mut self, container: &mut GvisorContainer)...
+    |        ^^^^^^^^^^^^^^^
+...
+200 |     fn execute_in_container(
+    |        ^^^^^^^^^^^^^^^^^^^^
+...
+270 |     fn deploy_rtfs_runtime(&self, container_id: &str) -> RuntimeRe...
+    |        ^^^^^^^^^^^^^^^^^^^
+...
+305 |     fn execute_rtfs_in_container(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+351 |     fn get_container(&mut self) -> RuntimeResult<String> {
+    |        ^^^^^^^^^^^^^
+
+warning: method `create_simple_wasm_module` is never used
+   --> rtfs/src/runtime/microvm/providers/wasm.rs:125:8
+    |
+ 23 | impl WasmMicroVMProvider {
+    | ------------------------ method in this implementation
+...
+125 |     fn create_simple_wasm_module(&self, _source: &str) -> RuntimeR...
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple associated functions are never used
+    --> rtfs/src/runtime/stdlib.rs:517:8
+     |
+  42 | impl StandardLibrary {
+     | -------------------- associated functions in this implementation
+...
+ 517 |     fn tool_open_file(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^^^
+...
+ 529 |     fn http_fetch_via_host(
+     |        ^^^^^^^^^^^^^^^^^^^
+...
+ 557 |     fn open_file_via_host(args: Vec<Value>, evaluator: &Evaluator...
+     |        ^^^^^^^^^^^^^^^^^^
+...
+ 564 |     fn tool_log_via_host(args: Vec<Value>, evaluator: &Evaluator)...
+     |        ^^^^^^^^^^^^^^^^^
+...
+ 569 |     fn time_ms_via_host(args: Vec<Value>, evaluator: &Evaluator) ...
+     |        ^^^^^^^^^^^^^^^^
+...
+ 576 |     fn file_exists_via_host(args: Vec<Value>, evaluator: &Evaluat...
+     |        ^^^^^^^^^^^^^^^^^^^^
+...
+ 583 |     fn get_env_via_host(args: Vec<Value>, evaluator: &Evaluator) ...
+     |        ^^^^^^^^^^^^^^^^
+...
+ 590 |     fn println_via_host(args: Vec<Value>, evaluator: &Evaluator) ...
+     |        ^^^^^^^^^^^^^^^^
+...
+ 595 |     fn thread_sleep_via_host(args: Vec<Value>, evaluator: &Evalua...
+     |        ^^^^^^^^^^^^^^^^^^^^^
+...
+ 602 |     fn read_lines_via_host(args: Vec<Value>, evaluator: &Evaluato...
+     |        ^^^^^^^^^^^^^^^^^^^
+...
+ 610 |     fn step_via_host(args: Vec<Value>, evaluator: &Evaluator) -> ...
+     |        ^^^^^^^^^^^^^
+...
+ 618 |     fn kv_assoc_bang(
+     |        ^^^^^^^^^^^^^
+...
+ 667 |     fn kv_dissoc_bang(
+     |        ^^^^^^^^^^^^^^
+...
+ 715 |     fn kv_conj_bang(
+     |        ^^^^^^^^^^^^
+...
+ 765 |     fn tool_log(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^
+...
+ 775 |     fn tool_time_ms(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^
+...
+ 986 |     fn println(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^
+...
+ 996 |     fn thread_sleep(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^^
+...
+1006 |     fn file_exists(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^
+...
+1016 |     fn get_env(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^
+...
+1026 |     fn read_lines(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^
+...
+1036 |     fn step(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^
+...
+1315 |     fn odd(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^
+...
+1338 |     fn inc(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^
+...
+1361 |     fn str(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^
+...
+1537 |     fn some(
+     |        ^^^^
+...
+1604 |     fn every(
+     |        ^^^^^
+...
+1671 |     fn even(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^
+...
+1694 |     fn first(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^
+...
+1734 |     fn rest(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^
+...
+1774 |     fn nth(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^
+...
+1825 |     fn range(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^
+...
+1924 |     fn map(args: Vec<Value>, evaluator: &Evaluator, env: &mut Env...
+     |        ^^^
+...
+1978 |     fn filter(
+     |        ^^^^^^
+...
+2079 |     fn reduce(
+     |        ^^^^^^
+...
+2151 |     fn sort(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^
+...
+2212 |     fn sort_by(
+     |        ^^^^^^^
+...
+2278 |     fn frequencies(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^^^^
+...
+2324 |     fn distinct(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^
+...
+2365 |     fn contains(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^^^^
+...
+2408 |     fn merge(args: Vec<Value>) -> RuntimeResult<Value> {
+     |        ^^^^^
+...
+2438 |     fn coordinate_work_stub(args: Vec<Value>) -> RuntimeResult<Va...
+     |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `f32_to_bits` is never used
+  --> rtfs/src/bytecode/mod.rs:79:4
+   |
+79 | fn f32_to_bits(f: f64) -> u32 {
+   |    ^^^^^^^^^^^
+
+warning: function `properties_to_map` is never used
+  --> rtfs/src/builders/module_builder.rs:77:4
+   |
+77 | fn properties_to_map(props: Vec<Property>) -> HashMap<MapKey, Expre...
+   |    ^^^^^^^^^^^^^^^^^
+
+warning: `rtfs` (lib) generated 61 warnings (run `cargo fix --lib -p rtfs` to apply 9 suggestions)
+    Checking ccos v0.1.0 (/home/mandubian/workspaces/mandubian/ccos/ccos)
+error[E0603]: module `context` is private
+  --> ccos/src/orchestrator.rs:20:20
+   |
+20 | use crate::budget::context::BudgetContext;
+   |                    ^^^^^^^ private module
+   |
+note: the module `context` is defined here
+  --> ccos/src/budget/mod.rs:62:1
+   |
+62 | mod context;
+   | ^^^^^^^^^^^^
+
+warning: unused import: `rtfs_value_to_json`
+ --> ccos/src/approval/queue.rs:3:58
+  |
+3 | use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
+  |                                                          ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::utils::value_conversion::rtfs_value_to_json`
+  --> ccos/src/approval/storage_file.rs:16:5
+   |
+16 | use crate::utils::value_conversion::rtfs_value_to_json;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TopLevel` and `TypeExpr`
+  --> ccos/src/approval/storage_file.rs:17:29
+   |
+17 | use rtfs::ast::{Expression, TopLevel, TypeExpr};
+   |                             ^^^^^^^^  ^^^^^^^^
+
+warning: unused imports: `AgentDefinition` and `AgentRegistryConfig`
+  --> ccos/src/cognitive_engine/delegating_engine.rs:12:5
+   |
+12 |     AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig, RetryConfig,
+   |     ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `PlanBody`, `PlanLanguage`, and `PlanStatus`
+  --> ccos/src/cognitive_engine/delegating_engine.rs:31:50
+   |
+31 |     ExecutionResult, Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
+   |                                                  ^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `ccos_println`
+ --> ccos/src/mcp/stdio_client.rs:6:28
+  |
+6 | use crate::{ccos_eprintln, ccos_println};
+  |                            ^^^^^^^^^^^^
+
+warning: unused import: `ExternalLlmHintStrategy`
+  --> ccos/src/synthesis/core/missing_capability_resolver.rs:10:5
+   |
+10 |     ExternalLlmHintStrategy, MissingCapabilityStrategy, MissingCapabilityStrategyConfig,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::synthesis::dialogue::capability_synthesizer::MultiCapabilityEndpoint`
+  --> ccos/src/synthesis/core/missing_capability_resolver.rs:27:5
+   |
+27 | use crate::synthesis::dialogue::capability_synthesizer::MultiCapabilityEndpoint;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ccos_eprintln`
+  --> ccos/src/ops/introspection_service.rs:18:13
+   |
+18 | use crate::{ccos_eprintln, ccos_println};
+   |             ^^^^^^^^^^^^^
+
+warning: unused import: `serde_json::json`
+  --> ccos/src/ops/introspection_service.rs:22:5
+   |
+22 | use serde_json::json;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `PathBuf`
+  --> ccos/src/ops/server_discovery_pipeline.rs:13:23
+   |
+13 | use std::path::{Path, PathBuf};
+   |                       ^^^^^^^
+
+warning: use of deprecated struct `approval::queue::ApprovalQueue`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:238:6
+    |
+238 | impl ApprovalQueue {
+    |      ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated struct `cognitive_engine::config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+   --> ccos/src/cognitive_engine/config.rs:152:21
+    |
+152 |     pub agents: Vec<AgentDefinition>,
+    |                     ^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `cognitive_engine::config::AgentRegistryConfig`: Use CapabilityMarketplace configuration instead
+   --> ccos/src/cognitive_engine/config.rs:585:18
+    |
+585 | impl Default for AgentRegistryConfig {
+    |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `cognitive_engine::config::AgentDefinition`: Use CapabilityMarketplace with :kind :agent capabilities instead
+  --> ccos/src/cognitive_engine/delegating_engine.rs:12:5
+   |
+12 |     AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig, RetryConfig,
+   |     ^^^^^^^^^^^^^^^
+
+warning: use of deprecated struct `cognitive_engine::config::AgentRegistryConfig`: Use CapabilityMarketplace configuration instead
+  --> ccos/src/cognitive_engine/delegating_engine.rs:12:22
+   |
+12 |     AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig, RetryConfig,
+   |                      ^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated function `base64::decode`: Use Engine::decode
+    --> ccos/src/capability_marketplace/executors.rs:1303:61
+     |
+1303 |                 let wasm_bytes = if let Ok(bytes) = base64::decode(&sandboxed.source) {
+     |                                                             ^^^^^^
+
+error[E0599]: no function or associated item named `with_metadata_map` found for struct `types::Action` in the current scope
+    --> ccos/src/orchestrator.rs:1169:29
+     |
+1169 |                     Action::with_metadata_map(
+     |                             ^^^^^^^^^^^^^^^^^ function or associated item not found in `types::Action`
+     |
+    ::: ccos/src/types.rs:159:1
+     |
+ 159 | pub struct Action {
+     | ----------------- function or associated item `with_metadata_map` not found for this struct
+     |
+note: if you're trying to build a new `types::Action` consider using one of the following associated functions:
+      types::Action::new
+      types::Action::new_capability
+    --> ccos/src/types.rs:489:5
+     |
+ 489 |       pub fn new(action_type: ActionType, plan_id: PlanId, intent_id: IntentId) -> Self {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 530 | /     pub fn new_capability(
+ 531 | |         plan_id: PlanId,
+ 532 | |         intent_id: IntentId,
+ 533 | |         name: &str,
+ 534 | |         args: &[Value],
+ 535 | |     ) -> Self {
+     | |_____________^
+help: there is a method `with_metadata` with a similar name, but with different arguments
+    --> ccos/src/types.rs:564:5
+     |
+ 564 |     pub fn with_metadata(mut self, key: &str, value: &str) -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> ccos/src/orchestrator.rs:1272:35
+     |
+1272 |                         return Ok((res, None));
+     |                                -- ^^^^^^^^^^^ expected `ExecutionResult`, found `(ExecutionResult, Option<_>)`
+     |                                |
+     |                                arguments to this enum variant are incorrect
+     |
+     = note: expected struct `types::ExecutionResult`
+                 found tuple `(types::ExecutionResult, std::option::Option<_>)`
+help: the type constructed contains `(types::ExecutionResult, std::option::Option<_>)` due to the type of the argument passed
+    --> ccos/src/orchestrator.rs:1272:32
+     |
+1272 |                         return Ok((res, None));
+     |                                ^^^-----------^
+     |                                   |
+     |                                   this argument influences the type of `Ok`
+note: tuple variant defined here
+    --> /home/mandubian/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:554:5
+     |
+ 554 |     Ok(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^
+
+error[E0599]: no function or associated item named `with_metadata_map` found for struct `types::Action` in the current scope
+    --> ccos/src/orchestrator.rs:1278:29
+     |
+1278 |                     Action::with_metadata_map(
+     |                             ^^^^^^^^^^^^^^^^^ function or associated item not found in `types::Action`
+     |
+    ::: ccos/src/types.rs:159:1
+     |
+ 159 | pub struct Action {
+     | ----------------- function or associated item `with_metadata_map` not found for this struct
+     |
+note: if you're trying to build a new `types::Action` consider using one of the following associated functions:
+      types::Action::new
+      types::Action::new_capability
+    --> ccos/src/types.rs:489:5
+     |
+ 489 |       pub fn new(action_type: ActionType, plan_id: PlanId, intent_id: IntentId) -> Self {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 530 | /     pub fn new_capability(
+ 531 | |         plan_id: PlanId,
+ 532 | |         intent_id: IntentId,
+ 533 | |         name: &str,
+ 534 | |         args: &[Value],
+ 535 | |     ) -> Self {
+     | |_____________^
+help: there is a method `with_metadata` with a similar name, but with different arguments
+    --> ccos/src/types.rs:564:5
+     |
+ 564 |     pub fn with_metadata(mut self, key: &str, value: &str) -> Self {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `resolution_method`
+   --> ccos/src/planner/capabilities_v2.rs:321:29
+    |
+321 | ...                   resolution_method,
+    |                       ^^^^^^^^^^^^^^^^^-
+    |                       |
+    |                       help: try removing the field
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `next_message` is never read
+   --> ccos/src/planner/dialogue_planner/planner.rs:229:17
+    |
+229 |         let mut next_message = None;
+    |                 ^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `next_message` is never read
+  --> ccos/src/planner/dialogue_planner/turn_processor.rs:81:17
+   |
+81 |         let mut next_message = None;
+   |                 ^^^^^^^^^^^^
+   |
+   = help: maybe it is overwritten before being read?
+
+warning: value assigned to `should_continue` is never read
+   --> ccos/src/planner/dialogue_planner/turn_processor.rs:244:17
+    |
+244 |                 should_continue = false;
+    |                 ^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unused variable: `arbiter`
+    --> ccos/src/planner/modular_planner/orchestrator.rs:1597:37
+     |
+1597 |                         if let Some(arbiter) = &self.delegating_arbiter {
+     |                                     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_arbiter`
+
+warning: value assigned to `synthetic_target_schema` is never read
+    --> ccos/src/planner/modular_planner/orchestrator.rs:1740:37
+     |
+1740 | ...                   let mut synthetic_target_schema: Option<serde_json::Value> = None;
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: variable does not need to be mutable
+    --> ccos/src/planner/modular_planner/orchestrator.rs:1578:17
+     |
+1578 |             let mut call_expr = match resolutions.get(intent_id) {
+     |                 ----^^^^^^^^^
+     |                 |
+     |                 help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `result`
+   --> ccos/src/planner/modular_planner/steps.rs:532:32
+    |
+532 | ...                   Ok(result) => {
+    |                          ^^^^^^ help: if this is intentional, prefix it with an underscore: `_result`
+
+warning: variable does not need to be mutable
+   --> ccos/src/planner/modular_planner/steps.rs:789:9
+    |
+789 |     let mut result = step_resolve_intents(sub_intents, intent_ids, resolution, trace).await?;
+    |         ----^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `source_url`
+    --> ccos/src/synthesis/core/missing_capability_resolver.rs:3756:9
+     |
+3756 |         source_url: &str,
+     |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_source_url`
+
+warning: unused variable: `introspection_query`
+  --> ccos/src/synthesis/importers/graphql_importer.rs:85:13
+   |
+85 |         let introspection_query = r#"
+   |             ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_introspection_query`
+
+warning: unused variable: `governance_result`
+  --> ccos/src/synthesis/registration/registration_flow.rs:81:13
+   |
+81 |         let governance_result = self.apply_governance_policies(&manifest, rtfs_code)?;
+   |             ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_governance_result`
+
+warning: unused variable: `native_provider`
+    --> ccos/src/capability_marketplace/executors.rs:1377:37
+     |
+1377 |             ExecutorVariant::Native(native_provider) => {
+     |                                     ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_native_provider`
+
+warning: unused variable: `input_schema`
+    --> ccos/src/capability_marketplace/marketplace.rs:1345:9
+     |
+1345 |         input_schema: Option<TypeExpr>,
+     |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_input_schema`
+
+warning: unused variable: `output_schema`
+    --> ccos/src/capability_marketplace/marketplace.rs:1346:9
+     |
+1346 |         output_schema: Option<TypeExpr>,
+     |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_output_schema`
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:241:13
+    |
+241 |             base_path: base_path.as_ref().to_path_buf(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:297:9
+    |
+297 |         self.base_path.join("capabilities/servers/pending")
+    |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:301:9
+    |
+301 |         self.base_path.join("servers")
+    |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:305:9
+    |
+305 |         self.base_path.join("capabilities/servers/approved")
+    |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:309:9
+    |
+309 |         self.base_path.join("capabilities/servers/rejected")
+    |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:313:9
+    |
+313 |         self.base_path.join("capabilities/servers/timeout")
+    |         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:648:27
+    |
+648 |         let legacy_path = self.base_path.join("capabilities/servers/pending.json");
+    |                           ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:673:27
+    |
+673 |         let legacy_path = self.base_path.join("capabilities/servers/approved.json");
+    |                           ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:692:27
+    |
+692 |         let legacy_path = self.base_path.join("capabilities/servers/rejected.json");
+    |                           ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+   --> ccos/src/approval/queue.rs:711:27
+    |
+711 |         let legacy_path = self.base_path.join("capabilities/servers/timeout.json");
+    |                           ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+    --> ccos/src/approval/queue.rs:1037:25
+     |
+1037 |                         self.base_path.join(path)
+     |                         ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `approval::queue::ApprovalQueue::base_path`: Use `UnifiedApprovalQueue` with `FileApprovalStorage` instead. This legacy queue will be removed in a future release.
+    --> ccos/src/approval/queue.rs:1056:29
+     |
+1056 | ...                   self.base_path.join(path)
+     |                       ^^^^^^^^^^^^^^
+
+warning: use of deprecated field `cognitive_engine::config::AgentRegistryConfig::registry_type`: Use CapabilityMarketplace configuration instead
+   --> ccos/src/cognitive_engine/config.rs:588:13
+    |
+588 |             registry_type: RegistryType::InMemory,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `cognitive_engine::config::AgentRegistryConfig::database_url`: Use CapabilityMarketplace configuration instead
+   --> ccos/src/cognitive_engine/config.rs:589:13
+    |
+589 |             database_url: None,
+    |             ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated field `cognitive_engine::config::AgentRegistryConfig::agents`: Use CapabilityMarketplace configuration instead
+   --> ccos/src/cognitive_engine/config.rs:590:13
+    |
+590 |             agents: vec![],
+    |             ^^^^^^^^^^^^^^
+
+warning: unused import: `StreamChunkSink`
+ --> ccos/src/streaming/mock_loop.rs:2:27
+  |
+2 |     McpStreamingProvider, StreamChunkSink, StreamTransport, StreamTransportArgs,
+  |                           ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::capabilities::provider::CapabilityProvider`
+  --> ccos/src/capability_marketplace/executors.rs:21:5
+   |
+21 | use crate::capabilities::provider::CapabilityProvider;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `wrapper_fn`
+   --> ccos/src/approval/queue.rs:601:9
+    |
+601 |         wrapper_fn: fn(Vec<T>) -> T, // Dummy wrapper not needed, we need to extract items
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_wrapper_fn`
+
+warning: variable does not need to be mutable
+    --> ccos/src/approval/queue.rs:1180:17
+     |
+1180 |             let mut approved_state = self.load_approved()?;
+     |                 ----^^^^^^^^^^^^^^
+     |                 |
+     |                 help: remove this `mut`
+
+warning: variable `deleted` is assigned to, but never used
+   --> ccos/src/approval/storage_file.rs:443:17
+    |
+443 |         let mut deleted = false;
+    |                 ^^^^^^^
+    |
+    = note: consider using `_deleted` instead
+
+warning: value assigned to `deleted` is never read
+   --> ccos/src/approval/storage_file.rs:454:17
+    |
+454 |                 deleted = true;
+    |                 ^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `found_plan_or_do` is never read
+    --> ccos/src/cognitive_engine/delegating_engine.rs:1558:21
+     |
+1558 |                     found_plan_or_do = true;
+     |                     ^^^^^^^^^^^^^^^^
+     |
+     = help: maybe it is overwritten before being read?
+
+warning: unused variable: `response_preview`
+   --> ccos/src/cognitive_engine/delegation_analysis.rs:231:17
+    |
+231 |             let response_preview = if response.len() > 500 {
+    |                 ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_response_preview`
+
+warning: variable does not need to be mutable
+   --> ccos/src/cognitive_engine/learning_augmenter.rs:442:9
+    |
+442 |     let mut skipped = vec![];
+    |         ----^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `intent`
+    --> ccos/src/governance_kernel.rs:1296:9
+     |
+1296 |         intent: Option<&StorableIntent>,
+     |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_intent`
+
+warning: unused variable: `graph`
+    --> ccos/src/governance_kernel.rs:1549:13
+     |
+1549 |         let graph = self
+     |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_graph`
+
+warning: unused variable: `t`
+   --> ccos/src/planner/modular_planner/resolution/mcp.rs:710:38
+    |
+710 |             if all_tools.iter().any(|t: &ToolSummary| {
+    |                                      ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `meta_map`
+   --> ccos/src/rtfs_bridge/extractors.rs:430:48
+    |
+430 |                         if let Expression::Map(meta_map) = value {
+    |                                                ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_meta_map`
+
+warning: value assigned to `missing_dependencies` is never read
+  --> ccos/src/synthesis/core/dependency_extractor.rs:49:13
+   |
+49 |     let mut missing_dependencies = HashSet::new();
+   |             ^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: maybe it is overwritten before being read?
+
+warning: unused variable: `meta`
+   --> ccos/src/synthesis/dialogue/artifact_generator.rs:614:15
+    |
+614 |     for (key, meta) in &schema.params {
+    |               ^^^^ help: if this is intentional, prefix it with an underscore: `_meta`
+
+warning: unused variable: `skills`
+   --> ccos/src/synthesis/dialogue/artifact_generator.rs:649:5
+    |
+649 |     skills: &[ExtractedSkill],
+    |     ^^^^^^ help: if this is intentional, prefix it with an underscore: `_skills`
+
+warning: unused variable: `i`
+   --> ccos/src/synthesis/dialogue/artifact_generator.rs:662:24
+    |
+662 |                 .map(|(i, param)| format!("{} {}", param.replace("/", "_"), param))
+    |                        ^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+662 |                 .map(|(_i, param)| format!("{} {}", param.replace("/", "_"), param))
+    |                        +
+help: you might have meant to pattern match on the similarly named constant `DEFAULT_MAX_VERSIONS`
+    |
+662 -                 .map(|(i, param)| format!("{} {}", param.replace("/", "_"), param))
+662 +                 .map(|(capability_marketplace::version_store::DEFAULT_MAX_VERSIONS, param)| format!("{} {}", param.replace("/", "_"), param))
+    |
+
+warning: unused variable: `i`
+   --> ccos/src/synthesis/dialogue/artifact_generator.rs:690:16
+    |
+690 |         .map(|(i, param)| format!(":{} {}", param.replace("/", "_"), param.replace("/", "_")))
+    |                ^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+690 |         .map(|(_i, param)| format!(":{} {}", param.replace("/", "_"), param.replace("/", "_")))
+    |                +
+help: you might have meant to pattern match on the similarly named constant `DEFAULT_MAX_VERSIONS`
+    |
+690 -         .map(|(i, param)| format!(":{} {}", param.replace("/", "_"), param.replace("/", "_")))
+690 +         .map(|(capability_marketplace::version_store::DEFAULT_MAX_VERSIONS, param)| format!(":{} {}", param.replace("/", "_"), param.replace("/", "_")))
+    |
+
+warning: unused variable: `root`
+   --> ccos/src/synthesis/introspection/schema_refiner.rs:106:9
+    |
+106 |     let root = get_workspace_root();
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_root`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/governance_policies.rs:370:32
+    |
+370 |     fn check_compliance(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> ValidationResult {
+    |                                ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/registration_flow.rs:205:9
+    |
+205 |         manifest: &CapabilityManifest,
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/registration_flow.rs:216:9
+    |
+216 |         manifest: &CapabilityManifest,
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+  --> ccos/src/synthesis/registration/static_analyzers.rs:36:23
+   |
+36 |     fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
+   |                       ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/static_analyzers.rs:143:23
+    |
+143 |     fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
+    |                       ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/static_analyzers.rs:235:23
+    |
+235 |     fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
+    |                       ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+   --> ccos/src/synthesis/registration/static_analyzers.rs:371:23
+    |
+371 |     fn analyze(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> Vec<ValidationIssue> {
+    |                       ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `validation_result`
+   --> ccos/src/synthesis/registration/validation_harness.rs:799:37
+    |
+799 |     pub fn create_provenance(&self, validation_result: &ValidationResult) -> CapabilityProvenance {
+    |                                     ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_validation_result`
+
+warning: unused variable: `cursor_position`
+    --> ccos/src/tui/panels.rs:2593:5
+     |
+2593 |     cursor_position: usize,
+     |     ^^^^^^^^^^^^^^^
+     |
+help: if this is intentional, prefix it with an underscore
+     |
+2593 |     _cursor_position: usize,
+     |     +
+help: you might have meant to pattern match on the similarly named constant `DEFAULT_MAX_VERSIONS`
+     |
+2593 -     cursor_position: usize,
+2593 +     capability_marketplace::version_store::DEFAULT_MAX_VERSIONS: usize,
+     |
+
+warning: unused variable: `memory`
+   --> ccos/src/capabilities/agent_ops.rs:125:21
+    |
+125 |         if let Some(memory) = memories.get(agent_id) {
+    |                     ^^^^^^ help: if this is intentional, prefix it with an underscore: `_memory`
+
+warning: unused variable: `capability_id`
+   --> ccos/src/capabilities/providers/github_mcp.rs:538:9
+    |
+538 |         capability_id: &str,
+    |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_capability_id`
+
+warning: unused variable: `context`
+   --> ccos/src/capabilities/providers/weather_mcp.rs:387:9
+    |
+387 |         context: &ExecutionContext,
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_context`
+
+warning: unused variable: `content`
+   --> ccos/src/capability_marketplace/discovery.rs:106:13
+    |
+106 |         let content = fs::read_to_string(&self.manifest_path)
+    |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_content`
+
+warning: unused variable: `i`
+   --> ccos/src/capability_marketplace/mcp_discovery.rs:984:14
+    |
+984 |         for (i, top_level) in top_levels.iter().enumerate() {
+    |              ^
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+984 |         for (_i, top_level) in top_levels.iter().enumerate() {
+    |              +
+help: you might have meant to pattern match on the similarly named constant `DEFAULT_MAX_VERSIONS`
+    |
+984 -         for (i, top_level) in top_levels.iter().enumerate() {
+984 +         for (capability_marketplace::version_store::DEFAULT_MAX_VERSIONS, top_level) in top_levels.iter().enumerate() {
+    |
+
+warning: unused variable: `module_def`
+    --> ccos/src/capability_marketplace/mcp_discovery.rs:1203:9
+     |
+1203 |         module_def: &rtfs::ast::ModuleDefinition,
+     |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_module_def`
+
+warning: unused variable: `indent_str`
+    --> ccos/src/capability_marketplace/mcp_discovery.rs:1568:13
+     |
+1568 |         let indent_str = "  ".repeat(indent);
+     |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_indent_str`
+
+warning: unused variable: `name`
+   --> ccos/src/capability_marketplace/types.rs:925:14
+    |
+925 |         for (name, limit) in &self.extended_limits {
+    |              ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `microvm_provider`
+   --> ccos/src/environment.rs:140:13
+    |
+140 |         let microvm_provider = config.microvm_provider.clone();
+    |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_microvm_provider`
+
+warning: unused variable: `http_allow_hosts`
+   --> ccos/src/environment.rs:141:13
+    |
+141 |         let http_allow_hosts = config.http_allow_hosts.clone();
+    |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_http_allow_hosts`
+
+warning: unused variable: `http_mocking_enabled`
+   --> ccos/src/environment.rs:142:13
+    |
+142 |         let http_mocking_enabled = config.http_mocking_enabled;
+    |             ^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_http_mocking_enabled`
+
+warning: variable `version` is assigned to, but never used
+   --> ccos/src/environment.rs:882:33
+    |
+882 |                         let mut version: Option<String> = None;
+    |                                 ^^^^^^^
+    |
+    = note: consider using `_version` instead
+
+warning: variable `source_url` is assigned to, but never used
+   --> ccos/src/environment.rs:883:33
+    |
+883 |                         let mut source_url: Option<String> = None;
+    |                                 ^^^^^^^^^^
+    |
+    = note: consider using `_source_url` instead
+
+warning: value assigned to `version` is never read
+   --> ccos/src/environment.rs:903:41
+    |
+903 | ...                   version = Some(s);
+    |                       ^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `source_url` is never read
+   --> ccos/src/environment.rs:910:41
+    |
+910 | ...                   source_url = Some(s);
+    |                       ^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unused variable: `env`
+   --> ccos/src/examples_common/builder.rs:227:13
+    |
+227 |     fn from(env: CcosEnv) -> Self {
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_env`
+
+warning: unused variable: `now`
+  --> ccos/src/hints/handlers/cache.rs:63:17
+   |
+63 |             let now = Instant::now();
+   |                 ^^^ help: if this is intentional, prefix it with an underscore: `_now`
+
+warning: unused variable: `result`
+   --> ccos/src/host.rs:197:9
+    |
+197 |         result: &RuntimeResult<Value>,
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_result`
+
+warning: unused variable: `capability_args`
+   --> ccos/src/host.rs:531:13
+    |
+531 |         let capability_args = Value::Map(call_map);
+    |             ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_capability_args`
+
+warning: unused variable: `files_rtfs`
+   --> ccos/src/ops/introspection_service.rs:457:13
+    |
+457 |         let files_rtfs = capability_files
+    |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_files_rtfs`
+
+warning: unused variable: `config`
+    --> ccos/src/streaming/runtime.rs:1701:9
+     |
+1701 |         config: &StreamConfig,
+     |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+
+warning: unused variable: `wisdom`
+   --> ccos/src/context_horizon.rs:278:9
+    |
+278 |         wisdom: DistilledWisdom,
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_wisdom`
+
+warning: unused variable: `task`
+   --> ccos/src/context_horizon.rs:675:41
+    |
+675 |     pub fn create_abstract_steps(&self, task: &Task) -> Result<Vec<AbstractStep>, RuntimeError> {
+    |                                         ^^^^ help: if this is intentional, prefix it with an underscore: `_task`
+
+warning: unused variable: `task`
+   --> ccos/src/context_horizon.rs:692:39
+    |
+692 |     pub fn create_data_handles(&self, task: &Task) -> Result<Vec<ResourceId>, RuntimeError> {
+    |                                       ^^^^ help: if this is intentional, prefix it with an underscore: `_task`
+
+Some errors have detailed explanations: E0308, E0599, E0603.
+For more information about an error, try `rustc --explain E0308`.
+warning: `ccos` (lib) generated 99 warnings
+error: could not compile `ccos` (lib) due to 4 previous errors; 99 warnings emitted
