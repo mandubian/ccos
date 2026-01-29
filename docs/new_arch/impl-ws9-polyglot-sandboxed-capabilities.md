@@ -1,6 +1,6 @@
 # WS9: Polyglot Sandboxed Capabilities - Implementation Plan
 
-**Status**: Planning  
+**Status**: In Progress  
 **Priority**: High  
 **Related**: [Spec](./spec-polyglot-sandboxed-capabilities.md), [Roadmap](./ccos-secure-chat-gateway-roadmap.md)
 
@@ -17,33 +17,41 @@ WS9 enables CCOS to execute capabilities written in any programming language (Py
 | Component | Location | Status |
 |-----------|----------|--------|
 | `MicroVMFactory` | `rtfs/src/runtime/microvm/mod.rs` | ✅ Complete |
-| `ProcessMicroVMProvider` | `rtfs/src/runtime/microvm/providers/process.rs` | ✅ Basic |
+| `ProcessMicroVMProvider` | `rtfs/src/runtime/microvm/providers/process.rs` | ✅ Complete |
 | `FirecrackerMicroVMProvider` | `rtfs/src/runtime/microvm/providers/firecracker.rs` | ✅ Skeleton |
 | `GvisorMicroVMProvider` | `rtfs/src/runtime/microvm/providers/gvisor.rs` | ✅ Skeleton |
 | `WasmMicroVMProvider` | `rtfs/src/runtime/microvm/providers/wasm.rs` | ✅ Skeleton |
-| `SandboxedExecutor` | `ccos/src/capability_marketplace/executors.rs` | ✅ Basic |
+| `SandboxedExecutor` | `ccos/src/capability_marketplace/executors.rs` | ✅ Complete |
 | `SandboxedCapability` type | `ccos/src/capability_marketplace/types.rs` | ✅ Complete |
-| Integration tests | `ccos/tests/test_sandboxed_capability.rs` | ✅ Basic |
+| Integration tests | `ccos/tests/test_sandboxed_capability.rs` | ✅ Complete |
+| `SandboxRuntime` trait | `ccos/src/sandbox/mod.rs` | ✅ Complete |
+| `SandboxManager` | `ccos/src/sandbox/manager.rs` | ✅ Complete |
+| `SandboxConfig` | `ccos/src/sandbox/config.rs` | ✅ Complete |
+| `NetworkProxy` | `ccos/src/sandbox/network_proxy.rs` | ✅ Complete |
+| `SecretInjector` | `ccos/src/sandbox/secret_injection.rs` | ✅ Complete |
+| `VirtualFilesystem` | `ccos/src/sandbox/filesystem.rs` | ✅ Complete |
+| `ResourceLimits` / `ResourceMetrics` | `ccos/src/sandbox/resources.rs` | ✅ Complete |
+| Budget integration | `ccos/src/budget/context.rs` | ✅ `record_sandbox_consumption()` |
+| Host metering | `ccos/src/host.rs` | ✅ CPU/memory/wall-clock extraction |
 
 ### 🔴 Missing / Incomplete
 
 | Component | Gap |
 |-----------|-----|
-| GK Network Proxy | No allowlist enforcement, no egress metering |
-| Secret Injection | Secrets not injected into sandboxes |
-| Filesystem Policy | No virtual FS mounting with quotas |
-| Resource Limits | No CPU/memory/time enforcement |
-| Governance Integration | Sandboxed execution bypasses GK checks |
 | Capability Manifest Schema | `:runtime` field not parsed from RTFS |
+| Manifest `:filesystem` parsing | Uses temporary metadata keys |
+| Manifest `:resources` parsing | Uses temporary metadata keys |
 | Skills Layer | Not started |
 
 ---
 
 ## Phased Implementation
 
-### Phase 0: Foundation Hardening (1-2 weeks)
+### Phase 0: Foundation Hardening ✅ COMPLETE
 
 **Goal**: Ensure existing sandbox infrastructure is robust and integrated with GK.
+
+**Status**: ✅ Complete — `SandboxRuntime` trait, `SandboxManager`, `SandboxConfig` implemented. GK routing via metadata keys.
 
 #### 0.1 Sandbox Manager Interface
 
@@ -124,9 +132,42 @@ impl GovernanceKernel {
 
 ---
 
-### Phase 1: Network Proxy & Secret Injection (2-3 weeks)
+### Phase 1: Network Proxy & Secret Injection ✅ COMPLETE
 
 **Goal**: Implement the security-critical layers for sandboxed network and secrets.
+
+**Status**: ✅ Complete — `NetworkProxy` with host/port allowlists, `SecretInjector` for header injection.
+
+**Current metadata keys** (temporary):
+- `sandbox_required_secrets`: comma-separated secret names
+- `sandbox_allowed_hosts`: comma-separated host allowlist
+- `sandbox_allowed_ports`: comma-separated ports
+
+**Example runtime context** (cross-plan params):
+
+```rust
+let mut ctx = RuntimeContext::controlled(vec!["ccos.network.http-fetch".to_string()]);
+ctx.cross_plan_params.insert(
+    "sandbox_allowed_hosts".to_string(),
+    Value::String("api.example.com".to_string()),
+);
+ctx.cross_plan_params.insert(
+    "sandbox_allowed_ports".to_string(),
+    Value::String("443".to_string()),
+);
+ctx.cross_plan_params.insert(
+    "sandbox_required_secrets".to_string(),
+    Value::String("EXAMPLE_API_KEY".to_string()),
+);
+```
+
+**Runtime behavior** (current):
+- Required secrets are written to a temp directory and exposed via `CCOS_SECRET_DIR`.
+- MicroVM FS policy is set to read-only for that secrets directory.
+- Host allowlists are enforced by preflight URL parsing in `SandboxManager`.
+- Port allowlists are enforced by preflight URL parsing in `SandboxManager`.
+- `NetworkProxy` forwards requests with allowlist checks and secret header injection.
+- `ccos.network.http-fetch` routes through `NetworkProxy` when `sandbox_*` metadata is present.
 
 #### 1.1 GK Network Proxy
 
@@ -221,9 +262,11 @@ impl SecretInjector {
 
 ---
 
-### Phase 2: Filesystem & Resource Limits (2 weeks)
+### Phase 2: Filesystem & Resource Limits ✅ COMPLETE
 
 **Goal**: Implement virtual filesystem mounting and resource budget enforcement.
+
+**Status**: ✅ Complete — `VirtualFilesystem`, `ResourceLimits`, `ResourceMetrics` with MicroVM metadata extraction. Budget integration via `record_sandbox_consumption()`.
 
 #### 2.1 Virtual Filesystem
 
@@ -279,6 +322,10 @@ impl SandboxManager {
     }
 }
 ```
+
+**Temporary metadata keys** (until manifest fields land in Phase 3):
+- `sandbox_filesystem`: JSON-encoded `VirtualFilesystem`
+- `sandbox_resources`: JSON-encoded `ResourceLimits`
 
 **Integration with Budget System:**
 Sandboxed capability consumption is reported to `BudgetContext`:
