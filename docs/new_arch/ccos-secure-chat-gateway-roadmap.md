@@ -178,10 +178,18 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
 - **WS6 Packaging/Distribution**: signed bundles for “skills/capabilities”.
 - **WS7 Remote Nodes/Pairing**: secure pairing + scoped remote surfaces.
 - **WS8 Observability**: metrics/logging/tracing for runs, denials, costs.
-- **WS9 Polyglot Sandboxed Capabilities**: execute Python/JS/Go capabilities in microVMs with GK-proxied effects. See [Polyglot Sandboxed Capabilities Spec](./spec-polyglot-sandboxed-capabilities.md).
-- **WS10 Skills Layer**: natural-language teaching docs that map to governed capabilities.
-- **WS11 Resource Budget Governance**: upfront estimation, enforcement, warning thresholds, human escalation for all agent runs.
+- **WS9 Polyglot Sandboxed Capabilities** ✅: execute Python/JS/Go capabilities in microVMs with GK-proxied effects. See [Polyglot Sandboxed Capabilities Spec](./spec-polyglot-sandboxed-capabilities.md) and [Implementation Plan](./impl-ws9-polyglot-sandboxed-capabilities.md).
+- **WS10 Skills Layer** ✅: natural-language teaching docs that map to governed capabilities. *(Implemented as part of WS9 Phase 4)*
+- **WS11 Resource Budget Governance** ✅: upfront estimation, enforcement, warning thresholds, human escalation for all agent runs.
 - **WS12 Governed Memory**: working memory + long-term memory with PII classification, storage quotas, and governed read/write (not raw workspace files).
+
+### Implementation Status Summary
+
+| Workstream | Status | Key Components |
+|------------|--------|----------------|
+| WS9 | ✅ Complete | `sandbox/` module (config, manager, network_proxy, secret_injection, filesystem, resources), manifest types (`RuntimeSpec`, `NetworkPolicy`, `FilesystemSpec`) |
+| WS10 | ✅ Complete | `skills/` module (types, parser, mapper), `Skill`, `SkillMapper`, YAML parsing |
+| WS11 | ✅ Complete | `budget/` module (context, events, types), `BudgetContext`, checkpoint/resume, approval queue integration |
 
 ## Phase 0 — Define “Chat Mode” Security Contract (Spec + Minimal Implementation)
 **Goal**: make it impossible to accidentally recreate Moltbot’s unsafe personal-data model.
