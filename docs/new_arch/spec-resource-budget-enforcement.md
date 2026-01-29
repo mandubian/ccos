@@ -227,16 +227,181 @@ Session-level limits can be provided via execution context and will clamp per-ru
 - All `BudgetEvent` variants are recorded as `Action` nodes with `ActionType::BudgetConsumptionRecorded`.
 - Metadata includes `duration_ms`, `llm_input_tokens`, `llm_output_tokens`, and `cost_usd`.
 
-## 11. Future Work
+## 11. Implementation Status
 
-- [x] Budget inheritance (session → run → step)
-- [x] Approval-driven budget extensions (execution hints + approval queue)
-- [x] Budget extension visibility in approvals UI (main pane + side panel)
-- [ ] Predictive budget estimation before run
-- [ ] Automatic model tier selection based on remaining budget
-- [ ] Cost optimization via batching
+### Phase 1: Core Budget Enforcement ✅ COMPLETE
 
-## 12. References
+| Component | Status | Location |
+|-----------|--------|----------|
+| `BudgetLimits` struct | ✅ | `ccos/src/budget/types.rs` |
+| `BudgetContext` struct | ✅ | `ccos/src/budget/context.rs` |
+| `ExhaustionPolicy` enum | ✅ | `ccos/src/budget/types.rs` |
+| `BudgetConsumed` tracking | ✅ | `ccos/src/budget/context.rs` |
+| `check_budget_pre_call()` | ✅ | `ccos/src/host.rs` |
+| `record_budget_consumption()` | ✅ | `ccos/src/host.rs` |
+| Warning thresholds (50%/80%) | ✅ | `ccos/src/budget/context.rs` |
+| Causal Chain logging | ✅ | `ccos/src/host.rs`, `ccos/src/types.rs` |
+| Pause + Checkpoint on exhaustion | ✅ | `ccos/src/orchestrator.rs` |
+| Integration test | ✅ | `ccos/tests/test_budget_exhaustion.rs` |
 
-- [Secure Chat Gateway Roadmap](./ccos-secure-chat-gateway-roadmap.md) - WS11 Resource Budget Governance
-- [Polyglot Sandboxed Capabilities](./spec-polyglot-sandboxed-capabilities.md) - Section 7.4 Resource Budget Integration
+**Key behaviors implemented:**
+- Pre-call budget check before every capability execution
+- Post-call metering extracts `llm_input_tokens`, `llm_output_tokens`, `cost_usd`, `duration_ms` from result metadata
+- `ApprovalRequired` policy triggers plan pause with checkpoint generation
+- `HardStop` policy ends execution as `Failed`
+- All budget events logged to Causal Chain with `ActionType::BudgetConsumptionRecorded`
+
+### Phase 2: Approval-to-Resume Flow 🔴 NOT STARTED
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `ccos_budget_approve` MCP tool | ❌ | Approve budget extension |
+| `ccos_budget_deny` MCP tool | ❌ | Deny and cancel run |
+| `resume_from_checkpoint()` | ❌ | Reload state and continue |
+| TUI approval integration | ❌ | Show budget approvals in queue |
+| Budget extension via execution hints | ❌ | `budget_extend` hint |
+
+### Phase 3: Advanced Features 🔴 NOT STARTED
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Upfront resource estimation | ❌ | LLM-based prediction |
+| Automatic model tier selection | ❌ | Based on remaining budget |
+| Network/storage budget dimensions | ❌ | `network_egress_bytes`, `storage_write_bytes` |
+| Cost optimization via batching | ❌ | Group capability calls |
+
+---
+
+## 12. Implementation Plan: Approval-to-Resume Flow
+
+### Goal
+Enable human operators to approve or deny budget extensions when a run is paused due to `ApprovalRequired` policy, and resume execution from the checkpoint.
+
+### 12.1 New MCP Tools
+
+#### `ccos_budget_approve`
+```rust
+struct BudgetApproveInput {
+    checkpoint_id: String,
+    extensions: BudgetExtensions, // which dimensions to extend and by how much
+    reason: Option<String>,
+}
+
+struct BudgetExtensions {
+    steps: Option<u32>,
+    llm_tokens: Option<u64>,
+    cost_usd: Option<f64>,
+    wall_clock_ms: Option<u64>,
+}
+```
+
+**Behavior:**
+1. Load checkpoint by ID
+2. Extend the `BudgetContext` using `extend_*()` methods
+3. Log `BudgetEvent::Extended` to Causal Chain
+4. Call `Orchestrator::resume_from_checkpoint(checkpoint_id)`
+5. Return new execution result
+
+#### `ccos_budget_deny`
+```rust
+struct BudgetDenyInput {
+    checkpoint_id: String,
+    reason: Option<String>,
+}
+```
+
+**Behavior:**
+1. Load checkpoint by ID
+2. Mark run as `Cancelled` in session state
+3. Log `BudgetEvent::Denied` to Causal Chain
+4. Clean up checkpoint file
+
+### 12.2 Orchestrator Changes
+
+#### New method: `resume_from_checkpoint()`
+```rust
+impl Orchestrator {
+    pub async fn resume_from_checkpoint(
+        &self,
+        checkpoint_id: &str,
+        extended_budget: Option<BudgetExtensions>,
+    ) -> RuntimeResult<ExecutionResult> {
+        // 1. Load checkpoint from storage
+        let checkpoint = self.load_checkpoint(checkpoint_id)?;
+        
+        // 2. Restore evaluator state
+        let evaluator = self.restore_evaluator(&checkpoint)?;
+        
+        // 3. Apply budget extensions if provided
+        if let Some(extensions) = extended_budget {
+            checkpoint.budget_context.extend(extensions);
+        }
+        
+        // 4. Resume execution from saved program counter
+        self.continue_execution(evaluator, checkpoint.budget_context).await
+    }
+}
+```
+
+### 12.3 Approval Queue Integration
+
+Extend `UnifiedApprovalQueue` to include budget extension requests:
+
+```rust
+pub enum ApprovalRequestKind {
+    ServerDiscovery { ... },
+    CapabilityExecution { ... },
+    BudgetExtension {
+        checkpoint_id: String,
+        exhausted_dimension: String,
+        consumed: BudgetConsumed,
+        limits: BudgetLimits,
+        suggested_extension: BudgetExtensions,
+    },
+}
+```
+
+### 12.4 TUI Integration
+
+Add to approvals panel:
+- Show `BudgetExtension` requests with:
+  - Which dimension was exhausted
+  - Current consumption vs limits
+  - Suggested extension amount
+- Actions: Approve (with optional amount edit) / Deny
+
+### 12.5 Execution Hints Extension
+
+Add `budget_extend` hint for programmatic extensions:
+
+```rust
+pub enum ExecutionHint {
+    // ... existing hints
+    BudgetExtend {
+        dimension: String,
+        additional: u64,
+    },
+}
+```
+
+---
+
+## 13. File Change Summary (Phase 2)
+
+### New Files
+- `ccos/src/ops/budget_approval.rs` — MCP tool handlers for approve/deny
+
+### Modified Files
+- `ccos/src/orchestrator.rs` — Add `resume_from_checkpoint()`
+- `ccos/src/approval/types.rs` — Add `BudgetExtension` request kind
+- `ccos/src/bin/ccos-mcp.rs` — Register new MCP tools
+- `ccos/src/tui/panels.rs` — Render budget approval requests
+- `ccos/src/budget/context.rs` — Add `extend()` method for multiple dimensions
+
+---
+
+## 14. References
+
+- [Secure Chat Gateway Roadmap](./ccos-secure-chat-gateway-roadmap.md) — WS11 Resource Budget Governance
+- [Polyglot Sandboxed Capabilities](./spec-polyglot-sandboxed-capabilities.md) — Section 7.4 Resource Budget Integration
+- [Checkpoint/Resume](../ccos/specs/017-checkpoint-resume.md) — Plan serialization and resumption
