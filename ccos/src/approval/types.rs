@@ -63,6 +63,15 @@ pub enum ApprovalCategory {
         secret_type: String,
         description: String,
     },
+    /// Budget extension approval (for exhausted budgets requiring escalation)
+    BudgetExtension {
+        plan_id: String,
+        intent_id: String,
+        dimension: String,
+        requested_additional: f64,
+        consumed: u64,
+        limit: u64,
+    },
 }
 
 /// Health tracking for approved servers
@@ -106,6 +115,9 @@ impl fmt::Display for ApprovalCategory {
             }
             ApprovalCategory::SecretRequired { capability_id, .. } => {
                 write!(f, "SecretRequired({})", capability_id)
+            }
+            ApprovalCategory::BudgetExtension { dimension, .. } => {
+                write!(f, "BudgetExtension({})", dimension)
             }
         }
     }

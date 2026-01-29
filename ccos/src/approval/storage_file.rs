@@ -13,8 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-use crate::utils::value_conversion::rtfs_value_to_json;
-use rtfs::ast::{Expression, TopLevel, TypeExpr};
+use rtfs::ast::Expression;
 
 /// File-based implementation of ApprovalStorage.
 ///
@@ -440,7 +439,7 @@ impl FileApprovalStorage {
         // However, usually `remove` is called with the ID, and we check the cache first.
         // But to be safe and thorough, we check all dirs.
 
-        let mut deleted = false;
+        let mut _deleted = false;
         for status in &["pending", "approved", "rejected", "expired"] {
             let path = self.base_path.join(status).join(format!("{}.json", id));
             if path.exists() {
@@ -451,7 +450,7 @@ impl FileApprovalStorage {
                         e
                     ))
                 })?;
-                deleted = true;
+                _deleted = true;
             }
         }
 
@@ -480,6 +479,7 @@ impl FileApprovalStorage {
                 ApprovalCategory::SynthesisApproval { .. } => "SynthesisApproval",
                 ApprovalCategory::LlmPromptApproval { .. } => "LlmPromptApproval",
                 ApprovalCategory::SecretRequired { .. } => "SecretRequired",
+                ApprovalCategory::BudgetExtension { .. } => "BudgetExtension",
             };
             if request_type != category_type {
                 return false;
@@ -664,7 +664,7 @@ mod tests {
     #[tokio::test]
     async fn test_file_storage_add_and_get() {
         let dir = tempdir().unwrap();
-        let mut storage = FileApprovalStorage::new(dir.path().to_path_buf()).unwrap();
+        let storage = FileApprovalStorage::new(dir.path().to_path_buf()).unwrap();
 
         let request = create_test_request("test-1", true);
         storage.add(request.clone()).await.unwrap();
@@ -681,7 +681,7 @@ mod tests {
 
         // Add a request
         {
-            let mut storage = FileApprovalStorage::new(path.clone()).unwrap();
+            let storage = FileApprovalStorage::new(path.clone()).unwrap();
             let request = create_test_request("persist-1", false);
             storage.add(request).await.unwrap();
         }
@@ -697,7 +697,7 @@ mod tests {
     #[tokio::test]
     async fn test_file_storage_remove() {
         let dir = tempdir().unwrap();
-        let mut storage = FileApprovalStorage::new(dir.path().to_path_buf()).unwrap();
+        let storage = FileApprovalStorage::new(dir.path().to_path_buf()).unwrap();
 
         let request = create_test_request("remove-1", true);
         storage.add(request).await.unwrap();

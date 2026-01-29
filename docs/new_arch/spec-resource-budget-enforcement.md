@@ -147,7 +147,7 @@ When `ExhaustionPolicy::ApprovalRequired` triggers:
    - Proposed extension amount
 3. User approves/denies/modifies extension
 4. If approved:
-   - Budget extended via `extend_*()` methods
+  - Budget extended via `extend_*()` methods or `execution_hints.budget_extend`
    - `BudgetEvent::Extended` logged
    - Run resumes
 5. If denied:
@@ -196,22 +196,42 @@ Runs can specify custom limits via RTFS metadata:
   :body (do ...))
 ```
 
+### Session Budget (Inheritance)
+Session-level limits can be provided via execution context and will clamp per-run budgets:
+
+```clojure
+{:session_budget_limits
+  {:steps 200
+   :wall_clock_ms 600000
+   :llm_tokens 200000
+   :cost_usd 1.0
+   :network_egress_bytes 10485760
+   :storage_write_bytes 52428800}}
+```
+
 ## 10. Integration Points
 
 ### RuntimeHost
-- `check_budget_pre_call()` before each capability
-- `record_consumption()` after capability returns
+- `check_budget_pre_call()`: Intercepts host calls before execution to verify remaining budget.
+- `record_budget_consumption()`: Extracts consumption data from `RuntimeResult<Value>` metadata.
+  - Recognizes keys like `usage.llm_input_tokens`, `usage_output_tokens`, `total_cost_usd`, etc.
+  - **Provider-first**: uses provider-reported usage when available.
+  - **Fallback estimation**: if provider usage is missing, estimate tokens from serialized inputs/outputs and mark as estimated.
+  - Records results into `BudgetContext` and logs to **Causal Chain**.
+
+### GovernanceKernel
+- `handle_host_call_governed()`: Central entry point for all governed host calls.
+- Validates current execution hints and budget before delegating to the `Orchestrator`.
 
 ### Causal Chain
-- All `BudgetEvent` variants logged
-
-### Orchestrator
-- Creates `BudgetContext` at run start
-- Handles `ApprovalRequired` pausing
+- All `BudgetEvent` variants are recorded as `Action` nodes with `ActionType::BudgetConsumptionRecorded`.
+- Metadata includes `duration_ms`, `llm_input_tokens`, `llm_output_tokens`, and `cost_usd`.
 
 ## 11. Future Work
 
-- [ ] Budget inheritance (session → run → step)
+- [x] Budget inheritance (session → run → step)
+- [x] Approval-driven budget extensions (execution hints + approval queue)
+- [x] Budget extension visibility in approvals UI (main pane + side panel)
 - [ ] Predictive budget estimation before run
 - [ ] Automatic model tier selection based on remaining budget
 - [ ] Cost optimization via batching

@@ -17,7 +17,9 @@
 //! - Determinism flags for reproducible execution
 //! - Resource limits and isolation levels
 
+use crate::budget::{BudgetContext, BudgetLimits};
 use crate::capability_marketplace::CapabilityMarketplace;
+use crate::config::types::PolicyConfig;
 use crate::execution_context::IsolationLevel;
 use crate::host::RuntimeHost;
 use rtfs::ast::MapKey;
@@ -28,6 +30,7 @@ use rtfs::runtime::execution_outcome::ExecutionOutcome;
 use rtfs::runtime::microvm::config::{FileSystemPolicy, MicroVMConfig, NetworkPolicy};
 use rtfs::runtime::security::RuntimeContext;
 use rtfs::runtime::values::Value;
+use crate::utils::value_conversion::rtfs_value_to_json;
 use serde_json::{self, Value as JsonValue};
 use std::sync::{Arc, Mutex};
 
@@ -593,8 +596,6 @@ pub struct Orchestrator {
     plan_archive: Arc<PlanArchive>,
     /// Current step profile being executed (for step-level security enforcement)
     current_step_profile: Option<StepProfile>,
-    /// Execution hint policies from Constitution (for runtime validation)
-    hint_policies: crate::governance_kernel::ExecutionHintPolicies,
     /// Modular hint handler registry for extensible hint processing
     hint_registry: Arc<crate::hints::HintHandlerRegistry>,
 }
@@ -633,30 +634,99 @@ impl Orchestrator {
             checkpoint_archive: Arc::new(CheckpointArchive::new()),
             plan_archive,
             current_step_profile: None,
-            hint_policies: crate::governance_kernel::ExecutionHintPolicies::default(),
             hint_registry: Arc::new(crate::hints::HintHandlerRegistry::with_defaults()),
         }
     }
 
-    /// Creates a new Orchestrator with custom hint policies.
-    pub(crate) fn new_with_policies(
-        causal_chain: Arc<Mutex<CausalChain>>,
-        intent_graph: Arc<Mutex<IntentGraph>>,
-        capability_marketplace: Arc<CapabilityMarketplace>,
-        plan_archive: Arc<PlanArchive>,
-        hint_policies: crate::governance_kernel::ExecutionHintPolicies,
-    ) -> Self {
-        Self {
-            causal_chain,
-            intent_graph,
-            capability_marketplace,
-            checkpoint_archive: Arc::new(CheckpointArchive::new()),
-            plan_archive,
-            current_step_profile: None,
-            hint_policies,
-            hint_registry: Arc::new(crate::hints::HintHandlerRegistry::with_defaults()),
+    /// Creates a new Orchestrator with custom policies.
+    /// Initializes a BudgetContext for a plan execution based on its execution mode and governance policies.
+    pub(crate) fn initialize_budget_context(
+        &self,
+        policy: &PolicyConfig,
+        context: &RuntimeContext,
+    ) -> RuntimeResult<Arc<Mutex<BudgetContext>>> {
+        let mut limits = policy.budgets.limits.clone();
+
+        // Apply session-level budget inheritance when provided in context.
+        if let Some(session_limits) = self.extract_session_budget_limits(context) {
+            limits = limits.clamp_to(&session_limits);
+        }
+
+        let budget_context = BudgetContext::new(limits, policy.budgets.policies.clone());
+
+        Ok(Arc::new(Mutex::new(budget_context)))
+    }
+
+    fn extract_session_budget_limits(&self, context: &RuntimeContext) -> Option<BudgetLimits> {
+        let value = context.get_cross_plan_param("session_budget_limits")?;
+        let json = rtfs_value_to_json(value).ok()?;
+
+        let obj = json.as_object()?;
+
+        let steps = obj.get("steps")?.as_u64()? as u32;
+        let wall_clock_ms = obj.get("wall_clock_ms")?.as_u64()?;
+        let llm_tokens = obj.get("llm_tokens")?.as_u64()?;
+        let cost_usd = obj.get("cost_usd")?.as_f64()?;
+        let network_egress_bytes = obj.get("network_egress_bytes")?.as_u64()?;
+        let storage_write_bytes = obj.get("storage_write_bytes")?.as_u64()?;
+
+        Some(BudgetLimits {
+            steps,
+            wall_clock_ms,
+            llm_tokens,
+            cost_usd,
+            network_egress_bytes,
+            storage_write_bytes,
+        })
+    }
+
+    fn apply_budget_overrides_from_plan(&self, plan: &Plan, policy: &mut PolicyConfig) {
+        let override_value = plan
+            .policies
+            .get("budget")
+            .or_else(|| plan.policies.get("budget_limits"));
+
+        let Some(value) = override_value else {
+            return;
+        };
+
+        let Ok(json) = rtfs_value_to_json(value) else {
+            return;
+        };
+
+        let obj = match json.as_object() {
+            Some(obj) => obj,
+            None => return,
+        };
+
+        if let Some(steps) = obj.get("steps").and_then(|v| v.as_u64()) {
+            policy.budgets.limits.steps = steps as u32;
+        }
+        if let Some(wall_clock_ms) = obj.get("wall_clock_ms").and_then(|v| v.as_u64()) {
+            policy.budgets.limits.wall_clock_ms = wall_clock_ms;
+        }
+        if let Some(llm_tokens) = obj.get("llm_tokens").and_then(|v| v.as_u64()) {
+            policy.budgets.limits.llm_tokens = llm_tokens;
+        }
+        if let Some(cost_usd) = obj
+            .get("cost_usd")
+            .and_then(|v| v.as_f64().or_else(|| v.as_u64().map(|u| u as f64)))
+        {
+            policy.budgets.limits.cost_usd = cost_usd;
+        }
+        if let Some(network_egress_bytes) =
+            obj.get("network_egress_bytes").and_then(|v| v.as_u64())
+        {
+            policy.budgets.limits.network_egress_bytes = network_egress_bytes;
+        }
+        if let Some(storage_write_bytes) =
+            obj.get("storage_write_bytes").and_then(|v| v.as_u64())
+        {
+            policy.budgets.limits.storage_write_bytes = storage_write_bytes;
         }
     }
+
+    /// Creates a new Orchestrator with custom hint policies.
 
     /// Execute RTFS expression with yield-based control flow handling.
     /// This implements the top-level execution loop that handles RequiresHost outcomes.
@@ -698,30 +768,11 @@ impl Orchestrator {
 
     /// Handles a host call with governance (hint validation and application).
     /// This is the unified entry point for capability execution from RuntimeHost.
-    pub async fn handle_host_call(
+    pub(crate) async fn handle_host_call_internal(
         &self,
         host_call: &rtfs::runtime::execution_outcome::HostCall,
     ) -> RuntimeResult<Value> {
-        // Detect security level for conditional governance checkpoint (inline pattern matching)
-        let security_level = Self::detect_security_level_for_capability(&host_call.capability_id);
-
-        // Tier 2: Atomic governance checkpoint for risky operations
-        let checkpoint_id = if security_level >= "medium" {
-            let decision_action = self.log_action(
-                Action::new(
-                    ActionType::GovernanceCheckpointDecision,
-                    host_call.capability_id.clone(),
-                    String::new(),
-                )
-                .with_metadata("security_level", security_level)
-                .with_metadata("decision", "approved"),
-            )?;
-            Some(decision_action)
-        } else {
-            None
-        };
-
-        // Validate and apply execution hints
+        // Extract execution hints
         let hints = host_call
             .metadata
             .as_ref()
@@ -729,37 +780,14 @@ impl Orchestrator {
             .cloned()
             .unwrap_or_default();
 
-        // Validate hints against governance policies before executing
-        self.validate_execution_hints(&hints)?;
-
         // Apply execution hints (retry, timeout, fallback) via modular registry
         let execution_ctx = crate::hints::ExecutionContext::new(
             Arc::clone(&self.capability_marketplace),
             Arc::clone(&self.causal_chain),
         );
-        let result = self
-            .hint_registry
+        self.hint_registry
             .execute_with_hints(host_call, &hints, &execution_ctx)
-            .await;
-
-        // Tier 2: Record outcome for risky operations
-        if let Some(action_id) = checkpoint_id {
-            let outcome_desc = match &result {
-                Ok(_) => "success".to_string(),
-                Err(e) => format!("error:{}", e),
-            };
-            let _ = self.log_action(
-                Action::new(
-                    ActionType::GovernanceCheckpointOutcome,
-                    host_call.capability_id.clone(),
-                    String::new(),
-                )
-                .with_parent(Some(action_id))
-                .with_metadata("outcome", &outcome_desc),
-            );
-        }
-
-        result
+            .await
     }
 
     /// Detect security level for a capability based on its ID pattern.
@@ -797,111 +825,6 @@ impl Orchestrator {
         "low"
     }
 
-    /// Validates execution hints against governance policy limits.
-    fn validate_execution_hints(
-        &self,
-        hints: &std::collections::HashMap<String, Value>,
-    ) -> RuntimeResult<()> {
-        // Validate retry hints
-        if let Some(retry_value) = hints.get("runtime.learning.retry") {
-            if let Some(max_retries) = Self::extract_u32_from_map(retry_value, "max-retries")
-                .or_else(|| Self::extract_u32_from_map(retry_value, "max"))
-            {
-                if max_retries > self.hint_policies.max_retries {
-                    return Err(RuntimeError::Generic(format!(
-                        "Execution hint violated: retry max-retries={} exceeds policy limit of {}",
-                        max_retries, self.hint_policies.max_retries
-                    )));
-                }
-            }
-        }
-
-        // Validate timeout hints
-        if let Some(timeout_value) = hints.get("runtime.learning.timeout") {
-            if let Some(multiplier) = Self::extract_f64_from_map(timeout_value, "multiplier") {
-                if multiplier > self.hint_policies.max_timeout_multiplier {
-                    return Err(RuntimeError::Generic(format!(
-                        "Execution hint violated: timeout multiplier={:.1} exceeds policy limit of {:.1}",
-                        multiplier, self.hint_policies.max_timeout_multiplier
-                    )));
-                }
-            }
-            if let Some(absolute_ms) = Self::extract_u64_from_map(timeout_value, "absolute-ms") {
-                if absolute_ms > self.hint_policies.max_absolute_timeout_ms {
-                    return Err(RuntimeError::Generic(format!(
-                        "Execution hint violated: absolute timeout={}ms exceeds policy limit of {}ms",
-                        absolute_ms, self.hint_policies.max_absolute_timeout_ms
-                    )));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Helper to extract u32 from a RTFS map value
-    fn extract_u32_from_map(value: &Value, key: &str) -> Option<u32> {
-        if let Value::Map(map) = value {
-            for (k, v) in map {
-                let key_str = match k {
-                    rtfs::ast::MapKey::Keyword(kw) => &kw.0,
-                    rtfs::ast::MapKey::String(s) => s,
-                    _ => continue,
-                };
-                if key_str == key {
-                    return match v {
-                        Value::Integer(i) => Some(*i as u32),
-                        Value::Float(f) => Some(*f as u32),
-                        _ => None,
-                    };
-                }
-            }
-        }
-        None
-    }
-
-    /// Helper to extract u64 from a RTFS map value
-    fn extract_u64_from_map(value: &Value, key: &str) -> Option<u64> {
-        if let Value::Map(map) = value {
-            for (k, v) in map {
-                let key_str = match k {
-                    rtfs::ast::MapKey::Keyword(kw) => &kw.0,
-                    rtfs::ast::MapKey::String(s) => s,
-                    _ => continue,
-                };
-                if key_str == key {
-                    return match v {
-                        Value::Integer(i) => Some(*i as u64),
-                        Value::Float(f) => Some(*f as u64),
-                        _ => None,
-                    };
-                }
-            }
-        }
-        None
-    }
-
-    /// Helper to extract f64 from a RTFS map value
-    fn extract_f64_from_map(value: &Value, key: &str) -> Option<f64> {
-        if let Value::Map(map) = value {
-            for (k, v) in map {
-                let key_str = match k {
-                    rtfs::ast::MapKey::Keyword(kw) => &kw.0,
-                    rtfs::ast::MapKey::String(s) => s,
-                    _ => continue,
-                };
-                if key_str == key {
-                    return match v {
-                        Value::Float(f) => Some(*f),
-                        Value::Integer(i) => Some(*i as f64),
-                        _ => None,
-                    };
-                }
-            }
-        }
-        None
-    }
-
     /// Helper to extract string from a RTFS map value
     fn extract_string_from_map(value: &Value, key: &str) -> Option<String> {
         if let Value::Map(map) = value {
@@ -936,17 +859,35 @@ impl Orchestrator {
             )
             .await
     }
+
+    /// Internal convenience method for plan execution with default policy.
+    /// Used for internal orchestration (e.g., orchestrate_intent_tree) where
+    /// no explicit governance policy is provided.
+    pub(crate) async fn execute_plan(
+        self: &Arc<Self>,
+        plan: &Plan,
+        context: &RuntimeContext,
+    ) -> RuntimeResult<ExecutionResult> {
+        // Use a default policy for internal calls
+        let default_policy = PolicyConfig::default();
+        self.execute_plan_with_policy(plan, context, default_policy)
+            .await
+    }
     /// Executes a given `Plan` within a specified `RuntimeContext`.
     /// This is the main entry point for the Orchestrator.
     ///
     /// # Security Note
     /// This method is restricted to internal CCOS use only.
     /// External code must use the governance-enforced interface through GovernanceKernel.
-    pub(crate) async fn execute_plan(
+    pub(crate) async fn execute_plan_with_policy(
         self: &Arc<Self>,
         plan: &Plan,
         context: &RuntimeContext,
+        policy: PolicyConfig,
     ) -> RuntimeResult<ExecutionResult> {
+        let mut policy = policy;
+        self.apply_budget_overrides_from_plan(plan, &mut policy);
+
         let plan_id = plan.plan_id.clone();
         let primary_intent_id = plan.intent_ids.first().cloned().unwrap_or_default();
 
@@ -969,6 +910,35 @@ impl Orchestrator {
             .with_parent(None),
         )?;
 
+        // --- 1.5 Initialize Budget Context and log allocation ---
+        let budget_context = self.initialize_budget_context(&policy, context)?;
+
+        let allocation_limits = budget_context
+            .lock()
+            .map(|ctx| ctx.limits().clone())
+            .unwrap_or_default();
+
+        self.log_action(
+            Action::new(
+                ActionType::BudgetAllocated,
+                plan_id.clone(),
+                primary_intent_id.clone(),
+            )
+            .with_metadata("steps", &allocation_limits.steps.to_string())
+            .with_metadata("wall_clock_ms", &allocation_limits.wall_clock_ms.to_string())
+            .with_metadata("llm_tokens", &allocation_limits.llm_tokens.to_string())
+            .with_metadata("cost_usd", &allocation_limits.cost_usd.to_string())
+            .with_metadata(
+                "network_egress_bytes",
+                &allocation_limits.network_egress_bytes.to_string(),
+            )
+            .with_metadata(
+                "storage_write_bytes",
+                &allocation_limits.storage_write_bytes.to_string(),
+            )
+            .with_parent(Some(plan_action_id.clone())),
+        )?;
+
         // Mark primary intent as Executing (transition Active -> Executing) before evaluation begins
         if !primary_intent_id.is_empty() {
             if let Ok(mut graph) = self.intent_graph.lock() {
@@ -989,7 +959,8 @@ impl Orchestrator {
                 self.capability_marketplace.clone(),
                 context.clone(),
             )
-            .with_orchestrator(Arc::clone(self)),
+            .with_orchestrator(Arc::clone(self))
+            .with_budget(budget_context.clone()),
         );
         host.set_execution_context(
             plan_id.clone(),
@@ -1065,12 +1036,23 @@ impl Orchestrator {
                     value,
                     metadata: Default::default(),
                 };
+                let final_consumption = {
+                    let ctx = budget_context.lock().expect("budget lock poisoned");
+                    ctx.consumed().clone()
+                };
+
                 self.log_action(
                     Action::new(
                         ActionType::PlanCompleted,
                         plan_id.clone(),
                         primary_intent_id.clone(),
                     )
+                    .with_metadata("total_cost_usd", &final_consumption.cost_usd.to_string())
+                    .with_metadata(
+                        "total_tokens",
+                        &final_consumption.total_llm_tokens().to_string(),
+                    )
+                    .with_metadata("total_steps", &final_consumption.steps.to_string())
                     .with_parent(Some(plan_action_id.clone()))
                     .with_result(res.clone()),
                 )?;
@@ -1108,24 +1090,96 @@ impl Orchestrator {
                 (res, None)
             }
             Err(e) => {
-                // Log aborted action first
-                self.log_action(
-                    Action::new(
-                        ActionType::PlanAborted,
-                        plan_id.clone(),
-                        primary_intent_id.clone(),
-                    )
-                    .with_parent(Some(plan_action_id.clone()))
-                    .with_error(&e.to_string()),
-                )?;
-                // Represent failure value explicitly (string) so ExecutionResult always has a Value
-                let failure_value = RtfsValue::String(format!("error: {}", e));
-                let res = ExecutionResult {
-                    success: false,
-                    value: failure_value,
-                    metadata: Default::default(),
+                let final_consumption = {
+                    let ctx = budget_context.lock().expect("budget lock poisoned");
+                    ctx.consumed().clone()
                 };
-                (res, Some(e))
+
+                // Handle budget-specific exhaustion policies
+                if let RuntimeError::BudgetExhausted { dimension, policy } = &e {
+                    if policy == "ApprovalRequired" {
+                        // Execution is paused for approval.
+                        // Checkpoint the plan state so it can be resumed later.
+                        let (checkpoint_id, _serialized) =
+                            self.checkpoint_plan(&plan_id, &primary_intent_id, &evaluator, None)?;
+
+                        // Note: checkpoint_plan already logs PlanPaused, but we can enrich the result
+                        let res = ExecutionResult {
+                            success: false,
+                            value: Value::String(format!(
+                                "paused: budget approval required for {}",
+                                dimension
+                            )),
+                            metadata: std::collections::HashMap::from([
+                                ("status".to_string(), Value::String("paused".to_string())),
+                                ("checkpoint_id".to_string(), Value::String(checkpoint_id)),
+                                (
+                                    "exhausted_dimension".to_string(),
+                                    Value::String(dimension.clone()),
+                                ),
+                                (
+                                    "policy".to_string(),
+                                    Value::String("ApprovalRequired".to_string()),
+                                ),
+                            ]),
+                        };
+                        // Return the result with None as error_opt to avoid double logging PlanAborted
+                        (res, None)
+                    } else {
+                        // Log aborted action first
+                        self.log_action(
+                            Action::new(
+                                ActionType::PlanAborted,
+                                plan_id.clone(),
+                                primary_intent_id.clone(),
+                            )
+                            .with_metadata(
+                                "total_cost_usd",
+                                &final_consumption.cost_usd.to_string(),
+                            )
+                            .with_metadata(
+                                "total_tokens",
+                                &final_consumption.total_llm_tokens().to_string(),
+                            )
+                            .with_metadata("total_steps", &final_consumption.steps.to_string())
+                            .with_parent(Some(plan_action_id.clone()))
+                            .with_error(&e.to_string()),
+                        )?;
+                        // Represent failure value explicitly (string) so ExecutionResult always has a Value
+                        let failure_value = RtfsValue::String(format!("error: {}", e));
+                        let res = ExecutionResult {
+                            success: false,
+                            value: failure_value,
+                            metadata: Default::default(),
+                        };
+                        (res, Some(e))
+                    }
+                } else {
+                    // Log aborted action first
+                    self.log_action(
+                        Action::new(
+                            ActionType::PlanAborted,
+                            plan_id.clone(),
+                            primary_intent_id.clone(),
+                        )
+                        .with_metadata("total_cost_usd", &final_consumption.cost_usd.to_string())
+                        .with_metadata(
+                            "total_tokens",
+                            &final_consumption.total_llm_tokens().to_string(),
+                        )
+                        .with_metadata("total_steps", &final_consumption.steps.to_string())
+                        .with_parent(Some(plan_action_id.clone()))
+                        .with_error(&e.to_string()),
+                    )?;
+                    // Represent failure value explicitly (string) so ExecutionResult always has a Value
+                    let failure_value = RtfsValue::String(format!("error: {}", e));
+                    let res = ExecutionResult {
+                        success: false,
+                        value: failure_value,
+                        metadata: Default::default(),
+                    };
+                    (res, Some(e))
+                }
             }
         };
 
@@ -1982,7 +2036,7 @@ impl Orchestrator {
     /// Validates that referenced plan and intent exist before logging to ensure consistency.
     /// Governance checkpoint actions are exempt from plan validation since they reference
     /// capability IDs rather than plan IDs.
-    fn log_action(&self, action: Action) -> RuntimeResult<String> {
+    pub(crate) fn log_action(&self, action: Action) -> RuntimeResult<String> {
         // Skip validation for governance actions that use capability_id as plan_id
         // These are stateless audit events without associated plans
         let skip_plan_validation = matches!(

@@ -9,8 +9,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::budget::{BudgetCheckResult, BudgetContext, ExhaustionPolicy, StepConsumption};
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::causal_chain::CausalChain;
+use crate::approval::storage_file::FileApprovalStorage;
+use crate::approval::types::ApprovalCategory;
+use crate::approval::{RiskAssessment, RiskLevel, UnifiedApprovalQueue};
+use crate::governance_kernel::GovernanceKernel;
 use crate::orchestrator::Orchestrator;
 use crate::types::{Action, ActionType, ExecutionResult};
+use crate::utils::fs::get_workspace_root;
 use crate::utils::value_conversion::{map_key_to_string, rtfs_value_to_json};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::execution_outcome::{CallMetadata, CausalContext, HostCall};
@@ -29,6 +34,15 @@ struct HostPlanContext {
     step_context: HashMap<String, Value>,
 }
 
+#[derive(Debug, Default)]
+struct UsageMetrics {
+    llm_input_tokens: Option<u64>,
+    llm_output_tokens: Option<u64>,
+    cost_usd: Option<f64>,
+    network_egress_bytes: Option<u64>,
+    storage_write_bytes: Option<u64>,
+}
+
 /// The RuntimeHost is the bridge between the pure RTFS runtime and the stateful CCOS world.
 pub struct RuntimeHost {
     causal_chain: Arc<Mutex<CausalChain>>,
@@ -40,7 +54,9 @@ pub struct RuntimeHost {
     step_exposure_override: Mutex<Vec<(bool, Option<Vec<String>>)>>,
     // Step-scoped execution hints for capability calls (generic key-value pairs)
     execution_hints: Mutex<HashMap<String, Value>>,
-    // Optional orchestrator for unified governance path
+    // Optional governance kernel for unified governance path (external calls)
+    governance_kernel: Option<Arc<GovernanceKernel>>,
+    // Optional orchestrator for internal orchestration (bypasses governance)
     orchestrator: Option<Arc<Orchestrator>>,
     // Budget context for resource governance
     budget_context: Mutex<Option<Arc<Mutex<BudgetContext>>>>,
@@ -59,14 +75,22 @@ impl RuntimeHost {
             execution_context: Mutex::new(None),
             step_exposure_override: Mutex::new(Vec::new()),
             execution_hints: Mutex::new(HashMap::new()),
+            governance_kernel: None,
             orchestrator: None,
             budget_context: Mutex::new(None),
         }
     }
 
-    /// Sets the orchestrator for unified governance path.
-    /// When set, capability calls are routed through the orchestrator
-    /// for hint application (retry, timeout, fallback).
+    /// Sets the governance kernel for unified governance path.
+    /// When set, capability calls are routed through the governance kernel
+    /// for governance enforcement (hint validation, security checks, etc.).
+    pub fn with_governance_kernel(mut self, governance_kernel: Arc<GovernanceKernel>) -> Self {
+        self.governance_kernel = Some(governance_kernel);
+        self
+    }
+
+    /// Sets the orchestrator for internal orchestration path.
+    /// This bypasses governance enforcement and is used for internal recursive calls.
     pub fn with_orchestrator(mut self, orchestrator: Arc<Orchestrator>) -> Self {
         self.orchestrator = Some(orchestrator);
         self
@@ -110,6 +134,31 @@ impl RuntimeHost {
         self
     }
 
+    fn consume_budget_extensions(&self) -> Vec<(String, f64)> {
+        let mut extensions = Vec::new();
+        let mut hints_guard = match self.execution_hints.lock() {
+            Ok(guard) => guard,
+            Err(_) => return extensions,
+        };
+
+        let extension_value = hints_guard.remove("budget_extend");
+        let Some(Value::Map(map)) = extension_value else {
+            return extensions;
+        };
+
+        for (key, value) in map {
+            let key_str = map_key_to_string(&key);
+            let additional = match value {
+                Value::Integer(i) => i as f64,
+                Value::Float(f) => f,
+                _ => continue,
+            };
+            extensions.push((key_str, additional));
+        }
+
+        extensions
+    }
+
     fn check_budget_pre_call(&self) -> RuntimeResult<()> {
         let budget_ctx_arc = {
             let guard = self.budget_context.lock().map_err(|_| {
@@ -123,10 +172,66 @@ impl RuntimeHost {
                 .lock()
                 .map_err(|_| RuntimeError::Generic("BudgetContext lock poisoned".to_string()))?;
 
+            for (dimension, additional) in self.consume_budget_extensions() {
+                let mut extended = false;
+                match dimension.as_str() {
+                    "steps" => {
+                        ctx.extend_steps(additional as u32);
+                        extended = true;
+                    }
+                    "llm_tokens" => {
+                        ctx.extend_llm_tokens(additional as u64);
+                        extended = true;
+                    }
+                    "cost_usd" => {
+                        ctx.extend_cost(additional);
+                        extended = true;
+                    }
+                    "wall_clock_ms" => {
+                        ctx.extend_wall_clock_ms(additional as u64);
+                        extended = true;
+                    }
+                    "network_egress_bytes" => {
+                        ctx.extend_network_egress_bytes(additional as u64);
+                        extended = true;
+                    }
+                    "storage_write_bytes" => {
+                        ctx.extend_storage_write_bytes(additional as u64);
+                        extended = true;
+                    }
+                    _ => {}
+                }
+
+                if extended {
+                    if let Ok(mut chain) = self.get_causal_chain() {
+                        let plan_ctx = self.get_context().ok();
+                        let action = Action::new(
+                            ActionType::BudgetExtended,
+                            plan_ctx
+                                .as_ref()
+                                .map(|c| c.plan_id.clone())
+                                .unwrap_or_default(),
+                            plan_ctx
+                                .as_ref()
+                                .and_then(|c| c.intent_ids.first())
+                                .cloned()
+                                .unwrap_or_default(),
+                        )
+                        .with_metadata("dimension", &dimension)
+                        .with_metadata("additional", &additional.to_string());
+
+                        chain.append(&action).ok();
+                    }
+                }
+            }
+
             match ctx.check() {
                 BudgetCheckResult::Ok => {}
                 BudgetCheckResult::Warning { dimension, percent } => {
                     let mut chain = self.get_causal_chain()?;
+                    let (consumed, limit) = ctx
+                        .consumed_and_limit_for(&dimension)
+                        .unwrap_or((0, 0));
 
                     // Log as a generic system action in causal chain for now
                     let plan_ctx = self.get_context().ok();
@@ -143,12 +248,17 @@ impl RuntimeHost {
                             .unwrap_or_default(),
                     )
                     .with_metadata("dimension", &dimension)
-                    .with_metadata("percent", &percent.to_string());
+                    .with_metadata("percent", &percent.to_string())
+                    .with_metadata("consumed", &consumed.to_string())
+                    .with_metadata("limit", &limit.to_string());
 
                     chain.append(&action).ok();
                 }
                 BudgetCheckResult::Exhausted { dimension, policy } => {
                     let mut chain = self.get_causal_chain()?;
+                    let (consumed, limit) = ctx
+                        .consumed_and_limit_for(&dimension)
+                        .unwrap_or((0, 0));
                     let plan_ctx = self.get_context().ok();
                     let action = Action::new(
                         ActionType::BudgetExhausted,
@@ -163,22 +273,32 @@ impl RuntimeHost {
                             .unwrap_or_default(),
                     )
                     .with_metadata("dimension", &dimension)
-                    .with_metadata("policy", &format!("{:?}", policy));
+                    .with_metadata("policy", &format!("{:?}", policy))
+                    .with_metadata("consumed", &consumed.to_string())
+                    .with_metadata("limit", &limit.to_string());
 
                     chain.append(&action).ok();
 
                     match policy {
                         ExhaustionPolicy::HardStop => {
-                            return Err(RuntimeError::Generic(format!(
-                                "Resource budget exhausted: {}",
-                                dimension
-                            )));
+                            return Err(RuntimeError::BudgetExhausted {
+                                dimension: dimension.clone(),
+                                policy: "HardStop".to_string(),
+                            });
                         }
                         ExhaustionPolicy::ApprovalRequired => {
-                            return Err(RuntimeError::Generic(format!(
-                                "Resource budget exhausted (approval required): {}",
-                                dimension
-                            )));
+                            if let Some(ctx) = plan_ctx.as_ref() {
+                                self.queue_budget_extension_approval(
+                                    ctx,
+                                    &dimension,
+                                    consumed,
+                                    limit,
+                                );
+                            }
+                            return Err(RuntimeError::BudgetExhausted {
+                                dimension: dimension.clone(),
+                                policy: "ApprovalRequired".to_string(),
+                            });
                         }
                         ExhaustionPolicy::SoftWarn => {
                             // Log and continue
@@ -194,6 +314,7 @@ impl RuntimeHost {
         &self,
         capability_id: &str,
         duration_ms: u64,
+        args: &[Value],
         result: &RuntimeResult<Value>,
     ) {
         let budget_ctx_arc = {
@@ -206,18 +327,50 @@ impl RuntimeHost {
 
         if let Some(ctx_mutex) = budget_ctx_arc {
             if let Ok(mut ctx) = ctx_mutex.lock() {
-                let consumption = StepConsumption {
+                let mut consumption = StepConsumption {
                     capability_id: Some(capability_id.to_string()),
                     duration_ms,
                     ..Default::default()
                 };
 
-                ctx.record_step(consumption);
+                let mut tokens_estimated = false;
+                if let Ok(res_val) = result {
+                    if let Some(usage) = Self::extract_usage_from_value(res_val) {
+                        if let Some(input) = usage.llm_input_tokens {
+                            consumption.llm_input_tokens = input;
+                        }
+                        if let Some(output) = usage.llm_output_tokens {
+                            consumption.llm_output_tokens = output;
+                        }
+                        if let Some(cost) = usage.cost_usd {
+                            consumption.cost_usd = cost;
+                        }
+                        if let Some(network) = usage.network_egress_bytes {
+                            consumption.network_egress_bytes = network;
+                        }
+                        if let Some(storage) = usage.storage_write_bytes {
+                            consumption.storage_write_bytes = storage;
+                        }
+                    }
+                }
+
+                if consumption.llm_input_tokens == 0 && consumption.llm_output_tokens == 0 {
+                    let (estimated_input, estimated_output) =
+                        Self::estimate_tokens_from_values(args, result);
+                    if estimated_input > 0 || estimated_output > 0 {
+                        consumption.llm_input_tokens = estimated_input;
+                        consumption.llm_output_tokens = estimated_output;
+                        tokens_estimated = true;
+                    }
+                }
+
+                ctx.record_step(consumption.clone());
+                let remaining = ctx.remaining();
 
                 // Log to causal chain
                 if let Ok(mut chain) = self.get_causal_chain() {
                     let plan_ctx = self.get_context().ok();
-                    let action = Action::new(
+                    let mut action = Action::new(
                         ActionType::BudgetConsumptionRecorded,
                         plan_ctx
                             .as_ref()
@@ -230,11 +383,259 @@ impl RuntimeHost {
                             .unwrap_or_default(),
                     )
                     .with_name(capability_id)
-                    .with_metadata("duration_ms", &duration_ms.to_string());
+                    .with_metadata("duration_ms", &duration_ms.to_string())
+                    .with_metadata("remaining_steps", &remaining.steps.to_string())
+                    .with_metadata("remaining_llm_tokens", &remaining.llm_tokens.to_string())
+                    .with_metadata("remaining_cost_usd", &remaining.cost_usd.to_string())
+                    .with_metadata(
+                        "remaining_network_egress_bytes",
+                        &remaining.network_egress_bytes.to_string(),
+                    )
+                    .with_metadata(
+                        "remaining_storage_write_bytes",
+                        &remaining.storage_write_bytes.to_string(),
+                    );
+
+                    if consumption.llm_input_tokens > 0 {
+                        action = action.with_metadata(
+                            "llm_input_tokens",
+                            &consumption.llm_input_tokens.to_string(),
+                        );
+                    }
+                    if consumption.llm_output_tokens > 0 {
+                        action = action.with_metadata(
+                            "llm_output_tokens",
+                            &consumption.llm_output_tokens.to_string(),
+                        );
+                    }
+                    if tokens_estimated {
+                        action = action.with_metadata("llm_tokens_estimated", "true");
+                    }
+                    if consumption.cost_usd > 0.0 {
+                        action =
+                            action.with_metadata("cost_usd", &consumption.cost_usd.to_string());
+                    }
+                    if consumption.network_egress_bytes > 0 {
+                        action = action.with_metadata(
+                            "network_egress_bytes",
+                            &consumption.network_egress_bytes.to_string(),
+                        );
+                    }
+                    if consumption.storage_write_bytes > 0 {
+                        action = action.with_metadata(
+                            "storage_write_bytes",
+                            &consumption.storage_write_bytes.to_string(),
+                        );
+                    }
 
                     chain.append(&action).ok();
                 }
             }
+        }
+    }
+
+    fn extract_usage_from_value(value: &Value) -> Option<UsageMetrics> {
+        let json = rtfs_value_to_json(value).ok()?;
+        let mut usage = UsageMetrics::default();
+
+        let read_u64 = |obj: &serde_json::Value, keys: &[&str]| -> Option<u64> {
+            for key in keys {
+                if let Some(val) = obj.get(*key) {
+                    if let Some(num) = val.as_u64() {
+                        return Some(num);
+                    }
+                    if let Some(num) = val.as_f64() {
+                        return Some(num as u64);
+                    }
+                }
+            }
+            None
+        };
+
+        let read_f64 = |obj: &serde_json::Value, keys: &[&str]| -> Option<f64> {
+            for key in keys {
+                if let Some(val) = obj.get(*key) {
+                    if let Some(num) = val.as_f64() {
+                        return Some(num);
+                    }
+                    if let Some(num) = val.as_u64() {
+                        return Some(num as f64);
+                    }
+                }
+            }
+            None
+        };
+
+        let usage_obj = json.get("usage").unwrap_or(&json);
+
+        usage.llm_input_tokens = read_u64(
+            usage_obj,
+            &[
+                "llm_input_tokens",
+                "input_tokens",
+                "prompt_tokens",
+                "usage_input_tokens",
+                "usage.llm_input_tokens",
+            ],
+        )
+        .or_else(|| read_u64(&json, &["usage.llm_input_tokens", "usage_input_tokens"]));
+
+        usage.llm_output_tokens = read_u64(
+            usage_obj,
+            &[
+                "llm_output_tokens",
+                "output_tokens",
+                "completion_tokens",
+                "usage_output_tokens",
+                "usage.llm_output_tokens",
+            ],
+        )
+        .or_else(|| read_u64(&json, &["usage.llm_output_tokens", "usage_output_tokens"]));
+
+        if usage.llm_input_tokens.is_none() && usage.llm_output_tokens.is_none() {
+            if let Some(total) = read_u64(usage_obj, &["total_tokens", "usage.total_tokens"]) {
+                usage.llm_input_tokens = Some(total);
+                usage.llm_output_tokens = Some(0);
+            }
+        }
+
+        usage.cost_usd = read_f64(
+            usage_obj,
+            &[
+                "cost_usd",
+                "total_cost_usd",
+                "usage_cost_usd",
+                "usage.total_cost_usd",
+            ],
+        )
+        .or_else(|| read_f64(&json, &["cost_usd", "total_cost_usd"]));
+
+        usage.network_egress_bytes = read_u64(
+            usage_obj,
+            &[
+                "network_egress_bytes",
+                "egress_bytes",
+                "usage.network_egress_bytes",
+            ],
+        )
+        .or_else(|| read_u64(&json, &["network_egress_bytes"]));
+
+        usage.storage_write_bytes = read_u64(
+            usage_obj,
+            &[
+                "storage_write_bytes",
+                "storage_bytes",
+                "usage.storage_write_bytes",
+            ],
+        )
+        .or_else(|| read_u64(&json, &["storage_write_bytes"]));
+
+        if usage.llm_input_tokens.is_some()
+            || usage.llm_output_tokens.is_some()
+            || usage.cost_usd.is_some()
+            || usage.network_egress_bytes.is_some()
+            || usage.storage_write_bytes.is_some()
+        {
+            Some(usage)
+        } else {
+            None
+        }
+    }
+
+    fn estimate_tokens_from_values(
+        args: &[Value],
+        result: &RuntimeResult<Value>,
+    ) -> (u64, u64) {
+        let input_tokens = Self::estimate_tokens_for_value(&Value::List(args.to_vec()));
+        let output_tokens = match result {
+            Ok(value) => Self::estimate_tokens_for_value(value),
+            Err(_) => 0,
+        };
+
+        (input_tokens, output_tokens)
+    }
+
+    fn estimate_tokens_for_value(value: &Value) -> u64 {
+        let serialized = rtfs_value_to_json(value)
+            .ok()
+            .and_then(|json| serde_json::to_string(&json).ok())
+            .unwrap_or_else(|| format!("{:?}", value));
+
+        let char_count = serialized.chars().count() as f64;
+        (char_count / 4.0).ceil() as u64
+    }
+
+    fn queue_budget_extension_approval(
+        &self,
+        ctx: &HostPlanContext,
+        dimension: &str,
+        consumed: u64,
+        limit: u64,
+    ) {
+        let storage_path = get_workspace_root().join("storage/approvals");
+        let storage = match FileApprovalStorage::new(storage_path) {
+            Ok(storage) => storage,
+            Err(_) => return,
+        };
+        let queue = UnifiedApprovalQueue::new(std::sync::Arc::new(storage));
+
+        let suggested = self.suggest_budget_extension(dimension, limit);
+        let plan_id_owned = ctx.plan_id.clone();
+        let intent_id = ctx.intent_ids.first().cloned().unwrap_or_default();
+        let dimension_owned = dimension.to_string();
+        let reason = format!("Budget exhausted: {} consumed {}/{}", dimension, consumed, limit);
+
+        let fut = async move {
+            if let Ok(pending) = queue.list_pending_budget_extensions().await {
+                let already_pending = pending.iter().any(|request| {
+                    matches!(
+                        request.category,
+                        ApprovalCategory::BudgetExtension {
+                            ref plan_id,
+                            ref dimension,
+                            ..
+                        } if plan_id == &plan_id_owned && dimension == &dimension_owned
+                    )
+                });
+                if already_pending {
+                    return;
+                }
+            }
+
+            let risk = RiskAssessment {
+                level: RiskLevel::Medium,
+                reasons: vec![reason],
+            };
+
+            let _ = queue
+                .add_budget_extension(
+                    plan_id_owned,
+                    intent_id,
+                    dimension_owned,
+                    suggested,
+                    consumed,
+                    limit,
+                    risk,
+                    24,
+                    None,
+                )
+                .await;
+        };
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(fut);
+        } else {
+            futures::executor::block_on(fut);
+        }
+    }
+
+    fn suggest_budget_extension(&self, dimension: &str, limit: u64) -> f64 {
+        match dimension {
+            "cost_usd" => {
+                let limit_usd = limit as f64 / 1000.0;
+                (limit_usd * 0.5).max(0.01)
+            }
+            _ => ((limit as f64) * 0.5).max(1.0),
         }
     }
 
@@ -528,7 +929,7 @@ impl HostInterface for RuntimeHost {
                 snapshot_value,
             );
         }
-        let capability_args = Value::Map(call_map);
+        let _capability_args = Value::Map(call_map);
 
         // Prepare CallMetadata - ALWAYS include execution_hints for governance
         // Even if snapshot is None, we must pass hints to the Orchestrator
@@ -610,8 +1011,37 @@ impl HostInterface for RuntimeHost {
         let runtime_handle = tokio::runtime::Handle::try_current().ok();
         let call_metadata_owned = call_metadata.clone();
 
-        let result = if let Some(orchestrator) = &self.orchestrator {
-            // Route through Orchestrator for governance (hints: retry, timeout, fallback)
+        let result = if let Some(governance_kernel) = &self.governance_kernel {
+            // Route through GovernanceKernel for governance enforcement (external calls)
+            let governance_kernel = governance_kernel.clone();
+            let security_context = self.security_context.clone();
+
+            std::thread::spawn(move || {
+                let fut = async move {
+                    let host_call = HostCall {
+                        capability_id: name_owned,
+                        args: args_owned,
+                        security_context,
+                        causal_context: Some(CausalContext::default()),
+                        metadata: call_metadata_owned,
+                    };
+                    governance_kernel
+                        .handle_host_call_governed(&host_call)
+                        .await
+                };
+
+                if let Some(handle) = runtime_handle {
+                    handle.block_on(fut)
+                } else {
+                    futures::executor::block_on(fut)
+                }
+            })
+            .join()
+            .map_err(|_| {
+                RuntimeError::Generic("Thread join error during capability execution".to_string())
+            })?
+        } else if let Some(orchestrator) = &self.orchestrator {
+            // Route through Orchestrator internally (bypasses governance for recursive calls)
             let orchestrator = orchestrator.clone();
             let security_context = self.security_context.clone();
 
@@ -624,7 +1054,7 @@ impl HostInterface for RuntimeHost {
                         causal_context: Some(CausalContext::default()),
                         metadata: call_metadata_owned,
                     };
-                    orchestrator.handle_host_call(&host_call).await
+                    orchestrator.handle_host_call_internal(&host_call).await
                 };
 
                 if let Some(handle) = runtime_handle {
@@ -638,7 +1068,7 @@ impl HostInterface for RuntimeHost {
                 RuntimeError::Generic("Thread join error during capability execution".to_string())
             })?
         } else {
-            // Fallback: direct marketplace call (for tests without orchestrator)
+            // Fallback: direct marketplace call (for tests without orchestrator/kernel)
             let marketplace = self.capability_marketplace.clone();
 
             std::thread::spawn(move || {
@@ -688,7 +1118,7 @@ impl HostInterface for RuntimeHost {
 
         // --- Resource Budget Metering ---
         let duration_ms = step_start_time.elapsed().as_millis() as u64;
-        self.record_budget_consumption(name, duration_ms, &result);
+        self.record_budget_consumption(name, duration_ms, args, &result);
 
         result
     }

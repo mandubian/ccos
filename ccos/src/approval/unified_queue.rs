@@ -816,6 +816,44 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
     }
 
     // ========================================================================
+    // Budget Extension Approval Operations
+    // ========================================================================
+
+    /// Add a budget extension approval request
+    pub async fn add_budget_extension(
+        &self,
+        plan_id: String,
+        intent_id: String,
+        dimension: String,
+        requested_additional: f64,
+        consumed: u64,
+        limit: u64,
+        risk_assessment: RiskAssessment,
+        expires_in_hours: i64,
+        context: Option<String>,
+    ) -> RuntimeResult<String> {
+        let request = ApprovalRequest::new(
+            ApprovalCategory::BudgetExtension {
+                plan_id,
+                intent_id,
+                dimension,
+                requested_additional,
+                consumed,
+                limit,
+            },
+            risk_assessment,
+            expires_in_hours,
+            context,
+        );
+        self.add(request).await
+    }
+
+    /// List pending budget extension approvals
+    pub async fn list_pending_budget_extensions(&self) -> RuntimeResult<Vec<ApprovalRequest>> {
+        self.list_pending_by_category("BudgetExtension").await
+    }
+
+    // ========================================================================
     // LLM Prompt Approval Specific Operations
     // ========================================================================
 

@@ -25,8 +25,9 @@ use super::governance_judge::PlanJudge;
 use super::intent_graph::IntentGraph;
 use super::orchestrator::Orchestrator;
 use super::types::Intent; // for delegation validation
-use super::types::{ExecutionResult, Plan, PlanBody, StorableIntent};
+use super::types::{Action, ActionId, ActionType, ExecutionResult, Plan, PlanBody, StorableIntent};
 use rtfs::runtime::error::RuntimeError;
+use rtfs::runtime::execution_outcome::HostCall;
 
 /// Action to take when a rule matches
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -160,13 +161,15 @@ pub struct ConstitutionRule {
 
 /// Represents the system's constitution, a set of human-authored rules.
 // TODO: This should be loaded from a secure, signed configuration file.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Constitution {
     pub rules: Vec<ConstitutionRule>,
     /// Execution hint policy limits
     pub hint_policies: ExecutionHintPolicies,
     /// Semantic judge configuration
     pub semantic_judge_policy: SemanticJudgePolicy,
+    /// Governance policies for budget enforcement
+    pub budget_policies: HashMap<String, crate::config::types::PolicyConfig>,
 }
 
 /// Policy for the semantic plan judge
@@ -252,6 +255,7 @@ impl Default for Constitution {
             rules,
             hint_policies: ExecutionHintPolicies::default(),
             semantic_judge_policy: SemanticJudgePolicy::default(),
+            budget_policies: HashMap::new(),
         }
     }
 }
@@ -261,19 +265,25 @@ impl Default for Constitution {
 pub struct GovernanceKernel {
     orchestrator: Arc<Orchestrator>,
     intent_graph: Arc<Mutex<IntentGraph>>,
-    constitution: Constitution,
-    /// Optional reference to the DelegatingCognitiveEngine for centralized LLM access
+    constitution: RwLock<Constitution>,
     delegating_arbiter: RwLock<Option<Arc<DelegatingCognitiveEngine>>>,
     plan_judge: PlanJudge,
 }
 
 impl GovernanceKernel {
     /// Creates a new Governance Kernel.
-    pub fn new(orchestrator: Arc<Orchestrator>, intent_graph: Arc<Mutex<IntentGraph>>) -> Self {
+    pub fn new(
+        orchestrator: Arc<Orchestrator>,
+        intent_graph: Arc<Mutex<IntentGraph>>,
+        budget_policies: HashMap<String, crate::config::types::PolicyConfig>,
+    ) -> Self {
+        let mut constitution = Constitution::default();
+        constitution.budget_policies = budget_policies;
+
         Self {
             orchestrator,
             intent_graph,
-            constitution: Constitution::default(),
+            constitution: RwLock::new(constitution),
             delegating_arbiter: RwLock::new(None),
             plan_judge: PlanJudge::new(),
         }
@@ -287,8 +297,8 @@ impl GovernanceKernel {
     }
 
     /// Access the system Constitution.
-    pub fn get_rules(&self) -> &Constitution {
-        &self.constitution
+    pub fn get_rules(&self) -> Constitution {
+        self.constitution.read().unwrap().clone()
     }
 
     /// Check authorization for synthesizing an external capability.
@@ -506,8 +516,10 @@ impl GovernanceKernel {
     }
 
     /// Set the semantic judge policy.
-    pub fn set_semantic_judge_policy(&mut self, policy: SemanticJudgePolicy) {
-        self.constitution.semantic_judge_policy = policy;
+    pub fn set_semantic_judge_policy(&self, policy: SemanticJudgePolicy) {
+        if let Ok(mut constitution) = self.constitution.write() {
+            constitution.semantic_judge_policy = policy;
+        }
     }
 
     /// Performs a semantic judgment of the plan using an LLM.
@@ -517,7 +529,10 @@ impl GovernanceKernel {
         plan: &Plan,
         intent: Option<&StorableIntent>,
     ) -> RuntimeResult<()> {
-        let policy = &self.constitution.semantic_judge_policy;
+        let policy = match self.constitution.read() {
+            Ok(c) => c.semantic_judge_policy.clone(),
+            Err(_) => return Ok(()), // Fail open if lock poisoned
+        };
         if !policy.enabled {
             ccos_eprintln!("   ⚖️  [SemanticJudge] Disabled - skipping judgment");
             return Ok(());
@@ -604,12 +619,27 @@ impl GovernanceKernel {
         }
     }
 
-    /// The primary entry point for processing a plan from the Arbiter.
-    /// It validates the plan and, if successful, passes it to the Orchestrator.
+    /// Convenience wrapper for validate_and_execute_with_policy using default PolicyConfig.
     pub async fn validate_and_execute(
         &self,
         plan: Plan,
         context: &RuntimeContext,
+    ) -> RuntimeResult<ExecutionResult> {
+        self.validate_and_execute_with_policy(
+            plan,
+            context,
+            crate::config::types::PolicyConfig::default(),
+        )
+        .await
+    }
+
+    /// The primary entry point for processing a plan from the Arbiter.
+    /// It validates the plan and, if successful, passes it to the Orchestrator.
+    pub async fn validate_and_execute_with_policy(
+        &self,
+        plan: Plan,
+        context: &RuntimeContext,
+        budget_policy: crate::config::types::PolicyConfig,
     ) -> RuntimeResult<ExecutionResult> {
         // --- 1. Intent Sanitization (SEP-012) ---
         // For capability-internal plans, intent may be None. Only sanitize if present.
@@ -705,7 +735,7 @@ impl GovernanceKernel {
         // Execution mode is passed via context cross_plan_params for RuntimeHost to use
         let result = self
             .orchestrator
-            .execute_plan(&plan_to_execute, &context_with_mode)
+            .execute_plan_with_policy(&plan_to_execute, &context_with_mode, budget_policy.clone())
             .await;
 
         // --- 8c. Reactive Auto-Repair (fast pattern-based, then LLM dialog) ---
@@ -740,7 +770,11 @@ impl GovernanceKernel {
                         // Retry execution with repaired plan
                         return self
                             .orchestrator
-                            .execute_plan(&repaired_plan, &context_with_mode)
+                            .execute_plan_with_policy(
+                                &repaired_plan,
+                                &context_with_mode,
+                                budget_policy.clone(),
+                            )
                             .await;
                     }
                 }
@@ -755,8 +789,8 @@ impl GovernanceKernel {
                 };
 
                 if let Some(arbiter) = arbiter_opt {
-                    let max_repair_attempts = crate::config::ValidationConfig::default()
-                        .max_runtime_repair_attempts;
+                    let max_repair_attempts =
+                        crate::config::ValidationConfig::default().max_runtime_repair_attempts;
                     let mut current_plan = rtfs_code.clone();
                     let mut last_error = error_msg.clone();
 
@@ -817,47 +851,50 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
 
                                 ccos_eprintln!("🔧 [GovernanceKernel] LLM produced parsable fix");
 
-                                    // Create repaired plan
-                                    let mut repaired_plan = safe_plan.clone();
-                                    repaired_plan.body = PlanBody::Rtfs(repaired.clone());
+                                // Create repaired plan
+                                let mut repaired_plan = safe_plan.clone();
+                                repaired_plan.body = PlanBody::Rtfs(repaired.clone());
 
-                                    // Re-validate against constitution
-                                    if let Err(e) = self.validate_against_constitution(
-                                        &repaired_plan,
-                                        &execution_mode,
-                                    ) {
-                                        ccos_eprintln!(
+                                // Re-validate against constitution
+                                if let Err(e) = self
+                                    .validate_against_constitution(&repaired_plan, &execution_mode)
+                                {
+                                    ccos_eprintln!(
                                             "⚠️  [GovernanceKernel] Repaired plan failed constitution: {}",
                                             e
                                         );
-                                        current_plan = repaired;
-                                        last_error = e.to_string();
-                                        continue;
-                                    }
+                                    current_plan = repaired;
+                                    last_error = e.to_string();
+                                    continue;
+                                }
 
-                                    // Try executing the repaired plan
-                                    match self
-                                        .orchestrator
-                                        .execute_plan(&repaired_plan, &context_with_mode)
-                                        .await
-                                    {
-                                        Ok(exec_result) => {
-                                            ccos_eprintln!(
+                                // Try executing the repaired plan
+                                match self
+                                    .orchestrator
+                                    .execute_plan_with_policy(
+                                        &repaired_plan,
+                                        &context_with_mode,
+                                        budget_policy.clone(),
+                                    )
+                                    .await
+                                {
+                                    Ok(exec_result) => {
+                                        ccos_eprintln!(
                                                 "✅ [GovernanceKernel] LLM repair succeeded on attempt {}",
                                                 attempt
                                             );
-                                            ccos_eprintln!("📝 Repaired Plan:\n{}", repaired);
-                                            return Ok(exec_result);
-                                        }
-                                        Err(exec_err) => {
-                                            ccos_eprintln!(
-                                                "⚠️  [GovernanceKernel] Repaired plan still failed: {}",
-                                                exec_err
-                                            );
-                                            current_plan = repaired;
-                                            last_error = exec_err.to_string();
-                                        }
+                                        ccos_eprintln!("📝 Repaired Plan:\n{}", repaired);
+                                        return Ok(exec_result);
                                     }
+                                    Err(exec_err) => {
+                                        ccos_eprintln!(
+                                            "⚠️  [GovernanceKernel] Repaired plan still failed: {}",
+                                            exec_err
+                                        );
+                                        current_plan = repaired;
+                                        last_error = exec_err.to_string();
+                                    }
+                                }
                             }
                             Err(e) => {
                                 ccos_eprintln!("⚠️  [GovernanceKernel] LLM repair error: {}", e);
@@ -991,9 +1028,14 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
         plan: &Plan,
         execution_mode: &str,
     ) -> RuntimeResult<()> {
+        // Acquire read lock on constitution
+        let constitution = self.constitution.read().map_err(|_| {
+            RuntimeError::Generic("Failed to acquire constitution lock".to_string())
+        })?;
+
         // Check required capabilities against rules
         for capability_id in &plan.capabilities_required {
-            for rule in &self.constitution.rules {
+            for rule in &constitution.rules {
                 if self.matches_pattern(capability_id, &rule.match_pattern) {
                     match &rule.action {
                         RuleAction::Deny(reason) => {
@@ -1045,7 +1087,10 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
         &self,
         hints: &std::collections::HashMap<String, Value>,
     ) -> RuntimeResult<()> {
-        let policies = &self.constitution.hint_policies;
+        let policies = match self.constitution.read() {
+            Ok(c) => c.hint_policies.clone(),
+            Err(_) => return Ok(()), // Fail open if lock poisoned
+        };
 
         // Validate retry hints
         if let Some(retry_value) = hints.get("runtime.learning.retry") {
@@ -1431,6 +1476,71 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
     // Governance-Enforced Execution Interfaces
     // ---------------------------------------------------------------------
 
+    /// Handles a capability call from the runtime, enforcing governance policies.
+    pub async fn handle_host_call_governed(&self, host_call: &HostCall) -> RuntimeResult<Value> {
+        // 1. Detect security level
+        let security_level = self.detect_security_level(&host_call.capability_id);
+
+        // 2. Perform risky operation checkpointing
+        let mut checkpoint_id = None;
+        if security_level == "high" || security_level == "critical" {
+            // Log governance checkpoint
+            let action = Action::new(
+                ActionType::GovernanceCheckpointDecision,
+                host_call.capability_id.clone(),
+                String::new(), // intent id not always available here
+            )
+            .with_metadata("security_level", &security_level)
+            .with_metadata("decision", "analyzing");
+
+            checkpoint_id = Some(self.orchestrator.log_action(action)?);
+
+            // Decision action for audit
+            let _decision_action = self.orchestrator.log_action(
+                Action::new(
+                    ActionType::GovernanceApprovalGranted,
+                    host_call.capability_id.clone(),
+                    String::new(),
+                )
+                .with_parent(checkpoint_id.clone())
+                .with_metadata("security_level", &security_level)
+                .with_metadata("decision", "approved"),
+            )?;
+        }
+
+        // 3. Validate execution hints
+        let hints = host_call
+            .metadata
+            .as_ref()
+            .map(|m| &m.execution_hints)
+            .cloned()
+            .unwrap_or_default();
+
+        self.validate_execution_hints(&hints)?;
+
+        // 4. Delegate to Orchestrator for actual execution
+        let result = self.orchestrator.handle_host_call_internal(host_call).await;
+
+        // 5. Log outcome if checkpointed
+        if let Some(action_id) = checkpoint_id {
+            let outcome_desc = match &result {
+                Ok(_) => "success".to_string(),
+                Err(e) => format!("error:{}", e),
+            };
+            let _ = self.orchestrator.log_action(
+                Action::new(
+                    ActionType::GovernanceCheckpointOutcome,
+                    host_call.capability_id.clone(),
+                    String::new(),
+                )
+                .with_parent(Some(action_id))
+                .with_metadata("outcome", &outcome_desc),
+            );
+        }
+
+        result
+    }
+
     /// Execute a plan through the governance pipeline.
     /// This is the primary interface for external code to execute plans safely.
     ///
@@ -1442,8 +1552,29 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
         plan: Plan,
         context: &RuntimeContext,
     ) -> RuntimeResult<ExecutionResult> {
+        // Resolve budget policy for this plan
+        let policy_name = context
+            .cross_plan_params
+            .get("execution_mode")
+            .and_then(|v| v.as_string())
+            .unwrap_or("default");
+
+        let policy = {
+            let constitution = self.constitution.read().unwrap();
+            constitution
+                .budget_policies
+                .get(policy_name)
+                .or_else(|| constitution.budget_policies.get("default"))
+                .cloned()
+                .ok_or_else(|| {
+                    RuntimeError::Generic(format!("Governance policy '{}' not found", policy_name))
+                })?
+        };
+
         // Use the existing validate_and_execute method which handles all governance checks
-        self.validate_and_execute(plan, context).await
+        // We pass the policy down (will need to update validate_and_execute to take it)
+        self.validate_and_execute_with_policy(plan, context, policy)
+            .await
     }
 
     /// Execute an entire intent graph through the governance pipeline.

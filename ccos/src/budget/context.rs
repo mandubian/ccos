@@ -202,6 +202,34 @@ impl BudgetContext {
         None
     }
 
+    /// Get consumed and limit values for a dimension name
+    pub fn consumed_and_limit_for(&self, dimension: &str) -> Option<(u64, u64)> {
+        match dimension {
+            "steps" => Some((self.consumed.steps as u64, self.limits.steps as u64)),
+            "wall_clock" | "wall_clock_ms" => {
+                let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
+                Some((elapsed_ms, self.limits.wall_clock_ms))
+            }
+            "llm_tokens" => Some((
+                self.consumed.total_llm_tokens(),
+                self.limits.llm_tokens,
+            )),
+            "cost_usd" => Some((
+                (self.consumed.cost_usd * 1000.0) as u64,
+                (self.limits.cost_usd * 1000.0) as u64,
+            )),
+            "network_egress" | "network_egress_bytes" => Some((
+                self.consumed.network_egress_bytes,
+                self.limits.network_egress_bytes,
+            )),
+            "storage_write" | "storage_write_bytes" => Some((
+                self.consumed.storage_write_bytes,
+                self.limits.storage_write_bytes,
+            )),
+            _ => None,
+        }
+    }
+
     /// Record consumption from a capability call
     pub fn record_step(&mut self, consumption: StepConsumption) {
         self.consumed.steps += 1;
@@ -232,6 +260,27 @@ impl BudgetContext {
         self.limits.cost_usd += additional;
         self.warnings_issued.remove(&BudgetWarning::Cost50);
         self.warnings_issued.remove(&BudgetWarning::Cost80);
+    }
+
+    /// Extend wall-clock budget (after human approval)
+    pub fn extend_wall_clock_ms(&mut self, additional: u64) {
+        self.limits.wall_clock_ms += additional;
+        self.warnings_issued.remove(&BudgetWarning::WallClock50);
+        self.warnings_issued.remove(&BudgetWarning::WallClock80);
+    }
+
+    /// Extend network egress budget (after human approval)
+    pub fn extend_network_egress_bytes(&mut self, additional: u64) {
+        self.limits.network_egress_bytes += additional;
+        self.warnings_issued.remove(&BudgetWarning::Network50);
+        self.warnings_issued.remove(&BudgetWarning::Network80);
+    }
+
+    /// Extend storage write budget (after human approval)
+    pub fn extend_storage_write_bytes(&mut self, additional: u64) {
+        self.limits.storage_write_bytes += additional;
+        self.warnings_issued.remove(&BudgetWarning::Storage50);
+        self.warnings_issued.remove(&BudgetWarning::Storage80);
     }
 }
 
