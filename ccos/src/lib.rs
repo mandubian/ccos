@@ -57,6 +57,7 @@ pub mod rtfs_bridge;
 pub mod sandbox;
 pub mod secrets;
 pub mod security_policies;
+pub mod skills;
 pub mod storage;
 pub mod storage_backends;
 pub mod synthesis;
