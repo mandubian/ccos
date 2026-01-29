@@ -1698,7 +1698,7 @@ impl StreamingCapability for McpStreamingProvider {
     async fn start_stream_with_config(
         &self,
         params: &Value,
-        config: &StreamConfig,
+        _config: &StreamConfig,
     ) -> RuntimeResult<StreamHandle> {
         // For MCP streams, we primarily use the basic start_stream
         // Config could be used for additional MCP-specific settings

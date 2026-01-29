@@ -582,6 +582,10 @@ fn render_approvals_view(f: &mut Frame, state: &mut AppState, area: Rect) {
             render_approved_list(f, state, cols[0]);
             render_approved_details(f, state, cols[1]);
         }
+        ApprovalsTab::Budget => {
+            render_budget_list(f, state, cols[0]);
+            render_budget_details(f, state, cols[1]);
+        }
     }
 }
 
@@ -589,6 +593,7 @@ fn render_approvals_view(f: &mut Frame, state: &mut AppState, area: Rect) {
 fn render_approvals_tabs(f: &mut Frame, state: &AppState, area: Rect) {
     let pending_count = state.pending_servers.len();
     let approved_count = state.approved_servers.len();
+    let budget_count = state.budget_approvals.len();
 
     let pending_style = if state.approvals_tab == ApprovalsTab::Pending {
         Style::default()
@@ -608,6 +613,15 @@ fn render_approvals_tabs(f: &mut Frame, state: &AppState, area: Rect) {
         Style::default().fg(theme::SUBTEXT1)
     };
 
+    let budget_style = if state.approvals_tab == ApprovalsTab::Budget {
+        Style::default()
+            .fg(theme::BASE)
+            .bg(theme::PEACH)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::SUBTEXT1)
+    };
+
     let loading_indicator = if state.approvals_loading { " ⟳" } else { "" };
 
     let tabs = Line::from(vec![
@@ -616,6 +630,11 @@ fn render_approvals_tabs(f: &mut Frame, state: &AppState, area: Rect) {
         Span::styled(
             format!(" []] Approved ({}) ", approved_count),
             approved_style,
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!(" {{}} Budget ({}) ", budget_count),
+            budget_style,
         ),
         Span::styled(loading_indicator, Style::default().fg(theme::YELLOW)),
     ]);
@@ -1076,6 +1095,197 @@ fn render_approved_details(f: &mut Frame, state: &AppState, area: Rect) {
     f.render_widget(paragraph, area);
 }
 
+/// Render the pending budget extensions list
+fn render_budget_list(f: &mut Frame, state: &AppState, area: Rect) {
+    let is_active = state.active_panel == ActivePanel::ApprovalsBudgetList;
+    let border_color = if is_active {
+        theme::PANEL_BORDER_ACTIVE
+    } else {
+        theme::PANEL_BORDER
+    };
+
+    let block = Block::default()
+        .title(format!("Budget Extensions [{}]", state.budget_approvals.len()))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    if state.budget_approvals.is_empty() {
+        let content = if state.approvals_loading {
+            "Loading budget approvals..."
+        } else {
+            "No pending budget extensions."
+        };
+        let paragraph = Paragraph::new(content)
+            .style(Style::default().fg(theme::SUBTEXT0))
+            .block(block);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
+    // Layout: List (top) | Help Footer (bottom)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    let list_area = chunks[0];
+    let help_area = chunks[1];
+
+    let items: Vec<ListItem> = state
+        .budget_approvals
+        .iter()
+        .enumerate()
+        .map(|(i, approval)| {
+            let is_selected = i == state.budget_selected;
+
+            let risk_color = match approval.risk_level.as_str() {
+                "low" => theme::GREEN,
+                "medium" => theme::YELLOW,
+                "high" => theme::PEACH,
+                "critical" => theme::RED,
+                _ => theme::SUBTEXT0,
+            };
+
+            let line = Line::from(vec![
+                Span::styled("💸", Style::default().fg(theme::PEACH)),
+                Span::raw(" "),
+                Span::styled(
+                    truncate(&approval.dimension, 16),
+                    if is_selected {
+                        Style::default()
+                            .fg(theme::TEXT)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(theme::SUBTEXT1)
+                    },
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    format!("+{:.2}", approval.requested_additional),
+                    Style::default().fg(theme::SAPPHIRE),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    format!("[{}]", approval.risk_level),
+                    Style::default().fg(risk_color),
+                ),
+            ]);
+
+            let mut item = ListItem::new(line);
+            if is_selected {
+                item = item.style(
+                    Style::default()
+                        .bg(theme::SURFACE0)
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            item
+        })
+        .collect();
+
+    let list = List::new(items).block(block);
+    f.render_widget(list, list_area);
+
+    let help_text = Line::from(vec![
+        Span::styled("[a]", Style::default().fg(theme::GREEN)),
+        Span::raw(" Approve  "),
+        Span::styled("[r]", Style::default().fg(theme::RED)),
+        Span::raw(" Reject"),
+    ]);
+    let help_paragraph = Paragraph::new(help_text).alignment(Alignment::Center);
+    f.render_widget(help_paragraph, help_area);
+}
+
+/// Render details for the selected budget extension
+fn render_budget_details(f: &mut Frame, state: &AppState, area: Rect) {
+    let is_active = state.active_panel == ActivePanel::ApprovalsBudgetDetails;
+    let border_color = if is_active {
+        theme::PANEL_BORDER_ACTIVE
+    } else {
+        theme::PANEL_BORDER
+    };
+
+    let block = Block::default()
+        .title("Budget Extension Details")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    if state.budget_approvals.is_empty() || state.budget_selected >= state.budget_approvals.len() {
+        let paragraph = Paragraph::new("Select a budget request to view details")
+            .style(Style::default().fg(theme::SUBTEXT0))
+            .block(block);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
+    let approval = &state.budget_approvals[state.budget_selected];
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Dimension:  ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(
+                &approval.dimension,
+                Style::default()
+                    .fg(theme::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Requested:  ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(
+                format!("{:.2}", approval.requested_additional),
+                Style::default().fg(theme::SAPPHIRE),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Consumed:   ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(
+                format!("{} / {}", approval.consumed, approval.limit),
+                Style::default().fg(theme::TEXT),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Plan ID:    ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(truncate(&approval.plan_id, 40), Style::default().fg(theme::LAVENDER)),
+        ]),
+        Line::from(vec![
+            Span::styled("Intent ID:  ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(
+                truncate(&approval.intent_id, 40),
+                Style::default().fg(theme::LAVENDER),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Requested:  ", Style::default().fg(theme::SUBTEXT0)),
+            Span::styled(&approval.requested_at, Style::default().fg(theme::SUBTEXT1)),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Actions:",
+            Style::default().fg(theme::SUBTEXT0),
+        )]),
+        Line::from(vec![
+            Span::styled("  [a] ", Style::default().fg(theme::GREEN)),
+            Span::raw("Approve extension"),
+        ]),
+        Line::from(vec![
+            Span::styled("  [r] ", Style::default().fg(theme::RED)),
+            Span::raw("Reject extension"),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, area);
+}
+
 /// Render the auth token input popup
 fn render_auth_token_popup(f: &mut Frame, popup: &super::state::AuthTokenPopup) {
     let area = centered_rect(60, 20, f.size()); // Increased height from 12% to 20%
@@ -1464,7 +1674,7 @@ fn render_capability_details(f: &mut Frame, state: &mut AppState, area: Rect) {
 }
 
 /// Helper to format schema content for display
-fn format_schema_content(schema_str: &str) -> Vec<Line> {
+fn format_schema_content(schema_str: &str) -> Vec<Line<'static>> {
     // Try to parse as JSON
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(schema_str) {
         // Check if it's an object with properties (like a JSON schema)
@@ -1592,13 +1802,16 @@ fn format_schema_content(schema_str: &str) -> Vec<Line> {
                     // Flush previous token if any
                     if idx > last_idx {
                         let token = &code[last_idx..idx];
-                        spans.push(Span::styled(token, get_token_style(token)));
+                        spans.push(Span::styled(token.to_string(), get_token_style(token)));
                     }
 
                     // Add the delimiter/whitespace itself
                     let delimiter = &code[idx..idx + 1];
                     // Whitespace is just styled as text (invisible mostly), brackets handled
-                    spans.push(Span::styled(delimiter, get_token_style(delimiter)));
+                    spans.push(Span::styled(
+                        delimiter.to_string(),
+                        get_token_style(delimiter),
+                    ));
 
                     last_idx = idx + 1;
                 }
@@ -1606,13 +1819,13 @@ fn format_schema_content(schema_str: &str) -> Vec<Line> {
             // Flush remaining code
             if last_idx < code.len() {
                 let token = &code[last_idx..];
-                spans.push(Span::styled(token, get_token_style(token)));
+                spans.push(Span::styled(token.to_string(), get_token_style(token)));
             }
 
             // Add comment if present
             if let Some(c) = comment {
                 spans.push(Span::styled(
-                    c,
+                    c.to_string(),
                     Style::default()
                         .fg(theme::SUBTEXT0)
                         .add_modifier(Modifier::ITALIC),
@@ -2590,7 +2803,7 @@ fn render_delete_confirmation_popup(f: &mut Frame, server: &crate::tui::state::S
 fn render_server_search_input_popup(
     f: &mut Frame,
     query: &str,
-    cursor_position: usize,
+    _cursor_position: usize,
     state: &AppState,
 ) {
     let area = f.size();

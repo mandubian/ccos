@@ -34,7 +34,7 @@ fn test_match_literal_integer() {
         panic!("Expected expression")
     };
 
-    let mut eval = create_test_evaluator();
+    let eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
 
     match outcome {
@@ -57,7 +57,7 @@ fn test_match_literal_string() {
     } else {
         panic!("Expected expression")
     };
-    let mut eval = create_test_evaluator();
+    let eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
 
     match outcome {
@@ -79,7 +79,7 @@ fn test_match_wildcard() {
     } else {
         panic!("Expected expression")
     };
-    let mut eval = create_test_evaluator();
+    let eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
 
     match outcome {
@@ -101,7 +101,7 @@ fn test_match_variable_binding() {
     } else {
         panic!("Expected expression")
     };
-    let mut eval = create_test_evaluator();
+    let eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
 
     match outcome {
@@ -123,7 +123,7 @@ fn test_match_vector_pattern() {
     } else {
         panic!("Expected expression")
     };
-    let mut eval = create_test_evaluator();
+    let eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
 
     match outcome {
@@ -145,7 +145,7 @@ fn test_match_map_pattern() {
     } else {
         panic!("Expected expression")
     };
-    let mut eval = create_test_evaluator();
+    let eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
 
     match outcome {
@@ -168,7 +168,7 @@ fn test_match_guard_condition() {
     } else {
         panic!("Expected expression")
     };
-    let mut eval = create_test_evaluator();
+    let eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
 
     match outcome {
@@ -190,7 +190,7 @@ fn test_match_no_pattern_found() {
     } else {
         panic!("Expected expression")
     };
-    let mut eval = create_test_evaluator();
+    let eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr);
 
     match outcome {
@@ -212,7 +212,7 @@ fn test_match_nested_pattern() {
     } else {
         panic!("Expected expression")
     };
-    let mut eval = create_test_evaluator();
+    let eval = create_test_evaluator();
     let outcome = eval.evaluate(&expr).expect("Should evaluate");
 
     match outcome {

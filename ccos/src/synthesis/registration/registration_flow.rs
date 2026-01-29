@@ -78,7 +78,7 @@ impl RegistrationFlow {
         let validation_result = self.validate_capability(&manifest, rtfs_code)?;
 
         // Step 2: Apply governance policies
-        let governance_result = self.apply_governance_policies(&manifest, rtfs_code)?;
+        let _governance_result = self.apply_governance_policies(&manifest, rtfs_code)?;
 
         // Step 3: Generate version and attestation
         let version = self.generate_version(&manifest, &validation_result)?;
@@ -202,7 +202,7 @@ impl RegistrationFlow {
     /// Create attestation for the capability
     fn create_attestation(
         &self,
-        manifest: &CapabilityManifest,
+        _manifest: &CapabilityManifest,
         validation_result: &ValidationResult,
     ) -> RuntimeResult<CapabilityAttestation> {
         Ok(self
@@ -213,7 +213,7 @@ impl RegistrationFlow {
     /// Create provenance for the capability
     fn create_provenance(
         &self,
-        manifest: &CapabilityManifest,
+        _manifest: &CapabilityManifest,
         validation_result: &ValidationResult,
     ) -> RuntimeResult<CapabilityProvenance> {
         Ok(self.validation_harness.create_provenance(validation_result))
@@ -507,7 +507,9 @@ impl RegistrationFlow {
 /// Integration result for parent capability checks
 #[derive(Debug, Clone)]
 struct IntegrationResult {
+    #[allow(dead_code)]
     issues: Vec<String>,
+    #[allow(dead_code)]
     updated_capabilities: Vec<String>,
 }
 

@@ -60,7 +60,7 @@ impl CapabilityCache {
     fn put(&mut self, args_hash: u64, value: Value) {
         // Evict expired entries if at capacity
         if self.entries.len() >= self.max_entries {
-            let now = Instant::now();
+            let _now = Instant::now();
             self.entries
                 .retain(|_, entry| entry.created_at.elapsed() < self.ttl);
         }

@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 use std::borrow::Cow;
 use std::cmp::{min, Ordering};
 use std::collections::{BTreeMap, HashMap, HashSet};

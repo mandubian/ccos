@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::approval::{
@@ -873,6 +873,7 @@ impl ServerDiscoveryPipeline {
     }
 }
 
+#[allow(dead_code)]
 fn dedupe_results(results: Vec<RegistrySearchResult>) -> Vec<RegistrySearchResult> {
     let mut seen = HashSet::new();
     results

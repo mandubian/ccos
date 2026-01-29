@@ -3,6 +3,8 @@ use crate::secrets::SecretStore;
 use crate::utils::fs::get_workspace_root;
 use crate::utils::value_conversion::{self, json_to_rtfs_value};
 use async_trait::async_trait;
+use base64::engine::general_purpose::STANDARD as Base64Engine;
+use base64::Engine as _;
 use futures::StreamExt;
 use regex::Regex;
 use reqwest;
@@ -10,23 +12,21 @@ use reqwest_eventsource::{Event, EventSource};
 use rtfs::ast::MapKey;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::any::TypeId;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::time::Duration;
 use urlencoding::encode;
 
 use crate::capabilities::native_provider::NativeCapabilityProvider;
-use crate::capabilities::provider::CapabilityProvider;
 use crate::capabilities::SessionPoolManager;
-use rtfs::runtime::microvm::{
-    ExecutionContext as MicroVMExecutionContext, MicroVMFactory, Program, ScriptLanguage,
-};
+use crate::sandbox::{ResourceLimits, ResourceMetrics, VirtualFilesystem};
+use rtfs::runtime::microvm::{Program, ScriptLanguage};
 use std::sync::Arc;
-use std::sync::Mutex;
 use tokio::sync::RwLock;
-use uuid::Uuid;
 
 /// Execution context passed to all capability executors.
 /// Provides access to metadata, session management, and capability identification.
@@ -1252,26 +1252,13 @@ impl CapabilityExecutor for HttpExecutor {
 }
 
 pub struct SandboxedExecutor {
-    factory: Arc<Mutex<MicroVMFactory>>,
+    manager: Arc<crate::sandbox::SandboxManager>,
 }
 
 impl SandboxedExecutor {
     pub fn new() -> Self {
-        let mut factory = MicroVMFactory::new();
-        // Get provider names first to avoid borrow issues
-        let provider_names: Vec<String> = factory
-            .list_providers()
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        // Initialize all available providers
-        for provider_name in provider_names {
-            if let Some(provider) = factory.get_provider_mut(&provider_name) {
-                let _ = provider.initialize();
-            }
-        }
         Self {
-            factory: Arc::new(Mutex::new(factory)),
+            manager: Arc::new(crate::sandbox::SandboxManager::new()),
         }
     }
 }
@@ -1286,21 +1273,12 @@ impl CapabilityExecutor for SandboxedExecutor {
         &self,
         provider: &ProviderType,
         inputs: &Value,
-        _context: &ExecutionContext<'_>,
+        context: &ExecutionContext<'_>,
     ) -> RuntimeResult<Value> {
         if let ProviderType::Sandboxed(sandboxed) = provider {
-            let mut factory = self.factory.lock().map_err(|e| {
-                RuntimeError::Generic(format!("SandboxedExecutor factory mutex poisoned: {}", e))
-            })?;
-            let provider_name = sandboxed.provider.as_deref().unwrap_or("process");
-
-            let vm_provider = factory.get_provider_mut(provider_name).ok_or_else(|| {
-                RuntimeError::Generic(format!("Provider '{}' not available", provider_name))
-            })?;
-
             let program = if sandboxed.runtime == "wasm" {
                 // Try to decode as base64, if fails assume it's a path and read it
-                let wasm_bytes = if let Ok(bytes) = base64::decode(&sandboxed.source) {
+                let wasm_bytes = if let Ok(bytes) = Base64Engine.decode(&sandboxed.source) {
                     bytes
                 } else {
                     std::fs::read(&sandboxed.source).map_err(|e| {
@@ -1330,22 +1308,244 @@ impl CapabilityExecutor for SandboxedExecutor {
                 }
             };
 
-            let context = MicroVMExecutionContext {
-                execution_id: Uuid::new_v4().to_string(),
-                program: Some(program),
-                capability_id: None,
-                capability_permissions: vec![],
-                args: vec![inputs.clone()],
-                config: Default::default(),
-                runtime_context: None,
-            };
+            let mut sandbox_config = crate::sandbox::SandboxConfig::default();
+            sandbox_config.provider = sandboxed.provider.clone();
+            sandbox_config.capability_id = Some(context.capability_id.to_string());
+            sandbox_config.required_secrets = parse_csv_list(context.metadata, "sandbox_required_secrets");
+            sandbox_config.allowed_hosts = parse_csv_set(context.metadata, "sandbox_allowed_hosts");
+            sandbox_config.allowed_ports = parse_csv_ports(context.metadata, "sandbox_allowed_ports");
 
-            let result = vm_provider.execute_program(context)?;
-            Ok(result.value)
+            if let Some(raw) = context.metadata.get("sandbox_filesystem") {
+                sandbox_config.filesystem = Some(parse_json_metadata::<VirtualFilesystem>(
+                    raw,
+                    "sandbox_filesystem",
+                )?);
+            }
+
+            if let Some(raw) = context.metadata.get("sandbox_resources") {
+                sandbox_config.resources = Some(parse_json_metadata::<ResourceLimits>(
+                    raw,
+                    "sandbox_resources",
+                )?);
+            }
+
+            let result = self
+                .manager
+                .execute(&sandbox_config, program, vec![inputs.clone()])
+                .await?;
+            let metrics = ResourceMetrics::from_microvm_metadata(&result.metadata);
+            Ok(attach_usage(result.value, &metrics))
         } else {
             Err(RuntimeError::Generic("Invalid provider type".to_string()))
         }
     }
+}
+
+fn parse_json_metadata<T: DeserializeOwned>(raw: &str, key: &str) -> RuntimeResult<T> {
+    serde_json::from_str(raw).map_err(|e| {
+        RuntimeError::Generic(format!("Failed to parse {} metadata: {}", key, e))
+    })
+}
+
+fn attach_usage(value: Value, metrics: &ResourceMetrics) -> Value {
+    let mut usage_map: HashMap<MapKey, Value> = HashMap::new();
+
+    if metrics.cpu_time_ms > 0 {
+        usage_map.insert(
+            MapKey::String("cpu_time_ms".to_string()),
+            Value::Integer(metrics.cpu_time_ms as i64),
+        );
+    }
+    if metrics.memory_peak_mb > 0 {
+        usage_map.insert(
+            MapKey::String("memory_peak_mb".to_string()),
+            Value::Integer(metrics.memory_peak_mb as i64),
+        );
+    }
+    if metrics.wall_clock_ms > 0 {
+        usage_map.insert(
+            MapKey::String("wall_clock_ms".to_string()),
+            Value::Integer(metrics.wall_clock_ms as i64),
+        );
+    }
+    if metrics.network_egress_bytes > 0 {
+        usage_map.insert(
+            MapKey::String("network_egress_bytes".to_string()),
+            Value::Integer(metrics.network_egress_bytes as i64),
+        );
+    }
+    if metrics.storage_write_bytes > 0 {
+        usage_map.insert(
+            MapKey::String("storage_write_bytes".to_string()),
+            Value::Integer(metrics.storage_write_bytes as i64),
+        );
+    }
+
+    if usage_map.is_empty() {
+        return value;
+    }
+
+    let usage_key = MapKey::String("usage".to_string());
+
+    match value {
+        Value::Map(mut map) => {
+            match map.get_mut(&usage_key) {
+                Some(Value::Map(existing)) => {
+                    for (k, v) in usage_map {
+                        existing.entry(k).or_insert(v);
+                    }
+                }
+                _ => {
+                    map.insert(usage_key, Value::Map(usage_map));
+                }
+            }
+            Value::Map(map)
+        }
+        other => {
+            let mut map = HashMap::new();
+            map.insert(MapKey::String("result".to_string()), other);
+            map.insert(usage_key, Value::Map(usage_map));
+            Value::Map(map)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sandbox::{FilesystemMode, MountMode, ResourceLimits, VirtualFilesystem};
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_parse_json_metadata_filesystem() {
+        let json = r#"{
+            "mounts": [
+                {"host_path": "/tmp/data", "guest_path": "/data", "mode": "ReadOnly"}
+            ],
+            "quota_mb": 128,
+            "mode": "Ephemeral"
+        }"#;
+
+        let fs: VirtualFilesystem = parse_json_metadata(json, "sandbox_filesystem")
+            .expect("filesystem metadata parses");
+
+        assert_eq!(fs.quota_mb, 128);
+        assert_eq!(fs.mode, FilesystemMode::Ephemeral);
+        assert_eq!(fs.mounts.len(), 1);
+        assert_eq!(fs.mounts[0].guest_path, "/data");
+        assert_eq!(fs.mounts[0].mode, MountMode::ReadOnly);
+        assert_eq!(fs.mounts[0].host_path, PathBuf::from("/tmp/data"));
+    }
+
+    #[test]
+    fn test_parse_json_metadata_resources() {
+        let json = r#"{
+            "cpu_shares": 128,
+            "memory_mb": 256,
+            "timeout_ms": 5000,
+            "network_egress_bytes": 4096
+        }"#;
+
+        let limits: ResourceLimits = parse_json_metadata(json, "sandbox_resources")
+            .expect("resource limits parse");
+
+        assert_eq!(limits.cpu_shares, 128);
+        assert_eq!(limits.memory_mb, 256);
+        assert_eq!(limits.timeout_ms, 5000);
+        assert_eq!(limits.network_egress_bytes, 4096);
+    }
+
+    #[test]
+    fn test_attach_usage_merges_without_overwrite() {
+        let metrics = ResourceMetrics {
+            cpu_time_ms: 10,
+            memory_peak_mb: 20,
+            wall_clock_ms: 30,
+            network_egress_bytes: 40,
+            storage_write_bytes: 50,
+        };
+
+        let mut existing_usage = HashMap::new();
+        existing_usage.insert(
+            MapKey::String("network_egress_bytes".to_string()),
+            Value::Integer(5),
+        );
+        let mut base_map = HashMap::new();
+        base_map.insert(MapKey::String("usage".to_string()), Value::Map(existing_usage));
+        base_map.insert(
+            MapKey::String("payload".to_string()),
+            Value::String("ok".to_string()),
+        );
+
+        let updated = attach_usage(Value::Map(base_map), &metrics);
+        let Value::Map(updated_map) = updated else {
+            panic!("expected map result");
+        };
+        let Value::Map(usage_map) = updated_map
+            .get(&MapKey::String("usage".to_string()))
+            .expect("usage present")
+        else {
+            panic!("usage is map");
+        };
+
+        assert!(matches!(
+            usage_map.get(&MapKey::String("network_egress_bytes".to_string())),
+            Some(Value::Integer(5))
+        ));
+        assert!(matches!(
+            usage_map.get(&MapKey::String("storage_write_bytes".to_string())),
+            Some(Value::Integer(50))
+        ));
+    }
+
+    #[test]
+    fn test_attach_usage_wraps_non_map() {
+        let metrics = ResourceMetrics {
+            cpu_time_ms: 1,
+            memory_peak_mb: 2,
+            wall_clock_ms: 3,
+            network_egress_bytes: 4,
+            storage_write_bytes: 5,
+        };
+
+        let updated = attach_usage(Value::String("ok".to_string()), &metrics);
+        let Value::Map(updated_map) = updated else {
+            panic!("expected map result");
+        };
+
+        assert!(updated_map.contains_key(&MapKey::String("result".to_string())));
+        assert!(updated_map.contains_key(&MapKey::String("usage".to_string())));
+    }
+}
+
+fn parse_csv_list(metadata: &HashMap<String, String>, key: &str) -> Vec<String> {
+    metadata
+        .get(key)
+        .map(|value| {
+            value
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_csv_set(metadata: &HashMap<String, String>, key: &str) -> HashSet<String> {
+    parse_csv_list(metadata, key).into_iter().collect()
+}
+
+fn parse_csv_ports(metadata: &HashMap<String, String>, key: &str) -> HashSet<u16> {
+    metadata
+        .get(key)
+        .map(|value| {
+            value
+                .split(',')
+                .filter_map(|s| s.trim().parse::<u16>().ok())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub enum ExecutorVariant {
@@ -1374,7 +1574,7 @@ impl ExecutorVariant {
             ExecutorVariant::OpenApi(e) => e.execute(provider, inputs, context).await,
             ExecutorVariant::Registry(e) => e.execute(provider, inputs, context).await,
             ExecutorVariant::Sandboxed(e) => e.execute(provider, inputs, context).await,
-            ExecutorVariant::Native(native_provider) => {
+            ExecutorVariant::Native(_native_provider) => {
                 // For Native capabilities, the provider type contains the capability ID
                 // and we dispatch through the NativeCapabilityProvider
                 if let ProviderType::Native(native) = provider {

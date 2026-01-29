@@ -112,6 +112,7 @@ pub struct MultiCapabilitySynthesisResult {
 /// LLM Capability Synthesizer with guardrails
 pub struct CapabilitySynthesizer {
     /// Auth injector for handling credentials
+    #[allow(dead_code)]
     auth_injector: AuthInjector,
     /// Mock mode for testing (bypasses LLM calls)
     mock_mode: bool,
@@ -674,6 +675,7 @@ Wrap your answer in ```rtfs code blocks. Keep it simple and pure:
     }
 
     /// Generate the guardrailed prompt for LLM
+    #[allow(dead_code)]
     fn generate_synthesis_prompt(&self, request: &SynthesisRequest) -> String {
         let mut prompt = String::new();
 

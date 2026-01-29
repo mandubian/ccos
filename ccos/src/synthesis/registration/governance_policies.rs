@@ -117,7 +117,11 @@ impl EnterpriseSecurityPolicy {
 }
 
 impl GovernancePolicy for EnterpriseSecurityPolicy {
-    fn check_compliance(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> ValidationResult {
+    fn check_compliance(
+        &self,
+        manifest: &CapabilityManifest,
+        rtfs_code: &str,
+    ) -> ValidationResult {
         let mut issues = Vec::new();
 
         // Check for blocked keywords in capability name
@@ -257,7 +261,11 @@ impl DataPrivacyPolicy {
 }
 
 impl GovernancePolicy for DataPrivacyPolicy {
-    fn check_compliance(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> ValidationResult {
+    fn check_compliance(
+        &self,
+        manifest: &CapabilityManifest,
+        rtfs_code: &str,
+    ) -> ValidationResult {
         let mut issues = Vec::new();
 
         // Check for sensitive data patterns
@@ -367,7 +375,11 @@ impl PerformancePolicy {
 }
 
 impl GovernancePolicy for PerformancePolicy {
-    fn check_compliance(&self, manifest: &CapabilityManifest, rtfs_code: &str) -> ValidationResult {
+    fn check_compliance(
+        &self,
+        _manifest: &CapabilityManifest,
+        rtfs_code: &str,
+    ) -> ValidationResult {
         let mut issues = Vec::new();
 
         // Count external calls

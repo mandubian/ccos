@@ -318,7 +318,7 @@ Output format:
                     return match resolved {
                         crate::synthesis::core::ResolutionResult::Resolved {
                             capability_id,
-                            resolution_method,
+                            resolution_method: _resolution_method,
                             ..
                         } => {
                             Ok::<SynthesizeCapabilityOutput, RuntimeError>(
@@ -1009,6 +1009,7 @@ struct SynthesizeCapabilityOutput {
 
 // --- Discovery DTOs ---
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct DiscoverToolsInput {
     query: String,
@@ -1016,12 +1017,14 @@ struct DiscoverToolsInput {
     max_results: Option<usize>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct DiscoverToolsOutput {
     tools: Vec<DiscoveredToolDto>,
     query: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 struct DiscoveredToolDto {
     name: String,

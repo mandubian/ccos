@@ -13,6 +13,7 @@ use crate::approval::storage_file::FileApprovalStorage;
 use crate::approval::types::ApprovalCategory;
 use crate::approval::{RiskAssessment, RiskLevel, UnifiedApprovalQueue};
 use crate::governance_kernel::GovernanceKernel;
+use crate::sandbox::ResourceMetrics;
 use crate::orchestrator::Orchestrator;
 use crate::types::{Action, ActionType, ExecutionResult};
 use crate::utils::fs::get_workspace_root;
@@ -41,6 +42,9 @@ struct UsageMetrics {
     cost_usd: Option<f64>,
     network_egress_bytes: Option<u64>,
     storage_write_bytes: Option<u64>,
+    cpu_time_ms: Option<u64>,
+    memory_peak_mb: Option<u64>,
+    wall_clock_ms: Option<u64>,
 }
 
 /// The RuntimeHost is the bridge between the pure RTFS runtime and the stateful CCOS world.
@@ -199,6 +203,14 @@ impl RuntimeHost {
                         ctx.extend_storage_write_bytes(additional as u64);
                         extended = true;
                     }
+                    "sandbox_cpu_ms" => {
+                        ctx.extend_sandbox_cpu_ms(additional as u64);
+                        extended = true;
+                    }
+                    "sandbox_memory_peak_mb" => {
+                        ctx.extend_sandbox_memory_peak_mb(additional as u64);
+                        extended = true;
+                    }
                     _ => {}
                 }
 
@@ -327,6 +339,11 @@ impl RuntimeHost {
 
         if let Some(ctx_mutex) = budget_ctx_arc {
             if let Ok(mut ctx) = ctx_mutex.lock() {
+                let usage = result
+                    .as_ref()
+                    .ok()
+                    .and_then(Self::extract_usage_from_value);
+
                 let mut consumption = StepConsumption {
                     capability_id: Some(capability_id.to_string()),
                     duration_ms,
@@ -334,23 +351,34 @@ impl RuntimeHost {
                 };
 
                 let mut tokens_estimated = false;
-                if let Ok(res_val) = result {
-                    if let Some(usage) = Self::extract_usage_from_value(res_val) {
-                        if let Some(input) = usage.llm_input_tokens {
-                            consumption.llm_input_tokens = input;
-                        }
-                        if let Some(output) = usage.llm_output_tokens {
-                            consumption.llm_output_tokens = output;
-                        }
-                        if let Some(cost) = usage.cost_usd {
-                            consumption.cost_usd = cost;
-                        }
-                        if let Some(network) = usage.network_egress_bytes {
-                            consumption.network_egress_bytes = network;
-                        }
-                        if let Some(storage) = usage.storage_write_bytes {
-                            consumption.storage_write_bytes = storage;
-                        }
+                if let Some(usage) = &usage {
+                    if let Some(input) = usage.llm_input_tokens {
+                        consumption.llm_input_tokens = input;
+                    }
+                    if let Some(output) = usage.llm_output_tokens {
+                        consumption.llm_output_tokens = output;
+                    }
+                    if let Some(cost) = usage.cost_usd {
+                        consumption.cost_usd = cost;
+                    }
+                    if let Some(network) = usage.network_egress_bytes {
+                        consumption.network_egress_bytes = network;
+                    }
+                    if let Some(storage) = usage.storage_write_bytes {
+                        consumption.storage_write_bytes = storage;
+                    }
+                    if usage.cpu_time_ms.is_some()
+                        || usage.memory_peak_mb.is_some()
+                        || usage.wall_clock_ms.is_some()
+                    {
+                        let metrics = ResourceMetrics {
+                            cpu_time_ms: usage.cpu_time_ms.unwrap_or(0),
+                            memory_peak_mb: usage.memory_peak_mb.unwrap_or(0),
+                            wall_clock_ms: usage.wall_clock_ms.unwrap_or(0),
+                            network_egress_bytes: 0,
+                            storage_write_bytes: 0,
+                        };
+                        ctx.record_sandbox_consumption(&metrics);
                     }
                 }
 
@@ -395,6 +423,15 @@ impl RuntimeHost {
                         "remaining_storage_write_bytes",
                         &remaining.storage_write_bytes.to_string(),
                     );
+                    action = action
+                        .with_metadata(
+                            "remaining_sandbox_cpu_ms",
+                            &remaining.sandbox_cpu_ms.to_string(),
+                        )
+                        .with_metadata(
+                            "remaining_sandbox_memory_peak_mb",
+                            &remaining.sandbox_memory_peak_mb.to_string(),
+                        );
 
                     if consumption.llm_input_tokens > 0 {
                         action = action.with_metadata(
@@ -426,6 +463,26 @@ impl RuntimeHost {
                             "storage_write_bytes",
                             &consumption.storage_write_bytes.to_string(),
                         );
+                    }
+                    if let Some(usage) = &usage {
+                        if let Some(cpu_time_ms) = usage.cpu_time_ms {
+                            action = action.with_metadata(
+                                "sandbox_cpu_time_ms",
+                                &cpu_time_ms.to_string(),
+                            );
+                        }
+                        if let Some(memory_peak_mb) = usage.memory_peak_mb {
+                            action = action.with_metadata(
+                                "sandbox_memory_peak_mb",
+                                &memory_peak_mb.to_string(),
+                            );
+                        }
+                        if let Some(wall_clock_ms) = usage.wall_clock_ms {
+                            action = action.with_metadata(
+                                "sandbox_wall_clock_ms",
+                                &wall_clock_ms.to_string(),
+                            );
+                        }
                     }
 
                     chain.append(&action).ok();
@@ -530,11 +587,32 @@ impl RuntimeHost {
         )
         .or_else(|| read_u64(&json, &["storage_write_bytes"]));
 
+        usage.cpu_time_ms = read_u64(
+            usage_obj,
+            &["cpu_time_ms", "sandbox_cpu_ms", "usage.cpu_time_ms"],
+        )
+        .or_else(|| read_u64(&json, &["cpu_time_ms", "sandbox_cpu_ms"]));
+
+        usage.memory_peak_mb = read_u64(
+            usage_obj,
+            &["memory_peak_mb", "sandbox_memory_peak_mb", "usage.memory_peak_mb"],
+        )
+        .or_else(|| read_u64(&json, &["memory_peak_mb", "sandbox_memory_peak_mb"]));
+
+        usage.wall_clock_ms = read_u64(
+            usage_obj,
+            &["wall_clock_ms", "sandbox_wall_clock_ms", "usage.wall_clock_ms"],
+        )
+        .or_else(|| read_u64(&json, &["wall_clock_ms", "sandbox_wall_clock_ms"]));
+
         if usage.llm_input_tokens.is_some()
             || usage.llm_output_tokens.is_some()
             || usage.cost_usd.is_some()
             || usage.network_egress_bytes.is_some()
             || usage.storage_write_bytes.is_some()
+            || usage.cpu_time_ms.is_some()
+            || usage.memory_peak_mb.is_some()
+            || usage.wall_clock_ms.is_some()
         {
             Some(usage)
         } else {
@@ -623,7 +701,7 @@ impl RuntimeHost {
         };
 
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.block_on(fut);
+            handle.spawn(fut);
         } else {
             futures::executor::block_on(fut);
         }

@@ -199,6 +199,7 @@ impl IntentSummarizer {
 }
 
 /// Intent pruning engine for managing large graphs
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct IntentPruningEngine {
     importance_threshold: f64,

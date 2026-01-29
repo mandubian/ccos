@@ -54,6 +54,7 @@ pub mod orchestrator;
 pub mod plan_archive;
 pub mod planner;
 pub mod rtfs_bridge;
+pub mod sandbox;
 pub mod secrets;
 pub mod security_policies;
 pub mod storage;

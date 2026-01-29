@@ -122,7 +122,7 @@ impl AgentCapabilityState {
 
     fn get_or_create_memory(&self, agent_id: &str) -> AgentMemory {
         let mut memories = self.memories.lock().unwrap();
-        if let Some(memory) = memories.get(agent_id) {
+        if let Some(_memory) = memories.get(agent_id) {
             // Return a new wrapper with same backend
             AgentMemory::new(agent_id, self.working_memory.clone())
         } else {

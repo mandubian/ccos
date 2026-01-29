@@ -15,6 +15,7 @@ use rtfs::runtime::{RuntimeError, RuntimeResult, Value as RuntimeValue};
 
 /// Weather MCP Server implementation
 /// Provides weather information tools following MCP protocol standards
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct WeatherMCPCapability {
     /// API key for OpenWeatherMap (in real implementation)
@@ -384,7 +385,7 @@ impl CapabilityProvider for WeatherMCPCapability {
         &self,
         capability_id: &str,
         inputs: &RuntimeValue,
-        context: &ExecutionContext,
+        _context: &ExecutionContext,
     ) -> RuntimeResult<RuntimeValue> {
         // Extract tool name from capability ID
         let tool_name = capability_id.strip_prefix("weather_mcp.").ok_or_else(|| {

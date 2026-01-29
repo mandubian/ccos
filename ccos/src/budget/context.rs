@@ -8,6 +8,7 @@ use crate::budget::types::{
     BudgetCheckResult, BudgetConsumed, BudgetLimits, BudgetPolicies, BudgetRemaining,
     BudgetWarning, ExhaustionPolicy,
 };
+use crate::sandbox::resources::ResourceMetrics;
 
 /// Runtime budget context for an agent run
 #[derive(Debug)]
@@ -70,6 +71,14 @@ impl BudgetContext {
                 .limits
                 .storage_write_bytes
                 .saturating_sub(self.consumed.storage_write_bytes),
+            sandbox_cpu_ms: self
+                .limits
+                .sandbox_cpu_ms
+                .saturating_sub(self.consumed.sandbox_cpu_ms),
+            sandbox_memory_peak_mb: self
+                .limits
+                .sandbox_memory_peak_mb
+                .saturating_sub(self.consumed.sandbox_memory_peak_mb),
         }
     }
 
@@ -154,6 +163,30 @@ impl BudgetContext {
             return result;
         }
 
+        // 7. Sandbox CPU time
+        if let Some(result) = self.check_dimension(
+            "sandbox_cpu_ms",
+            self.consumed.sandbox_cpu_ms,
+            self.limits.sandbox_cpu_ms,
+            self.policies.sandbox_cpu,
+            BudgetWarning::SandboxCpu50,
+            BudgetWarning::SandboxCpu80,
+        ) {
+            return result;
+        }
+
+        // 8. Sandbox memory peak
+        if let Some(result) = self.check_dimension(
+            "sandbox_memory_peak_mb",
+            self.consumed.sandbox_memory_peak_mb,
+            self.limits.sandbox_memory_peak_mb,
+            self.policies.sandbox_memory,
+            BudgetWarning::SandboxMemory50,
+            BudgetWarning::SandboxMemory80,
+        ) {
+            return result;
+        }
+
         BudgetCheckResult::Ok
     }
 
@@ -226,6 +259,13 @@ impl BudgetContext {
                 self.consumed.storage_write_bytes,
                 self.limits.storage_write_bytes,
             )),
+            "sandbox_cpu" | "sandbox_cpu_ms" => {
+                Some((self.consumed.sandbox_cpu_ms, self.limits.sandbox_cpu_ms))
+            }
+            "sandbox_memory" | "sandbox_memory_peak_mb" => Some((
+                self.consumed.sandbox_memory_peak_mb,
+                self.limits.sandbox_memory_peak_mb,
+            )),
             _ => None,
         }
     }
@@ -238,6 +278,14 @@ impl BudgetContext {
         self.consumed.cost_usd += consumption.cost_usd;
         self.consumed.network_egress_bytes += consumption.network_egress_bytes;
         self.consumed.storage_write_bytes += consumption.storage_write_bytes;
+    }
+
+    /// Record sandbox resource consumption in the budget.
+    pub fn record_sandbox_consumption(&mut self, metrics: &ResourceMetrics) {
+        self.consumed.sandbox_cpu_ms += metrics.cpu_time_ms;
+        if metrics.memory_peak_mb > self.consumed.sandbox_memory_peak_mb {
+            self.consumed.sandbox_memory_peak_mb = metrics.memory_peak_mb;
+        }
     }
 
     /// Extend budget (after human approval)
@@ -281,6 +329,20 @@ impl BudgetContext {
         self.limits.storage_write_bytes += additional;
         self.warnings_issued.remove(&BudgetWarning::Storage50);
         self.warnings_issued.remove(&BudgetWarning::Storage80);
+    }
+
+    /// Extend sandbox CPU budget (after human approval)
+    pub fn extend_sandbox_cpu_ms(&mut self, additional: u64) {
+        self.limits.sandbox_cpu_ms += additional;
+        self.warnings_issued.remove(&BudgetWarning::SandboxCpu50);
+        self.warnings_issued.remove(&BudgetWarning::SandboxCpu80);
+    }
+
+    /// Extend sandbox memory budget (after human approval)
+    pub fn extend_sandbox_memory_peak_mb(&mut self, additional: u64) {
+        self.limits.sandbox_memory_peak_mb += additional;
+        self.warnings_issued.remove(&BudgetWarning::SandboxMemory50);
+        self.warnings_issued.remove(&BudgetWarning::SandboxMemory80);
     }
 }
 

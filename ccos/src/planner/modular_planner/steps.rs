@@ -529,7 +529,7 @@ pub async fn step_create_fallback_resolutions_with_strategies(
 
                     if strat.can_handle(&request) {
                         match strat.resolve(&request, resolution_context).await {
-                            Ok(result) => {
+                            Ok(_result) => {
                                 // Strategy succeeded
                                 let method = strat.name().to_string();
                                 trace.events.push(TraceEvent::ResolutionCompleted {
@@ -786,7 +786,7 @@ pub async fn step_resolve_with_discovery(
     trace: &mut PlanningTrace,
 ) -> Result<ResolutionWithDiscoveryResult, PlannerError> {
     // First attempt: standard resolution
-    let mut result = step_resolve_intents(sub_intents, intent_ids, resolution, trace).await?;
+    let result = step_resolve_intents(sub_intents, intent_ids, resolution, trace).await?;
 
     if result.unresolved.is_empty() || max_discovery_rounds == 0 {
         return Ok(ResolutionWithDiscoveryResult {

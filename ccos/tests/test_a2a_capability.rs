@@ -1,3 +1,5 @@
+#![allow(unused_imports, unused_variables)]
+
 use ccos::capabilities::providers::a2a_provider::{A2AConfig, A2AProvider};
 use ccos::capabilities::{CapabilityExecutionPolicy, CapabilityProvider, CapabilityRegistry};
 use rtfs::runtime::security::RuntimeContext;

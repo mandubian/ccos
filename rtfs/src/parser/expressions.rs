@@ -7,7 +7,7 @@ use super::special_forms::{
 };
 use super::utils::unescape;
 use super::Rule;
-use crate::ast::{Expression, ForExpr, Keyword, Literal, MapKey, Symbol}; // Symbol now used for task_context_access desugaring
+use crate::ast::{Expression, Keyword, Literal, MapKey, Symbol}; // Symbol now used for task_context_access desugaring
 use pest::iterators::Pair;
 use std::collections::HashMap;
 
@@ -387,7 +387,7 @@ pub(super) fn build_map(pair: Pair<Rule>) -> Result<HashMap<MapKey, Expression>,
 
 fn build_shorthand_fn(pair: Pair<Rule>) -> Result<Expression, PestParseError> {
     // Collect body expressions first
-    let span = pair_to_source_span(&pair);
+    let _span = pair_to_source_span(&pair);
     let mut body_exprs = Vec::new();
     let mut max_index: usize = 0; // Track highest %n encountered
     let mut uses_plain_percent = false;

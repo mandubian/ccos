@@ -74,6 +74,7 @@ impl ModuleBuilder {
 }
 
 // Helper to convert Vec<Property> to HashMap<MapKey, Expression>
+#[allow(dead_code)]
 fn properties_to_map(props: Vec<Property>) -> HashMap<MapKey, Expression> {
     props
         .into_iter()

@@ -4,8 +4,8 @@
 use rtfs::ccos::delegation::ModelProvider;
 #[cfg(feature = "ccos-integration")]
 use rtfs::ccos::local_models::LocalLlamaModel;
+#[cfg(feature = "ccos-integration")]
 use std::env;
-use std::path::Path;
 
 #[test]
 #[cfg(feature = "ccos-integration")]

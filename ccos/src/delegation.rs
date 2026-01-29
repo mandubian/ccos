@@ -630,7 +630,7 @@ mod tests {
 
         // Verify the cache contains the metadata
         let agent = "math/add";
-        let task = format!("{:x}", 0x12345678u64 ^ 0xABCDEF01u64);
+        let _task = format!("{:x}", 0x12345678u64 ^ 0xABCDEF01u64);
         let plans = de.l1_cache.get_agent_plans(agent);
         assert!(!plans.is_empty());
 

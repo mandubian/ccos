@@ -12,6 +12,8 @@
 //! - Tooling functions (file I/O, HTTP, etc.)
 //! - CCOS capability functions
 
+#![allow(unused_imports, unused_variables, dead_code)]
+
 use crate::ast::{Keyword, MapKey, Symbol};
 // CCOS capability marketplace removed - RTFS uses pure_host
 use crate::runtime::environment::Environment;

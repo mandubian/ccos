@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use ccos::approval::{
     ApprovalQueue, DiscoverySource, PendingDiscovery, RiskAssessment, RiskLevel, ServerInfo,
 };
@@ -22,15 +24,17 @@ fn test_approval_workflow() {
             auth_env_var: None,
             capabilities_path: None,
             alternative_endpoints: Vec::new(),
+            capability_files: None,
         },
-        domain_match: vec![],
-        risk_assessment: RiskAssessment {
+        domain_match: false,
+        risk_assessment: Some(RiskAssessment {
             level: RiskLevel::Low,
             reasons: vec![],
-        },
+        }),
         requested_at: Utc::now(),
         expires_at: Utc::now() + chrono::Duration::hours(1),
         requesting_goal: None,
+        capability_files: None,
     };
 
     // Add
@@ -75,15 +79,17 @@ fn test_rejection_workflow() {
             auth_env_var: None,
             capabilities_path: None,
             alternative_endpoints: Vec::new(),
+            capability_files: None,
         },
-        domain_match: vec![],
-        risk_assessment: RiskAssessment {
+        domain_match: false,
+        risk_assessment: Some(RiskAssessment {
             level: RiskLevel::High,
             reasons: vec![],
-        },
+        }),
         requested_at: Utc::now(),
         expires_at: Utc::now() + chrono::Duration::hours(1),
         requesting_goal: None,
+        capability_files: None,
     };
 
     queue.add(discovery).unwrap();

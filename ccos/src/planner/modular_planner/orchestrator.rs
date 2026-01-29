@@ -1575,7 +1575,7 @@ impl ModularPlanner {
                 .cloned()
                 .collect();
 
-            let mut call_expr = match resolutions.get(intent_id) {
+            let call_expr = match resolutions.get(intent_id) {
                 Some(resolved) => match resolved {
                     ResolvedCapability::Local { .. }
                     | ResolvedCapability::Remote { .. }
@@ -1594,7 +1594,7 @@ impl ModularPlanner {
                         let mut resolved_expr = None;
 
                         // Try LLM fallback if we have an arbiter and exactly one dependency with grounding data
-                        if let Some(arbiter) = &self.delegating_arbiter {
+                        if let Some(_arbiter) = &self.delegating_arbiter {
                             if sub_intent.dependencies.len() == 1 {
                                 let dep_idx = sub_intent.dependencies[0];
                                 let dep_intent_id = &intent_ids[dep_idx];
@@ -1737,7 +1737,6 @@ impl ModularPlanner {
                                     }
                                 });
 
-                            let mut synthetic_target_schema: Option<serde_json::Value> = None;
                             let target_param_schema: Option<&serde_json::Value> =
                                 consumer_param_name.as_ref().and_then(|param| {
                                     consumer_schema
@@ -1747,44 +1746,42 @@ impl ModularPlanner {
 
                             // If we don't have a formal schema (e.g. local capability), use a minimal
                             // hint based on common list-carrying param names.
+                            let synthetic_target_schema = if matches!(
+                                consumer_param_name.as_deref(),
+                                Some("data")
+                                    | Some("items")
+                                    | Some("rows")
+                                    | Some("issues")
+                                    | Some("results")
+                                    | Some("records")
+                                    | Some("entries")
+                            ) {
+                                Some(json!({ "type": "array" }))
+                            } else if matches!(
+                                consumer_param_name.as_deref(),
+                                Some("perPage")
+                                    | Some("per_page")
+                                    | Some("page")
+                                    | Some("pageSize")
+                                    | Some("page_size")
+                                    | Some("count")
+                                    | Some("limit")
+                                    | Some("offset")
+                                    | Some("max")
+                                    | Some("min")
+                                    | Some("size")
+                                    | Some("num")
+                                    | Some("number")
+                            ) {
+                                Some(json!({ "type": "number" }))
+                            } else {
+                                None
+                            };
+
                             let target_input_schema: Option<&serde_json::Value> =
-                                if target_param_schema.is_some() {
-                                    target_param_schema
-                                } else if consumer_schema.is_some() {
-                                    consumer_schema
-                                } else if matches!(
-                                    consumer_param_name.as_deref(),
-                                    Some("data")
-                                        | Some("items")
-                                        | Some("rows")
-                                        | Some("issues")
-                                        | Some("results")
-                                        | Some("records")
-                                        | Some("entries")
-                                ) {
-                                    synthetic_target_schema = Some(json!({ "type": "array" }));
-                                    synthetic_target_schema.as_ref()
-                                } else if matches!(
-                                    consumer_param_name.as_deref(),
-                                    Some("perPage")
-                                        | Some("per_page")
-                                        | Some("page")
-                                        | Some("pageSize")
-                                        | Some("page_size")
-                                        | Some("count")
-                                        | Some("limit")
-                                        | Some("offset")
-                                        | Some("max")
-                                        | Some("min")
-                                        | Some("size")
-                                        | Some("num")
-                                        | Some("number")
-                                ) {
-                                    synthetic_target_schema = Some(json!({ "type": "number" }));
-                                    synthetic_target_schema.as_ref()
-                                } else {
-                                    None
-                                };
+                                target_param_schema
+                                    .or(consumer_schema)
+                                    .or(synthetic_target_schema.as_ref());
 
                             // Detect if we need an adapter
                             let bridge = SchemaBridge::detect(

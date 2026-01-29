@@ -1,4 +1,5 @@
 // RTFS Development Tooling - Step 3 Implementation
+#![allow(dead_code)]
 // REPL interface, testing framework, and development utilities
 // Note: Full CCOS integration available when RTFS is used with CCOS
 
@@ -12,7 +13,6 @@ use crate::runtime::{
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::sync::Mutex;
 
 // Placeholder IrStrategy implementation until the actual one is available
 #[derive(Debug)]

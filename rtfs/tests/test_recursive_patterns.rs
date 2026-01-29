@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 use rtfs::runtime::module_runtime::ModuleRegistry;
 use rtfs::runtime::pure_host::create_pure_host;
 use std::sync::Arc;

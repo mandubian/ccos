@@ -1,5 +1,4 @@
 // --- Grammar Entry Point ---
-program = { SOI ~ (task_definition | module_definition | expression)* ~ EOI }
 // Allow multiple top-level forms for now
 
 // --- Core Recursive Rule ---
@@ -193,7 +192,6 @@ try_catch_expr = { "(" ~ try_keyword ~ try_body_expression+ ~ catch_clause* ~ fi
 // Changed + to * for catch
 catch_clause   =  { "(" ~ catch_keyword ~ symbol ~ symbol? ~ expression+ ~ ")" } // Use catch_keyword
 finally_clause =  { "(" ~ finally_keyword ~ expression+ ~ ")" } // Use finally_keyword
-catch_pattern  = _{ type_expr | keyword | symbol }
 // symbol implies catch-all
 
 // Flat syntax: (match expr pattern1 body1 pattern2 body2 ...)
@@ -205,8 +203,6 @@ WHEN = @{ "when" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":
 discover_agents_expr = { "(" ~ discover_agents_keyword ~ expression ~ expression? ~ ")" }
 
 // --- Top-Level Definitions ---z
-task_keyword = @{ "task" }
-module_keyword = @{ "module" }
 import_keyword = @{ "import" }
 
 // Keywords for special forms
@@ -225,27 +221,7 @@ log_step_keyword = @{ "log-step" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" 
 discover_agents_keyword = @{ "discover-agents" ~ (WHITESPACE | &(")" | "(" | "\"" | "[" | "]" | "{" | "}" | ":" | ";")) } // Agent discovery keyword
 
 
-task_definition =  { "(" ~ task_keyword ~ task_property+ ~ ")" }
-task_property   = {
-    (":id" ~ string)
-  | (":source" ~ string) // Added from syntax_spec
-  | (":timestamp" ~ string) // Added from syntax_spec
-  | (":metadata" ~ map) // Assuming map literal
-  | (":intent" ~ expression)
-  | (":contracts" ~ map) // Assuming map literal
-  | (":plan" ~ expression)
-  | (":execution-trace" ~ vector) // Assuming vector literal
-}
-
 // module_definition =  { "(" ~ "module" ~ namespaced_identifier ~ export_option? ~ definition* ~ ")" }
-module_definition =  { "(" ~ module_keyword ~ (symbol | namespaced_identifier) ~ export_option? ~ definition* ~ ")" } // Changed namespaced_identifier to symbol and used module_keyword
-
-// Corrected export_option structure
-exports_keyword   = @{ ":exports" } 
-export_symbols_vec = { "[" ~ (WHITESPACE* ~ symbol)+ ~ WHITESPACE* ~ "]" }
-export_option     =  { "(" ~ exports_keyword ~ WHITESPACE* ~ export_symbols_vec ~ WHITESPACE* ~ ")" }
-
-definition        = _{ def_expr | defn_expr | import_definition }
 import_definition =  { "(" ~ import_keyword ~ (symbol | namespaced_identifier) ~ (import_option* ) ~ ")" } // Allow multiple flat import options
 import_option      = { ":as" ~ symbol | ":only" ~ "[" ~ symbol+ ~ "]" } // Normal rule, singular
 

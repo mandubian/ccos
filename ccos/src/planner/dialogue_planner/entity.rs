@@ -62,6 +62,7 @@ impl From<io::Error> for EntityError {
 
 /// Human entity interacting via CLI (stdin/stdout)
 pub struct HumanEntity {
+    #[allow(dead_code)]
     name: Option<String>,
 }
 

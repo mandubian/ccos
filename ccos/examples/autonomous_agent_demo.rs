@@ -3,6 +3,7 @@
 //! This example demonstrates an advanced, self-evolving autonomous agent that:
 //! 1. Takes a high-level goal from the user.
 //! 2. Iteratively decomposes it into steps using the Arbiter.
+#![allow(dead_code, unused_imports, unused_variables)]
 //! 3. Resolves capabilities for each step (Local -> Semantic Search -> MCP Registry).
 //! 4. Recursively plans for missing capabilities that can't be found directly.
 //! 5. Synthesizes missing capabilities using LLM-generated RTFS code (Phase B).

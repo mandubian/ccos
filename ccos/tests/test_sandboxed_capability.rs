@@ -59,6 +59,11 @@ else:
         source: python_code.to_string(),
         entry_point: None,
         provider: Some("process".to_string()),
+        runtime_spec: None,
+        network_policy: None,
+        filesystem: None,
+        resources: None,
+        secrets: Vec::new(),
     };
 
     let provider = ProviderType::Sandboxed(sandboxed);
@@ -128,6 +133,11 @@ else:
         source: python_code.to_string(),
         entry_point: None,
         provider: Some("process".to_string()),
+        runtime_spec: None,
+        network_policy: None,
+        filesystem: None,
+        resources: None,
+        secrets: Vec::new(),
     };
 
     let provider = ProviderType::Sandboxed(sandboxed);
@@ -181,6 +191,11 @@ async fn test_sandboxed_invalid_provider() {
         source: "print('hello')".to_string(),
         entry_point: None,
         provider: Some("nonexistent_provider".to_string()),
+        runtime_spec: None,
+        network_policy: None,
+        filesystem: None,
+        resources: None,
+        secrets: Vec::new(),
     };
 
     let provider = ProviderType::Sandboxed(sandboxed);
@@ -258,6 +273,11 @@ print(json.dumps({"result": "sandbox works!"}))
             source: python_code.to_string(),
             entry_point: None,
             provider: Some("process".to_string()),
+            runtime_spec: None,
+            network_policy: None,
+            filesystem: None,
+            resources: None,
+            secrets: Vec::new(),
         }),
         input_schema: None,
         output_schema: None,
@@ -374,6 +394,11 @@ print(json.dumps(result))
         source: python_code.to_string(),
         entry_point: None,
         provider: Some("firecracker".to_string()),
+        runtime_spec: None,
+        network_policy: None,
+        filesystem: None,
+        resources: None,
+        secrets: Vec::new(),
     };
 
     let provider = ProviderType::Sandboxed(sandboxed);

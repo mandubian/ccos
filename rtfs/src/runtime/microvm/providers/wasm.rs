@@ -122,6 +122,7 @@ impl WasmMicroVMProvider {
         )))
     }
 
+    #[allow(dead_code)]
     fn create_simple_wasm_module(&self, _source: &str) -> RuntimeResult<Vec<u8>> {
         // TODO: Implement actual WASM module compilation
         // This is a placeholder that returns empty bytes

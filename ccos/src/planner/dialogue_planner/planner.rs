@@ -1,4 +1,5 @@
 // DialoguePlanner: Conversational planning that builds plans through dialogue
+#![allow(unused_assignments)]
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

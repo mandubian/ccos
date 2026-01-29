@@ -112,6 +112,7 @@ impl InMemoryJsonlBackend {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn load_jsonl_into_memory(&mut self, path: &Path) -> Result<(), WorkingMemoryError> {
         if !path.exists() {
             return Ok(()); // nothing to load

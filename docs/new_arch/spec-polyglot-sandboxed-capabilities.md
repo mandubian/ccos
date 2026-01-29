@@ -163,6 +163,14 @@ Instead, it must:
 )
 ```
 
+**Interim metadata wiring (WS9 Phase 2)**
+- `sandbox_filesystem`: JSON-encoded `VirtualFilesystem`
+- `sandbox_resources`: JSON-encoded `ResourceLimits`
+- `sandbox_runtime`: JSON-encoded runtime spec (for future manifest parsing)
+
+These metadata keys are used until the manifest `:filesystem` and `:resources` fields
+are parsed and enforced directly.
+
 ### 4.2 Runtime Types
 
 | Type | Isolation | Startup | Use Case |
@@ -525,6 +533,12 @@ The sandbox manager meters actual consumption:
 | Wall-clock | Timer started at request forward |
 | Network | GK proxy byte counters |
 
+**Current implementation (WS9 Phase 2)**
+- Network/storage usage is collected from sandbox execution metadata and surfaced as
+  `usage.network_egress_bytes` and `usage.storage_write_bytes` in capability results.
+- CPU/memory metering is captured in metadata but not yet enforced as run-level budget
+  limits.
+
 #### Budget Enforcement in Sandboxes
 When a sandbox exceeds its per-call budget:
 
@@ -572,6 +586,14 @@ The GK uses these estimates for:
 - Cost estimation for user approval
 
 ## 8. Implementation Roadmap
+
+### Implementation Status (WS9)
+- [x] GK network proxy with allowlist
+- [x] Secret injection for sandboxed calls
+- [x] Virtual FS mount wiring for MicroVM process provider
+- [x] Resource limit wiring (timeout/memory/CPU) for MicroVM process provider
+- [x] Usage reporting for network/storage in sandboxed results
+- [ ] Manifest parsing for `:runtime`, `:filesystem`, and `:resources`
 
 ### Phase 0: Foundation
 - [ ] Define capability manifest schema for `:runtime` field

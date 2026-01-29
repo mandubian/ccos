@@ -12,6 +12,7 @@ BACKTICK = @{ "`" }
 // --- Grammar Entry Point ---
 // Note: task_definition is removed in favor of RTFS 2.0 objects.
 program = { SOI ~ (module_definition | expression)* ~ EOI }
+root = _{ program }
 
 // --- Core Recursive Rule ---
 // Order matters for precedence (e.g., special forms before general lists)
@@ -87,6 +88,7 @@ match_pattern = _{
   | wildcard // Wildcard before symbol
   | symbol 
   | type_expr // Matching on type might be complex, placeholder
+    | catch_pattern
   | as_match_pattern // Use the specific :as pattern rule
   | vector_match_pattern
   | map_match_pattern 
@@ -101,9 +103,9 @@ map_entry = { map_key ~ expression }
 // Allowing keywords, strings, or integers as map keys for now (as per grammar_spec)
 map_key = { keyword | string | integer }
 
-quasiquote = { "`" ~ expression }
-unquote = { "~" ~ expression }
-unquote_splicing = { "~@" ~ expression }
+quasiquote = { BACKTICK ~ expression }
+unquote = { TILDE ~ expression }
+unquote_splicing = { TILDE ~ "@" ~ expression }
 
 // Shorthand anonymous function using Clojure-style reader macro: #( ... ) with % %1 %2 ...
 // Parses as its own rule; later transformed into a normal fn expression in parser.

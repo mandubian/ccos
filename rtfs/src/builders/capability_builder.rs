@@ -380,14 +380,14 @@ impl ObjectBuilder<CapabilityDefinition> for CapabilityBuilder {
         }
 
         // Add optional properties
-        if let Some(input_schema) = &self.input_schema {
+        if let Some(_input_schema) = &self.input_schema {
             properties.push(Property {
                 key: Keyword::new("input-schema"),
                 value: Expression::Symbol(Symbol::new("type-expr")), // Placeholder for TypeExpr
             });
         }
 
-        if let Some(output_schema) = &self.output_schema {
+        if let Some(_output_schema) = &self.output_schema {
             properties.push(Property {
                 key: Keyword::new("output-schema"),
                 value: Expression::Symbol(Symbol::new("type-expr")), // Placeholder for TypeExpr

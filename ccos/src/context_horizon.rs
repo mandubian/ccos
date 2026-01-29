@@ -3,6 +3,8 @@
 //! This module implements the Context Horizon Manager that addresses the finite
 //! context window of the core Arbiter LLM through virtualization and distillation.
 
+#![allow(dead_code, unused_variables)]
+
 use super::types::Intent;
 use super::types::IntentId;
 use crate::working_memory::backend::QueryParams;

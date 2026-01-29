@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Minimal test helpers for RTFS-only tests
 // This provides only the essential functions needed for pure RTFS testing
 

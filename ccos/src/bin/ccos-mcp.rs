@@ -3,6 +3,7 @@
 //! Exposes CCOS capabilities as MCP tools.
 //! Supports two transports:
 //!   - HTTP (default): Streamable HTTP for persistent long-running daemon
+#![allow(unused_imports, unused_variables, dead_code)]
 //!   - stdio: JSON-RPC over stdin/stdout for subprocess mode
 //!
 //! Usage:
@@ -3156,6 +3157,257 @@ fn register_ccos_tools(
                     "approval_id": approval_id,
                     "category_type": category_type,
                     "message": "Approval has been re-approved successfully"
+                }))
+            })
+        }),
+    );
+
+    // ccos_budget_approve - Approve a budget extension and resume execution from checkpoint
+    let aq_budget_approve = approval_queue.clone();
+    let ccos_budget = ccos.clone();
+    server.register_tool(
+        "ccos_budget_approve",
+        "Approve a budget extension and resume execution from the associated checkpoint.",
+        json!({
+            "type": "object",
+            "properties": {
+                "approval_id": {
+                    "type": "string",
+                    "description": "Approval ID for the budget extension request"
+                },
+                "checkpoint_id": {
+                    "type": "string",
+                    "description": "Optional checkpoint ID to resume (auto-resolved if omitted)"
+                },
+                "extensions": {
+                    "type": "object",
+                    "description": "Optional map of budget extensions (e.g. {\"llm_tokens\": 5000, \"cost_usd\": 0.25})"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional approval reason"
+                }
+            },
+            "required": ["approval_id"]
+        }),
+        Box::new(move |params| {
+            let aq = aq_budget_approve.clone();
+            let ccos = ccos_budget.clone();
+            Box::pin(async move {
+                let approval_id = match params.get("approval_id").and_then(|v| v.as_str()) {
+                    Some(id) => id,
+                    None => return Ok(json!({"error": "Missing required parameter: approval_id"})),
+                };
+
+                let checkpoint_override = params.get("checkpoint_id").and_then(|v| v.as_str());
+                let reason = params.get("reason").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+                let req = match aq.get(approval_id).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return Ok(json!({"error": format!("Approval not found: {}", approval_id)})),
+                    Err(e) => return Ok(json!({"error": format!("Failed to load approval: {}", e)})),
+                };
+
+                if !req.status.is_pending() {
+                    return Ok(json!({"error": "Approval is not pending"}));
+                }
+
+                let (plan_id, intent_id, dimension, requested_additional) = match &req.category {
+                    ccos::approval::types::ApprovalCategory::BudgetExtension {
+                        plan_id,
+                        intent_id,
+                        dimension,
+                        requested_additional,
+                        ..
+                    } => (
+                        plan_id.clone(),
+                        intent_id.clone(),
+                        dimension.clone(),
+                        *requested_additional,
+                    ),
+                    _ => return Ok(json!({"error": "Approval is not a budget extension"})),
+                };
+
+                // Approve the request first
+                if let Err(e) = aq
+                    .approve(
+                        approval_id,
+                        ccos::approval::types::ApprovalAuthority::User("mcp_agent".to_string()),
+                        reason.clone().or(Some("Budget extension approved via MCP".to_string())),
+                    )
+                    .await
+                {
+                    return Ok(json!({"error": format!("Failed to approve: {}", e)}));
+                }
+
+                let checkpoint_id = if let Some(cid) = checkpoint_override {
+                    cid.to_string()
+                } else {
+                    match ccos
+                        .orchestrator
+                        .find_latest_checkpoint_for_plan_intent(&plan_id, &intent_id)
+                    {
+                        Some(rec) => rec.checkpoint_id,
+                        None => {
+                            return Ok(json!({
+                                "error": "No checkpoint found for plan/intent",
+                                "plan_id": plan_id,
+                                "intent_id": intent_id
+                            }))
+                        }
+                    }
+                };
+
+                let mut extensions: std::collections::HashMap<String, f64> =
+                    std::collections::HashMap::new();
+                if let Some(map) = params.get("extensions").and_then(|v| v.as_object()) {
+                    for (k, v) in map {
+                        if let Some(f) = v.as_f64() {
+                            extensions.insert(k.clone(), f);
+                        } else if let Some(i) = v.as_i64() {
+                            extensions.insert(k.clone(), i as f64);
+                        }
+                    }
+                }
+                if extensions.is_empty() {
+                    extensions.insert(dimension.clone(), requested_additional);
+                }
+
+                let plan = match ccos.orchestrator.get_plan_by_id(&plan_id) {
+                    Ok(Some(plan)) => plan,
+                    Ok(None) => {
+                        return Ok(json!({
+                            "error": "Plan not found in archive",
+                            "plan_id": plan_id
+                        }))
+                    }
+                    Err(e) => return Ok(json!({"error": format!("Failed to load plan: {}", e)})),
+                };
+
+                let context = RuntimeContext::full();
+                let exec_result = ccos
+                    .orchestrator
+                    .resume_and_continue_from_checkpoint_with_budget_extensions(
+                        &plan,
+                        &context,
+                        &checkpoint_id,
+                        Some(extensions),
+                    )
+                    .await;
+
+                match exec_result {
+                    Ok(result) => {
+                        let output_json = rtfs_value_to_json(&result.value);
+                        Ok(json!({
+                            "success": result.success,
+                            "plan_id": plan_id,
+                            "intent_id": intent_id,
+                            "checkpoint_id": checkpoint_id,
+                            "result": output_json,
+                            "metadata": result.metadata
+                        }))
+                    }
+                    Err(e) => Ok(json!({
+                        "success": false,
+                        "error": e.to_string(),
+                        "plan_id": plan_id,
+                        "intent_id": intent_id,
+                        "checkpoint_id": checkpoint_id
+                    })),
+                }
+            })
+        }),
+    );
+
+    // ccos_budget_deny - Deny a budget extension and discard the checkpoint
+    let aq_budget_deny = approval_queue.clone();
+    let ccos_budget_deny = ccos.clone();
+    server.register_tool(
+        "ccos_budget_deny",
+        "Deny a budget extension approval and cancel the pending resume.",
+        json!({
+            "type": "object",
+            "properties": {
+                "approval_id": {
+                    "type": "string",
+                    "description": "Approval ID for the budget extension request"
+                },
+                "checkpoint_id": {
+                    "type": "string",
+                    "description": "Optional checkpoint ID to discard (auto-resolved if omitted)"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional denial reason"
+                }
+            },
+            "required": ["approval_id"]
+        }),
+        Box::new(move |params| {
+            let aq = aq_budget_deny.clone();
+            let ccos = ccos_budget_deny.clone();
+            Box::pin(async move {
+                let approval_id = match params.get("approval_id").and_then(|v| v.as_str()) {
+                    Some(id) => id,
+                    None => return Ok(json!({"error": "Missing required parameter: approval_id"})),
+                };
+                let checkpoint_override = params.get("checkpoint_id").and_then(|v| v.as_str());
+                let reason = params
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Budget extension denied via MCP")
+                    .to_string();
+
+                let req = match aq.get(approval_id).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return Ok(json!({"error": format!("Approval not found: {}", approval_id)})),
+                    Err(e) => return Ok(json!({"error": format!("Failed to load approval: {}", e)})),
+                };
+
+                if !req.status.is_pending() {
+                    return Ok(json!({"error": "Approval is not pending"}));
+                }
+
+                let (plan_id, intent_id) = match &req.category {
+                    ccos::approval::types::ApprovalCategory::BudgetExtension {
+                        plan_id,
+                        intent_id,
+                        ..
+                    } => (plan_id.clone(), intent_id.clone()),
+                    _ => return Ok(json!({"error": "Approval is not a budget extension"})),
+                };
+
+                if let Err(e) = aq
+                    .reject(
+                        approval_id,
+                        ccos::approval::types::ApprovalAuthority::User("mcp_agent".to_string()),
+                        reason.clone(),
+                    )
+                    .await
+                {
+                    return Ok(json!({"error": format!("Failed to reject: {}", e)}));
+                }
+
+                let checkpoint_id = if let Some(cid) = checkpoint_override {
+                    Some(cid.to_string())
+                } else {
+                    ccos
+                        .orchestrator
+                        .find_latest_checkpoint_for_plan_intent(&plan_id, &intent_id)
+                        .map(|rec| rec.checkpoint_id)
+                };
+
+                if let Some(cid) = &checkpoint_id {
+                    let _ = ccos.orchestrator.remove_checkpoint(cid);
+                }
+
+                Ok(json!({
+                    "success": true,
+                    "approval_id": approval_id,
+                    "plan_id": plan_id,
+                    "intent_id": intent_id,
+                    "checkpoint_id": checkpoint_id,
+                    "message": "Budget extension denied"
                 }))
             })
         }),

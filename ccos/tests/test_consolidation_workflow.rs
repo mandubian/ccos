@@ -1,7 +1,6 @@
 use ccos::utils::fs::get_workspace_root;
 use ccos::working_memory::{AgentMemory, InMemoryJsonlBackend, WorkingMemory};
 use std::fs;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 // Mock structures to simulate MCP tools behavior or use the actual tools if possible.
@@ -13,7 +12,7 @@ async fn test_simulated_agent_workflow() {
     // 1. Setup paths
     let root = get_workspace_root();
     let memory_path = root.join(".ccos/agent_memory/system_memory.json");
-    let agents_dir = root.join(".ccos/capabilities/agents"); // Adjust based on config, let's assume default for now or check config
+    let _agents_dir = root.join(".ccos/capabilities/agents"); // Adjust based on config, let's assume default for now or check config
                                                              // Actually, `get_configured_capabilities_path` usually defaults to workspace root/rtfs or similar.
                                                              // Let's rely on where the code claimed to write: `crate::utils::fs::get_configured_capabilities_path().join("agents")`
 

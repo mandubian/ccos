@@ -126,6 +126,20 @@ impl CheckpointArchive {
         }
     }
 
+    /// Find the most recent checkpoint for a plan/intent pair (by created_at)
+    pub fn find_latest_for_plan_intent(
+        &self,
+        plan_id: &str,
+        intent_id: &str,
+    ) -> Option<CheckpointRecord> {
+        let index = self.id_index.lock().ok()?;
+        index
+            .values()
+            .filter(|record| record.plan_id == plan_id && record.intent_id == intent_id)
+            .cloned()
+            .max_by_key(|record| record.created_at)
+    }
+
     /// Get all checkpoints that are waiting for auto-resume
     pub fn get_pending_auto_resume_checkpoints(&self) -> Vec<CheckpointRecord> {
         self.id_index

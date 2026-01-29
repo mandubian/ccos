@@ -439,7 +439,7 @@ fn try_textual_augmentation(
     String,
 > {
     let mut applied = vec![];
-    let mut skipped = vec![];
+    let skipped = vec![];
     let mut result_source = source.to_string();
 
     for modification in modifications {

@@ -60,6 +60,7 @@ impl IrStrategy {
     }
 
     /// Get the current persistent environment (creates one if needed)
+    #[allow(dead_code)]
     fn get_or_create_persistent_env(&mut self) -> Result<&mut IrEnvironment, RuntimeError> {
         if self.persistent_env.is_none() {
             self.persistent_env = Some(IrEnvironment::with_stdlib(&self.module_registry)?);

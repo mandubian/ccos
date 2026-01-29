@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Immutable budget limits for a run
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct BudgetLimits {
     /// Maximum number of capability calls
     pub steps: u32,
@@ -15,6 +16,10 @@ pub struct BudgetLimits {
     pub network_egress_bytes: u64,
     /// Maximum storage write bytes
     pub storage_write_bytes: u64,
+    /// Maximum sandbox CPU time in milliseconds
+    pub sandbox_cpu_ms: u64,
+    /// Maximum sandbox memory peak in MB
+    pub sandbox_memory_peak_mb: u64,
 }
 
 impl BudgetLimits {
@@ -31,6 +36,10 @@ impl BudgetLimits {
             storage_write_bytes: self
                 .storage_write_bytes
                 .min(parent.storage_write_bytes),
+            sandbox_cpu_ms: self.sandbox_cpu_ms.min(parent.sandbox_cpu_ms),
+            sandbox_memory_peak_mb: self
+                .sandbox_memory_peak_mb
+                .min(parent.sandbox_memory_peak_mb),
         }
     }
 }
@@ -44,6 +53,8 @@ impl Default for BudgetLimits {
             cost_usd: 0.50,
             network_egress_bytes: 10 * 1024 * 1024, // 10 MB
             storage_write_bytes: 50 * 1024 * 1024,  // 50 MB
+            sandbox_cpu_ms: 0,
+            sandbox_memory_peak_mb: 0,
         }
     }
 }
@@ -67,6 +78,7 @@ impl Default for ExhaustionPolicy {
 
 /// Per-dimension exhaustion policies
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct BudgetPolicies {
     pub steps: ExhaustionPolicy,
     pub wall_clock: ExhaustionPolicy,
@@ -74,6 +86,8 @@ pub struct BudgetPolicies {
     pub cost_usd: ExhaustionPolicy,
     pub network_egress: ExhaustionPolicy,
     pub storage_write: ExhaustionPolicy,
+    pub sandbox_cpu: ExhaustionPolicy,
+    pub sandbox_memory: ExhaustionPolicy,
 }
 
 impl Default for BudgetPolicies {
@@ -85,6 +99,8 @@ impl Default for BudgetPolicies {
             cost_usd: ExhaustionPolicy::HardStop,
             network_egress: ExhaustionPolicy::HardStop,
             storage_write: ExhaustionPolicy::HardStop,
+            sandbox_cpu: ExhaustionPolicy::HardStop,
+            sandbox_memory: ExhaustionPolicy::HardStop,
         }
     }
 }
@@ -98,6 +114,8 @@ pub struct BudgetConsumed {
     pub cost_usd: f64,
     pub network_egress_bytes: u64,
     pub storage_write_bytes: u64,
+    pub sandbox_cpu_ms: u64,
+    pub sandbox_memory_peak_mb: u64,
 }
 
 impl BudgetConsumed {
@@ -116,6 +134,8 @@ pub struct BudgetRemaining {
     pub cost_usd: f64,
     pub network_egress_bytes: u64,
     pub storage_write_bytes: u64,
+    pub sandbox_cpu_ms: u64,
+    pub sandbox_memory_peak_mb: u64,
 }
 
 /// Result of budget check
@@ -191,4 +211,8 @@ pub enum BudgetWarning {
     Network80,
     Storage50,
     Storage80,
+    SandboxCpu50,
+    SandboxCpu80,
+    SandboxMemory50,
+    SandboxMemory80,
 }

@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// MCP Session data
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct MCPSession {
     session_id: String,
@@ -100,6 +101,7 @@ impl MCPSessionHandler {
     }
 
     /// Get server URL from metadata (with fallback to env var)
+    #[allow(dead_code)]
     fn get_server_url(&self, metadata: &HashMap<String, String>) -> RuntimeResult<String> {
         // Priority: metadata → env var override → error
         if let Some(url_from_meta) = metadata.get("mcp_server_url") {

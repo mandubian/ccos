@@ -19,6 +19,7 @@
 
 use crate::budget::{BudgetContext, BudgetLimits};
 use crate::capability_marketplace::CapabilityMarketplace;
+use crate::capability_marketplace::types::CapabilityManifest;
 use crate::config::types::PolicyConfig;
 use crate::execution_context::IsolationLevel;
 use crate::host::RuntimeHost;
@@ -669,6 +670,14 @@ impl Orchestrator {
         let cost_usd = obj.get("cost_usd")?.as_f64()?;
         let network_egress_bytes = obj.get("network_egress_bytes")?.as_u64()?;
         let storage_write_bytes = obj.get("storage_write_bytes")?.as_u64()?;
+        let sandbox_cpu_ms = obj
+            .get("sandbox_cpu_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let sandbox_memory_peak_mb = obj
+            .get("sandbox_memory_peak_mb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
 
         Some(BudgetLimits {
             steps,
@@ -677,6 +686,8 @@ impl Orchestrator {
             cost_usd,
             network_egress_bytes,
             storage_write_bytes,
+            sandbox_cpu_ms,
+            sandbox_memory_peak_mb,
         })
     }
 
@@ -723,6 +734,14 @@ impl Orchestrator {
             obj.get("storage_write_bytes").and_then(|v| v.as_u64())
         {
             policy.budgets.limits.storage_write_bytes = storage_write_bytes;
+        }
+        if let Some(sandbox_cpu_ms) = obj.get("sandbox_cpu_ms").and_then(|v| v.as_u64()) {
+            policy.budgets.limits.sandbox_cpu_ms = sandbox_cpu_ms;
+        }
+        if let Some(sandbox_memory_peak_mb) =
+            obj.get("sandbox_memory_peak_mb").and_then(|v| v.as_u64())
+        {
+            policy.budgets.limits.sandbox_memory_peak_mb = sandbox_memory_peak_mb;
         }
     }
 
@@ -772,6 +791,8 @@ impl Orchestrator {
         &self,
         host_call: &rtfs::runtime::execution_outcome::HostCall,
     ) -> RuntimeResult<Value> {
+        let host_call = self.enrich_host_call_with_sandbox_metadata(host_call);
+
         // Extract execution hints
         let hints = host_call
             .metadata
@@ -786,12 +807,81 @@ impl Orchestrator {
             Arc::clone(&self.causal_chain),
         );
         self.hint_registry
-            .execute_with_hints(host_call, &hints, &execution_ctx)
+            .execute_with_hints(&host_call, &hints, &execution_ctx)
+            .await
+    }
+
+    fn enrich_host_call_with_sandbox_metadata(
+        &self,
+        host_call: &rtfs::runtime::execution_outcome::HostCall,
+    ) -> rtfs::runtime::execution_outcome::HostCall {
+        let mut security_context = host_call.security_context.clone();
+        let mut updated = false;
+
+        if let Some(metadata) = host_call.metadata.as_ref() {
+            if let Some(value) = metadata.context.get("sandbox_allowed_hosts") {
+                security_context.cross_plan_params.insert(
+                    "sandbox_allowed_hosts".to_string(),
+                    Value::String(value.clone()),
+                );
+                updated = true;
+            }
+            if let Some(value) = metadata.context.get("sandbox_allowed_ports") {
+                security_context.cross_plan_params.insert(
+                    "sandbox_allowed_ports".to_string(),
+                    Value::String(value.clone()),
+                );
+                updated = true;
+            }
+            if let Some(value) = metadata.context.get("sandbox_required_secrets") {
+                security_context.cross_plan_params.insert(
+                    "sandbox_required_secrets".to_string(),
+                    Value::String(value.clone()),
+                );
+                updated = true;
+            }
+
+            if let Some(value) = metadata.execution_hints.get("sandbox_allowed_hosts") {
+                security_context
+                    .cross_plan_params
+                    .insert("sandbox_allowed_hosts".to_string(), value.clone());
+                updated = true;
+            }
+            if let Some(value) = metadata.execution_hints.get("sandbox_allowed_ports") {
+                security_context
+                    .cross_plan_params
+                    .insert("sandbox_allowed_ports".to_string(), value.clone());
+                updated = true;
+            }
+            if let Some(value) = metadata.execution_hints.get("sandbox_required_secrets") {
+                security_context
+                    .cross_plan_params
+                    .insert("sandbox_required_secrets".to_string(), value.clone());
+                updated = true;
+            }
+        }
+
+        if updated {
+            let mut updated_call = host_call.clone();
+            updated_call.security_context = security_context;
+            updated_call
+        } else {
+            host_call.clone()
+        }
+    }
+
+    pub(crate) async fn get_capability_manifest(
+        &self,
+        capability_id: &str,
+    ) -> Option<CapabilityManifest> {
+        self.capability_marketplace
+            .get_manifest(capability_id)
             .await
     }
 
     /// Detect security level for a capability based on its ID pattern.
     /// Returns "low", "medium", or "critical".
+    #[allow(dead_code)]
     fn detect_security_level_for_capability(capability_id: &str) -> &'static str {
         let cap = capability_id.to_lowercase();
 
@@ -826,6 +916,7 @@ impl Orchestrator {
     }
 
     /// Helper to extract string from a RTFS map value
+    #[allow(dead_code)]
     fn extract_string_from_map(value: &Value, key: &str) -> Option<String> {
         if let Value::Map(map) = value {
             for (k, v) in map {
@@ -846,6 +937,7 @@ impl Orchestrator {
     }
 
     /// Executes the actual capability call through the marketplace.
+    #[allow(dead_code)]
     async fn execute_capability_call(
         &self,
         host_call: &rtfs::runtime::execution_outcome::HostCall,
@@ -863,6 +955,7 @@ impl Orchestrator {
     /// Internal convenience method for plan execution with default policy.
     /// Used for internal orchestration (e.g., orchestrate_intent_tree) where
     /// no explicit governance policy is provided.
+    #[allow(dead_code)]
     pub(crate) async fn execute_plan(
         self: &Arc<Self>,
         plan: &Plan,
@@ -1228,6 +1321,7 @@ impl Orchestrator {
     /// # Security Note
     /// This method is restricted to internal CCOS use only.
     /// External code must use the governance-enforced interface through GovernanceKernel.
+    #[allow(dead_code)]
     pub(crate) async fn execute_intent_graph(
         self: &Arc<Self>,
         root_intent_id: &str,
@@ -1326,6 +1420,7 @@ impl Orchestrator {
     }
 
     /// Simple method to get children order
+    #[allow(dead_code)]
     fn get_children_order(&self, root_id: &str) -> RuntimeResult<Vec<String>> {
         let graph = self
             .intent_graph
@@ -1338,6 +1433,7 @@ impl Orchestrator {
         Ok(children.into_iter().map(|child| child.intent_id).collect())
     }
 
+    #[allow(dead_code)]
     #[cfg(test)]
     fn test_get_children_order(&self, root_id: &str) -> Result<Vec<String>, String> {
         self.get_children_order(root_id)
@@ -1645,6 +1741,7 @@ impl Orchestrator {
 
     /// Extract exported variables from execution result
     /// This is a simplified version - in practice, you'd analyze the result more carefully
+    #[allow(dead_code)]
     fn extract_exported_variables(&self, result: &ExecutionResult) -> HashMap<String, RtfsValue> {
         let mut exported = HashMap::new();
 
@@ -1777,6 +1874,21 @@ impl Orchestrator {
         self.resume_plan(plan_id, intent_id, evaluator, &rec.serialized_context)
     }
 
+    /// Find the newest checkpoint for a plan/intent pair.
+    pub fn find_latest_checkpoint_for_plan_intent(
+        &self,
+        plan_id: &str,
+        intent_id: &str,
+    ) -> Option<CheckpointRecord> {
+        self.checkpoint_archive
+            .find_latest_for_plan_intent(plan_id, intent_id)
+    }
+
+    /// Remove a checkpoint by id (used after explicit denials).
+    pub fn remove_checkpoint(&self, checkpoint_id: &str) -> Option<CheckpointRecord> {
+        self.checkpoint_archive.remove_checkpoint(checkpoint_id)
+    }
+
     /// Resume execution from a checkpoint and continue running the plan until
     /// either it completes or it yields another RequiresHost (in which case a
     /// new checkpoint is created). This helper will:
@@ -1794,10 +1906,29 @@ impl Orchestrator {
     /// on completion, success=false and metadata describing the paused capability
     /// when a new host interaction is required.
     pub async fn resume_and_continue_from_checkpoint(
-        &self,
+        self: &Arc<Self>,
         plan: &Plan,
         context: &RuntimeContext,
         checkpoint_id: &str,
+    ) -> RuntimeResult<ExecutionResult> {
+        self
+            .resume_and_continue_from_checkpoint_with_budget_extensions(
+                plan,
+                context,
+                checkpoint_id,
+                None,
+            )
+            .await
+    }
+
+    /// Resume execution from a checkpoint with optional budget extensions applied as
+    /// execution hints before the first capability call.
+    pub async fn resume_and_continue_from_checkpoint_with_budget_extensions(
+        self: &Arc<Self>,
+        plan: &Plan,
+        context: &RuntimeContext,
+        checkpoint_id: &str,
+        budget_extensions: Option<HashMap<String, f64>>,
     ) -> RuntimeResult<ExecutionResult> {
         let plan_id = plan.plan_id.clone();
         let primary_intent_id = plan.intent_ids.first().cloned().unwrap_or_default();
@@ -1814,13 +1945,34 @@ impl Orchestrator {
             }
         }
 
+        // Initialize budget context for resumed execution
+        let mut policy = PolicyConfig::default();
+        self.apply_budget_overrides_from_plan(plan, &mut policy);
+        let budget_context = self.initialize_budget_context(&policy, context)?;
+
         // --- Recreate Host & Evaluator ---
-        let host = Arc::new(RuntimeHost::new(
-            self.causal_chain.clone(),
-            self.capability_marketplace.clone(),
-            context.clone(),
-        ));
+        let host = Arc::new(
+            RuntimeHost::new(
+                self.causal_chain.clone(),
+                self.capability_marketplace.clone(),
+                context.clone(),
+            )
+            .with_orchestrator(Arc::clone(self))
+            .with_budget(budget_context.clone()),
+        );
         host.set_execution_context(plan_id.clone(), plan.intent_ids.clone(), "".to_string());
+
+        if let Some(extensions) = budget_extensions {
+            let mut map: std::collections::HashMap<MapKey, Value> = std::collections::HashMap::new();
+            for (dimension, additional) in extensions {
+                map.insert(
+                    MapKey::Keyword(rtfs::ast::Keyword(dimension)),
+                    Value::Float(additional),
+                );
+            }
+            host.set_execution_hint("budget_extend", Value::Map(map))?;
+        }
+
         let module_registry = std::sync::Arc::new(ModuleRegistry::new());
         let host_iface: Arc<dyn HostInterface> = host.clone();
         let mut evaluator = Evaluator::new(

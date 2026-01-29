@@ -1,3 +1,5 @@
+#![allow(deprecated, unused_imports, unused_mut, dead_code)]
+
 use ccos::approval::queue::{
     ApprovalAuthority, ApprovalQueue, ApprovedDiscovery, HasId, HasName, ServerInfo,
 };

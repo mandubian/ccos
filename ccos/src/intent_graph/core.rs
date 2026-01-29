@@ -1515,6 +1515,7 @@ impl IntentGraph {
 }
 
 /// Backup data structure for serialization
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 struct StorageBackupData {
     intents: HashMap<IntentId, StorableIntent>,

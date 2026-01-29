@@ -96,7 +96,7 @@ impl AgentConfig {
     pub fn from_env() -> Self {
         let config_path = std::env::var("AGENT_CONFIG_PATH");
         if let Ok(path) = config_path {
-            if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(_content) = std::fs::read_to_string(&path) {
                 // Try to parse using AgentConfigParser if available in ccos,
                 // but since we are in rtfs, we might not have it easily accessible without circular deps
                 // if we are not careful.

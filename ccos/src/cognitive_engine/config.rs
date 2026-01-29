@@ -142,6 +142,7 @@ pub struct DelegationConfig {
     since = "0.1.0",
     note = "Use CapabilityMarketplace configuration instead"
 )]
+#[allow(deprecated)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRegistryConfig {
     /// Registry type (in_memory, database, etc.)
@@ -582,6 +583,7 @@ impl CognitiveEngineConfig {
     }
 }
 
+#[allow(deprecated)]
 impl Default for AgentRegistryConfig {
     fn default() -> Self {
         Self {

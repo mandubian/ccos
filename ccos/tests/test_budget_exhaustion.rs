@@ -1,6 +1,7 @@
 use ccos::budget::{BudgetLimits, BudgetPolicies, ExhaustionPolicy};
 use ccos::ccos_core::CCOS;
 use ccos::config::types::{AgentConfig, BudgetConfig, PolicyConfig};
+use ccos::governance_kernel::SemanticJudgePolicy;
 use ccos::intent_graph::config::IntentGraphConfig;
 use ccos::types::{Plan, PlanBody};
 use rtfs::runtime::security::RuntimeContext;
@@ -9,6 +10,7 @@ use std::collections::HashMap;
 
 #[tokio::test]
 async fn test_budget_exhaustion_approval_required() {
+    std::env::set_var("CCOS_ALLOW_STUB_PROVIDER", "1");
     // 1. Setup a policy with a very strict budget (1 step allowed)
     // and an ApprovalRequired exhaustion policy.
     let mut policies = HashMap::new();
@@ -45,6 +47,13 @@ async fn test_budget_exhaustion_approval_required() {
     )
     .await
     .expect("Failed to initialize CCOS");
+
+    ccos.governance_kernel
+        .set_semantic_judge_policy(SemanticJudgePolicy {
+            enabled: false,
+            fail_open: true,
+            risk_threshold: 1.0,
+        });
 
     // 3. Create a plan that calls a capability twice
     // Since we only allow 1 step, the second call should trigger exhaustion.

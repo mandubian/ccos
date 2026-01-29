@@ -30,6 +30,14 @@ pub struct SecretStore {
 }
 
 impl SecretStore {
+    pub fn empty() -> Self {
+        Self {
+            local_path: None,
+            local_secrets: HashMap::new(),
+            mappings: HashMap::new(),
+        }
+    }
+
     /// Create a new SecretStore, loading from the given project directory
     pub fn new(project_dir: Option<PathBuf>) -> RuntimeResult<Self> {
         let local_path = project_dir.map(|p| p.join(".ccos").join("secrets.toml"));

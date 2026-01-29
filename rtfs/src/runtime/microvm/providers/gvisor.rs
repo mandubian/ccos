@@ -1,5 +1,7 @@
 //! gVisor MicroVM Provider
 
+#![allow(dead_code, unused_variables)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};

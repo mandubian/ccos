@@ -6,6 +6,7 @@
 use rtfs::runtime::error::RuntimeError;
 
 /// Subconscious system for background analysis and optimization
+#[allow(dead_code)]
 pub struct SubconsciousV1 {
     analysis_engine: AnalysisEngine,
     optimization_engine: OptimizationEngine,

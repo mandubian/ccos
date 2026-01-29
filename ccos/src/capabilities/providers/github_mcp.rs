@@ -16,6 +16,7 @@ use rtfs::runtime::{RuntimeError, RuntimeResult, Value as RuntimeValue};
 
 /// GitHub MCP Server implementation
 /// Provides GitHub issue management tools following MCP protocol standards
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct GitHubMCPCapability {
     /// GitHub API token for authentication
@@ -29,6 +30,7 @@ pub struct GitHubMCPCapability {
 }
 
 /// Cached GitHub data to reduce API calls
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct CachedGitHubData {
     data: Value,
@@ -535,7 +537,7 @@ impl CapabilityProvider for GitHubMCPCapability {
 
     fn execute_capability(
         &self,
-        capability_id: &str,
+        _capability_id: &str,
         inputs: &RuntimeValue,
         _context: &ExecutionContext,
     ) -> RuntimeResult<RuntimeValue> {

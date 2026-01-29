@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(parents_of_parent[0], root_id);
 
         // Test child relationships
-        let root_edges = graph.storage.get_edges_for_intent(&root_id).await.unwrap();
+        let _root_edges = graph.storage.get_edges_for_intent(&root_id).await.unwrap();
         let children_of_root: Vec<_> = all_edges
             .iter()
             .filter(|e| e.to == root_id && e.edge_type == EdgeType::IsSubgoalOf)

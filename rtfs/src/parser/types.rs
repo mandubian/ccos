@@ -1,3 +1,5 @@
+#![allow(unreachable_patterns)]
+
 use super::{PestParseError, Rule};
 use crate::ast::{
     ArrayDimension, Keyword, Literal, MapTypeEntry, ParamType, PrimitiveType, Symbol, TypeExpr,

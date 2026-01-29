@@ -319,6 +319,7 @@ impl MCPRegistryClient {
     }
 
     /// Get mock servers for development when the real API is unavailable
+    #[allow(dead_code)]
     fn get_mock_servers(&self, _query: &str) -> Vec<McpServer> {
         // Return empty vector - mock capabilities should only be created at startup
         Vec::new()

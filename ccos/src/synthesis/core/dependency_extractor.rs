@@ -5,6 +5,8 @@
 //! - Compare against CapabilityMarketplace to identify missing capabilities
 //! - Attach metadata and emit audit events
 
+#![allow(unused_assignments)]
+
 use crate::capability_marketplace::types::CapabilityManifest;
 #[cfg(test)]
 use crate::capability_marketplace::types::EffectType;

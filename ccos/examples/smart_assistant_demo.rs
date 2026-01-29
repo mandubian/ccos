@@ -3,6 +3,7 @@
 // This demo integrates the RecursiveSynthesizer to automatically generate
 // missing capabilities and their dependencies when executing user goals.
 //
+#![allow(dead_code)]
 // Key features:
 // - Natural language goal → Intent → Plan → Orchestrator RTFS
 // - Automatic capability discovery (Marketplace → MCP → OpenAPI → Recursive Synthesis)
@@ -695,7 +696,7 @@ async fn run_demo(args: Args) -> DemoResult<()> {
             .collect_discovery_hints_with_descriptions(&capability_info)
             .await
             .map_err(|e| {
-                Box::<dyn std::error::Error + Send + Sync>::from(std::io::Error::new(
+                Box::<dyn std::error::Error>::from(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     format!("Failed to collect discovery hints: {}", e),
                 ))
@@ -782,7 +783,7 @@ async fn run_demo(args: Args) -> DemoResult<()> {
                     let new_matches = match_proposed_steps(&ccos, &plan_steps).await?;
                     annotate_steps_with_matches(&mut plan_steps, &new_matches);
 
-                    return build_register_and_execute_plan(
+                    build_register_and_execute_plan(
                         &ccos,
                         missing_capability_resolver.clone(),
                         &agent_config,
@@ -793,7 +794,8 @@ async fn run_demo(args: Args) -> DemoResult<()> {
                         &plan_steps,
                         &new_matches,
                     )
-                    .await;
+                    .await?;
+                    return Ok(());
                 } else {
                     println!("  {} Re-plan failed to generate valid steps, proceeding with original plan", "⚠️".yellow());
                 }
@@ -812,10 +814,11 @@ async fn run_demo(args: Args) -> DemoResult<()> {
         &plan_steps,
         &matches,
     )
-    .await
+    .await?;
+    Ok(())
 }
 
-type DemoResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+type DemoResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 async fn configure_session_pool(ccos: &Arc<CCOS>) -> DemoResult<()> {
     let mut session_pool = SessionPoolManager::new();
@@ -827,7 +830,7 @@ async fn configure_session_pool(ccos: &Arc<CCOS>) -> DemoResult<()> {
     Ok(())
 }
 
-fn runtime_error(err: RuntimeError) -> Box<dyn std::error::Error + Send + Sync> {
+fn runtime_error(err: RuntimeError) -> Box<dyn std::error::Error> {
     Box::new(err)
 }
 
@@ -983,7 +986,7 @@ fn determine_goal(args: &Args) -> DemoResult<String> {
     io::stdin().read_line(&mut buffer)?;
     let goal = buffer.trim();
     if goal.is_empty() {
-        Err(Box::<dyn std::error::Error + Send + Sync>::from(
+        Err(Box::<dyn std::error::Error>::from(
             io::Error::new(io::ErrorKind::InvalidInput, "Goal cannot be empty"),
         ))
     } else {
@@ -1260,7 +1263,7 @@ async fn generate_clarifying_questions(
             💡 If no questions are needed, the LLM should return an empty vector: []",
             response
         );
-        Err(Box::<dyn std::error::Error + Send + Sync>::from(
+        Err(Box::<dyn std::error::Error>::from(
             RuntimeError::Generic(error_msg),
         ))
     } else {
@@ -2090,11 +2093,11 @@ async fn propose_plan_steps(
             }
 
             if steps.is_empty() {
-                Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                Err(Box::<dyn std::error::Error>::from(
                     RuntimeError::Generic(format!(
-                    "No steps parsed from arbiter response ({} items total, all failed to parse)",
-                    total_items
-                )),
+                        "No steps parsed from arbiter response ({} items total, all failed to parse)",
+                        total_items
+                    )),
                 ))
             } else {
                 if !debug {
@@ -2124,7 +2127,7 @@ async fn propose_plan_steps(
                 Ok(steps)
             }
         }
-        other => Err(Box::<dyn std::error::Error + Send + Sync>::from(
+        other => Err(Box::<dyn std::error::Error>::from(
             RuntimeError::Generic(format!(
                 "Plan step response was not a vector: {}",
                 format_value(&other)
@@ -3283,7 +3286,7 @@ async fn resolve_and_stub_capabilities(
                     continue;
                 }
                 Ok(DiscoveryResult::NotFound) => {
-                    return Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                    return Err(Box::<dyn std::error::Error>::from(
                         RuntimeError::Generic(format!(
                             "❌ Capability '{}' not found and synthesis failed.",
                             step.capability_class
@@ -3291,7 +3294,7 @@ async fn resolve_and_stub_capabilities(
                     ));
                 }
                 Err(e) => {
-                    return Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                    return Err(Box::<dyn std::error::Error>::from(
                         RuntimeError::Generic(format!(
                             "❌ Failed to synthesize capability '{}':\n\n{}",
                             step.capability_class, e
@@ -3300,10 +3303,12 @@ async fn resolve_and_stub_capabilities(
                 }
             }
         } else {
-            return Err(Box::<dyn std::error::Error + Send + Sync>::from(RuntimeError::Generic(format!(
-                "❌ No delegating arbiter available for synthesis. Cannot synthesize capability '{}'.",
-                step.capability_class
-            ))));
+            return Err(Box::<dyn std::error::Error>::from(RuntimeError::Generic(
+                format!(
+                    "❌ No delegating arbiter available for synthesis. Cannot synthesize capability '{}'.",
+                    step.capability_class
+                ),
+            )));
         }
     }
 
@@ -3984,7 +3989,7 @@ fn convert_plan_to_capability_rtfs(capability_id: &str, plan_rtfs: &str) -> Demo
     let body_do = extract_s_expr_after_key(plan_rtfs, ":body")
         .or_else(|| extract_do_block(plan_rtfs))
         .ok_or_else(|| {
-            Box::<dyn std::error::Error + Send + Sync>::from(RuntimeError::Generic(
+            Box::<dyn std::error::Error>::from(RuntimeError::Generic(
                 "Could not extract :body from plan".to_string(),
             ))
         })?;

@@ -62,7 +62,7 @@ fn build_program(pairs: pest::iterators::Pairs<Rule>) -> Result<Vec<TopLevel>, P
 
 /// Parse a full RTFS program (potentially multiple top-level items)
 pub fn parse(input: &str) -> Result<Vec<TopLevel>, PestError<Rule>> {
-    let pairs = RTFSParser::parse(Rule::program, input)?;
+    let pairs = RTFSParser::parse(Rule::root, input)?;
     build_program(pairs)
 }
 

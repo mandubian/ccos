@@ -47,6 +47,7 @@ pub struct HTTPWrapper {
     /// Base URL for the API
     pub base_url: String,
     /// Auth injector for handling credentials
+    #[allow(dead_code)]
     auth_injector: AuthInjector,
     /// Mock mode for testing
     mock_mode: bool,

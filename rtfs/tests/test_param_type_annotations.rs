@@ -29,7 +29,7 @@ fn eval_ast_and_ir(
     let module_registry = Arc::new(ModuleRegistry::new());
     let security_context = RuntimeContext::pure();
     let host = create_pure_host();
-    let mut evaluator = Evaluator::new(
+    let evaluator = Evaluator::new(
         module_registry,
         security_context,
         host,

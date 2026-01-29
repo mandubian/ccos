@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::parser::parse_expression;
 use rtfs::runtime::evaluator::Evaluator;

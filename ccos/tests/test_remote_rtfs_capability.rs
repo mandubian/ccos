@@ -1,3 +1,5 @@
+#![allow(unused_imports, unused_variables)]
+
 use ccos::capabilities::providers::remote_rtfs_provider::{RemoteRTFSConfig, RemoteRTFSProvider};
 use ccos::capabilities::{CapabilityExecutionPolicy, CapabilityProvider, CapabilityRegistry};
 use rtfs::runtime::security::RuntimeContext;

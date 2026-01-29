@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn test_mark_capability_with_auth() {
         let injector = AuthInjector::new();
-        let mut metadata = HashMap::new();
+        let metadata = HashMap::new();
         let providers = vec!["github".to_string(), "stripe".to_string()];
         let updated = injector.mark_capability_with_auth(metadata, &providers);
 

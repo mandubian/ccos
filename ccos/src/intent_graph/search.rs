@@ -6,6 +6,7 @@ use rtfs::runtime::error::RuntimeError;
 use std::collections::{HashMap, HashSet};
 
 /// Enhanced semantic search engine with keyword and pattern matching
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct SemanticSearchEngine {
     /// Cache for search results

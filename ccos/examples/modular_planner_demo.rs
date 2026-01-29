@@ -1,4 +1,5 @@
 //! Modular Planner Demo
+#![allow(dead_code, unused_imports)]
 //!
 //! This example demonstrates the new modular planning architecture that:
 //! 1. Uses pluggable decomposition strategies (pattern-first, then LLM fallback)
@@ -167,7 +168,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     .filter_map(|(intent_id, resolution)| {
                         if let ResolvedCapability::NeedsReferral {
                             reason,
-                            suggested_action,
+                            suggested_action: _suggested_action,
                         } = resolution
                         {
                             // Find the sub_intent description for this intent_id

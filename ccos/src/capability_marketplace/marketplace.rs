@@ -193,6 +193,11 @@ impl SerializableProvider {
                 source,
                 entry_point,
                 provider,
+                runtime_spec: None,
+                network_policy: None,
+                filesystem: None,
+                resources: None,
+                secrets: Vec::new(),
             }),
         }
     }
@@ -753,8 +758,8 @@ impl CapabilityMarketplace {
         description: String,
         stream_type: StreamType,
         provider: StreamingProvider,
-        input_schema: Option<TypeExpr>,
-        output_schema: Option<TypeExpr>,
+        _input_schema: Option<TypeExpr>,
+        _output_schema: Option<TypeExpr>,
         effects: Vec<String>,
     ) -> Result<(), RuntimeError> {
         let mut effect_set: HashSet<String> = HashSet::with_capacity(effects.len() + 1);
@@ -785,8 +790,8 @@ impl CapabilityMarketplace {
         let stream_impl = StreamCapabilityImpl {
             provider,
             stream_type,
-            input_schema: input_schema.clone(),
-            output_schema: output_schema.clone(),
+            input_schema: _input_schema.clone(),
+            output_schema: _output_schema.clone(),
             supports_progress: true,
             supports_cancellation: true,
             bidirectional_config: None,
@@ -801,8 +806,8 @@ impl CapabilityMarketplace {
             description,
             provider: ProviderType::Stream(stream_impl),
             version: "1.0.0".to_string(),
-            input_schema,
-            output_schema,
+            input_schema: _input_schema,
+            output_schema: _output_schema,
             attestation: None,
             provenance: Some(provenance),
             permissions: vec![],
@@ -1342,8 +1347,8 @@ impl CapabilityMarketplace {
         description: String,
         handler: Arc<dyn Fn(&Value) -> BoxFuture<'static, RuntimeResult<Value>> + Send + Sync>,
         security_level: String,
-        input_schema: Option<TypeExpr>,
-        output_schema: Option<TypeExpr>,
+        _input_schema: Option<TypeExpr>,
+        _output_schema: Option<TypeExpr>,
     ) -> Result<(), RuntimeError> {
         let provenance = CapabilityProvenance {
             source: "native".to_string(),
@@ -1863,6 +1868,10 @@ impl CapabilityMarketplace {
         // so downstream resolvers can see any grounding/context hints.
         self.execute_capability_with_metadata(id, inputs, metadata)
             .await
+    }
+
+    pub async fn get_manifest(&self, id: &str) -> Option<CapabilityManifest> {
+        self.capabilities.read().await.get(id).cloned()
     }
 
     // execute_effect_request removed - unified into execute_capability_enhanced

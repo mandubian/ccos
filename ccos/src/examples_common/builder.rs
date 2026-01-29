@@ -224,7 +224,7 @@ pub struct ModularPlannerEnv {
 }
 
 impl From<CcosEnv> for ModularPlannerEnv {
-    fn from(env: CcosEnv) -> Self {
+    fn from(_env: CcosEnv) -> Self {
         // This is a partial conversion, planner needs to be added later.
         // This impl is mainly to show relationship or help with destructuring if needed.
         // But practically we construct ModularPlannerEnv directly in the builder.
