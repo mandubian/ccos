@@ -347,9 +347,11 @@ self.runtime_host.budget_context.record_sandbox_consumption(
 
 ---
 
-### Phase 3: Capability Manifest & RTFS Integration (1-2 weeks)
+### Phase 3: Capability Manifest & RTFS Integration ✅ COMPLETE
 
 **Goal**: Parse `:runtime` field from capability manifests and wire to sandbox execution.
+
+**Status**: ✅ Complete — Added `RuntimeSpec`, `NetworkPolicy`, `FilesystemSpec`, `ResourceSpec` types. Implemented `SandboxConfig::from_sandboxed_capability()` conversion.
 
 #### 3.1 Manifest Schema Extension
 
