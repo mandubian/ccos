@@ -409,9 +409,11 @@ pub fn parse_runtime_spec(expr: &Expression) -> Result<RuntimeSpec, ParseError> 
 
 ---
 
-### Phase 4: Skills Layer (Optional, 2-3 weeks)
+### Phase 4: Skills Layer ✅ COMPLETE
 
 **Goal**: Implement natural-language skill definitions that map to governed capabilities.
+
+**Status**: ✅ Complete — Created `Skill`, `SkillMapper`, `Intent` types. Implemented YAML parsing with validation. Added LLM prompt generation for intent interpretation.
 
 #### 4.1 Skill Schema
 
