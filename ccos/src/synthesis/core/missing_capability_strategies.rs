@@ -103,6 +103,7 @@ impl Default for MissingCapabilityStrategyConfig {
 /// Composite strategy that combines multiple missing capability strategies
 pub struct CompositeMissingCapabilityStrategy {
     strategies: Vec<Arc<dyn MissingCapabilityStrategy>>,
+    #[allow(dead_code)]
     config: MissingCapabilityStrategyConfig,
 }
 

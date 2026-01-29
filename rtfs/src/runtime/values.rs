@@ -484,7 +484,7 @@ impl From<Expression> for Value {
                 // For now, return a placeholder for deref expressions
                 Value::String("#<deref>".to_string())
             }
-            Expression::WithMetadata { meta, expr } => {
+            Expression::WithMetadata { meta: _meta, expr } => {
                 // Return the inner expression's value; metadata is not converted to runtime values here.
                 Value::from(*expr)
             }

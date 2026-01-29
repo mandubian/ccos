@@ -54,7 +54,11 @@ impl LocalProvider {
     }
 
     /// Execute HTTP fetch with local implementation
-    fn execute_http_fetch_local(&self, args: &[Value]) -> RuntimeResult<Value> {
+    fn execute_http_fetch_local(
+        &self,
+        args: &[Value],
+        _runtime_context: Option<&RuntimeContext>,
+    ) -> RuntimeResult<Value> {
         eprintln!("LocalProvider::execute_http_fetch_local called (http_mocking_enabled={}, allow_hosts={:?}) args={:?}", self.http_mocking_enabled, self.http_allow_hosts, args);
         if self.http_mocking_enabled {
             let mut response_map = std::collections::HashMap::new();
@@ -411,6 +415,55 @@ impl LocalProvider {
     }
 }
 
+fn extract_string_list(value: &Value) -> Vec<String> {
+    match value {
+        Value::String(s) => s
+            .split(',')
+            .flat_map(|part| part.split_whitespace())
+            .map(|part| part.trim())
+            .filter(|part| !part.is_empty())
+            .map(|part| part.to_string())
+            .collect(),
+        Value::Vector(values) | Value::List(values) => values
+            .iter()
+            .filter_map(|v| v.as_string().map(|s| s.to_string()))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn extract_u16_list(value: &Value) -> Vec<u16> {
+    let mut ports = Vec::new();
+    match value {
+        Value::String(s) => {
+            for part in s.split(',').flat_map(|part| part.split_whitespace()) {
+                if let Ok(port) = part.trim().parse::<u16>() {
+                    ports.push(port);
+                }
+            }
+        }
+        Value::Vector(values) | Value::List(values) => {
+            for v in values {
+                match v {
+                    Value::Integer(i) => {
+                        if let Ok(port) = u16::try_from(*i) {
+                            ports.push(port);
+                        }
+                    }
+                    Value::String(s) => {
+                        if let Ok(port) = s.trim().parse::<u16>() {
+                            ports.push(port);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+
+    ports
+}
 impl CapabilityProvider for LocalProvider {
     fn provider_id(&self) -> &str {
         "local"
@@ -468,7 +521,7 @@ impl CapabilityProvider for LocalProvider {
             "ccos.state.event.append" => Self::event_append_capability(args),
             "ccos.network.http-fetch" => {
                 eprintln!("LocalProvider::execute_capability handling ccos.network.http-fetch (http_mocking_enabled={})", self.http_mocking_enabled);
-                self.execute_http_fetch_local(&args)
+                self.execute_http_fetch_local(&args, None)
             }
             _ => Err(RuntimeError::Generic(format!(
                 "Capability '{}' not supported by LocalProvider",
@@ -1598,7 +1651,7 @@ impl CapabilityRegistry {
                 return Ok(Value::Map(response_map));
             }
 
-            return self.execute_http_fetch(&args);
+            return self.execute_http_fetch(&args, runtime_context);
         }
 
         // For other capabilities, use the MicroVM provider
@@ -1825,21 +1878,25 @@ impl CapabilityRegistry {
     }
 
     // Agent capability implementations (stubs - these should be implemented by proper providers)
+    #[allow(dead_code)]
     fn discover_agents_capability(_args: Vec<Value>) -> RuntimeResult<Value> {
         // TODO: Implement with proper capability marketplace integration
         Ok(Value::Vector(vec![]))
     }
 
+    #[allow(dead_code)]
     fn task_coordination_capability(_args: Vec<Value>) -> RuntimeResult<Value> {
         // TODO: Implement with proper CCOS task coordination
         Ok(Value::Map(std::collections::HashMap::new()))
     }
 
+    #[allow(dead_code)]
     fn discover_and_assess_agents_capability(_args: Vec<Value>) -> RuntimeResult<Value> {
         // TODO: Implement with proper agent discovery system
         Ok(Value::Vector(vec![]))
     }
 
+    #[allow(dead_code)]
     fn establish_system_baseline_capability(_args: Vec<Value>) -> RuntimeResult<Value> {
         // TODO: Implement with proper system baseline establishment
         Ok(Value::Map(std::collections::HashMap::new()))
@@ -1847,10 +1904,47 @@ impl CapabilityRegistry {
 }
 
 impl CapabilityRegistry {
-    fn execute_http_fetch(&self, args: &[Value]) -> RuntimeResult<Value> {
+    fn extract_proxy_metadata(runtime_context: &RuntimeContext) -> (Vec<String>, Vec<u16>, Vec<String>) {
+        let params = &runtime_context.cross_plan_params;
+
+        let allowed_hosts = params
+            .get("sandbox_allowed_hosts")
+            .map(extract_string_list)
+            .unwrap_or_default();
+        let allowed_ports = params
+            .get("sandbox_allowed_ports")
+            .map(extract_u16_list)
+            .unwrap_or_default();
+        let required_secrets = params
+            .get("sandbox_required_secrets")
+            .map(extract_string_list)
+            .unwrap_or_default();
+
+        (allowed_hosts, allowed_ports, required_secrets)
+    }
+
+    fn execute_http_fetch(
+        &self,
+        args: &[Value],
+        runtime_context: Option<&RuntimeContext>,
+    ) -> RuntimeResult<Value> {
         let request = self.parse_http_request(args)?;
 
-        if let Some(allow_hosts) = &self.http_allow_hosts {
+        let (proxy_hosts, proxy_ports, required_secrets) = runtime_context
+            .map(Self::extract_proxy_metadata)
+            .unwrap_or_default();
+
+        let proxy_allow_hosts: Option<HashSet<String>> = if proxy_hosts.is_empty() {
+            None
+        } else {
+            Some(proxy_hosts.iter().cloned().collect())
+        };
+
+        let effective_allow_hosts = proxy_allow_hosts
+            .as_ref()
+            .or_else(|| self.http_allow_hosts.as_ref());
+
+        if let Some(allow_hosts) = effective_allow_hosts {
             let host = request
                 .url
                 .host_str()
@@ -1864,6 +1958,29 @@ impl CapabilityRegistry {
                     context: format!("Host '{}' not in HTTP allowlist", host),
                 });
             }
+        }
+
+        if !proxy_ports.is_empty() {
+            let port = request
+                .url
+                .port_or_known_default()
+                .ok_or_else(|| RuntimeError::NetworkError("URL missing port".to_string()))?;
+            if !proxy_ports.contains(&port) {
+                return Err(RuntimeError::SecurityViolation {
+                    operation: "ccos.network.http-fetch".to_string(),
+                    capability: "ccos.network.http-fetch".to_string(),
+                    context: format!("Port '{}' not in HTTP allowlist", port),
+                });
+            }
+        }
+
+        if !proxy_hosts.is_empty() || !proxy_ports.is_empty() || !required_secrets.is_empty() {
+            return self.execute_http_fetch_via_proxy(
+                &request,
+                &proxy_hosts,
+                &proxy_ports,
+                &required_secrets,
+            );
         }
 
         let mut client_builder = BlockingHttpClient::builder();
@@ -1954,6 +2071,92 @@ impl CapabilityRegistry {
             MapKey::String("usage".to_string()),
             Value::Map(usage_map),
         );
+
+        Ok(Value::Map(response_map))
+    }
+
+    fn execute_http_fetch_via_proxy(
+        &self,
+        request: &HttpRequestConfig,
+        allowed_hosts: &[String],
+        allowed_ports: &[u16],
+        required_secrets: &[String],
+    ) -> RuntimeResult<Value> {
+        use crate::sandbox::{NetworkRequest, NetworkProxy};
+        use crate::sandbox::secret_injection::SecretInjector;
+        use crate::utils::fs::get_workspace_root;
+
+        let host = request
+            .url
+            .host_str()
+            .ok_or_else(|| RuntimeError::NetworkError("URL missing host".to_string()))?
+            .to_lowercase();
+        let port = request
+            .url
+            .port_or_known_default()
+            .ok_or_else(|| RuntimeError::NetworkError("URL missing port".to_string()))?;
+
+        let mut headers = std::collections::HashMap::new();
+        for (key, value) in request.headers.iter() {
+            headers.insert(key.to_string(), value.to_string());
+        }
+
+        let body_bytes = request.body.as_ref().map(|b| b.as_bytes().to_vec());
+
+        let proxy_request = NetworkRequest {
+            method: request.method.to_string(),
+            url: request.url.to_string(),
+            host: host.clone(),
+            port,
+            headers,
+            body: body_bytes,
+        };
+
+        let secret_store = crate::secrets::SecretStore::new(Some(get_workspace_root()))
+            .or_else(|_| crate::secrets::SecretStore::new(None))
+            .unwrap_or_else(|e| {
+                log::warn!("Network proxy SecretStore unavailable: {}", e);
+                crate::secrets::SecretStore::empty()
+            });
+        let injector = Arc::new(SecretInjector::new(Arc::new(secret_store)));
+        let proxy = NetworkProxy::new(
+            allowed_hosts.iter().cloned().collect(),
+            allowed_ports.iter().cloned().collect(),
+            injector,
+        );
+
+        let response = if tokio::runtime::Handle::try_current().is_ok() {
+            futures::executor::block_on(proxy.forward_request(
+                proxy_request,
+                "ccos.network.http-fetch",
+                required_secrets,
+            ))
+        } else {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| RuntimeError::NetworkError(e.to_string()))?;
+            rt.block_on(proxy.forward_request(
+                proxy_request,
+                "ccos.network.http-fetch",
+                required_secrets,
+            ))
+        }?;
+
+        let mut response_map = std::collections::HashMap::new();
+        response_map.insert(
+            MapKey::String("status".to_string()),
+            Value::Integer(response.status as i64),
+        );
+        response_map.insert(
+            MapKey::String("body".to_string()),
+            Value::String(String::from_utf8_lossy(&response.body).to_string()),
+        );
+        let mut headers_map = std::collections::HashMap::new();
+        for (k, v) in response.headers.iter() {
+            headers_map.insert(MapKey::String(k.to_string()), Value::String(v.to_string()));
+        }
+        response_map.insert(MapKey::String("headers".to_string()), Value::Map(headers_map));
 
         Ok(Value::Map(response_map))
     }

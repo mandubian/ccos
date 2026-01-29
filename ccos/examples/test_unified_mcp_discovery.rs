@@ -113,6 +113,7 @@ async fn test_discovery_with_config(
         ignore_approved_files: false,
         force_refresh: false,
         non_interactive: true,
+        create_approval_request: false,
     };
 
     println!("    🔍 Discovering tools...");
@@ -201,6 +202,7 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
             ignore_approved_files: false,
             force_refresh: false,
             non_interactive: true,
+            create_approval_request: false,
         };
 
         // Use discover_and_export_tools which handles registration and export automatically
@@ -208,7 +210,7 @@ async fn test_with_marketplace_and_catalog() -> Result<(), Box<dyn std::error::E
             .discover_and_export_tools(server_config, &options)
             .await
         {
-            Ok(manifests) => {
+            Ok((manifests, _approval_id)) => {
                 println!("  ✅ Discovered {} tools", manifests.len());
 
                 // Tools are already registered and exported by discover_and_export_tools
@@ -269,6 +271,7 @@ async fn test_caching_behavior() -> Result<(), Box<dyn std::error::Error>> {
             ignore_approved_files: false,
             force_refresh: false,
             non_interactive: true,
+            create_approval_request: false,
         };
 
         // First discovery (should hit the server)

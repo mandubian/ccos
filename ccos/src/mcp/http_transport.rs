@@ -723,6 +723,7 @@ struct ApproveSecretRequest {
     #[serde(default)]
     secret_value: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     provided_env_var: Option<String>,
     #[serde(default)]
     reason: Option<String>,

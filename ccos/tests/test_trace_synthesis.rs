@@ -1,3 +1,5 @@
+#![allow(unused_imports, unused_variables)]
+
 use ccos::capabilities::registry::CapabilityRegistry;
 use ccos::capability_marketplace::CapabilityMarketplace;
 use ccos::mcp::session::{create_session_store, Session};

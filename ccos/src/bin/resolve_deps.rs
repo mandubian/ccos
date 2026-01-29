@@ -4,8 +4,8 @@
 //! monitoring, and observability as part of Phase 8 enhancements.
 
 use ccos::arbiter::config::{
-    AgentRegistryConfig as ArbiterAgentRegistryConfig, DelegationConfig as ArbiterDelegationConfig,
-    LlmConfig as ArbiterLlmConfig, LlmProviderType, RetryConfig,
+    DelegationConfig as ArbiterDelegationConfig, LlmConfig as ArbiterLlmConfig, LlmProviderType,
+    RetryConfig,
 };
 use ccos::arbiter::delegating_engine::DelegatingCognitiveEngine;
 use ccos::capability_marketplace::types::{

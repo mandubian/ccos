@@ -1,3 +1,4 @@
+#![allow(unused_variables, dead_code)]
 // tests/parser.rs
 
 use std::collections::HashMap;

@@ -100,6 +100,8 @@ pub enum ActivePanel {
     ApprovalsPendingList,
     ApprovalsApprovedList,
     ApprovalsDetails,
+    ApprovalsBudgetList,
+    ApprovalsBudgetDetails,
 }
 
 impl ActivePanel {
@@ -125,7 +127,9 @@ impl ActivePanel {
             // Approvals View Navigation
             Self::ApprovalsPendingList => Self::ApprovalsApprovedList,
             Self::ApprovalsApprovedList => Self::ApprovalsDetails,
-            Self::ApprovalsDetails => Self::ApprovalsPendingList,
+            Self::ApprovalsDetails => Self::ApprovalsBudgetList,
+            Self::ApprovalsBudgetList => Self::ApprovalsBudgetDetails,
+            Self::ApprovalsBudgetDetails => Self::ApprovalsPendingList,
         }
     }
 
@@ -149,9 +153,11 @@ impl ActivePanel {
             Self::ServerDetails => Self::ServersList,
 
             // Approvals View Navigation
-            Self::ApprovalsPendingList => Self::ApprovalsDetails,
+            Self::ApprovalsPendingList => Self::ApprovalsBudgetDetails,
             Self::ApprovalsApprovedList => Self::ApprovalsPendingList,
             Self::ApprovalsDetails => Self::ApprovalsApprovedList,
+            Self::ApprovalsBudgetList => Self::ApprovalsDetails,
+            Self::ApprovalsBudgetDetails => Self::ApprovalsBudgetList,
         }
     }
 }
@@ -514,8 +520,10 @@ pub struct AppState {
     // =========================================
     pub pending_servers: Vec<PendingServerEntry>,
     pub approved_servers: Vec<ApprovedServerEntry>,
+    pub budget_approvals: Vec<BudgetApprovalEntry>,
     pub pending_selected: usize,
     pub approved_selected: usize,
+    pub budget_selected: usize,
     pub approvals_loading: bool,
     pub approvals_details_scroll: usize,
     pub approvals_tab: ApprovalsTab, // Which tab is active (Pending or Approved)
@@ -555,6 +563,7 @@ pub enum ApprovalsTab {
     #[default]
     Pending,
     Approved,
+    Budget,
 }
 
 /// A pending server entry for the Approvals view
@@ -584,6 +593,20 @@ pub struct ApprovedServerEntry {
     pub approved_at: String,
     pub total_calls: u64,
     pub error_rate: f64,
+}
+
+/// A pending budget extension entry for the Approvals view
+#[derive(Debug, Clone)]
+pub struct BudgetApprovalEntry {
+    pub id: String,
+    pub plan_id: String,
+    pub intent_id: String,
+    pub dimension: String,
+    pub requested_additional: f64,
+    pub consumed: u64,
+    pub limit: u64,
+    pub risk_level: String,
+    pub requested_at: String,
 }
 
 /// Authentication status for a server
@@ -677,8 +700,10 @@ impl Default for AppState {
             // Approvals View
             pending_servers: Vec::new(),
             approved_servers: Vec::new(),
+            budget_approvals: Vec::new(),
             pending_selected: 0,
             approved_selected: 0,
+            budget_selected: 0,
             approvals_loading: false,
             approvals_details_scroll: 0,
             approvals_tab: ApprovalsTab::Pending,

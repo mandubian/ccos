@@ -36,6 +36,7 @@ static PATTERN_ACTION_WITH_TRANSFORM: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// A pattern with name and handler
+#[allow(dead_code)]
 struct PatternDef {
     name: &'static str,
     handler: fn(&regex::Captures, &str, &DecompositionContext) -> Option<Vec<SubIntent>>,
@@ -48,6 +49,7 @@ struct PatternDef {
 /// known patterns.
 pub struct PatternDecomposition {
     /// Whether to allow partial matches (lower confidence)
+    #[allow(dead_code)]
     allow_partial: bool,
 }
 

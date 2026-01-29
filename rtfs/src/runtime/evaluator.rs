@@ -1,4 +1,5 @@
 // RTFS Evaluator - Executes parsed AST nodes
+#![allow(unused_variables, unused_assignments, unused_mut, dead_code)]
 
 use crate::ast::{
     CatchPattern, DefExpr, DefnExpr, DefstructExpr, DoExpr, Expression, FnExpr, ForExpr, IfExpr,

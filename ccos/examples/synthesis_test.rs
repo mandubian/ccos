@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
             // Try to parse the RTFS
             match rtfs::parser::parse_expression(&code) {
-                Ok(ast) => {
+                Ok(_ast) => {
                     println!("\n   ✓ RTFS parsed successfully!");
                     println!("   The synthesized capability is syntactically valid.");
 

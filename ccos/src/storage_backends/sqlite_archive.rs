@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug)]
 pub struct SqliteArchive {
     conn: Arc<Mutex<Connection>>,
+    #[allow(dead_code)]
     db_path: PathBuf,
 }
 

@@ -1,5 +1,7 @@
 //! Native Capability Provider - exposes CLI commands as RTFS-callable capabilities
 
+#![allow(dead_code)]
+
 use crate::capabilities::provider::{CapabilityDescriptor, CapabilityProvider, ExecutionContext};
 use crate::capability_marketplace::types::NativeCapability;
 use crate::ops;
@@ -11,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Get the default storage path for approval queue from config
+#[allow(dead_code)]
 fn get_default_storage_path() -> PathBuf {
     let config = rtfs::config::AgentConfig::from_env();
     let workspace_root = std::env::var("CCOS_WORKSPACE_ROOT")
@@ -572,6 +575,7 @@ fn get_optional_value_as_string(inputs: &Value, key: &str) -> Option<String> {
 }
 
 /// Helper to get a bool from a Value map
+#[allow(dead_code)]
 fn get_bool_param(inputs: &Value, key: &str, default: bool) -> bool {
     match inputs {
         Value::Map(map) => map

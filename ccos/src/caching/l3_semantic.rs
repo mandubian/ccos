@@ -406,7 +406,7 @@ mod tests {
         // Query similar to first entry
         let result = cache.get_semantic("How is the weather?");
         assert!(result.is_some());
-        let (value, similarity) = result.unwrap();
+        let (_value, similarity) = result.unwrap();
         assert!(similarity > 0.5);
 
         // Should find the most similar match

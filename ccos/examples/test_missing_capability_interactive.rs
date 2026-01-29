@@ -1,7 +1,6 @@
 use ccos::examples_common::builder::CcosEnvBuilder;
 use ccos::planner::modular_planner::types::{DomainHint, IntentType, SubIntent};
 use ccos::synthesis::continuous_resolution::{ContinuousResolutionLoop, ResolutionConfig};
-use ccos::synthesis::missing_capability_resolver::ResolutionResult;
 use ccos::synthesis::registration_flow::RegistrationFlow;
 use rtfs::runtime::security::RuntimeContext;
 use std::collections::HashMap;

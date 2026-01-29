@@ -25,7 +25,8 @@ use super::governance_judge::PlanJudge;
 use super::intent_graph::IntentGraph;
 use super::orchestrator::Orchestrator;
 use super::types::Intent; // for delegation validation
-use super::types::{Action, ActionId, ActionType, ExecutionResult, Plan, PlanBody, StorableIntent};
+use super::types::{Action, ActionType, ExecutionResult, Plan, PlanBody, StorableIntent};
+use crate::capability_marketplace::types::ProviderType;
 use rtfs::runtime::error::RuntimeError;
 use rtfs::runtime::execution_outcome::HostCall;
 
@@ -947,12 +948,10 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
             } // No intent for capability-internal plans
         };
 
-        let graph = self
+        let intent = self
             .intent_graph
             .lock()
-            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
-
-        let intent = graph
+            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?
             .get_intent(intent_id)
             .ok_or_else(|| RuntimeError::Generic(format!("Intent not found: {}", intent_id)))?;
 
@@ -1338,7 +1337,7 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
     fn validate_execution_mode(
         &self,
         plan: &Plan,
-        intent: Option<&StorableIntent>,
+        _intent: Option<&StorableIntent>,
         execution_mode: &str,
     ) -> RuntimeResult<()> {
         // Check if plan has critical capabilities that require special handling
@@ -1519,7 +1518,20 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
         self.validate_execution_hints(&hints)?;
 
         // 4. Delegate to Orchestrator for actual execution
-        let result = self.orchestrator.handle_host_call_internal(host_call).await;
+        let manifest = self
+            .orchestrator
+            .get_capability_manifest(&host_call.capability_id)
+            .await;
+        let is_sandboxed = manifest
+            .as_ref()
+            .map(|m| matches!(m.provider, ProviderType::Sandboxed(_)))
+            .unwrap_or(false);
+
+        let result = if is_sandboxed {
+            self.execute_sandboxed_capability(host_call).await
+        } else {
+            self.orchestrator.handle_host_call_internal(host_call).await
+        };
 
         // 5. Log outcome if checkpointed
         if let Some(action_id) = checkpoint_id {
@@ -1539,6 +1551,12 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
         }
 
         result
+    }
+
+    async fn execute_sandboxed_capability(&self, host_call: &HostCall) -> RuntimeResult<Value> {
+        // Placeholder for sandbox-specific governance (secrets, network, resource policy)
+        // Currently delegates to orchestrator execution with hints already validated.
+        self.orchestrator.handle_host_call_internal(host_call).await
     }
 
     /// Execute a plan through the governance pipeline.
@@ -1591,16 +1609,16 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
         let intent_id = root_intent_id.to_string();
 
         // Get the root intent from the graph
-        let graph = self
-            .intent_graph
-            .lock()
-            .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
+        let _root_intent = {
+            let graph = self
+                .intent_graph
+                .lock()
+                .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;
 
-        let _root_intent = graph.get_intent(&intent_id).ok_or_else(|| {
-            RuntimeError::Generic(format!("Intent not found: {}", root_intent_id))
-        })?;
-
-        drop(graph);
+            graph.get_intent(&intent_id).ok_or_else(|| {
+                RuntimeError::Generic(format!("Intent not found: {}", root_intent_id))
+            })?
+        };
 
         // Get all child intents for this root intent
         let children = {
@@ -1677,7 +1695,7 @@ Respond with ONLY the corrected RTFS plan code, no explanations."#,
 
     /// Get plan for a specific intent (governance-aware lookup)
     fn get_plan_for_intent(&self, intent_id: &str) -> RuntimeResult<Option<Plan>> {
-        let graph = self
+        let _graph = self
             .intent_graph
             .lock()
             .map_err(|_| RuntimeError::Generic("Failed to lock IntentGraph".to_string()))?;

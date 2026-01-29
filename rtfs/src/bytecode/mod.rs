@@ -76,6 +76,7 @@ fn f64_to_bits(f: f64) -> u64 {
 fn bits_to_f64(b: u64) -> f64 {
     f64::from_bits(b)
 }
+#[allow(dead_code)]
 fn f32_to_bits(f: f64) -> u32 {
     (f as f32).to_bits()
 }

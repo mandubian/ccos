@@ -5,7 +5,9 @@ use crate::capability_marketplace::types::{
 };
 use crate::mcp::types::DiscoveredMCPTool;
 use crate::mcp::types::DiscoveryOptions;
+use crate::rtfs_bridge::normalizer::expression_to_value_simple;
 use crate::synthesis::mcp_introspector::MCPIntrospector;
+use crate::utils::value_conversion::rtfs_value_to_json;
 use async_trait::async_trait;
 use chrono::Utc;
 use log::debug;
@@ -121,6 +123,7 @@ pub struct MCPDiscoveryProvider {
         std::sync::Arc<dyn Fn() -> std::sync::Arc<dyn HostInterface + Send + Sync> + Send + Sync>,
 }
 
+#[allow(dead_code)]
 impl MCPDiscoveryProvider {
     fn derive_tool_effects(&self, tool: &MCPTool) -> Vec<String> {
         let mut effect_set = HashSet::new();
@@ -253,6 +256,12 @@ impl MCPDiscoveryProvider {
 
     fn serialize_effects(effects: &[String]) -> String {
         serde_json::to_string(effects).unwrap_or_else(|_| effects.join(","))
+    }
+
+    fn serialize_expression_to_json(value: &Expression) -> Option<String> {
+        let rtfs_value = expression_to_value_simple(value)?;
+        let json_value = rtfs_value_to_json(&rtfs_value).ok()?;
+        serde_json::to_string(&json_value).ok()
     }
 
     fn parse_effects_from_serialized(serialized: &str) -> Vec<String> {
@@ -981,7 +990,7 @@ impl MCPDiscoveryProvider {
     ) -> RuntimeResult<RTFSModuleDefinition> {
         let mut capabilities = Vec::new();
 
-        for (i, top_level) in top_levels.iter().enumerate() {
+        for (_i, top_level) in top_levels.iter().enumerate() {
             match top_level {
                 TopLevel::Capability(cap_def) => {
                     // Convert CapabilityDefinition to RTFSCapabilityDefinition
@@ -1200,7 +1209,7 @@ impl MCPDiscoveryProvider {
     /// Try to extract module from a ModuleDefinition
     fn extract_module_from_module_def(
         &self,
-        module_def: &rtfs::ast::ModuleDefinition,
+        _module_def: &rtfs::ast::ModuleDefinition,
     ) -> RuntimeResult<RTFSModuleDefinition> {
         // For now, return error as we need to implement proper module extraction
         Err(RuntimeError::Generic(
@@ -1565,7 +1574,7 @@ impl MCPDiscoveryProvider {
 
     /// Convert Expression to RTFS text format
     pub fn expression_to_rtfs_text(&self, expr: &Expression, indent: usize) -> String {
-        let indent_str = "  ".repeat(indent);
+        let _indent_str = "  ".repeat(indent);
 
         match expr {
             Expression::Literal(lit) => match lit {
@@ -1869,6 +1878,27 @@ impl MCPDiscoveryProvider {
                                 }
                             }
                         }
+                    }
+                }
+                MapKey::Keyword(k) if k.0 == "filesystem" => {
+                    if let Some(serialized) = Self::serialize_expression_to_json(value) {
+                        metadata
+                            .entry("sandbox_filesystem".to_string())
+                            .or_insert(serialized);
+                    }
+                }
+                MapKey::Keyword(k) if k.0 == "resources" => {
+                    if let Some(serialized) = Self::serialize_expression_to_json(value) {
+                        metadata
+                            .entry("sandbox_resources".to_string())
+                            .or_insert(serialized);
+                    }
+                }
+                MapKey::Keyword(k) if k.0 == "runtime" => {
+                    if let Some(serialized) = Self::serialize_expression_to_json(value) {
+                        metadata
+                            .entry("sandbox_runtime".to_string())
+                            .or_insert(serialized);
                     }
                 }
                 MapKey::Keyword(k) if k.0 == "metadata" => {

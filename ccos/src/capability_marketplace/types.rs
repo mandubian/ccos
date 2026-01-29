@@ -922,7 +922,7 @@ impl ResourceConstraints {
         }
 
         // Check extended resource limits
-        for (name, limit) in &self.extended_limits {
+        for (_name, limit) in &self.extended_limits {
             if let Some(measurement) = usage.resources.get(&limit.resource_type) {
                 if measurement.value > limit.value {
                     violations.push(ResourceViolation {
@@ -1111,6 +1111,166 @@ pub struct SandboxedCapability {
     pub source: String,  // Code or path
     pub entry_point: Option<String>,
     pub provider: Option<String>, // e.g., "process", "firecracker"
+    /// Extended runtime specification (when parsed from manifest)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_spec: Option<RuntimeSpec>,
+    /// Network policy for sandboxed execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_policy: Option<NetworkPolicy>,
+    /// Filesystem configuration for sandboxed execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filesystem: Option<FilesystemSpec>,
+    /// Resource limits for sandboxed execution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ResourceSpec>,
+    /// Required secrets for this capability
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<String>,
+}
+
+/// Runtime specification for polyglot sandboxed capabilities.
+/// Parsed from the `:runtime` field in RTFS capability manifests.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeSpec {
+    /// Runtime type: rtfs, wasm, container, microvm, native
+    pub runtime_type: RuntimeType,
+    /// Container/VM image (e.g., "python:3.12-slim")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Entrypoint command
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entrypoint: Vec<String>,
+    /// Port to expose (for HTTP-based capabilities)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// Startup timeout in milliseconds
+    #[serde(default = "default_startup_timeout")]
+    pub startup_timeout_ms: u64,
+    /// Health check endpoint (e.g., "/ping")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_check: Option<String>,
+}
+
+fn default_startup_timeout() -> u64 {
+    5000
+}
+
+/// Runtime type for polyglot capabilities
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeType {
+    /// Pure RTFS, no sandbox needed
+    Rtfs,
+    /// WebAssembly sandbox (memory-safe, fast startup)
+    Wasm,
+    /// Container sandbox (namespace isolation)
+    Container,
+    /// MicroVM sandbox (hardware isolation, e.g., Firecracker)
+    MicroVM,
+    /// Native host process (trusted code only)
+    Native,
+}
+
+impl Default for RuntimeType {
+    fn default() -> Self {
+        RuntimeType::MicroVM
+    }
+}
+
+/// Network policy for sandboxed capabilities.
+/// Parsed from the `:network` field in RTFS capability manifests.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetworkPolicy {
+    /// Network mode: proxy (all through GK), none, or direct
+    #[serde(default)]
+    pub mode: NetworkMode,
+    /// Allowed destination hosts
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_hosts: Vec<String>,
+    /// Allowed destination ports
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_ports: Vec<u16>,
+    /// Egress rate limit (requests per minute)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub egress_rate_limit: Option<u32>,
+}
+
+/// Network mode for sandboxed execution
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum NetworkMode {
+    /// All network requests routed through GK proxy (default, most secure)
+    #[default]
+    Proxy,
+    /// No network access allowed
+    None,
+    /// Direct network access (requires elevated trust)
+    Direct,
+}
+
+/// Filesystem specification for sandboxed capabilities.
+/// Parsed from the `:filesystem` field in RTFS capability manifests.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FilesystemSpec {
+    /// Filesystem mode: ephemeral, session, or persistent
+    #[serde(default)]
+    pub mode: FilesystemSpecMode,
+    /// Mount points
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<MountSpec>,
+    /// Quota in megabytes for writable space
+    #[serde(default)]
+    pub quota_mb: u64,
+}
+
+/// Filesystem mode for sandboxed execution
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FilesystemSpecMode {
+    /// Destroyed after each invocation (default)
+    #[default]
+    Ephemeral,
+    /// Persists within session, destroyed after
+    Session,
+    /// Persists across invocations (with quota)
+    Persistent,
+}
+
+/// Mount specification for sandboxed filesystem
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MountSpec {
+    /// Host path (relative to workspace)
+    pub host: String,
+    /// Guest path (inside sandbox)
+    pub guest: String,
+    /// Mount mode: read-only or read-write
+    #[serde(default)]
+    pub mode: MountSpecMode,
+}
+
+/// Mount mode for filesystem mounts
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MountSpecMode {
+    /// Read-only mount (default, most secure)
+    #[default]
+    ReadOnly,
+    /// Read-write mount
+    ReadWrite,
+}
+
+/// Resource specification for sandboxed capabilities.
+/// Parsed from the `:resources` field in RTFS capability manifests.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResourceSpec {
+    /// Relative CPU allocation (shares)
+    #[serde(default)]
+    pub cpu_shares: u32,
+    /// Maximum memory in megabytes
+    #[serde(default)]
+    pub memory_mb: u64,
+    /// Maximum execution time per call in milliseconds
+    #[serde(default)]
+    pub timeout_ms: u64,
+    /// Maximum network egress bytes per call
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1255,6 +1415,7 @@ pub struct CapabilityMarketplace {
     pub(crate) capabilities: Arc<RwLock<HashMap<String, CapabilityManifest>>>,
     pub(crate) discovery_agents: Vec<Box<dyn CapabilityDiscovery>>,
     pub(crate) capability_registry: Arc<RwLock<crate::capabilities::registry::CapabilityRegistry>>,
+    #[allow(dead_code)]
     pub(crate) network_registry: Option<NetworkRegistryConfig>,
     pub(crate) type_validator: Arc<rtfs::runtime::type_validator::TypeValidator>,
     pub(crate) executor_registry:

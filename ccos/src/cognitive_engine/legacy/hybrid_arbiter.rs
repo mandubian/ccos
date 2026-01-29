@@ -219,6 +219,7 @@ fn intent_from_function_call(expr: &rtfs::ast::Expression) -> Option<Intent> {
 
 /// Hybrid arbiter that combines template matching with LLM fallback
 pub struct HybridArbiter {
+    #[allow(dead_code)]
     template_config: TemplateConfig,
     llm_config: LlmConfig,
     intent_patterns: Vec<IntentPattern>,

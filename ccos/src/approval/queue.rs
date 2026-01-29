@@ -1,6 +1,7 @@
 //! Approval queue for discovered servers
+#![allow(deprecated)]
 
-use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
+use crate::utils::value_conversion::json_to_rtfs_value;
 use chrono::{DateTime, Utc};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
@@ -598,7 +599,7 @@ impl ApprovalQueue {
         &self,
         legacy_path: &Path,
         target_dir: &Path,
-        wrapper_fn: fn(Vec<T>) -> T, // Dummy wrapper not needed, we need to extract items
+        _wrapper_fn: fn(Vec<T>) -> T, // Dummy wrapper not needed, we need to extract items
     ) -> RuntimeResult<()> {
         if legacy_path.exists() && legacy_path.is_file() {
             println!(
@@ -700,6 +701,7 @@ impl ApprovalQueue {
         Ok(RejectedQueueState { items })
     }
 
+    #[allow(dead_code)]
     fn save_rejected(&self, state: &RejectedQueueState) -> RuntimeResult<()> {
         for item in &state.items {
             self.save_to_dir(&self.rejected_path(), item)?;
@@ -1177,7 +1179,7 @@ impl ApprovalQueue {
             // If it exists, save_to_dir will overwrite the server.json file
             // But we should check to preserve stats if possible.
 
-            let mut approved_state = self.load_approved()?;
+            let approved_state = self.load_approved()?;
             let existing_pos = approved_state.items.iter().position(|existing| {
                 existing.server_info.name == approved.server_info.name
                     || (!approved.server_info.endpoint.is_empty()

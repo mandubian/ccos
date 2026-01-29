@@ -419,6 +419,7 @@ mod discovery_options_tests {
             ignore_approved_files: false,
             force_refresh: false,
             non_interactive: true,
+            create_approval_request: false,
         };
 
         assert!(options.introspect_output_schemas);
@@ -1196,7 +1197,7 @@ mod performance_optimization_tests {
 
     #[tokio::test]
     async fn test_lazy_schema_loading_skips_output_introspection() {
-        let service = MCPDiscoveryService::new();
+        let _service = MCPDiscoveryService::new();
         let mut options = DiscoveryOptions::default();
 
         // Test with lazy loading enabled (default)
@@ -1215,7 +1216,7 @@ mod performance_optimization_tests {
 
     #[tokio::test]
     async fn test_parallel_discovery_options_respected() {
-        let service = MCPDiscoveryService::new();
+        let _service = MCPDiscoveryService::new();
         let mut options = DiscoveryOptions::default();
 
         // Test different parallelism settings
@@ -1297,8 +1298,8 @@ mod performance_optimization_tests {
     #[test]
     fn test_connection_pooling_shared_client() {
         // Test that MCPDiscoveryService creates a shared HTTP client
-        let service1 = MCPDiscoveryService::new();
-        let service2 = MCPDiscoveryService::new();
+        let _service1 = MCPDiscoveryService::new();
+        let _service2 = MCPDiscoveryService::new();
 
         // Both services should have HTTP clients (connection pooling)
         // We can't directly test connection reuse without real HTTP calls,

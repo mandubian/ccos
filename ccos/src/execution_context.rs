@@ -685,7 +685,7 @@ mod tests {
         let mut stack = ContextStack::with_root(Some("root".to_string()));
 
         // Push child context
-        let child_id = stack
+        let _child_id = stack
             .push(Some("child".to_string()), IsolationLevel::Inherit)
             .unwrap();
         assert_eq!(

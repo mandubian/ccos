@@ -10,5 +10,6 @@ pub mod registry;
 
 // Keep convenience re-exports for code that imports `crate::runtime::capabilities::*`.
 pub use provider::*;
+#[allow(unused_imports)]
 pub use providers::*;
 pub use registry::*;

@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Virtualization layer for context horizon management and large graph optimization
 #[derive(Debug)]
 pub struct IntentGraphVirtualization {
+    #[allow(dead_code)]
     context_manager: ContextWindowManager,
     semantic_search: SemanticSearchEngine,
     graph_traversal: GraphTraversalEngine,

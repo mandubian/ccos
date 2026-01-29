@@ -1,3 +1,5 @@
+#![allow(unused_mut)]
+
 use rtfs::parser::parse;
 use rtfs::runtime::evaluator::Evaluator;
 use rtfs::runtime::execution_outcome::ExecutionOutcome;

@@ -1184,7 +1184,7 @@ mod tests {
 
         let action1 = Action::new(ActionType::PlanStarted, plan_id.clone(), intent_id.clone());
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let action2_id = format!("action-{}", uuid::Uuid::new_v4());
+        let _action2_id = format!("action-{}", uuid::Uuid::new_v4());
         let action2 = Action::new(
             ActionType::CapabilityCall,
             plan_id.clone(),

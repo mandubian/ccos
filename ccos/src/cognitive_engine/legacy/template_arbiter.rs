@@ -18,6 +18,7 @@ use rtfs::runtime::values::Value;
 
 /// Template-based arbiter that uses pattern matching and predefined templates
 pub struct TemplateArbiter {
+    #[allow(dead_code)]
     config: TemplateConfig,
     intent_patterns: Vec<IntentPattern>,
     plan_templates: Vec<PlanTemplate>,

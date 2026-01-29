@@ -52,6 +52,7 @@ pub struct GraphQLImporter {
     /// GraphQL endpoint URL
     pub endpoint_url: String,
     /// Auth injector for handling credentials
+    #[allow(dead_code)]
     auth_injector: AuthInjector,
     /// Mock mode for testing
     mock_mode: bool,
@@ -82,7 +83,7 @@ impl GraphQLImporter {
             return self.get_mock_schema();
         }
 
-        let introspection_query = r#"
+        let _introspection_query = r#"
         query IntrospectionQuery {
             __schema {
                 queryType { name }

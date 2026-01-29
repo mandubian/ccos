@@ -1,4 +1,5 @@
 // RTFS Interactive REPL with RTFS 2.0 Support
+#![allow(unused_variables, unused_imports, dead_code, unused_mut)]
 // Interactive read-eval-print loop with RTFS 2.0 object support and validation
 
 use clap::Parser;

@@ -8,9 +8,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::config::{
-    AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig, RetryConfig,
-};
+use super::config::{DelegationConfig, LlmConfig, RetryConfig};
 use super::delegation_analysis::{DelegationAnalysis, DelegationAnalyzer};
 use super::engine::CognitiveEngine;
 use super::intent_parsing::{
@@ -27,9 +25,7 @@ use crate::capability_marketplace::CapabilityMarketplace;
 use crate::delegation_keys::{agent, generation};
 use crate::synthesis::artifact_generator::generate_planner_via_arbiter;
 use crate::synthesis::{schema_builder::ParamSchema, InteractionTurn};
-use crate::types::{
-    ExecutionResult, Intent, IntentStatus, Plan, PlanBody, PlanLanguage, PlanStatus, StorableIntent,
-};
+use crate::types::{ExecutionResult, Intent, IntentStatus, Plan, StorableIntent};
 
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 
@@ -1545,7 +1541,6 @@ The tool name MUST be one of: {}"#,
         // If other top-level blocks exist, return the first non-(intent) balanced block.
         if let Some(idx) = response.find('(') {
             let mut collected_intents = Vec::new();
-            let mut found_plan_or_do = false;
             let mut remaining = &response[idx..];
 
             // Collect consecutive top-level balanced blocks
@@ -1555,13 +1550,10 @@ The tool name MUST be one of: {}"#,
                     collected_intents.push(block.clone());
                 } else if trimmed.starts_with("(plan") || trimmed.starts_with("(do") {
                     // Found a plan or do block: prefer returning it
-                    found_plan_or_do = true;
                     return Ok(block);
                 } else {
-                    // Found some other top-level block: return it if no plan/do blocks found yet
-                    if !found_plan_or_do {
-                        return Ok(block);
-                    }
+                    // Found some other top-level block: return it
+                    return Ok(block);
                 }
 
                 // Advance remaining slice
@@ -1919,10 +1911,7 @@ Now output ONLY the RTFS (do ...) block for the provided goal:
 mod tests {
     use super::*;
 
-    use crate::cognitive_engine::config::{
-        AgentDefinition, AgentRegistryConfig, DelegationConfig, LlmConfig, LlmProviderType,
-        RegistryType,
-    };
+    use crate::cognitive_engine::config::{DelegationConfig, LlmConfig, LlmProviderType};
     use std::sync::Arc;
     use tokio::sync::RwLock;
 

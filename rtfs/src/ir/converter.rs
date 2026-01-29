@@ -1,4 +1,5 @@
 // Complete AST to IR Converter Implementation
+#![allow(unused_variables, dead_code)]
 // Provides full conversion from parsed AST to optimized IR
 
 use crate::ast::*;

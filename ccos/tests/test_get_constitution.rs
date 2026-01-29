@@ -1,3 +1,5 @@
+#![allow(unused_imports, unused_variables)]
+
 use ccos::governance_kernel::{GovernanceKernel, RuleAction};
 use ccos::intent_graph::IntentGraph;
 use ccos::orchestrator::Orchestrator;
@@ -6,7 +8,7 @@ use std::sync::{Arc, Mutex};
 #[test]
 fn test_get_constitution_serialization() {
     // Setup minimal dependencies
-    let intent_graph = Arc::new(Mutex::new(IntentGraph::new()));
+    let _intent_graph = Arc::new(Mutex::new(IntentGraph::new()));
     // Mock orchestrator (simplified, or use real one if easy)
     // Orchestrator::new requires a lot of deps.
     // Let's see if we can instantiate GovernanceKernel without full Orchestrator.

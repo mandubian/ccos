@@ -65,6 +65,7 @@ use crate::capability_marketplace::config_mcp_discovery::LocalConfigMcpDiscovery
 ///
 /// This implementation always uses the unified `MCPDiscoveryService` for all
 /// discovery operations, providing consistent behavior with caching, rate limiting, etc.
+#[allow(dead_code)]
 pub struct RuntimeMcpDiscovery {
     registry_client: MCPRegistryClient,
     marketplace: Arc<CapabilityMarketplace>,
@@ -707,7 +708,7 @@ impl ResolutionStrategy for McpResolution {
 
         for server in servers_to_query {
             // Deduplicate by URL to avoid querying same server multiple times
-            if all_tools.iter().any(|t: &ToolSummary| {
+            if all_tools.iter().any(|_t: &ToolSummary| {
                 // Check if we already have tools from this domain/server?
                 // Hard to check from ToolSummary alone without metadata.
                 // But `get_tools` handles caching, so it's cheap to call.

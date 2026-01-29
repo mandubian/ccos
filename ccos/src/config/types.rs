@@ -1271,7 +1271,7 @@ impl DelegationConfig {
 
     #[cfg(not(feature = "ccos-integration"))]
     #[cfg(test)]
-    pub fn to_arbiter_config(&self) -> DelegationConfigStub {
+    fn to_arbiter_config(&self) -> DelegationConfigStub {
         // Stub implementation for RTFS-only tests
         DelegationConfigStub {
             enabled: self.enabled.unwrap_or(true),

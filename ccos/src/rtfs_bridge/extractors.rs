@@ -328,6 +328,7 @@ fn extract_intent_from_map(map: &HashMap<MapKey, Expression>) -> Result<Intent, 
     })
 }
 
+#[allow(dead_code)]
 fn extract_plan_from_function_call(
     callee: &Expression,
     arguments: &[Expression],
@@ -427,7 +428,7 @@ fn extract_plan_from_function_call(
                         annotations.insert("goal".to_string(), expression_to_value(value));
                     }
                     ":metadata" | "metadata" => {
-                        if let Expression::Map(meta_map) = value {
+                        if let Expression::Map(_meta_map) = value {
                             // Extract to metadata if we had a metadata field, but we are using metadata from annotations?
                             // Plan has metadata field too.
                             // Let's just merge into metadata if found.

@@ -1,3 +1,5 @@
+#![allow(unused_imports, unused_variables)]
+
 use ccos::utils::fs::get_workspace_root;
 use ccos::working_memory::{AgentMemory, InMemoryJsonlBackend, LearnedPattern, WorkingMemory};
 use std::fs;

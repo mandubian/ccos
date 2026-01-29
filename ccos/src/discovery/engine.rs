@@ -37,6 +37,7 @@ pub struct DiscoveryEngine {
     marketplace: Arc<CapabilityMarketplace>,
     intent_graph: Arc<Mutex<IntentGraph>>,
     /// Optional delegating arbiter for recursive synthesis
+    #[allow(dead_code)]
     delegating_arbiter: Option<Arc<DelegatingCognitiveEngine>>,
     /// Optional introspection cache for MCP/OpenAPI results
     introspection_cache: Option<Arc<IntrospectionCache>>,

@@ -1,3 +1,4 @@
+#![allow(unused_mut)]
 // Comprehensive tests for defn usage within let body (correct pattern)
 // Tests both AST evaluator and IR runtime
 

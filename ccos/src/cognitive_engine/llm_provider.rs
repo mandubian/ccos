@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 
 /// Convert a HashMap<String, Value> into an RTFS map literal string.
 /// Example: {:k1 "v" :k2 123}
+#[allow(dead_code)]
 fn hashmap_to_rtfs_map(m: &std::collections::HashMap<String, Value>) -> String {
     if m.is_empty() {
         return "{}".to_string();

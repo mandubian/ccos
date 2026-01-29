@@ -28,6 +28,7 @@ mod tests {
             }
         }
 
+        #[allow(dead_code)]
         fn get_received_messages(&self) -> Vec<String> {
             self.received_messages.lock().unwrap().clone()
         }

@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 use rtfs::ast::MapKey;
 use rtfs::parser::parse_expression;
 use rtfs::runtime::evaluator::Evaluator;

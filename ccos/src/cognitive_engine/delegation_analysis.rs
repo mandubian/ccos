@@ -228,7 +228,7 @@ Available Agents:
         let last_blob = json_blobs.last().unwrap();
         let json_response: serde_json::Value = serde_json::from_str(last_blob).map_err(|e| {
             // Generate user-friendly error message with full response preview
-            let response_preview = if response.len() > 500 {
+            let _response_preview = if response.len() > 500 {
                 format!(
                     "{}...\n[truncated, total length: {} chars]",
                     &response[..500],

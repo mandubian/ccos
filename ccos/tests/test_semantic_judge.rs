@@ -79,7 +79,11 @@ async fn test_semantic_judge_blocks_bad_plan() {
         plan_archive,
     ));
 
-    let mut kernel = GovernanceKernel::new(orchestrator, intent_graph.clone());
+    let kernel = GovernanceKernel::new(
+        orchestrator,
+        intent_graph.clone(),
+        std::collections::HashMap::new(),
+    );
 
     // Add policy to block unsafe plans
     kernel.set_semantic_judge_policy(SemanticJudgePolicy {
@@ -142,7 +146,11 @@ async fn test_judge_plan_allowed() {
         plan_archive,
     ));
 
-    let mut kernel = GovernanceKernel::new(orchestrator, intent_graph.clone());
+    let kernel = GovernanceKernel::new(
+        orchestrator,
+        intent_graph.clone(),
+        std::collections::HashMap::new(),
+    );
 
     kernel.set_semantic_judge_policy(SemanticJudgePolicy {
         enabled: true,

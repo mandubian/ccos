@@ -7,8 +7,8 @@
 
 use super::feature_flags::{FeatureFlagChecker, MissingCapabilityConfig};
 use super::missing_capability_strategies::{
-    ExternalLlmHintStrategy, MissingCapabilityStrategy, MissingCapabilityStrategyConfig,
-    PureRtfsGenerationStrategy, ServiceDiscoveryHintStrategy, UserInteractionStrategy,
+    MissingCapabilityStrategy, MissingCapabilityStrategyConfig, PureRtfsGenerationStrategy,
+    ServiceDiscoveryHintStrategy, UserInteractionStrategy,
 };
 use super::schema_serializer::type_expr_to_rtfs_compact;
 use crate::arbiter::prompt::{FilePromptStore, PromptManager};
@@ -24,7 +24,6 @@ use crate::cognitive_engine::DelegatingCognitiveEngine;
 use crate::discovery::need_extractor::CapabilityNeed;
 use crate::rtfs_bridge::expression_to_pretty_rtfs_string;
 use crate::rtfs_bridge::expression_to_rtfs_string;
-use crate::synthesis::dialogue::capability_synthesizer::MultiCapabilityEndpoint;
 use crate::synthesis::primitives::executor::RestrictedRtfsExecutor;
 use crate::synthesis::runtime::server_trust::{
     create_default_trust_registry, ServerCandidate, ServerSelectionHandler, ServerTrustRegistry,
@@ -346,6 +345,7 @@ pub struct RankedMcpServer {
 }
 
 /// Queue for managing missing capability resolution requests
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct MissingCapabilityQueue {
     /// Pending resolution requests
@@ -3753,7 +3753,7 @@ impl MissingCapabilityResolver {
     async fn save_generic_capability(
         &self,
         manifest: &CapabilityManifest,
-        source_url: &str,
+        _source_url: &str,
     ) -> RuntimeResult<()> {
         let storage_dir = std::env::var("CCOS_CAPABILITY_STORAGE")
             .map(std::path::PathBuf::from)

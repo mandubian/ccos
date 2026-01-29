@@ -1,4 +1,7 @@
+#![allow(dead_code)]
+
 use rtfs::parser::parse_expression;
+
 use rtfs::runtime::evaluator::Evaluator;
 use rtfs::runtime::module_runtime::ModuleRegistry;
 use rtfs::runtime::pure_host::create_pure_host;

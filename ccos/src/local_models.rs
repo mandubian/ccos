@@ -41,6 +41,7 @@ impl LocalLlamaModel {
     }
 
     /// Initialize the model (lazy loading)
+    #[allow(dead_code)]
     async fn ensure_loaded(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         #[cfg(feature = "cuda")]
         {

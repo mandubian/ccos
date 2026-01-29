@@ -1,6 +1,4 @@
-use crate::streaming::{
-    McpStreamingProvider, StreamChunkSink, StreamTransport, StreamTransportArgs,
-};
+use crate::streaming::{McpStreamingProvider, StreamTransport, StreamTransportArgs};
 use async_trait::async_trait;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;

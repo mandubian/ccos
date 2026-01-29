@@ -32,6 +32,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         source: "import json; import os; print(json.dumps({'status': 'success', 'provider': 'process', 'received': json.load(open(os.environ['RTFS_INPUT_FILE']))}))".to_string(),
         entry_point: None,
         provider: Some("process".to_string()),
+        runtime_spec: None,
+        network_policy: None,
+        filesystem: None,
+        resources: None,
+        secrets: Vec::new(),
     });
 
     let metadata = HashMap::new();
@@ -48,6 +53,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         source: "import json; import os; print(json.dumps({'status': 'success', 'provider': 'firecracker', 'received': json.load(open(os.environ['RTFS_INPUT_FILE']))}))".to_string(),
         entry_point: None,
         provider: Some("firecracker".to_string()),
+        runtime_spec: None,
+        network_policy: None,
+        filesystem: None,
+        resources: None,
+        secrets: Vec::new(),
     });
 
     let metadata = HashMap::new();
@@ -72,6 +82,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         source: "import json; import os; data = json.load(open(os.environ['RTFS_INPUT_FILE'])); print(json.dumps({'received_size': len(data['large_data'])}))".to_string(),
         entry_point: None,
         provider: Some("process".to_string()),
+        runtime_spec: None,
+        network_policy: None,
+        filesystem: None,
+        resources: None,
+        secrets: Vec::new(),
     });
 
     let metadata = HashMap::new();

@@ -230,6 +230,7 @@ impl SafeCapabilityExecutor {
     }
 
     /// Returns true if the capability is considered "safe" for opportunistic execution.
+    #[allow(dead_code)]
     fn is_safe(&self, manifest: &CapabilityManifest) -> bool {
         self.requires_approval(manifest).is_none()
     }

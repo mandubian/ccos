@@ -776,6 +776,7 @@ impl ContinuousResolutionLoop {
     }
 
     /// Get pending capabilities from resolver (placeholder)
+    #[allow(dead_code)]
     async fn get_pending_capabilities(&self) -> RuntimeResult<Vec<String>> {
         // This would integrate with the actual resolver's pending queue
         // For now, return empty list

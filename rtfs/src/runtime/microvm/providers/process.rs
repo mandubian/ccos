@@ -431,7 +431,7 @@ impl MicroVMProvider for ProcessMicroVMProvider {
                         Err(e) => Value::String(format!("Process external execution error: {}", e)),
                     }
                 }
-                crate::runtime::microvm::core::Program::Binary { language, source } => {
+                crate::runtime::microvm::core::Program::Binary { language, source: _source } => {
                     if *language == crate::runtime::microvm::core::ScriptLanguage::Wasm {
                         // For process provider, we can try to run wasmtime if available
                         let args = vec!["--dir=.".to_string(), "-".to_string()];

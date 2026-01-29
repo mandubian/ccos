@@ -69,7 +69,7 @@ impl TurnProcessor {
     }
 
     /// Process the entity's input intent and return actions + next message
-    #[allow(unused_variables)]
+    #[allow(unused_variables, unused_assignments)]
     pub async fn process(
         &self,
         intent: &InputIntent,

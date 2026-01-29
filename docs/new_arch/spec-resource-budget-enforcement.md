@@ -251,15 +251,15 @@ Session-level limits can be provided via execution context and will clamp per-ru
 - `HardStop` policy ends execution as `Failed`
 - All budget events logged to Causal Chain with `ActionType::BudgetConsumptionRecorded`
 
-### Phase 2: Approval-to-Resume Flow 🔴 NOT STARTED
+### Phase 2: Approval-to-Resume Flow ✅ COMPLETE
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `ccos_budget_approve` MCP tool | ❌ | Approve budget extension |
-| `ccos_budget_deny` MCP tool | ❌ | Deny and cancel run |
-| `resume_from_checkpoint()` | ❌ | Reload state and continue |
-| TUI approval integration | ❌ | Show budget approvals in queue |
-| Budget extension via execution hints | ❌ | `budget_extend` hint |
+| `ccos_budget_approve` MCP tool | ✅ | Approve budget extension |
+| `ccos_budget_deny` MCP tool | ✅ | Deny and cancel run |
+| `resume_from_checkpoint()` | ✅ | Reload state and continue |
+| TUI approval integration | ✅ | Show budget approvals in queue |
+| Budget extension via execution hints | ✅ | `budget_extend` hint |
 
 ### Phase 3: Advanced Features 🔴 NOT STARTED
 

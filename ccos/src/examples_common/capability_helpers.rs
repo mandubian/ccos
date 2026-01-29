@@ -304,12 +304,14 @@ struct OverrideParameter {
     #[serde(rename = "type")]
     param_type: String,
     #[serde(default)]
+    #[allow(dead_code)]
     description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct OverrideEntry {
     #[serde(default)]
+    #[allow(dead_code)]
     description: Option<String>,
     #[serde(default)]
     parameters: HashMap<String, OverrideParameter>,

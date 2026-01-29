@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let _ccos = env.ccos;
     let mut planner = env.planner;
-    let intent_graph = env.intent_graph;
+    let _intent_graph = env.intent_graph;
 
     println!("  ✅ ModularPlanner configured with LLM decomposition");
     println!("  ✅ Using default LLM profile from config\n");

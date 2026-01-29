@@ -698,6 +698,7 @@ impl CapabilityExplorer {
             ignore_approved_files: false,
             force_refresh: false,
             non_interactive: true,
+            create_approval_request: false,
         };
 
         // Use discover_and_export_tools to ensure RTFS files are created
@@ -707,7 +708,7 @@ impl CapabilityExplorer {
             .discover_and_export_tools(&config, &options)
             .await
         {
-            Ok(manifests) => {
+            Ok((manifests, _approval_id)) => {
                 let count = manifests.len();
 
                 for manifest in &manifests {
@@ -1156,7 +1157,7 @@ impl CapabilityExplorer {
                                 .discover_and_export_tools(config, &options)
                                 .await
                             {
-                                Ok(manifests) => {
+                                Ok((manifests, _approval_id)) => {
                                     if !manifests.is_empty() {
                                         println!("  {} Loaded {} capability(ies) from server introspection", "✓".green(), manifests.len());
                                         // Store for exploration
@@ -1291,7 +1292,7 @@ impl CapabilityExplorer {
             .discover_and_export_tools(config, &options)
             .await
         {
-            Ok(manifests) => {
+            Ok((manifests, _approval_id)) => {
                 println!(
                     "  {} Discovered {} tool(s)",
                     "✓".green(),

@@ -103,7 +103,7 @@ pub fn update_capability_output_schema(
 pub fn find_capability_file(capability_id: &str) -> Option<PathBuf> {
     use crate::utils::fs::get_workspace_root;
 
-    let root = get_workspace_root();
+    let _root = get_workspace_root();
 
     // Check generated capabilities
     let generated_dir = crate::utils::fs::get_configured_generated_path();

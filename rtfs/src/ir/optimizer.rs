@@ -9,6 +9,7 @@ use std::collections::HashSet;
 pub struct EnhancedIrOptimizer {
     optimization_level: OptimizationLevel,
     inline_threshold: usize,
+    #[allow(dead_code)]
     max_inline_depth: usize,
 }
 

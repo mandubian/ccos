@@ -15,11 +15,10 @@ use crate::synthesis::introspection::api_introspector::{
     APIIntrospectionResult, APIIntrospector, AuthRequirements, DiscoveredEndpoint,
 };
 use crate::utils::fs::get_workspace_root;
-use crate::{ccos_eprintln, ccos_println};
+use crate::ccos_println;
 use rtfs::ast::TypeExpr;
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -69,6 +68,7 @@ pub struct RtfsGenerationResult {
 }
 
 /// Introspection Service for discovering and generating capabilities
+#[allow(dead_code)]
 pub struct IntrospectionService {
     introspector: APIIntrospector,
     mcp_discovery: Option<Arc<crate::mcp::core::MCPDiscoveryService>>,
@@ -454,7 +454,7 @@ impl IntrospectionService {
         }
 
         // Create server.rtfs
-        let files_rtfs = capability_files
+        let _files_rtfs = capability_files
             .iter()
             .map(|f| format!("\"{}\"", f))
             .collect::<Vec<_>>()
@@ -949,6 +949,7 @@ impl IntrospectionService {
 }
 
 /// Sanitize a string to be used as a filename
+#[allow(dead_code)]
 fn sanitize_filename(name: &str) -> String {
     name.chars()
         .map(|c| {
