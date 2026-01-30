@@ -72,6 +72,28 @@ pub enum ApprovalCategory {
         consumed: u64,
         limit: u64,
     },
+
+    /// Chat-mode policy exception approval (e.g., allow `pii.redacted` egress for a run).
+    ChatPolicyException {
+        /// Exception kind identifier (e.g., "egress.pii_redacted")
+        kind: String,
+        /// Session scope (per spec 046: per-run by default)
+        session_id: String,
+        /// Run scope
+        run_id: String,
+    },
+
+    /// Chat-mode public declassification approval (per-run), required before verifier-gated downgrade.
+    ChatPublicDeclassification {
+        session_id: String,
+        run_id: String,
+        /// Transform capability producing the candidate output
+        transform_capability_id: String,
+        /// Verifier capability validating the output
+        verifier_capability_id: String,
+        /// Human-readable constraints summary enforced by verifier
+        constraints: String,
+    },
 }
 
 /// Health tracking for approved servers
@@ -118,6 +140,12 @@ impl fmt::Display for ApprovalCategory {
             }
             ApprovalCategory::BudgetExtension { dimension, .. } => {
                 write!(f, "BudgetExtension({})", dimension)
+            }
+            ApprovalCategory::ChatPolicyException { kind, .. } => {
+                write!(f, "ChatPolicyException({})", kind)
+            }
+            ApprovalCategory::ChatPublicDeclassification { .. } => {
+                write!(f, "ChatPublicDeclassification")
             }
         }
     }

@@ -38,6 +38,7 @@ pub mod catalog;
 pub mod causal_chain;
 pub mod checkpoint_archive;
 pub mod cli;
+pub mod chat;
 pub mod config;
 pub mod discovery;
 pub mod event_sink;

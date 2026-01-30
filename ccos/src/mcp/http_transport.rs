@@ -687,6 +687,34 @@ async fn handle_api_approvals_list(
                         "limit": limit
                     }),
                 ),
+                ApprovalCategory::ChatPolicyException {
+                    kind,
+                    session_id,
+                    run_id,
+                } => (
+                    "ChatPolicyException",
+                    json!({
+                        "kind": kind,
+                        "session_id": session_id,
+                        "run_id": run_id
+                    }),
+                ),
+                ApprovalCategory::ChatPublicDeclassification {
+                    session_id,
+                    run_id,
+                    transform_capability_id,
+                    verifier_capability_id,
+                    constraints,
+                } => (
+                    "ChatPublicDeclassification",
+                    json!({
+                        "session_id": session_id,
+                        "run_id": run_id,
+                        "transform_capability_id": transform_capability_id,
+                        "verifier_capability_id": verifier_capability_id,
+                        "constraints": constraints
+                    }),
+                ),
             };
 
             // Determine status string for UI filtering

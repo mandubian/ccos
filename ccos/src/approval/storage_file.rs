@@ -480,6 +480,8 @@ impl FileApprovalStorage {
                 ApprovalCategory::LlmPromptApproval { .. } => "LlmPromptApproval",
                 ApprovalCategory::SecretRequired { .. } => "SecretRequired",
                 ApprovalCategory::BudgetExtension { .. } => "BudgetExtension",
+                ApprovalCategory::ChatPolicyException { .. } => "ChatPolicyException",
+                ApprovalCategory::ChatPublicDeclassification { .. } => "ChatPublicDeclassification",
             };
             if request_type != category_type {
                 return false;
