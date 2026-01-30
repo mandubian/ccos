@@ -98,6 +98,33 @@ fn to_approval_item(request: &ApprovalRequest) -> ApprovalItem {
             "runtime".to_string(),
             None,
         ),
+        ApprovalCategory::ChatPolicyException {
+            kind,
+            session_id,
+            run_id,
+        } => (
+            ApprovalType::Effect, // reuse Effect type for now (policy exception gate)
+            format!("Chat Policy Exception: {}", kind),
+            format!("Session {} / Run {}", session_id, run_id),
+            "chat".to_string(),
+            None,
+        ),
+        ApprovalCategory::ChatPublicDeclassification {
+            session_id,
+            run_id,
+            transform_capability_id,
+            verifier_capability_id,
+            constraints,
+        } => (
+            ApprovalType::Effect, // reuse Effect type for now (public declass gate)
+            "Chat Public Declassification".to_string(),
+            format!(
+                "Session {} / Run {} — transform={} verifier={} constraints={}",
+                session_id, run_id, transform_capability_id, verifier_capability_id, constraints
+            ),
+            "chat".to_string(),
+            None,
+        ),
     };
 
     ApprovalItem {

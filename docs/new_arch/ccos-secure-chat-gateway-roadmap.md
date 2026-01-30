@@ -95,7 +95,6 @@ The GK can:
 
 ### Enforcement Behavior
 When any budget is exhausted:
-
 | Policy | Behavior |
 |--------|----------|
 | **hard-stop** (default) | Run ends immediately as `Failed`, logged to causal chain |
@@ -210,11 +209,27 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
   - every inbound message → session step record (metadata only by default)
   - every access to quarantine store → causal-chain event with justification + policy decision.
 
+### Status (now)
+- ✅ **Specs written**: `037`–`039` + `042`–`047` define classification, policy pack, quarantine, connector contract, approval/verifier wiring, and audit events.
+- ✅ **Minimal implementation shipped** (Phase 0):
+  - `ccos/src/chat/mod.rs` (classification metadata, in-memory quarantine, transform+verifier capabilities, egress gating, MCP result filtering, audit event helper)
+  - `ccos/tests/chat_mode_tests.rs` (proves deny-by-default + approval/verifier gates; `cargo test -p ccos --test chat_mode_tests`)
+  - Approvals plumbed end-to-end via `ApprovalCategory::{ChatPolicyException, ChatPublicDeclassification}` and surfaced in MCP/HTTP approval listings.
+
 ### References / Alignment
 - Host boundary: `docs/ccos/specs/004-rtfs-ccos-boundary.md`
 - Governance & context: `docs/ccos/specs/005-security-and-context.md`
 - Two-tier governance checkpoints: `docs/ccos/specs/035-two-tier-governance.md`
 - Sandbox isolation: `docs/ccos/specs/022-sandbox-isolation.md`
+- Chat mode security contract: `docs/ccos/specs/037-chat-mode-security-contract.md`
+- Chat mode policy pack: `docs/ccos/specs/038-chat-mode-policy-pack.md`
+- Quarantine store contract: `docs/ccos/specs/039-quarantine-store-contract.md`
+- Normalized message schema: `docs/ccos/specs/042-chat-message-schema.md`
+- Connector adapter interface: `docs/ccos/specs/043-chat-connector-adapter.md`
+- Hello world connector flow: `docs/ccos/specs/044-hello-world-connector-flow.md`
+- Chat transform capabilities (incl. verifier): `docs/ccos/specs/045-chat-transform-capabilities.md`
+- Chat approval flow: `docs/ccos/specs/046-chat-approval-flow.md`
+- Chat audit events: `docs/ccos/specs/047-chat-audit-events.md`
 - Polyglot sandboxed capabilities: [spec-polyglot-sandboxed-capabilities.md](./spec-polyglot-sandboxed-capabilities.md)
 
 ### Success criteria
@@ -379,10 +394,16 @@ The following are important but **not blocking for Phase 0-2**:
 - **Attachment pipeline**: media parsing is a large attack surface; keep it sandboxed (`docs/ccos/specs/022-sandbox-isolation.md`).
 
 ## Next Actions (Concrete)
-- Write a short “Chat Mode Security Contract” spec draft (Phase 0) that defines:
-  - data classes, quarantine store, transform capabilities, egress policy defaults.
-- Choose MVP connector target based on lowest-risk onboarding and strongest allowlist/activation controls.
-- Define the normalized message/event schema and the adapter interface once, then implement the first connector against it.
+- **Choose MVP connector target** (lowest-risk onboarding + strongest allowlist/activation controls), then implement it against `043-chat-connector-adapter.md`.
+- **Wire a gateway/daemon “chat mode” execution path**:
+  - connector → `MessageEnvelope` with quarantine pointers
+  - transform-only access + egress gating via `ccos.chat.*` capabilities
+  - outbound send only after `ccos.chat.egress.prepare_outbound` succeeds.
+- **Persist quarantine store** (Phase 1 requirement from `039`):
+  - add encryption-at-rest + retention/TTL enforcement + purge tooling
+  - keep pointer unguessability + pointer-not-authorization invariant.
+- **Integrate audit events with existing observability surfaces**:
+  - ensure chat audit actions can be queried/visualized consistently (Causal Chain viewer/TUI).
 
 - Review and finalize [Polyglot Sandboxed Capabilities Spec](./spec-polyglot-sandboxed-capabilities.md):
   - confirm sandbox technology choice (Firecracker vs gVisor vs nsjail)

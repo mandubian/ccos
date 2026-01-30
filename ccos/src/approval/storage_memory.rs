@@ -71,6 +71,12 @@ impl ApprovalStorage for InMemoryApprovalStorage {
                         }
                         super::types::ApprovalCategory::SecretRequired { .. } => "SecretRequired",
                         super::types::ApprovalCategory::BudgetExtension { .. } => "BudgetExtension",
+                        super::types::ApprovalCategory::ChatPolicyException { .. } => {
+                            "ChatPolicyException"
+                        }
+                        super::types::ApprovalCategory::ChatPublicDeclassification { .. } => {
+                            "ChatPublicDeclassification"
+                        }
                     };
                     if actual_type != cat_type {
                         return false;

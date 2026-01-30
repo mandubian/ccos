@@ -3083,6 +3083,12 @@ fn register_ccos_tools(
                         ccos::approval::types::ApprovalCategory::BudgetExtension { plan_id, dimension, requested_additional, .. } => {
                             json!({ "type": "BudgetExtension", "plan_id": plan_id, "dimension": dimension, "requested_additional": requested_additional })
                         }
+                        ccos::approval::types::ApprovalCategory::ChatPolicyException { kind, session_id, run_id } => {
+                            json!({ "type": "ChatPolicyException", "kind": kind, "session_id": session_id, "run_id": run_id })
+                        }
+                        ccos::approval::types::ApprovalCategory::ChatPublicDeclassification { session_id, run_id, transform_capability_id, verifier_capability_id, constraints } => {
+                            json!({ "type": "ChatPublicDeclassification", "session_id": session_id, "run_id": run_id, "transform_capability_id": transform_capability_id, "verifier_capability_id": verifier_capability_id, "constraints": constraints })
+                        }
                     };
 
                     json!({
@@ -3150,6 +3156,8 @@ fn register_ccos_tools(
                     ccos::approval::types::ApprovalCategory::LlmPromptApproval { .. } => "LlmPromptApproval",
                     ccos::approval::types::ApprovalCategory::SecretRequired { .. } => "SecretRequired",
                     ccos::approval::types::ApprovalCategory::BudgetExtension { .. } => "BudgetExtension",
+                    ccos::approval::types::ApprovalCategory::ChatPolicyException { .. } => "ChatPolicyException",
+                    ccos::approval::types::ApprovalCategory::ChatPublicDeclassification { .. } => "ChatPublicDeclassification",
                 };
 
                 Ok(json!({
