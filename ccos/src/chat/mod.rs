@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::Utc;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
@@ -27,6 +27,13 @@ use crate::utils::value_conversion::map_key_to_string;
 use crate::capability_marketplace::types::{
     CapabilityManifest, EffectType, NativeCapability, ProviderType,
 };
+
+pub mod connector;
+pub mod gateway;
+pub mod quarantine;
+
+pub use connector::{ActivationMetadata, AttachmentRef, MessageDirection, MessageEnvelope};
+pub use quarantine::{FileQuarantineStore, InMemoryQuarantineStore, QuarantineKey, QuarantineStore};
 
 /// Reserved key for CCOS-internal chat metadata inside RTFS values.
 ///
@@ -258,57 +265,6 @@ fn extract_field_labels(meta: &HashMap<String, Value>) -> HashMap<String, ChatDa
     out
 }
 
-/// Minimal in-memory quarantine store (Phase 0).
-#[derive(Debug)]
-pub struct InMemoryQuarantineStore {
-    entries: Mutex<HashMap<String, QuarantineEntry>>,
-}
-
-#[derive(Debug, Clone)]
-struct QuarantineEntry {
-    created_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
-    bytes: Vec<u8>,
-}
-
-impl InMemoryQuarantineStore {
-    pub fn new() -> Self {
-        Self {
-            entries: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub fn put_bytes(&self, bytes: Vec<u8>, ttl: Duration) -> String {
-        let id = uuid::Uuid::new_v4().to_string();
-        let now = Utc::now();
-        let entry = QuarantineEntry {
-            created_at: now,
-            expires_at: now + ttl,
-            bytes,
-        };
-        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        map.insert(id.clone(), entry);
-        id
-    }
-
-    pub fn get_bytes(&self, pointer_id: &str) -> RuntimeResult<Vec<u8>> {
-        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(entry) = map.get(pointer_id).cloned() else {
-            return Err(RuntimeError::Generic(format!(
-                "Quarantine pointer not found: {}",
-                pointer_id
-            )));
-        };
-        if Utc::now() > entry.expires_at {
-            map.remove(pointer_id);
-            return Err(RuntimeError::Generic(format!(
-                "Quarantine pointer expired: {}",
-                pointer_id
-            )));
-        }
-        Ok(entry.bytes)
-    }
-}
 
 /// Records a chat audit event into the causal chain as an `InternalStep`.
 ///
@@ -359,7 +315,7 @@ pub fn record_chat_audit_event(
 /// - `ccos.chat.egress.prepare_outbound` enforces deny-by-default egress rules and strips `__ccos_meta`.
 pub async fn register_chat_capabilities(
     marketplace: &crate::capability_marketplace::CapabilityMarketplace,
-    quarantine: Arc<InMemoryQuarantineStore>,
+    quarantine: Arc<dyn QuarantineStore>,
     causal_chain: Arc<Mutex<CausalChain>>,
     approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
 ) -> RuntimeResult<()> {

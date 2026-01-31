@@ -6,6 +6,7 @@ pub struct CausalQuery {
     pub action_type: Option<ActionType>,
     pub time_range: Option<(u64, u64)>,
     pub parent_action_id: Option<ActionId>,
+    pub function_prefix: Option<String>,
 }
 
 impl CausalQuery {
@@ -108,6 +109,12 @@ impl CausalChain {
             actions = actions
                 .into_iter()
                 .filter(|a| a.parent_action_id.as_ref() == Some(parent_id))
+                .collect();
+        }
+        if let Some(ref prefix) = query.function_prefix {
+            actions = actions
+                .into_iter()
+                .filter(|a| a.function_name.as_deref().unwrap_or("").starts_with(prefix))
                 .collect();
         }
         actions
@@ -949,6 +956,7 @@ mod tests {
             action_type: Some(action.action_type.clone()),
             time_range: None,
             parent_action_id: None,
+            function_prefix: None,
         };
         let results = chain.query_actions(&query);
         assert!(results
@@ -1265,6 +1273,7 @@ mod tests {
             action_type: Some(ActionType::CapabilityCall),
             time_range: None,
             parent_action_id: None,
+            function_prefix: None,
         };
 
         let exported = chain.export_actions(&query);

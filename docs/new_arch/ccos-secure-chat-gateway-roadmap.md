@@ -215,6 +215,11 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
   - `ccos/src/chat/mod.rs` (classification metadata, in-memory quarantine, transform+verifier capabilities, egress gating, MCP result filtering, audit event helper)
   - `ccos/tests/chat_mode_tests.rs` (proves deny-by-default + approval/verifier gates; `cargo test -p ccos --test chat_mode_tests`)
   - Approvals plumbed end-to-end via `ApprovalCategory::{ChatPolicyException, ChatPublicDeclassification}` and surfaced in MCP/HTTP approval listings.
+- ✅ **Phase 1 MVP wiring in progress**:
+  - `ccos/src/chat/quarantine.rs` (persistent encrypted quarantine store + TTL enforcement + purge tooling)
+  - `ccos/src/chat/connector.rs` (loopback webhook connector w/ allowlist + activation triggers)
+  - `ccos/src/chat/gateway.rs` + `ccos-chat-gateway` binary (chat mode execution path with transform-only + egress gating)
+  - Causal-chain query now supports function-prefix filtering for chat audit surfacing.
 
 ### References / Alignment
 - Host boundary: `docs/ccos/specs/004-rtfs-ccos-boundary.md`

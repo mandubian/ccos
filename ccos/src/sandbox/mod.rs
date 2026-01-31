@@ -1,9 +1,9 @@
 pub mod config;
 pub mod filesystem;
+pub mod manager;
 pub mod network_proxy;
 pub mod resources;
 pub mod secret_injection;
-pub mod manager;
 
 pub use config::{SandboxConfig, SandboxRuntimeType};
 pub use filesystem::{FilesystemMode, Mount, MountMode, VirtualFilesystem};
@@ -17,7 +17,7 @@ use rtfs::runtime::error::RuntimeResult;
 use rtfs::runtime::microvm::{ExecutionResult, Program};
 use rtfs::runtime::values::Value;
 
-#[async_trait(?Send)]
+#[async_trait]
 pub trait SandboxRuntime: Send + Sync {
     fn name(&self) -> &str;
     async fn execute(

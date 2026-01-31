@@ -439,6 +439,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                                                       // So I should use:
     let causal_chain = ccos.causal_chain.clone();
 
+    // Initialize Skill Mapper
+    let skill_mapper = Arc::new(tokio::sync::Mutex::new(ccos::skills::SkillMapper::new(marketplace.clone())));
+
+
     // Populate marketplace with approved capabilities
     let workspace_root = ccos::utils::fs::get_workspace_root();
     let _ = marketplace
@@ -472,6 +476,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     {
         eprintln!(
             "[ccos-mcp] Warning: failed to register planner v2 capabilities: {}",
+            e
+        );
+    }
+
+    // Register Skill Interpreter RTFS capabilities (ccos.skill.load/execute, ccos.primitive.map).
+    if let Err(e) = ccos::skills::register_skill_capabilities(
+        Arc::clone(&marketplace),
+        Arc::clone(&skill_mapper),
+    )
+    .await
+    {
+        eprintln!(
+            "[ccos-mcp] Warning: failed to register skill capabilities: {}",
+            e
+        );
+    }
+
+    if let Err(e) = ccos::capabilities::register_sandbox_ops_capabilities(Arc::clone(&marketplace))
+        .await
+    {
+        eprintln!(
+            "[ccos-mcp] Warning: failed to register sandbox ops capabilities: {}",
             e
         );
     }
@@ -647,6 +673,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         approval_queue.clone(),
         agent_memory.clone(), // Pass AgentMemory
         agent_config.clone(),
+        skill_mapper.clone(),
     );
 
     if args.verbose {
@@ -761,7 +788,10 @@ fn register_ccos_tools(
     approval_queue: UnifiedApprovalQueue<ccos::approval::storage_file::FileApprovalStorage>,
     agent_memory: Arc<RwLock<AgentMemory>>,
     agent_config: Option<AgentConfig>,
+    skill_mapper: Arc<tokio::sync::Mutex<ccos::skills::SkillMapper>>,
 ) {
+
+
     // Hide low-level/internal capabilities from MCP discovery surfaces.
     // They may still be callable by specific higher-level tools (e.g. consolidation),
     // but should not appear in ccos_list_capabilities / ccos_search_capabilities.
@@ -1442,6 +1472,172 @@ fn register_ccos_tools(
         }),
         handler,
     );
+
+    // ccos_skill_load
+    let sm_load = skill_mapper.clone();
+    let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        let sm = sm_load.clone();
+        Box::pin(async move {
+            let url = params.get("url").and_then(|v| v.as_str())
+                .ok_or_else(|| "url is required".to_string())?;
+            
+            let mut mapper = sm.lock().await;
+            let loaded = mapper.load_and_register(url).await
+                .map_err(|e| format!("Failed to load skill: {}", e))?;
+
+            
+            Ok(json!({
+                "skill_id": loaded.skill.id,
+                "name": loaded.skill.name,
+                "description": loaded.skill.description,
+                "capabilities": loaded.capabilities_to_register,
+                "requires_approval": loaded.requires_approval,
+            }))
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos_skill_load",
+        "Load and register a skill from a URL (Markdown or YAML)",
+        json!({
+            "type": "object",
+            "properties": {
+                "url": { "type": "string", "description": "URL of the skill definition" }
+            },
+            "required": ["url"]
+        }),
+        handler.clone(),
+    );
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos.skill.load",
+        "Load and register a skill from a URL (Markdown or YAML)",
+        json!({
+            "type": "object",
+            "properties": {
+                "url": { "type": "string", "description": "URL of the skill definition" }
+            },
+            "required": ["url"]
+        }),
+        handler,
+    );
+
+    // ccos_skill_execute
+    let sm_exec = skill_mapper.clone();
+    let mp_exec = marketplace.clone();
+    let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        let sm = sm_exec.clone();
+        let mp = mp_exec.clone();
+        Box::pin(async move {
+            let skill_id = params.get("skill_id").and_then(|v| v.as_str())
+                .ok_or_else(|| "skill_id is required".to_string())?;
+            let operation = params.get("operation").and_then(|v| v.as_str())
+                .ok_or_else(|| "operation is required".to_string())?;
+            let args = params.get("params").unwrap_or(&json!({})).clone();
+            
+            // Execute via marketplace (using the registered capability ID: skill_id.operation)
+            let cap_id = if operation.contains('.') { operation.to_string() } else { format!("{}.{}", skill_id, operation) };
+            
+            // Convert args to rtfs Value
+            let rtfs_args = json_to_rtfs_value(&args)
+                .map_err(|e| format!("Failed to convert arguments: {}", e))?;
+
+            let result = mp.execute_capability(&cap_id, &rtfs_args).await
+                .map_err(|e| format!("Execution failed: {}", e))?;
+            
+            // Convert result back to JSON
+            let result_json = rtfs_value_to_json(&result)
+                 .map_err(|e| format!("Failed to convert result: {}", e))?;
+            Ok(result_json)
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos_skill_execute",
+        "Execute a registered skill operation",
+        json!({
+            "type": "object",
+            "properties": {
+                "skill_id": { "type": "string", "description": "ID of the skill" },
+                "operation": { "type": "string", "description": "Name of the operation" },
+                "params": { "type": "object", "description": "Parameters for the operation" }
+            },
+            "required": ["skill_id", "operation"]
+        }),
+        handler.clone(),
+    );
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos.skill.execute",
+        "Execute a registered skill operation",
+        json!({
+            "type": "object",
+            "properties": {
+                "skill_id": { "type": "string", "description": "ID of the skill" },
+                "operation": { "type": "string", "description": "Name of the operation" },
+                "params": { "type": "object", "description": "Parameters for the operation" }
+            },
+            "required": ["skill_id", "operation"]
+        }),
+        handler,
+    );
+
+    // ccos_primitive_map
+    let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
+        Box::pin(async move {
+            let command = params.get("command").and_then(|v| v.as_str())
+                .ok_or_else(|| "command is required".to_string())?;
+            
+            let mapper = ccos::skills::PrimitiveMapper::new();
+            if let Some(mapped) = mapper.map_command(command) {
+                Ok(json!({
+                    "capability_id": mapped.capability_id,
+                    "params": mapped.params,
+                    "confidence": mapped.confidence,
+                    "explanation": mapped.explanation,
+                }))
+
+            } else {
+                Ok(json!({
+                    "success": false,
+                    "message": "No mapping found for command"
+                }))
+            }
+        })
+    });
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos_primitive_map",
+        "Map a shell command (curl, python, etc.) to a CCOS capability",
+        json!({
+            "type": "object",
+            "properties": {
+                "command": { "type": "string", "description": "The shell command to map" }
+            },
+            "required": ["command"]
+        }),
+        handler.clone(),
+    );
+    register_ecosystem_tool(
+        server,
+        marketplace.clone(),
+        "ccos.primitive.map",
+        "Map a shell command (curl, python, etc.) to a CCOS capability",
+        json!({
+            "type": "object",
+            "properties": {
+                "command": { "type": "string", "description": "The shell command to map" }
+            },
+            "required": ["command"]
+        }),
+        handler,
+    );
+
     let am_learn = agent_memory.clone();
     let am_learn = agent_memory.clone();
     let handler = Arc::new(move |params: serde_json::Value| -> BoxFuture<'static, Result<serde_json::Value, String>> {
@@ -3659,6 +3855,94 @@ fn register_ccos_tools(
                     }
                 })
             }
+        }),
+    );
+
+    // ccos_fetch_url - Simple URL content fetcher for agents
+    // This is a convenience tool for simple URL fetching - uses reqwest directly
+    server.register_tool(
+        "ccos_fetch_url",
+        "Fetch content from a URL. Use this to read remote files, API documentation, skill definitions, or any web content. Returns the raw text content. For JSON APIs, the response will be the JSON text which you can parse.",
+        json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to fetch (e.g., 'https://moltbook.com/skill.md' or 'https://api.example.com/openapi.json')"
+                },
+                "headers": {
+                    "type": "object",
+                    "description": "Optional HTTP headers to include (e.g., {\"Authorization\": \"Bearer token\"})"
+                }
+            },
+            "required": ["url"]
+        }),
+        Box::new(move |params| {
+            Box::pin(async move {
+                let url = params.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                let headers = params.get("headers").and_then(|v| v.as_object());
+                
+                if url.is_empty() {
+                    return Ok(json!({
+                        "success": false,
+                        "error": "url is required"
+                    }));
+                }
+
+                // Use reqwest directly for simple URL fetching
+                let client = match reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build() {
+                        Ok(c) => c,
+                        Err(e) => return Ok(json!({
+                            "success": false,
+                            "error": format!("Failed to create HTTP client: {}", e)
+                        })),
+                    };
+
+                let mut request = client.get(url);
+                
+                // Add any custom headers
+                if let Some(hdrs) = headers {
+                    for (key, value) in hdrs {
+                        if let Some(val_str) = value.as_str() {
+                            request = request.header(key.as_str(), val_str);
+                        }
+                    }
+                }
+
+                match request.send().await {
+                    Ok(response) => {
+                        let status = response.status().as_u16();
+                        let content_type = response.headers()
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string());
+                        
+                        match response.text().await {
+                            Ok(body) => Ok(json!({
+                                "success": true,
+                                "url": url,
+                                "status": status,
+                                "content_type": content_type,
+                                "content": body,
+                                "hint": "The content field contains the raw text. For markdown files like skill.md, read the content to understand the API. For OpenAPI specs, the content is JSON you can parse."
+                            })),
+                            Err(e) => Ok(json!({
+                                "success": false,
+                                "url": url,
+                                "status": status,
+                                "error": format!("Failed to read response body: {}", e)
+                            }))
+                        }
+                    }
+                    Err(e) => Ok(json!({
+                        "success": false,
+                        "url": url,
+                        "error": format!("HTTP request failed: {}", e)
+                    }))
+                }
+            })
         }),
     );
 }

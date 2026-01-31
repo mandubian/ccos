@@ -35,13 +35,10 @@ enabled = true
 [governance.keys]
 verify = "dummy-verify"
 
-[governance.policies.default]
-risk_tier = "low"
-requires_approvals = 0
-
-[governance.policies.default.budgets]
-max_cost_usd = 1.0
-token_budget = 5000
+# Simple policy shorthand: "allow" = low risk, no approvals, permissive budgets
+# For custom limits, use the full structure with limits.* and policies.* subfields
+[governance.policies]
+default = "allow"
 
 [causal_chain.storage]
 mode = "in_memory" # or "append_file" | "sqlite" | "vsock_stream"

@@ -53,7 +53,7 @@ impl<'a> ExecutionContext<'a> {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 pub trait CapabilityExecutor: Send + Sync {
     fn provider_type_id(&self) -> TypeId;
     async fn execute(
@@ -68,7 +68,7 @@ pub struct MCPExecutor {
     pub session_pool: Arc<RwLock<Option<Arc<SessionPoolManager>>>>,
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl CapabilityExecutor for MCPExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<MCPCapability>()
@@ -608,7 +608,7 @@ impl CapabilityExecutor for MCPExecutor {
 
 pub struct A2AExecutor;
 
-#[async_trait(?Send)]
+#[async_trait]
 impl CapabilityExecutor for A2AExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<A2ACapability>()
@@ -690,7 +690,7 @@ impl A2AExecutor {
 
 pub struct LocalExecutor;
 
-#[async_trait(?Send)]
+#[async_trait]
 impl CapabilityExecutor for LocalExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<LocalCapability>()
@@ -713,7 +713,7 @@ impl CapabilityExecutor for LocalExecutor {
 
 pub struct RegistryExecutor;
 
-#[async_trait(?Send)]
+#[async_trait]
 impl CapabilityExecutor for RegistryExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<RegistryCapability>()
@@ -746,7 +746,7 @@ impl CapabilityExecutor for RegistryExecutor {
 
 pub struct OpenApiExecutor;
 
-#[async_trait(?Send)]
+#[async_trait]
 impl CapabilityExecutor for OpenApiExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<OpenApiCapability>()
@@ -1166,7 +1166,7 @@ impl OpenApiExecutor {
 
 pub struct HttpExecutor;
 
-#[async_trait(?Send)]
+#[async_trait]
 impl CapabilityExecutor for HttpExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<HttpCapability>()
@@ -1263,7 +1263,7 @@ impl SandboxedExecutor {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl CapabilityExecutor for SandboxedExecutor {
     fn provider_type_id(&self) -> TypeId {
         TypeId::of::<SandboxedCapability>()
@@ -1311,9 +1311,11 @@ impl CapabilityExecutor for SandboxedExecutor {
             let mut sandbox_config = crate::sandbox::SandboxConfig::default();
             sandbox_config.provider = sandboxed.provider.clone();
             sandbox_config.capability_id = Some(context.capability_id.to_string());
-            sandbox_config.required_secrets = parse_csv_list(context.metadata, "sandbox_required_secrets");
+            sandbox_config.required_secrets =
+                parse_csv_list(context.metadata, "sandbox_required_secrets");
             sandbox_config.allowed_hosts = parse_csv_set(context.metadata, "sandbox_allowed_hosts");
-            sandbox_config.allowed_ports = parse_csv_ports(context.metadata, "sandbox_allowed_ports");
+            sandbox_config.allowed_ports =
+                parse_csv_ports(context.metadata, "sandbox_allowed_ports");
 
             if let Some(raw) = context.metadata.get("sandbox_filesystem") {
                 sandbox_config.filesystem = Some(parse_json_metadata::<VirtualFilesystem>(
@@ -1342,9 +1344,8 @@ impl CapabilityExecutor for SandboxedExecutor {
 }
 
 fn parse_json_metadata<T: DeserializeOwned>(raw: &str, key: &str) -> RuntimeResult<T> {
-    serde_json::from_str(raw).map_err(|e| {
-        RuntimeError::Generic(format!("Failed to parse {} metadata: {}", key, e))
-    })
+    serde_json::from_str(raw)
+        .map_err(|e| RuntimeError::Generic(format!("Failed to parse {} metadata: {}", key, e)))
 }
 
 fn attach_usage(value: Value, metrics: &ResourceMetrics) -> Value {
@@ -1426,8 +1427,8 @@ mod tests {
             "mode": "Ephemeral"
         }"#;
 
-        let fs: VirtualFilesystem = parse_json_metadata(json, "sandbox_filesystem")
-            .expect("filesystem metadata parses");
+        let fs: VirtualFilesystem =
+            parse_json_metadata(json, "sandbox_filesystem").expect("filesystem metadata parses");
 
         assert_eq!(fs.quota_mb, 128);
         assert_eq!(fs.mode, FilesystemMode::Ephemeral);
@@ -1446,8 +1447,8 @@ mod tests {
             "network_egress_bytes": 4096
         }"#;
 
-        let limits: ResourceLimits = parse_json_metadata(json, "sandbox_resources")
-            .expect("resource limits parse");
+        let limits: ResourceLimits =
+            parse_json_metadata(json, "sandbox_resources").expect("resource limits parse");
 
         assert_eq!(limits.cpu_shares, 128);
         assert_eq!(limits.memory_mb, 256);
@@ -1471,7 +1472,10 @@ mod tests {
             Value::Integer(5),
         );
         let mut base_map = HashMap::new();
-        base_map.insert(MapKey::String("usage".to_string()), Value::Map(existing_usage));
+        base_map.insert(
+            MapKey::String("usage".to_string()),
+            Value::Map(existing_usage),
+        );
         base_map.insert(
             MapKey::String("payload".to_string()),
             Value::String("ok".to_string()),

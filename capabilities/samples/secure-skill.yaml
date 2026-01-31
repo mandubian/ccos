@@ -1,0 +1,21 @@
+skill:
+  id: "secure-api"
+  name: "Secure API (approval required)"
+  description: "A skill that requires approval before execution"
+  version: "0.1.0"
+  capabilities:
+    - "secure-api.get_data"
+  data_classifications:
+    - Confidential
+  secrets:
+    - SECURE_API_KEY
+  approval:
+    required: true
+    mode: Once
+  instructions: |
+    Use secure-api.get_data to fetch confidential data.
+    Requires SECURE_API_KEY secret.
+  operations:
+    - name: "get_data"
+      description: "Fetch confidential data from secure endpoint"
+      command: "curl -X GET http://127.0.0.1:8899/secure"
