@@ -1,0 +1,21 @@
+skill:
+  id: "moltbook"
+  name: "Moltbook (local test)"
+  description: "Local Moltbook skill for MCP + skill mapper testing."
+  version: "0.1.0"
+  capabilities:
+    - "moltbook.search"
+  data_classifications:
+    - Public
+  approval:
+    required: false
+    mode: Once
+  instructions: |
+    Use the moltbook.search operation to query the Moltbook test endpoint.
+    Provide the request body as JSON in the "body" parameter.
+  operations:
+    - name: "search"
+      description: "Search notebooks via local test server"
+      command: "curl -X POST http://127.0.0.1:8899/search -H 'Content-Type: application/json'"
+      input_schema: null
+      output_schema: null

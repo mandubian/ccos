@@ -326,6 +326,59 @@ print(json.dumps({"result": "sandbox works!"}))
     }
 }
 
+/// Test ccos.sandbox.python capability registration and execution
+#[tokio::test]
+async fn test_sandbox_python_capability_execution() {
+    use ccos::capabilities::register_sandbox_ops_capabilities;
+    use ccos::capability_marketplace::CapabilityMarketplace;
+    use rtfs::ast::MapKey;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    if !is_process_provider_available() {
+        println!("Skipping test: process provider not available in this environment");
+        return;
+    }
+
+    let registry = Arc::new(RwLock::new(
+        ccos::capabilities::registry::CapabilityRegistry::new(),
+    ));
+    let marketplace = Arc::new(CapabilityMarketplace::new(registry));
+
+    register_sandbox_ops_capabilities(Arc::clone(&marketplace))
+        .await
+        .expect("Sandbox ops registration should succeed");
+
+    let code = r#"import json
+print(json.dumps({"ok": true}))
+"#;
+
+    let mut input_map = std::collections::HashMap::new();
+    input_map.insert(MapKey::String("code".to_string()), Value::String(code.to_string()));
+    input_map.insert(
+        MapKey::String("provider".to_string()),
+        Value::String("process".to_string()),
+    );
+
+    let exec_result = marketplace
+        .execute_capability("ccos.sandbox.python", &Value::Map(input_map))
+        .await;
+
+    match exec_result {
+        Ok(value) => {
+            println!("Sandbox python execution result: {:?}", value);
+        }
+        Err(e) => {
+            let err_msg = format!("{:?}", e);
+            if err_msg.contains("not available") {
+                println!("Skipping: process provider not available in test environment");
+            } else {
+                panic!("Unexpected execution error: {:?}", e);
+            }
+        }
+    }
+}
+
 /// Check if Firecracker is available on the system
 fn is_firecracker_available() -> bool {
     std::process::Command::new("firecracker")

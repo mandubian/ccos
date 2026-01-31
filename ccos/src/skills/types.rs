@@ -19,6 +19,9 @@ pub struct Skill {
     /// Semantic version
     #[serde(default = "default_version")]
     pub version: String,
+    /// Operations defined in this skill
+    #[serde(default)]
+    pub operations: Vec<SkillOperation>,
     /// Required capability IDs that this skill uses
     pub capabilities: Vec<String>,
     /// Effects declared by this skill (union of capability effects)
@@ -30,6 +33,9 @@ pub struct Skill {
     /// Data classification for governance
     #[serde(default)]
     pub data_class: DataClassification,
+    /// Optional list of data classifications (spec-compatible)
+    #[serde(default, alias = "data_classifications")]
+    pub data_classifications: Vec<DataClassification>,
     /// Approval configuration
     #[serde(default)]
     pub approval: ApprovalConfig,
@@ -45,6 +51,25 @@ pub struct Skill {
     /// Additional metadata
     #[serde(default)]
     pub metadata: HashMap<String, String>,
+}
+
+/// An operation defined within a skill
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillOperation {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub runtime: Option<String>,
+    #[serde(default)]
+    pub input_schema: Option<rtfs::ast::TypeExpr>,
+    #[serde(default)]
+    pub output_schema: Option<rtfs::ast::TypeExpr>,
 }
 
 fn default_version() -> String {
@@ -164,10 +189,12 @@ impl Skill {
             name: name.into(),
             description: description.into(),
             version: "1.0.0".to_string(),
+            operations: Vec::new(),
             capabilities,
             effects: Vec::new(),
             secrets: Vec::new(),
             data_class: DataClassification::default(),
+            data_classifications: Vec::new(),
             approval: ApprovalConfig::default(),
             display: DisplayMetadata::default(),
             instructions: instructions.into(),

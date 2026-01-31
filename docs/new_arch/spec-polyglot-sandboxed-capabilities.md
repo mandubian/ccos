@@ -9,6 +9,30 @@ This specification defines how CCOS can execute capabilities written in **any pr
 
 Additionally, this spec introduces **Skills** as a natural-language teaching layer that maps to governed capabilities, enabling easy authoring without sacrificing security.
 
+### Implementation Status (January 2026)
+- `ccos.sandbox.python` is registered as a native wrapper capability that executes Python code
+  via the sandboxed executor (process provider by default).
+- Skill-derived unknown commands are routed to sandboxed capabilities (`runtime: shell`, `provider: process`).
+- Sandboxed execution uses existing `SandboxManager` and `SandboxedExecutor` plumbing; policy
+  metadata can be supplied via `sandbox_*` fields in capability metadata.
+
+### Manual Invocation Example (RTFS)
+
+```clojure
+(call "ccos.sandbox.python"
+  {:code "print(1 + 2)"})
+```
+
+**Expected output shape** (JSON via RTFS values):
+
+```json
+{
+  "stdout": "3\n",
+  "stderr": "",
+  "exit_code": 0
+}
+```
+
 ## 2. Motivation
 
 ### 2.1 The Moltbot Pattern (Unsafe)

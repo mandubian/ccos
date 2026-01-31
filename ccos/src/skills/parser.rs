@@ -3,6 +3,7 @@
 //! Parses skill definitions from YAML files.
 
 use crate::skills::types::Skill;
+use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
@@ -43,7 +44,17 @@ impl From<serde_yaml::Error> for ParseError {
 
 /// Parse a skill from YAML string
 pub fn parse_skill_yaml(yaml: &str) -> Result<Skill, ParseError> {
-    let skill: Skill = serde_yaml::from_str(yaml)?;
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum SkillDocument {
+        Direct(Skill),
+        Wrapped { skill: Skill },
+    }
+
+    let skill: Skill = match serde_yaml::from_str::<SkillDocument>(yaml)? {
+        SkillDocument::Direct(skill) => skill,
+        SkillDocument::Wrapped { skill } => skill,
+    };
     validate_skill(&skill)?;
     Ok(skill)
 }
@@ -152,6 +163,37 @@ examples:
         assert_eq!(skill.examples.len(), 1);
     }
 
+        #[test]
+        fn test_parse_skill_yaml_with_root_skill_key() {
+                let yaml = r#"
+skill:
+    id: search-places
+    name: Search Places
+    description: Search for nearby places
+    version: "1.0.0"
+    capabilities:
+        - google-maps.places.search
+    effects:
+        - network:read
+    secrets:
+        - GOOGLE_MAPS_API_KEY
+    data_class: Public
+    approval:
+        required: false
+        mode: Once
+    display:
+        category: Location
+        visible: true
+    instructions: |
+        Use this skill to search for restaurants, shops, and other places.
+"#;
+
+                let skill = parse_skill_yaml(yaml).unwrap();
+                assert_eq!(skill.id, "search-places");
+                assert_eq!(skill.name, "Search Places");
+                assert_eq!(skill.capabilities.len(), 1);
+        }
+
     #[test]
     fn test_validation_empty_id() {
         let yaml = r#"
@@ -188,4 +230,24 @@ instructions: Test
         let err = result.unwrap_err().to_string();
         assert!(err.contains("capability"), "Error: {}", err);
     }
+
+        #[test]
+        fn test_parse_skill_yaml_with_data_classifications() {
+                let yaml = r#"
+id: data-class-test
+name: Data Class Test
+description: Test data_classifications list
+version: "1.0.0"
+capabilities:
+    - test.cap
+data_classifications:
+    - PII
+    - Confidential
+instructions: Test
+"#;
+
+                let skill = parse_skill_yaml(yaml).unwrap();
+                assert_eq!(skill.id, "data-class-test");
+                assert_eq!(skill.data_classifications.len(), 2);
+        }
 }

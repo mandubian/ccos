@@ -23,6 +23,7 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc;
 use tokio::task::LocalSet;
+use reqwest::Client;
 
 use ccos::ccos_eprintln;
 use ccos::examples_common::builder::ModularPlannerBuilder;
@@ -37,6 +38,7 @@ use ccos::tui::{
         BudgetApprovalEntry, CapabilityCategory, CapabilityResolution, CapabilitySource, DecompNode,
         DiscoverPopup, DiscoveredCapability, DiscoveryEntry, ExecutionMode, LlmInteraction,
         NodeStatus, PendingServerEntry, ServerInfo, ServerStatus, TraceEventType, View,
+        ChatAuditEntry,
     },
 };
 use ccos::ops::introspection_service::IntrospectionService;
@@ -217,6 +219,13 @@ enum TuiEvent {
     /// Popup closed
     #[allow(dead_code)]
     PopupClosed,
+
+    /// Chat audit loading
+    ChatAuditLoading,
+    /// Chat audit loaded
+    ChatAuditLoaded(Vec<ChatAuditEntry>),
+    /// Chat audit error
+    ChatAuditError(String),
 
     // =========================================
     // Approvals Events
@@ -880,6 +889,23 @@ fn process_tui_event(
             );
             state.approvals_loading = false;
         }
+        TuiEvent::ChatAuditLoading => {
+            state.chat_audit_loading = true;
+        }
+        TuiEvent::ChatAuditLoaded(entries) => {
+            state.chat_audit_loading = false;
+            state.chat_audit_entries = entries.into_iter().collect();
+            state.chat_audit_selected = 0;
+            state.chat_audit_last_refresh = Some(Instant::now());
+        }
+        TuiEvent::ChatAuditError(error) => {
+            state.chat_audit_loading = false;
+            state.add_trace(
+                TraceEventType::Error,
+                format!("Chat audit error: {}", error),
+                None,
+            );
+        }
     }
 }
 
@@ -921,6 +947,7 @@ async fn handle_key_event(
             View::Discover => ActivePanel::DiscoverList,
             View::Servers => ActivePanel::ServersList,
             View::Approvals => ActivePanel::ApprovalsPendingList,
+            View::ChatAudit => ActivePanel::ChatAuditList,
             View::Plans | View::Execute | View::Config => ActivePanel::GoalInput,
         }
     }
@@ -947,6 +974,7 @@ async fn handle_key_event(
                     | ActivePanel::ApprovalsApprovedList
                     | ActivePanel::ApprovalsDetails
             ),
+            View::ChatAudit => matches!(panel, ActivePanel::ChatAuditList),
             View::Plans | View::Execute | View::Config => true,
         }
     }
@@ -985,6 +1013,7 @@ async fn handle_key_event(
                 ActivePanel::ApprovalsDetails => ActivePanel::ApprovalsPendingList,
                 _ => ActivePanel::ApprovalsPendingList,
             },
+            View::ChatAudit => ActivePanel::ChatAuditList,
             View::Plans | View::Execute | View::Config => panel,
         }
     }
@@ -1023,6 +1052,7 @@ async fn handle_key_event(
                 ActivePanel::ApprovalsDetails => ActivePanel::ApprovalsApprovedList,
                 _ => ActivePanel::ApprovalsPendingList,
             },
+            View::ChatAudit => ActivePanel::ChatAuditList,
             View::Plans | View::Execute | View::Config => panel,
         }
     }
@@ -1129,6 +1159,14 @@ async fn handle_key_event(
             state.active_panel = ActivePanel::GoalInput; // Config view not yet implemented
             return;
         }
+        (KeyCode::Char('8'), _) if allow_view_switch => {
+            state.current_view = View::ChatAudit;
+            state.active_panel = ActivePanel::ChatAuditList;
+            if state.chat_audit_entries.is_empty() && !state.chat_audit_loading {
+                load_chat_audit_async(event_tx.clone(), state.chat_audit_endpoint.clone());
+            }
+            return;
+        }
         (KeyCode::Tab, KeyModifiers::NONE) => {
             state.active_panel = next_panel_in_view(state.active_panel, state.current_view);
             return;
@@ -1165,6 +1203,31 @@ async fn handle_key_event(
                 ActivePanel::LlmInspector => handle_llm_inspector(state, key),
                 _ => handle_goal_input(state, key, event_tx),
             }
+        }
+        View::ChatAudit => {
+            handle_chat_audit_view(state, key, event_tx);
+        }
+        _ => {}
+    }
+}
+
+fn handle_chat_audit_view(
+    state: &mut AppState,
+    key: event::KeyEvent,
+    event_tx: mpsc::UnboundedSender<TuiEvent>,
+) {
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.chat_audit_selected = state.chat_audit_selected.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !state.chat_audit_entries.is_empty() {
+                state.chat_audit_selected = (state.chat_audit_selected + 1)
+                    .min(state.chat_audit_entries.len().saturating_sub(1));
+            }
+        }
+        KeyCode::Char('r') => {
+            load_chat_audit_async(event_tx, state.chat_audit_endpoint.clone());
         }
         _ => {}
     }
@@ -3825,6 +3888,101 @@ fn load_servers_async(event_tx: mpsc::UnboundedSender<TuiEvent>) {
         }
 
         let _ = event_tx.send(TuiEvent::ServersLoaded(servers));
+    });
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ChatAuditResponse {
+    events: Vec<ChatAuditEvent>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ChatAuditEvent {
+    timestamp: u64,
+    event_type: String,
+    function_name: Option<String>,
+    session_id: Option<String>,
+    run_id: Option<String>,
+    step_id: Option<String>,
+    rule_id: Option<String>,
+    decision: Option<String>,
+    gate: Option<String>,
+    message_id: Option<String>,
+    payload_classification: Option<String>,
+}
+
+fn load_chat_audit_async(event_tx: mpsc::UnboundedSender<TuiEvent>, endpoint: String) {
+    let _ = event_tx.send(TuiEvent::ChatAuditLoading);
+
+    tokio::task::spawn_local(async move {
+        let client = Client::new();
+        let url = format!("{}?limit=200", endpoint.trim_end_matches('/'));
+        let resp = client.get(url).send().await;
+        let result = match resp {
+            Ok(resp) => resp
+                .json::<ChatAuditResponse>()
+                .await
+                .map_err(|e| format!("Failed to parse response: {}", e)),
+            Err(e) => Err(format!("Request failed: {}", e)),
+        };
+
+        match result {
+            Ok(payload) => {
+                let mut entries = Vec::new();
+                for event in payload.events {
+                    let mut details = Vec::new();
+                    if let Some(session_id) = event.session_id.clone() {
+                        details.push(("session_id".to_string(), session_id));
+                    }
+                    if let Some(run_id) = event.run_id.clone() {
+                        details.push(("run_id".to_string(), run_id));
+                    }
+                    if let Some(step_id) = event.step_id.clone() {
+                        details.push(("step_id".to_string(), step_id));
+                    }
+                    if let Some(rule_id) = event.rule_id.clone() {
+                        details.push(("rule_id".to_string(), rule_id));
+                    }
+                    if let Some(decision) = event.decision.clone() {
+                        details.push(("decision".to_string(), decision));
+                    }
+                    if let Some(gate) = event.gate.clone() {
+                        details.push(("gate".to_string(), gate));
+                    }
+                    if let Some(message_id) = event.message_id.clone() {
+                        details.push(("message_id".to_string(), message_id));
+                    }
+                    if let Some(payload_classification) = event.payload_classification.clone() {
+                        details.push((
+                            "payload_classification".to_string(),
+                            payload_classification,
+                        ));
+                    }
+                    if let Some(function_name) = event.function_name.clone() {
+                        details.push(("function_name".to_string(), function_name));
+                    }
+
+                    let summary = event
+                        .decision
+                        .clone()
+                        .or(event.rule_id.clone())
+                        .or(event.message_id.clone())
+                        .unwrap_or_else(|| "event".to_string());
+
+                    entries.push(ChatAuditEntry {
+                        timestamp: event.timestamp,
+                        event_type: event.event_type,
+                        summary,
+                        details,
+                    });
+                }
+
+                let _ = event_tx.send(TuiEvent::ChatAuditLoaded(entries));
+            }
+            Err(err) => {
+                let _ = event_tx.send(TuiEvent::ChatAuditError(err));
+            }
+        }
     });
 }
 

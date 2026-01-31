@@ -128,6 +128,7 @@ fn render_nav_menu(f: &mut Frame, state: &mut AppState, area: Rect) {
         (View::Plans, "Plan", "5"),
         (View::Execute, "Execute", "6"),
         (View::Config, "Config", "7"),
+        (View::ChatAudit, "ChatAudit", "8"),
     ];
 
     let items: Vec<ListItem> = views
@@ -194,6 +195,9 @@ fn render_view_content(f: &mut Frame, state: &mut AppState, area: Rect) {
         }
         View::Config => {
             render_placeholder_view(f, View::Config, area);
+        }
+        View::ChatAudit => {
+            render_chat_audit_view(f, state, area);
         }
     }
 }
@@ -1388,6 +1392,92 @@ fn render_discover_view(f: &mut Frame, state: &mut AppState, area: Rect) {
 
     render_capability_list(f, state, cols[0]);
     render_capability_details(f, state, cols[1]);
+}
+
+// ---------------------------------------------------------------------
+// Chat Audit View
+// ---------------------------------------------------------------------
+
+fn render_chat_audit_view(f: &mut Frame, state: &mut AppState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(area);
+
+    render_chat_audit_list(f, state, chunks[0]);
+    render_chat_audit_details(f, state, chunks[1]);
+}
+
+fn render_chat_audit_list(f: &mut Frame, state: &mut AppState, area: Rect) {
+    let is_active = state.active_panel == ActivePanel::ChatAuditList;
+    let border_color = if is_active {
+        theme::PANEL_BORDER_ACTIVE
+    } else {
+        theme::PANEL_BORDER
+    };
+
+    let title = if state.chat_audit_loading {
+        format!("Chat Audit [{} loading]", state.spinner_icon())
+    } else {
+        "Chat Audit".to_string()
+    };
+
+    let items: Vec<ListItem> = state
+        .chat_audit_entries
+        .iter()
+        .map(|entry| {
+            let line = format!("{} │ {}", entry.event_type, entry.summary);
+            ListItem::new(Line::from(vec![Span::raw(line)]))
+        })
+        .collect();
+
+    let mut list_state = ListState::default();
+    if !state.chat_audit_entries.is_empty() {
+        list_state.select(Some(state.chat_audit_selected.min(state.chat_audit_entries.len() - 1)));
+    }
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color)),
+        )
+        .highlight_style(Style::default().fg(theme::GREEN).add_modifier(Modifier::BOLD));
+
+    f.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn render_chat_audit_details(f: &mut Frame, state: &mut AppState, area: Rect) {
+    let border_color = theme::PANEL_BORDER;
+    let block = Block::default()
+        .title("Details")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(entry) = state.chat_audit_entries.get(state.chat_audit_selected) {
+        lines.push(Line::from(vec![
+            Span::styled("Event: ", Style::default().fg(theme::SUBTEXT1)),
+            Span::raw(entry.event_type.clone()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Summary: ", Style::default().fg(theme::SUBTEXT1)),
+            Span::raw(entry.summary.clone()),
+        ]));
+
+        for (k, v) in &entry.details {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}: ", k), Style::default().fg(theme::SUBTEXT1)),
+                Span::raw(v.clone()),
+            ]));
+        }
+    } else {
+        lines.push(Line::from(Span::raw("No chat audit events loaded.")));
+    }
+
+    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+    f.render_widget(paragraph, area);
 }
 
 fn render_discover_input(f: &mut Frame, state: &mut AppState, area: Rect) {

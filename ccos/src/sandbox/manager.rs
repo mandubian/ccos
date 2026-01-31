@@ -12,9 +12,9 @@ use rtfs::runtime::microvm::{
 use rtfs::runtime::values::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use uuid::Uuid;
-use url::Url;
 use std::time::Duration;
+use url::Url;
+use uuid::Uuid;
 
 pub struct SandboxManager {
     runtimes: HashMap<SandboxRuntimeType, Arc<dyn SandboxRuntime>>,
@@ -23,8 +23,7 @@ pub struct SandboxManager {
 
 impl SandboxManager {
     pub fn new() -> Self {
-        let microvm_runtime: Arc<dyn SandboxRuntime> =
-            Arc::new(MicroVMSandboxRuntime::new());
+        let microvm_runtime: Arc<dyn SandboxRuntime> = Arc::new(MicroVMSandboxRuntime::new());
         let mut runtimes = HashMap::new();
         runtimes.insert(SandboxRuntimeType::MicroVM, microvm_runtime);
 
@@ -86,11 +85,11 @@ impl SandboxManager {
             .runtimes
             .get(&config_for_runtime.runtime_type)
             .ok_or_else(|| {
-            RuntimeError::Generic(format!(
-                "Sandbox runtime {:?} not available",
-                config_for_runtime.runtime_type
-            ))
-        })?;
+                RuntimeError::Generic(format!(
+                    "Sandbox runtime {:?} not available",
+                    config_for_runtime.runtime_type
+                ))
+            })?;
 
         runtime.execute(&config_for_runtime, program, inputs).await
     }
@@ -114,9 +113,9 @@ impl SandboxManager {
         let parsed = Url::parse(&url_str).map_err(|e| {
             RuntimeError::Generic(format!("Failed to parse URL for port check: {}", e))
         })?;
-        let port = parsed.port_or_known_default().ok_or_else(|| {
-            RuntimeError::Generic("No port available for URL".to_string())
-        })?;
+        let port = parsed
+            .port_or_known_default()
+            .ok_or_else(|| RuntimeError::Generic("No port available for URL".to_string()))?;
 
         if config.allowed_ports.contains(&port) {
             Ok(())
@@ -147,9 +146,9 @@ impl SandboxManager {
         let parsed = Url::parse(&url_str).map_err(|e| {
             RuntimeError::Generic(format!("Failed to parse URL for host check: {}", e))
         })?;
-        let host = parsed.host_str().ok_or_else(|| {
-            RuntimeError::Generic("No host available for URL".to_string())
-        })?;
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| RuntimeError::Generic("No host available for URL".to_string()))?;
 
         if config.allowed_hosts.contains(host) {
             Ok(())
@@ -219,7 +218,7 @@ impl MicroVMSandboxRuntime {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl SandboxRuntime for MicroVMSandboxRuntime {
     fn name(&self) -> &str {
         "microvm"
@@ -232,10 +231,7 @@ impl SandboxRuntime for MicroVMSandboxRuntime {
         inputs: Vec<Value>,
     ) -> RuntimeResult<ExecutionResult> {
         let mut factory = self.factory.lock().map_err(|e| {
-            RuntimeError::Generic(format!(
-                "SandboxedExecutor factory mutex poisoned: {}",
-                e
-            ))
+            RuntimeError::Generic(format!("SandboxedExecutor factory mutex poisoned: {}", e))
         })?;
         let provider_name = config.provider.as_deref().unwrap_or("process");
 
@@ -280,7 +276,8 @@ impl SandboxRuntime for MicroVMSandboxRuntime {
             paths.extend(read_only_paths);
             vm_config.fs_policy = rtfs::runtime::microvm::FileSystemPolicy::ReadWrite(paths);
         } else if !read_only_paths.is_empty() {
-            vm_config.fs_policy = rtfs::runtime::microvm::FileSystemPolicy::ReadOnly(read_only_paths);
+            vm_config.fs_policy =
+                rtfs::runtime::microvm::FileSystemPolicy::ReadOnly(read_only_paths);
         }
 
         if let Some(resources) = config.resources.as_ref() {

@@ -29,6 +29,7 @@ pub enum View {
     Plans,     // Browse/manage saved plans (future)
     Execute,   // Live execution monitoring (future)
     Config,    // Configuration (future)
+    ChatAudit, // Chat audit trail
 }
 
 impl View {
@@ -41,6 +42,7 @@ impl View {
             Self::Plans => "Plan",
             Self::Execute => "Execute",
             Self::Config => "Config",
+            Self::ChatAudit => "ChatAudit",
         }
     }
 
@@ -53,6 +55,7 @@ impl View {
             Self::Plans => '5',
             Self::Execute => '6',
             Self::Config => '7',
+            Self::ChatAudit => '8',
         }
     }
 
@@ -65,13 +68,14 @@ impl View {
             View::Plans,
             View::Execute,
             View::Config,
+            View::ChatAudit,
         ]
     }
 
     pub fn is_implemented(&self) -> bool {
         matches!(
             self,
-            Self::Goals | Self::Servers | Self::Discover | Self::Approvals
+            Self::Goals | Self::Servers | Self::Discover | Self::Approvals | Self::ChatAudit
         )
     }
 }
@@ -102,6 +106,9 @@ pub enum ActivePanel {
     ApprovalsDetails,
     ApprovalsBudgetList,
     ApprovalsBudgetDetails,
+
+    // Chat Audit View Panels
+    ChatAuditList,
 }
 
 impl ActivePanel {
@@ -130,6 +137,9 @@ impl ActivePanel {
             Self::ApprovalsDetails => Self::ApprovalsBudgetList,
             Self::ApprovalsBudgetList => Self::ApprovalsBudgetDetails,
             Self::ApprovalsBudgetDetails => Self::ApprovalsPendingList,
+
+            // Chat Audit View Navigation
+            Self::ChatAuditList => Self::ChatAuditList,
         }
     }
 
@@ -158,6 +168,9 @@ impl ActivePanel {
             Self::ApprovalsDetails => Self::ApprovalsApprovedList,
             Self::ApprovalsBudgetList => Self::ApprovalsDetails,
             Self::ApprovalsBudgetDetails => Self::ApprovalsBudgetList,
+
+            // Chat Audit View Navigation
+            Self::ChatAuditList => Self::ChatAuditList,
         }
     }
 }
@@ -292,6 +305,15 @@ pub struct TraceEntry {
     pub event_type: TraceEventType,
     pub message: String,
     pub details: Option<String>,
+}
+
+/// A chat audit entry for the Chat Audit view
+#[derive(Debug, Clone)]
+pub struct ChatAuditEntry {
+    pub timestamp: u64,
+    pub event_type: String,
+    pub summary: String,
+    pub details: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -528,6 +550,15 @@ pub struct AppState {
     pub approvals_details_scroll: usize,
     pub approvals_tab: ApprovalsTab, // Which tab is active (Pending or Approved)
     pub auth_token_popup: Option<AuthTokenPopup>, // Popup for entering auth token
+
+    // =========================================
+    // Chat Audit View State
+    // =========================================
+    pub chat_audit_entries: VecDeque<ChatAuditEntry>,
+    pub chat_audit_selected: usize,
+    pub chat_audit_loading: bool,
+    pub chat_audit_last_refresh: Option<Instant>,
+    pub chat_audit_endpoint: String,
 }
 
 /// A discovered capability for the Discover view
@@ -708,6 +739,13 @@ impl Default for AppState {
             approvals_details_scroll: 0,
             approvals_tab: ApprovalsTab::Pending,
             auth_token_popup: None,
+
+            // Chat Audit View
+            chat_audit_entries: VecDeque::with_capacity(MAX_EVENTS),
+            chat_audit_selected: 0,
+            chat_audit_loading: false,
+            chat_audit_last_refresh: None,
+            chat_audit_endpoint: "http://127.0.0.1:8822/chat/audit".to_string(),
         }
     }
 }

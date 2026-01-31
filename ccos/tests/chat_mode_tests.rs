@@ -15,7 +15,7 @@ use ccos::chat::{
     approve_request, attach_label, extract_label, filter_mcp_tool_result,
     record_chat_audit_event, register_chat_capabilities, request_chat_policy_exception,
     request_chat_public_declassification, strip_ccos_meta, ChatDataLabel,
-    InMemoryQuarantineStore,
+    InMemoryQuarantineStore, QuarantineStore,
 };
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::values::Value;
@@ -59,7 +59,9 @@ fn test_label_join_with_field_labels() {
 #[test]
 fn test_quarantine_store_ttl_expires() {
     let store = InMemoryQuarantineStore::new();
-    let id = store.put_bytes(vec![1, 2, 3], Duration::milliseconds(1));
+    let id = store
+        .put_bytes(vec![1, 2, 3], Duration::milliseconds(1))
+        .expect("put bytes");
     sleep(StdDuration::from_millis(5));
     let result = store.get_bytes(&id);
     assert!(result.is_err());
@@ -70,7 +72,7 @@ async fn test_prepare_outbound_and_redacted_approval() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = CapabilityMarketplace::new(registry);
     let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
-    let quarantine = Arc::new(InMemoryQuarantineStore::new());
+        let quarantine = Arc::new(InMemoryQuarantineStore::new()) as Arc<dyn QuarantineStore>;
 
     let dir = tempdir().expect("tempdir");
     let storage = FileApprovalStorage::new(dir.path().join("approvals")).expect("storage");
@@ -184,7 +186,7 @@ async fn test_verify_redaction_requires_approval() {
     let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
     let marketplace = CapabilityMarketplace::new(registry);
     let chain = Arc::new(Mutex::new(CausalChain::new().expect("chain")));
-    let quarantine = Arc::new(InMemoryQuarantineStore::new());
+    let quarantine = Arc::new(InMemoryQuarantineStore::new()) as Arc<dyn QuarantineStore>;
 
     let dir = tempdir().expect("tempdir");
     let storage = FileApprovalStorage::new(dir.path().join("approvals")).expect("storage");

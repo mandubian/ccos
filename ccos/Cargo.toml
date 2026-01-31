@@ -67,6 +67,7 @@ yansi = "1.0"
 # Caching dependencies
 rand = "0.8"
 dashmap = "5.5"
+chacha20poly1305 = "0.10"
 
 # TUI/CLI dependencies
 ratatui = { version = "0.26", optional = true }
@@ -93,6 +94,11 @@ cuda = []
 [[bin]]
 name = "ccos"
 path = "src/bin/ccos.rs"
+
+[[bin]]
+name = "ccos-chat-gateway"
+path = "src/bin/ccos-chat-gateway.rs"
+required-features = ["server"]
 
 [[bin]]
 name = "rtfs-ccos-repl"
