@@ -189,6 +189,7 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
     let mut description = String::new();
     let mut operations = Vec::new();
     let mut instructions = String::new();
+    let mut secrets = Vec::new();
 
     let mut in_code_block = false;
     let mut code_block_content = String::new();
@@ -238,10 +239,29 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
         } else if let Some(heading) = trimmed.strip_prefix("## ") {
             current_section = slugify(heading);
             current_section_text.clear();
+        } else if let Some(heading) = trimmed.strip_prefix("### ") {
+            current_section = slugify(heading);
+            current_section_text.clear();
         } else if !trimmed.is_empty() {
             // Add to description or instructions based on context
             if current_section.is_empty() && description.is_empty() {
                 description = trimmed.to_string();
+            } else if current_section == "authentication" || current_section == "secrets" {
+                // Extract potential secret names from backticks or uppercase words
+                for word in trimmed.split_whitespace() {
+                    let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
+                    if word
+                        .chars()
+                        .all(|c| c.is_uppercase() || c.is_numeric() || c == '_')
+                        && word.len() > 3
+                    {
+                        if !secrets.contains(&word.to_string()) {
+                            secrets.push(word.to_string());
+                        }
+                    }
+                }
+                instructions.push_str(trimmed);
+                instructions.push('\n');
             } else {
                 instructions.push_str(trimmed);
                 instructions.push('\n');
@@ -281,6 +301,9 @@ fn extract_endpoint_from_curl(code: &str) -> Option<String> {
         if part.starts_with("http://") || part.starts_with("https://") {
             return Some(part.trim_matches('"').trim_matches('\'').to_string());
         }
+        if part.starts_with('/') {
+            return Some(part.to_string());
+        }
     }
     None
 }
@@ -291,6 +314,18 @@ fn extract_method_from_curl(code: &str) -> Option<String> {
         if (parts[i] == "-X" || parts[i] == "--request") && i + 1 < parts.len() {
             return Some(parts[i + 1].to_string());
         }
+    }
+    if code.starts_with("GET ") {
+        return Some("GET".to_string());
+    }
+    if code.starts_with("POST ") {
+        return Some("POST".to_string());
+    }
+    if code.starts_with("PUT ") {
+        return Some("PUT".to_string());
+    }
+    if code.starts_with("DELETE ") {
+        return Some("DELETE".to_string());
     }
     if code.contains("curl ") {
         return Some("GET".to_string());
@@ -314,7 +349,13 @@ fn extract_capability_from_code(code: &str) -> Option<String> {
     let trimmed = code.trim();
 
     // curl commands → http-fetch
-    if trimmed.starts_with("curl ") || trimmed.contains("curl -") {
+    if trimmed.starts_with("curl ")
+        || trimmed.contains("curl -")
+        || trimmed.starts_with("GET /")
+        || trimmed.starts_with("POST /")
+        || trimmed.starts_with("PUT /")
+        || trimmed.starts_with("DELETE /")
+    {
         return Some("ccos.network.http-fetch".to_string());
     }
 
@@ -401,6 +442,37 @@ curl -X POST https://api.moltbook.com/search \
         let skill = parse_skill_markdown(markdown).unwrap();
         assert_eq!(skill.id, "moltbook-search");
         assert_eq!(skill.name, "Moltbook Search");
+        assert!(skill
+            .capabilities
+            .contains(&"ccos.network.http-fetch".to_string()));
+    }
+
+    #[test]
+    fn test_parse_markdown_skill_moltbook() {
+        let markdown = r#"# Moltbook Agent Skill
+
+## Operations
+
+### Register Agent
+```
+POST /api/register-agent
+Body: { "name": "agent-name", "model": "claude-3" }
+Returns: { "agent_id": "...", "secret": "..." }
+```
+
+### Human Claim
+```
+POST /api/human-claim
+Headers: Authorization: Bearer {agent_secret}
+Body: { "human_x_username": "@human_handle" }
+```
+"#;
+
+        let skill = parse_skill_markdown(markdown).unwrap();
+        assert_eq!(skill.id, "moltbook-agent-skill");
+        assert_eq!(skill.operations.len(), 2);
+        assert_eq!(skill.operations[0].name, "register-agent");
+        assert_eq!(skill.operations[1].name, "human-claim");
         assert!(skill
             .capabilities
             .contains(&"ccos.network.http-fetch".to_string()));

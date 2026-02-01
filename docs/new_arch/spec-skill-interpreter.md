@@ -425,29 +425,18 @@ Skills loaded through chat mode inherit chat gateway policies:
 
 ## Implementation Status (January 2026)
 
-### Implemented
-- Skill parsing supports YAML (including root `skill:` wrapper), Markdown, and JSON.
-- `data_classifications` list is accepted in YAML alongside `data_class`.
-- RTFS capabilities registered in marketplace:
-  - `ccos.skill.load`
-  - `ccos.skill.execute`
-  - `ccos.primitive.map`
-- Primitive mapping includes `curl` → `ccos.network.http-fetch`, `jq` → `ccos.json.parse`.
-- Pipeline handling for `curl | jq` is supported via a native wrapper that calls
-  `ccos.network.http-fetch` then `ccos.json.parse`.
-- Unknown commands are routed to a sandboxed capability (`runtime: shell`, `provider: process`).
-- Approval requests are created for:
-  - secrets required by a skill (`SecretRequired` approvals)
-  - skills marked `approval.required` (`EffectApproval`)
-  - unknown tools routed to sandbox (`EffectApproval` with `sandbox` effect)
-- When the caller passes a `body` parameter that is an object/array, it is automatically
-  serialized to a JSON string before being passed to `ccos.network.http-fetch`.
-- **Approval enforcement**: Skills/capabilities with pending `EffectApproval` or `SecretRequired`
-  approvals are blocked from execution until approval is granted.
-- **Secret injection**: When a skill declares secrets, they are automatically injected into
-  HTTP request headers (Authorization Bearer or X-API-Key) from `SecretStore`.
+- [x] Skill parsing supports YAML, Markdown (with `###` naming), and JSON.
+- [x] `data_classifications` list is accepted.
+- [x] Capabilities `ccos.skill.load`, `ccos.skill.execute`, `ccos.primitive.map` registered.
+- [x] Primitive mapping (`curl` -> `http-fetch`) and Secret Injection (`Authorization` header) implemented and verified.
+- [x] Unknown commands routed to sandboxed capability (but see *Shadow Execution Risk* below).
+- [x] Approval enforcement and Secret Injection working end-to-end.
+
+### Critical Finding: Shadow Execution Risk
+The Moltbook onboarding demo revealed that an agent running outside a sandbox (e.g., in an IDE) can bypass the Skill Interpreter entirely by executing direct shell commands (`curl`).
+*   **Fix**: Integration with WS9 (Jailed Agent Runtime) is mandatory to force usage of this interpreter.
 
 ### Not Yet Implemented
-- Rich pipeline chaining beyond `curl | jq` (multi-step pipelines).
-- Automatic creation of sandbox policies from skill definitions (egress/FS/resource limits).
-- Agent planning loop integration (`ccos.agent.use_skill` high-level capability).
+- Rich pipeline chaining beyond basic pipes.
+- Automatic creation of sandbox policies from skill definitions.
+- Agent planning loop integration.

@@ -676,6 +676,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         skill_mapper.clone(),
     );
 
+    // Register Skill Onboarding capabilities (requires approval_queue, working_memory, secret_store)
+    let secret_store = Arc::new(StdMutex::new(
+        SecretStore::new(Some(get_workspace_root()))
+            .unwrap_or_else(|_| SecretStore::new(None).expect("Failed to create SecretStore"))
+    ));
+    
+    // Extract WorkingMemory from AgentMemory
+    let working_memory_for_onboarding = {
+        let am = agent_memory.read().await;
+        // Access the working_memory field through a getter or make it accessible
+        // For now, we'll create a new one - in production this should share the same instance
+        Arc::new(StdMutex::new(WorkingMemory::new(Box::new(InMemoryJsonlBackend::new(None, None, None)))))
+    };
+
+    if let Err(e) = ccos::skills::onboarding_capabilities::register_onboarding_capabilities(
+        marketplace.clone(),
+        secret_store,
+        working_memory_for_onboarding,
+        Arc::new(approval_queue.clone()),
+    ).await
+    {
+        eprintln!(
+            "[ccos-mcp] Warning: failed to register onboarding capabilities: {}",
+            e
+        );
+    }
+
     if args.verbose {
         eprintln!("[ccos-mcp] Registered {} tools", server.tool_count());
     }
@@ -1626,7 +1653,7 @@ fn register_ccos_tools(
     register_ecosystem_tool(
         server,
         marketplace.clone(),
-        "ccos.primitive.map",
+        "ccos-primitive-map",
         "Map a shell command (curl, python, etc.) to a CCOS capability",
         json!({
             "type": "object",
@@ -3285,6 +3312,12 @@ fn register_ccos_tools(
                         ccos::approval::types::ApprovalCategory::ChatPublicDeclassification { session_id, run_id, transform_capability_id, verifier_capability_id, constraints } => {
                             json!({ "type": "ChatPublicDeclassification", "session_id": session_id, "run_id": run_id, "transform_capability_id": transform_capability_id, "verifier_capability_id": verifier_capability_id, "constraints": constraints })
                         }
+                        ccos::approval::types::ApprovalCategory::SecretWrite { key, scope, skill_id, description } => {
+                            json!({ "type": "SecretWrite", "key": key, "scope": scope, "skill_id": skill_id, "description": description })
+                        }
+                        ccos::approval::types::ApprovalCategory::HumanActionRequest { action_type, title, instructions, skill_id, step_id, .. } => {
+                            json!({ "type": "HumanActionRequest", "action_type": action_type, "title": title, "skill_id": skill_id, "step_id": step_id })
+                        }
                     };
 
                     json!({
@@ -3354,6 +3387,8 @@ fn register_ccos_tools(
                     ccos::approval::types::ApprovalCategory::BudgetExtension { .. } => "BudgetExtension",
                     ccos::approval::types::ApprovalCategory::ChatPolicyException { .. } => "ChatPolicyException",
                     ccos::approval::types::ApprovalCategory::ChatPublicDeclassification { .. } => "ChatPublicDeclassification",
+                    ccos::approval::types::ApprovalCategory::SecretWrite { .. } => "SecretWrite",
+                    ccos::approval::types::ApprovalCategory::HumanActionRequest { .. } => "HumanActionRequest",
                 };
 
                 Ok(json!({
