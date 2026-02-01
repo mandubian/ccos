@@ -20,6 +20,7 @@ This roadmap focuses on what CCOS is missing to provide “chat-to-local-agent�
 - **Edge enforcement**: governance and data policy must be enforced at the gateway/adapter boundary, not left to an external “brain”.
 - **Loopback-first**: gateway binds to loopback by default; non-loopback requires explicit token + policy + audit.
 - **Resource budget governance**: agents must declare and respect resource budgets; exceeding budget triggers stop or approval flow, never silent continuation.
+- **Defense in Depth (Runtime Jailing)**: The agent process itself must be sandboxed (jailed) to prevent "Shadow Execution" (bypassing governance via side channels like local shell/curl). Governance must be physical, not just logical.
 
 ## Completion Contract (How “Autonomous” Runs End)
 Moltbot-style gateways can feel “autonomous” because the daemon stays up and keeps reacting to events, but each **run** must have explicit stop conditions. For CCOS chat gateway, completion must be **first-class, explicit, and governed**.
@@ -169,7 +170,8 @@ Every budget event is logged to the causal chain:
 ## Roadmap Overview (Workstreams)
 To ship “Moltbot-like services” securely, CCOS needs product/ops layers around the existing core:
 
-- **WS1 Gateway/Daemon**: long-running service, routing, ops, health.
+- **WS1 Gateway/Daemon (Router)**: Trusted, long-running service. Handles auth, rate limiting, channel protocols (Slack/Discord), and routing. NOT jailed.
+- **WSXX Agent Runtime (Jailed Worker)**: Ephemeral or persistent worker processes where the "Agent" reasoning loop lives. MUST be jailed (sandbox/microVM) to prevent egress bypass.
 - **WS2 Channel Connectors**: adapters for chat networks + normalization.
 - **WS3 Data Protection**: classification, quarantine, redaction, safe exports.
 - **WS4 Approvals + Secrets**: secret vault + approval UX + policy diffs.
@@ -177,7 +179,9 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
 - **WS6 Packaging/Distribution**: signed bundles for “skills/capabilities”.
 - **WS7 Remote Nodes/Pairing**: secure pairing + scoped remote surfaces.
 - **WS8 Observability**: metrics/logging/tracing for runs, denials, costs.
-- **WS9 Polyglot Sandboxed Capabilities** ✅: execute Python/JS/Go capabilities in microVMs with GK-proxied effects. See [Polyglot Sandboxed Capabilities Spec](./spec-polyglot-sandboxed-capabilities.md) and [Implementation Plan](./impl-ws9-polyglot-sandboxed-capabilities.md).
+- **WS9 Polyglot Sandboxed Capabilities & Agent Runtime** ✅: 
+  - Execute Python/JS/Go capabilities in isolated microVMs/containers.
+  - **Critical**: Provide a "Jailed Agent Runtime" where the agent itself runs without shell/network access, forcing all interaction through the governed Capability Socket.
 - **WS10 Skills Layer** ✅: natural-language teaching docs that map to governed capabilities. *(Implemented as part of WS9 Phase 4)*
 - **WS11 Resource Budget Governance** ✅: upfront estimation, enforcement, warning thresholds, human escalation for all agent runs.
 - **WS12 Governed Memory**: working memory + long-term memory with PII classification, storage quotas, and governed read/write (not raw workspace files).
@@ -243,7 +247,7 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
 ## Phase 1 — MVP: Local Gateway + One Connector + Minimal Control Surface
 **Goal**: a usable, safe local service that can be driven by an external agent (or later, an internal one).
 
-### WS1 Gateway/Daemon (MVP)
+### WS1 Gateway/Daemon (The "Sheriff")
 - **D1.1**: single binary “gateway” mode with:
   - loopback-only HTTP/WebSocket control plane
   - persistent config + runtime state
@@ -394,6 +398,7 @@ The following are important but **not blocking for Phase 0-2**:
 - Implicit secret leakage to external agents or logs.
 
 ## Key Risks / Watch Items
+- **Shadow Execution / Side-Channel Attacks**: As seen in the Moltbook demo, an unjailed agent can bypass CCOS governance (e.g., using `curl` directly). WS9's "Agent Runtime Jailing" is the critical defense against this.
 - **Interactive-mode governance gap**: `docs/ccos/specs/007-mcp-server-interactive-mode.md` notes governance is often bypassed in MCP mode; for chat gateway, governance must be **enforced**, not voluntary.
 - **Data classification correctness**: mislabeling PII as safe is catastrophic; start conservative and require explicit downgrades.
 - **Attachment pipeline**: media parsing is a large attack surface; keep it sandboxed (`docs/ccos/specs/022-sandbox-isolation.md`).

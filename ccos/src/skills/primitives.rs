@@ -71,7 +71,13 @@ impl PrimitiveMapper {
         let first_word = trimmed.split_whitespace().next()?;
 
         // Look up mapping
-        let capability_id = self.mappings.get(first_word)?;
+        let capability_id = match self.mappings.get(first_word) {
+            Some(id) => id.to_string(),
+            None if matches!(first_word, "GET" | "POST" | "PUT" | "DELETE") => {
+                "ccos.network.http-fetch".to_string()
+            }
+            None => return None,
+        };
 
         // Extract parameters based on command type
         let (params, confidence, explanation) = match first_word {
@@ -79,6 +85,7 @@ impl PrimitiveMapper {
             "wget" => self.parse_wget_command(trimmed),
             "python" | "python3" => self.parse_python_command(trimmed),
             "jq" => self.parse_jq_command(trimmed),
+            "GET" | "POST" | "PUT" | "DELETE" => self.parse_http_command(trimmed),
             _ => (
                 HashMap::new(),
                 0.7,
@@ -252,10 +259,81 @@ impl PrimitiveMapper {
         )
     }
 
+    /// Parse descriptive HTTP command (e.g. POST /api/register)
+    fn parse_http_command(
+        &self,
+        command: &str,
+    ) -> (HashMap<String, serde_json::Value>, f64, String) {
+        let mut params = HashMap::new();
+        let mut lines = command.lines();
+        let first_line = lines.next().unwrap_or("");
+        let mut parts = first_line.split_whitespace();
+        let method = parts.next().unwrap_or("GET").to_string();
+        let url = parts.next().unwrap_or("/").to_string();
+
+        params.insert(
+            "method".to_string(),
+            serde_json::Value::String(method.clone()),
+        );
+        params.insert("url".to_string(), serde_json::Value::String(url.clone()));
+
+        let mut headers = serde_json::Map::new();
+        let mut body = String::new();
+        let mut in_body = false;
+
+        for line in lines {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                in_body = true;
+                continue;
+            }
+
+            if in_body {
+                body.push_str(trimmed);
+                body.push('\n');
+            } else if let Some((key, value)) = trimmed.split_once(':') {
+                if key.to_lowercase() == "headers" {
+                    // Skip the "Headers:" line itself if it's just a marker
+                    continue;
+                }
+                headers.insert(
+                    key.trim().to_string(),
+                    serde_json::Value::String(value.trim().to_string()),
+                );
+            } else if trimmed.to_lowercase().starts_with("body:") {
+                in_body = true;
+                if let Some((_, json_body)) = trimmed.split_once(':') {
+                    body.push_str(json_body.trim());
+                }
+            }
+        }
+
+        if !headers.is_empty() {
+            params.insert("headers".to_string(), serde_json::Value::Object(headers));
+        }
+
+        if !body.is_empty() {
+            params.insert(
+                "body".to_string(),
+                serde_json::Value::String(body.trim().to_string()),
+            );
+        }
+
+        (
+            params,
+            0.9,
+            format!("HTTP {} {} → ccos.network.http-fetch", method, url),
+        )
+    }
+
     /// Check if a command is a known primitive
     pub fn is_known_primitive(&self, command: &str) -> bool {
         let first_word = command.trim().split_whitespace().next().unwrap_or("");
-        self.mappings.contains_key(first_word)
+        if self.mappings.contains_key(first_word) {
+            return true;
+        }
+        // Support descriptive HTTP methods
+        matches!(first_word, "GET" | "POST" | "PUT" | "DELETE")
     }
 
     /// Get all known primitives
