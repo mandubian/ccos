@@ -171,25 +171,27 @@ fn detect_format(url: &str, content: &str) -> SkillFormat {
 pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
     let lines: Vec<&str> = content.lines().collect();
 
-    // Check for YAML frontmatter
-    if content.starts_with("---") {
+    let mut skill = if content.starts_with("---") {
         // Find end of frontmatter
         if let Some(end_idx) = lines.iter().skip(1).position(|&l| l.trim() == "---") {
             let frontmatter: String = lines[1..=end_idx].join("\n");
             // Try to parse frontmatter as skill YAML
-            if let Ok(skill) = parse_skill_yaml(&frontmatter) {
-                return Ok(skill);
-            }
+            parse_skill_yaml(&frontmatter)
+                .unwrap_or_else(|_| Skill::new("", "", "", Vec::new(), ""))
+        } else {
+            Skill::new("", "", "", Vec::new(), "")
         }
-    }
+    } else {
+        Skill::new("", "", "", Vec::new(), "")
+    };
 
-    // Extract skill info from markdown structure
-    let mut id = String::new();
-    let mut name = String::new();
-    let mut description = String::new();
-    let mut operations = Vec::new();
-    let mut instructions = String::new();
-    let mut secrets = Vec::new();
+    // If frontmatter didn't provide basic info, we'll extract it from markdown
+    let mut id = skill.id.clone();
+    let mut name = skill.name.clone();
+    let mut description = skill.description.clone();
+    let mut operations = skill.operations.clone();
+    let mut instructions = skill.instructions.clone();
+    let mut secrets = skill.secrets.clone();
 
     let mut in_code_block = false;
     let mut code_block_content = String::new();
@@ -263,6 +265,11 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
                 instructions.push_str(trimmed);
                 instructions.push('\n');
             } else {
+                if trimmed.contains("Base URL:") || trimmed.contains("api_base:") {
+                    if let Some(url) = extract_endpoint_from_curl(trimmed) {
+                        skill.metadata.insert("api_base".to_string(), url);
+                    }
+                }
                 instructions.push_str(trimmed);
                 instructions.push('\n');
                 current_section_text.push_str(trimmed);
@@ -281,8 +288,12 @@ pub fn parse_skill_markdown(content: &str) -> Result<Skill, ParseError> {
         instructions = description.clone();
     }
 
-    let mut skill = Skill::new(id, name, description, Vec::new(), instructions);
+    skill.id = id;
+    skill.name = name;
+    skill.description = description;
+    skill.instructions = instructions;
     skill.operations = operations;
+    skill.secrets = secrets;
 
     // Add capabilities from operations
     for op in &skill.operations {

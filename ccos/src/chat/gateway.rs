@@ -19,8 +19,9 @@ use crate::capabilities::registry::CapabilityRegistry;
 use crate::capability_marketplace::CapabilityMarketplace;
 use crate::causal_chain::{CausalChain, CausalQuery};
 use crate::chat::{
-    attach_label, record_chat_audit_event, register_chat_capabilities, ChatDataLabel,
-    FileQuarantineStore, MessageEnvelope, MessageDirection, QuarantineKey, QuarantineStore,
+    attach_label, record_chat_audit_event, register_chat_capabilities, AgentSpawner, ChatDataLabel,
+    ChatMessage, FileQuarantineStore, MessageDirection, MessageEnvelope, QuarantineKey,
+    QuarantineStore, SessionRegistry, SpawnerFactory,
 };
 use crate::utils::value_conversion::{json_to_rtfs_value, rtfs_value_to_json};
 
@@ -48,13 +49,17 @@ pub struct ChatGateway {
 #[allow(dead_code)]
 struct GatewayState {
     marketplace: Arc<CapabilityMarketplace>,
-    _quarantine: Arc<dyn QuarantineStore>,
+    quarantine: Arc<dyn QuarantineStore>,
     chain: Arc<Mutex<CausalChain>>,
     _approvals: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
     connector: Arc<dyn ChatConnector>,
     connector_handle: ConnectionHandle,
     inbox: Mutex<VecDeque<MessageEnvelope>>,
     policy_pack_version: String,
+    /// Session registry for managing agent sessions
+    session_registry: SessionRegistry,
+    /// Agent spawner for launching agent runtimes
+    spawner: Arc<dyn AgentSpawner>,
 }
 
 impl ChatGateway {
@@ -76,37 +81,50 @@ impl ChatGateway {
         let registry = Arc::new(RwLock::new(CapabilityRegistry::new()));
         let marketplace = Arc::new(CapabilityMarketplace::new(registry));
 
-        register_chat_capabilities(
-            marketplace.as_ref(),
-            quarantine.clone(),
-            chain.clone(),
-            approvals.clone(),
-        )
-        .await?;
-
         let connector = Arc::new(LoopbackWebhookConnector::new(
             config.connector.clone(),
             quarantine.clone(),
         ));
         let handle = connector.connect().await?;
 
+        register_chat_capabilities(
+            marketplace.clone(),
+            quarantine.clone(),
+            chain.clone(),
+            approvals.clone(),
+            Some(connector.clone() as Arc<dyn ChatConnector>),
+            Some(handle.clone()),
+        )
+        .await?;
+
+        // Initialize session management
+        let session_registry = SessionRegistry::new();
+        let spawner = SpawnerFactory::create();
+
         let state = Arc::new(GatewayState {
             marketplace: marketplace.clone(),
-            _quarantine: quarantine,
+            quarantine,
             chain,
             _approvals: approvals,
             connector: connector.clone(),
             connector_handle: handle.clone(),
             inbox: Mutex::new(VecDeque::new()),
             policy_pack_version: config.policy_pack_version.clone(),
+            session_registry,
+            spawner: spawner.into(),
         });
 
-        let gateway = ChatGateway { state: state.clone() };
+        let gateway = ChatGateway {
+            state: state.clone(),
+        };
         connector
-            .subscribe(&handle, Arc::new(move |envelope| {
-                let gateway = gateway.clone();
-                Box::pin(async move { gateway.handle_inbound(envelope).await })
-            }))
+            .subscribe(
+                &handle,
+                Arc::new(move |envelope| {
+                    let gateway = gateway.clone();
+                    Box::pin(async move { gateway.handle_inbound(envelope).await })
+                }),
+            )
             .await?;
 
         let app_state = state.clone();
@@ -115,7 +133,10 @@ impl ChatGateway {
             .route("/chat/inbox", get(inbox_handler))
             .route("/chat/execute", post(execute_handler))
             .route("/chat/send", post(send_handler))
+            .route("/chat/capabilities", get(list_capabilities_handler))
             .route("/chat/audit", get(audit_handler))
+            .route("/chat/events/:session_id", get(events_handler))
+            .route("/chat/session/:session_id", get(get_session_handler))
             .with_state(app_state);
 
         let listener = TcpListener::bind(config.bind_addr.as_str())
@@ -129,11 +150,13 @@ impl ChatGateway {
     }
 
     async fn handle_inbound(&self, mut envelope: MessageEnvelope) -> RuntimeResult<()> {
-        let session_id = format!(
-            "chat:{}:{}",
-            envelope.channel_id,
-            envelope.sender_id
+        log::info!(
+            "[Gateway] Received inbound message {} from {} in channel {}",
+            envelope.id,
+            envelope.sender_id,
+            envelope.channel_id
         );
+        let session_id = format!("chat:{}:{}", envelope.channel_id, envelope.sender_id);
         let run_id = format!("chat-run-{}", Utc::now().timestamp_millis());
         let step_id = format!("message-ingest-{}", envelope.id);
         envelope.session_id = Some(session_id.clone());
@@ -181,6 +204,109 @@ impl ChatGateway {
             meta,
         )?;
 
+        // Check if session exists, if not create one and spawn agent
+        let session_exists = self
+            .state
+            .session_registry
+            .get_session(&session_id)
+            .await
+            .is_some();
+
+        if !session_exists {
+            // Create new session
+            let session = self
+                .state
+                .session_registry
+                .create_session(Some(session_id.clone()))
+                .await;
+            let token = session.auth_token.clone();
+
+            log::info!(
+                "[Gateway] Created new session {} for channel {} sender {}",
+                session.session_id,
+                envelope.channel_id,
+                envelope.sender_id
+            );
+
+            // Spawn agent for this session
+            match self
+                .state
+                .spawner
+                .spawn(session.session_id.clone(), token.clone())
+                .await
+            {
+                Ok(spawn_result) => {
+                    if let Some(pid) = spawn_result.pid {
+                        let _ = self
+                            .state
+                            .session_registry
+                            .set_agent_pid(&session.session_id, pid)
+                            .await;
+                    }
+                    log::info!(
+                        "[Gateway] Spawned agent for session {}: {}",
+                        session.session_id,
+                        spawn_result.message
+                    );
+                }
+                Err(e) => {
+                    log::error!(
+                        "[Gateway] Failed to spawn agent for session {}: {}",
+                        session.session_id,
+                        e
+                    );
+                }
+            }
+        }
+
+        // Resolve content from quarantine (transparent to agent)
+        let content_to_push = match self.state.quarantine.get_bytes(&envelope.content_ref) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    log::warn!(
+                        "[Gateway] Content for {} is not valid UTF-8, sending ref instead",
+                        envelope.id
+                    );
+                    envelope.content_ref.clone()
+                }
+            },
+            Err(e) => {
+                log::warn!(
+                    "[Gateway] Failed to resolve content for {}: {}, sending ref instead",
+                    envelope.id,
+                    e
+                );
+                envelope.content_ref.clone()
+            }
+        };
+
+        // Add message to session inbox
+        if let Err(e) = self
+            .state
+            .session_registry
+            .push_message_to_session(
+                &session_id,
+                envelope.channel_id.clone(),
+                content_to_push,
+                envelope.sender_id.clone(),
+            )
+            .await
+        {
+            log::error!(
+                "[Gateway] Failed to push message to session {}: {}",
+                session_id,
+                e
+            );
+            return Err(RuntimeError::Generic(e));
+        } else {
+            log::info!(
+                "[Gateway] Pushed message {} to session inbox {}",
+                envelope.id,
+                session_id
+            );
+        }
+
         let mut guard = self
             .state
             .inbox
@@ -194,7 +320,7 @@ impl ChatGateway {
         &self,
         capability_id: &str,
         inputs: serde_json::Value,
-    ) -> RuntimeResult<serde_json::Value> {
+    ) -> RuntimeResult<(serde_json::Value, bool)> {
         let rtfs_inputs = json_to_rtfs_value(&inputs)?;
 
         let rtfs_args: Vec<Value> = if let Value::Map(map) = &rtfs_inputs {
@@ -227,20 +353,26 @@ impl ChatGateway {
         let cap_id = capability_id.to_string();
         let exec_result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                self.state.marketplace.execute_capability(&cap_id, &rtfs_inputs).await
+                self.state
+                    .marketplace
+                    .execute_capability(&cap_id, &rtfs_inputs)
+                    .await
             })
         });
 
         let (result_json, success, rtfs_result) = match exec_result {
             Ok(value) => (rtfs_value_to_json(&value)?, true, Some(value)),
-            Err(e) => (
-                serde_json::json!({
-                    "error": format!("{}", e),
-                    "capability_id": capability_id,
-                }),
-                false,
-                None,
-            ),
+            Err(e) => {
+                log::error!("[Gateway] Capability {} failed: {}", capability_id, e);
+                (
+                    serde_json::json!({
+                        "error": format!("{}", e),
+                        "capability_id": capability_id,
+                    }),
+                    false,
+                    None,
+                )
+            }
         };
 
         if let Some(action) = action {
@@ -254,7 +386,7 @@ impl ChatGateway {
             }
         }
 
-        Ok(result_json)
+        Ok((result_json, success))
     }
 }
 
@@ -358,10 +490,16 @@ async fn audit_handler(
     Ok(Json(ChatAuditResponse { events }))
 }
 
-async fn health_handler(State(state): State<Arc<GatewayState>>) -> Result<Json<HealthStatusResponse>, StatusCode> {
+async fn health_handler(
+    State(state): State<Arc<GatewayState>>,
+) -> Result<Json<HealthStatusResponse>, StatusCode> {
     Ok(Json(HealthStatusResponse {
         ok: true,
-        queue_depth: state.inbox.lock().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.len(),
+        queue_depth: state
+            .inbox
+            .lock()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .len(),
     }))
 }
 
@@ -375,24 +513,74 @@ struct HealthStatusResponse {
 struct ExecuteRequest {
     capability_id: String,
     inputs: serde_json::Value,
+    session_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ExecuteResponse {
+    success: bool,
+    result: Option<serde_json::Value>,
+    error: Option<String>,
 }
 
 async fn execute_handler(
     State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<ExecuteRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    if !(payload.capability_id.starts_with("ccos.chat.transform.")
-        || payload.capability_id == "ccos.chat.egress.prepare_outbound")
-    {
-        return Err(StatusCode::FORBIDDEN);
+) -> Result<Json<ExecuteResponse>, StatusCode> {
+    // Require X-Agent-Token header
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            log::warn!("[Gateway] Execute request missing X-Agent-Token header");
+            StatusCode::UNAUTHORIZED
+        })?;
+
+    // Validate token against session registry
+    let session = state
+        .session_registry
+        .validate_token(&payload.session_id, token)
+        .await
+        .ok_or_else(|| {
+            log::warn!("[Gateway] Invalid token for session {}", payload.session_id);
+            StatusCode::UNAUTHORIZED
+        })?;
+
+    // Check session status
+    if session.status != crate::chat::session::SessionStatus::Active {
+        return Ok(Json(ExecuteResponse {
+            success: false,
+            result: None,
+            error: Some(format!("Session is not active: {:?}", session.status)),
+        }));
     }
 
+    log::info!(
+        "[Gateway] Executing capability {} for session {} (agent PID: {:?}) with inputs: {}",
+        payload.capability_id,
+        session.session_id,
+        session.agent_pid,
+        payload.inputs
+    );
+
+    // Forward to capability marketplace (which enforces its own policy/approvals)
     let gateway = ChatGateway { state };
-    let result = gateway
+    match gateway
         .execute_capability(&payload.capability_id, payload.inputs)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(result))
+    {
+        Ok((result, success)) => Ok(Json(ExecuteResponse {
+            success,
+            result: Some(result),
+            error: None,
+        })),
+        Err(e) => Ok(Json(ExecuteResponse {
+            success: false,
+            result: None,
+            error: Some(format!("Capability execution failed: {}", e)),
+        })),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -450,9 +638,15 @@ async fn send_handler(
         ),
     );
 
-    let gateway = ChatGateway { state: state.clone() };
-    let prepared = gateway
-        .execute_capability("ccos.chat.egress.prepare_outbound", rtfs_value_to_json(&Value::Map(inputs)).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
+    let gateway = ChatGateway {
+        state: state.clone(),
+    };
+    let (prepared, _success) = gateway
+        .execute_capability(
+            "ccos.chat.egress.prepare_outbound",
+            rtfs_value_to_json(&Value::Map(inputs))
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        )
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -481,9 +675,7 @@ async fn send_handler(
         .connector
         .send(&state.connector_handle, outbound)
         .await
-        .map_err(|e| {
-            e
-        });
+        .map_err(|e| e);
 
     match result {
         Ok(send_result) => Ok(Json(SendResponse {
@@ -497,4 +689,142 @@ async fn send_handler(
             message_id: None,
         })),
     }
+}
+
+/// Events endpoint for agents to poll for new messages (simplified - SSE in future)
+#[derive(Debug, Serialize)]
+struct EventsResponse {
+    messages: Vec<ChatMessage>,
+    has_more: bool,
+}
+
+async fn events_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+) -> Result<Json<EventsResponse>, StatusCode> {
+    // Require X-Agent-Token header
+    let token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Validate token
+    let session = state
+        .session_registry
+        .validate_token(&session_id, token)
+        .await;
+
+    if session.is_none() {
+        let stored_token = state.session_registry.get_token(&session_id).await;
+        log::warn!(
+            "[Gateway] Auth failed for session {}. Received token: '{}', Stored token: '{:?}'",
+            session_id,
+            token,
+            stored_token
+        );
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let _session = session.unwrap();
+
+    // Get messages from inbox (atomically draining shared state)
+    let messages = state
+        .session_registry
+        .drain_session_inbox(&session_id)
+        .await;
+
+    Ok(Json(EventsResponse {
+        messages,
+        has_more: false, // For now, agent needs to poll again
+    }))
+}
+/// Get session info
+#[derive(Debug, Serialize)]
+struct SessionInfoResponse {
+    session_id: String,
+    status: String,
+    created_at: String,
+    last_activity: String,
+    inbox_size: usize,
+    agent_pid: Option<u32>,
+}
+
+async fn get_session_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+) -> Result<Json<SessionInfoResponse>, StatusCode> {
+    // Require X-Agent-Token header (optional for admin/debug)
+    let provided_token = headers.get("X-Agent-Token").and_then(|v| v.to_str().ok());
+
+    let session = if let Some(token) = provided_token {
+        // Validate token
+        state
+            .session_registry
+            .validate_token(&session_id, token)
+            .await
+            .ok_or(StatusCode::UNAUTHORIZED)?
+    } else {
+        // No token - return limited info if session exists
+        state
+            .session_registry
+            .get_session(&session_id)
+            .await
+            .ok_or(StatusCode::NOT_FOUND)?
+    };
+
+    Ok(Json(SessionInfoResponse {
+        session_id: session.session_id,
+        status: format!("{:?}", session.status),
+        created_at: session.created_at.to_string(),
+        last_activity: session.last_activity.to_string(),
+        inbox_size: session.inbox.len(),
+        agent_pid: session.agent_pid,
+    }))
+}
+
+/// Capabilities list response
+#[derive(Debug, Serialize)]
+struct CapabilityInfo {
+    id: String,
+    name: String,
+    description: String,
+    version: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CapabilitiesListResponse {
+    capabilities: Vec<CapabilityInfo>,
+}
+
+/// List available capabilities for the agent
+async fn list_capabilities_handler(
+    State(state): State<Arc<GatewayState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<CapabilitiesListResponse>, StatusCode> {
+    // Require X-Agent-Token header for security
+    let _token = headers
+        .get("X-Agent-Token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Get capabilities from marketplace
+    let capabilities = state.marketplace.list_capabilities().await;
+
+    // Filter out transform capabilities - agent works with resolved content in transparent mode
+    let infos: Vec<CapabilityInfo> = capabilities
+        .into_iter()
+        .filter(|cap| !cap.id.starts_with("ccos.chat.transform."))
+        .map(|cap| CapabilityInfo {
+            id: cap.id,
+            name: cap.name,
+            description: cap.description,
+            version: cap.version,
+        })
+        .collect();
+
+    Ok(Json(CapabilitiesListResponse {
+        capabilities: infos,
+    }))
 }

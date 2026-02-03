@@ -16,24 +16,32 @@ use chrono::Utc;
 use rtfs::ast::{Keyword, MapKey};
 use rtfs::runtime::error::{RuntimeError, RuntimeResult};
 use rtfs::runtime::values::Value;
+use crate::skills::loader::parse_skill_markdown;
 
 use crate::approval::types::{ApprovalCategory, RiskAssessment, RiskLevel};
 use crate::approval::UnifiedApprovalQueue;
 use crate::approval::{storage_file::FileApprovalStorage, ApprovalAuthority};
 use crate::causal_chain::CausalChain;
 use crate::types::{Action, ActionType};
-use crate::utils::value_conversion::map_key_to_string;
+use crate::utils::value_conversion::{map_key_to_string, rtfs_value_to_json};
+
+use crate::chat::connector::{ChatConnector, ConnectionHandle, OutboundRequest};
 
 use crate::capability_marketplace::types::{
     CapabilityManifest, EffectType, NativeCapability, ProviderType,
 };
 
+pub mod agent_llm;
 pub mod connector;
 pub mod gateway;
 pub mod quarantine;
+pub mod session;
+pub mod spawner;
 
 pub use connector::{ActivationMetadata, AttachmentRef, MessageDirection, MessageEnvelope};
 pub use quarantine::{FileQuarantineStore, InMemoryQuarantineStore, QuarantineKey, QuarantineStore};
+pub use session::{ChatMessage, SessionRegistry};
+pub use spawner::{AgentSpawner, SpawnerFactory};
 
 /// Reserved key for CCOS-internal chat metadata inside RTFS values.
 ///
@@ -314,10 +322,12 @@ pub fn record_chat_audit_event(
 /// - `ccos.chat.transform.verify_redaction` is required to produce `public` outputs.
 /// - `ccos.chat.egress.prepare_outbound` enforces deny-by-default egress rules and strips `__ccos_meta`.
 pub async fn register_chat_capabilities(
-    marketplace: &crate::capability_marketplace::CapabilityMarketplace,
+    marketplace: Arc<crate::capability_marketplace::CapabilityMarketplace>,
     quarantine: Arc<dyn QuarantineStore>,
     causal_chain: Arc<Mutex<CausalChain>>,
     approval_queue: Option<UnifiedApprovalQueue<FileApprovalStorage>>,
+    connector: Option<Arc<dyn ChatConnector>>,
+    connector_handle: Option<ConnectionHandle>,
 ) -> RuntimeResult<()> {
     async fn register_native_chat_capability(
         marketplace: &crate::capability_marketplace::CapabilityMarketplace,
@@ -371,7 +381,7 @@ pub async fn register_chat_capabilities(
         let quarantine = Arc::clone(&quarantine);
         let chain = Arc::clone(&causal_chain);
         register_native_chat_capability(
-            marketplace,
+            &*marketplace,
             "ccos.chat.transform.summarize_message",
             "Summarize Message (chat mode)",
             "Read quarantined message by pointer and return pii.redacted summary.",
@@ -485,7 +495,7 @@ pub async fn register_chat_capabilities(
         let quarantine = Arc::clone(&quarantine);
         let chain = Arc::clone(&causal_chain);
         register_native_chat_capability(
-            marketplace,
+            &*marketplace,
             "ccos.chat.transform.extract_entities",
             "Extract Entities/Tasks (chat mode)",
             "Read quarantined message by pointer and return pii.redacted entities/tasks.",
@@ -580,7 +590,7 @@ pub async fn register_chat_capabilities(
         let quarantine = Arc::clone(&quarantine);
         let chain = Arc::clone(&causal_chain);
         register_native_chat_capability(
-            marketplace,
+            &*marketplace,
             "ccos.chat.transform.redact_message",
             "Redact Message (chat mode)",
             "Read quarantined message by pointer and return pii.redacted output.",
@@ -681,7 +691,7 @@ pub async fn register_chat_capabilities(
         let chain = Arc::clone(&causal_chain);
         let approval_queue = approval_queue.clone();
         register_native_chat_capability(
-            marketplace,
+            &*marketplace,
             "ccos.chat.transform.verify_redaction",
             "Redaction Verifier (chat mode)",
             "Verify pii.redacted output under constraints and (if approved) produce public text.",
@@ -776,7 +786,7 @@ pub async fn register_chat_capabilities(
         let chain = Arc::clone(&causal_chain);
         let approval_queue = approval_queue.clone();
         register_native_chat_capability(
-            marketplace,
+            &*marketplace,
             "ccos.chat.egress.prepare_outbound",
             "Prepare Outbound (chat mode)",
             "Enforce chat-mode egress rules and strip __ccos_meta.",
@@ -785,9 +795,13 @@ pub async fn register_chat_capabilities(
                 let approval_queue = approval_queue.clone();
                 let inputs = inputs.clone();
                 Box::pin(async move {
-                    let (content, session_id, run_id, step_id, policy_pack_version) =
+                    let (content, session_id, run_id, step_id, policy_pack_version, class_override) =
                         parse_egress_inputs(&inputs)?;
-                    let label = extract_label(&content);
+
+                    let mut label = extract_label(&content);
+                    if let Some(override_label) = class_override {
+                        label = override_label;
+                    }
 
                     // Deny-by-default: only public may egress without exception.
                     let mut decision = "deny".to_string();
@@ -867,7 +881,307 @@ pub async fn register_chat_capabilities(
         .await?;
     }
 
+    // ccos.chat.egress.send_outbound
+    if let (Some(connector), Some(handle)) = (connector, connector_handle) {
+        let marketplace_cloned = Arc::clone(&marketplace);
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.chat.egress.send_outbound",
+            "Send Outbound (chat mode)",
+            "Send content to the outbound channel configured for the connector.",
+            Arc::new(move |inputs: &Value| {
+                let marketplace = Arc::clone(&marketplace_cloned);
+                let connector = Arc::clone(&connector);
+                let handle = handle.clone();
+                let inputs = inputs.clone();
+                Box::pin(async move {
+                    // 1. Prepare outbound (enforce policy)
+                    let prepared = marketplace
+                        .execute_capability("ccos.chat.egress.prepare_outbound", &inputs)
+                        .await?;
+
+                    // 2. Extract content and other fields
+                    let Value::Map(ref map) = inputs else {
+                        return Err(RuntimeError::Generic("Expected map inputs".to_string()));
+                    };
+
+                    let channel_id = get_string_arg(map, "channel_id")
+                        .unwrap_or_else(|| "default".to_string());
+                    let reply_to = get_string_arg(map, "reply_to");
+                    
+                    let content_text = rtfs_value_to_json(&prepared)?
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+
+                    if content_text.is_empty() {
+                         return Err(RuntimeError::Generic("Prepared outbound content is empty".to_string()));
+                    }
+
+                    // 3. Send via connector
+                    let outbound = OutboundRequest {
+                        channel_id,
+                        content: content_text,
+                        reply_to,
+                        metadata: None,
+                    };
+
+                    let result = connector.send(&handle, outbound).await?;
+                    if !result.success {
+                        return Err(RuntimeError::Generic(format!(
+                            "Outbound send failed: {:?}",
+                            result.error
+                        )));
+                    }
+
+                    Ok(Value::Map(HashMap::from([
+                        (MapKey::String("success".to_string()), Value::Boolean(true)),
+                        (MapKey::String("message_id".to_string()), 
+                         Value::String(result.message_id.unwrap_or_default())),
+                    ])))
+                })
+            }),
+            "medium",
+            vec!["network".to_string()],
+            EffectType::Effectful,
+        )
+        .await?;
+    }
+
+    // -----------------------------------------------------------------
+    // Skill Capabilities (for agent to load and execute skills)
+    // -----------------------------------------------------------------
+    {
+        let marketplace_for_skill_load = Arc::clone(&marketplace);
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.skill.load",
+            "Load Skill",
+            "Load a skill definition from a URL and register its capabilities. Returns skill_id, status, and the skill_definition content. For local development skills, use http://localhost:8765/skill.md if not overridden.",
+            Arc::new(move |inputs: &Value| {
+                let inputs = inputs.clone();
+                let marketplace = Arc::clone(&marketplace_for_skill_load);
+                Box::pin(async move {
+                    // Extract URL from inputs
+                    let url = if let Value::Map(ref map) = inputs {
+                        map.get(&MapKey::String("url".to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("url".to_string()))))
+                            .and_then(|v| v.as_string())
+                            .map(|s| s.to_string())
+                    } else {
+                        None
+                    }.ok_or_else(|| RuntimeError::Generic("Missing url parameter".to_string()))?;
+                    
+                    // Fetch the skill definition from the URL
+                    let client = reqwest::Client::new();
+                    let skill_content = match client.get(&url).send().await {
+                        Ok(response) => {
+                            if response.status().is_success() {
+                                response.text().await.unwrap_or_default()
+                            } else {
+                                format!("Error fetching skill: HTTP {}", response.status())
+                            }
+                        }
+                        Err(e) => format!("Error fetching skill: {}", e),
+                    };
+                    
+                    // Parse the skill definition using the real parser
+                    let skill = parse_skill_markdown(&skill_content)
+                        .map_err(|e| RuntimeError::Generic(format!("Parse error: {}", e)))?;
+                    let skill_id = skill.id.clone();
+                    
+                    // Extract base URL (scheme + host + port) from the full URL
+                    let base_url = extract_base_url(&url);
+                    
+                    // Register a capability for each operation found
+                    let mut registered_capabilities = Vec::new();
+                    for op in &skill.operations {
+                        if let Some(endpoint) = &op.endpoint {
+                            let capability_id = format!("{}.{}", skill_id, op.name);
+                            let full_url = if endpoint.starts_with("http") {
+                                endpoint.clone()
+                            } else {
+                                format!("{}{}", base_url, endpoint)
+                            };
+                            
+                            // Register the capability
+                            let manifest = create_http_capability_manifest(
+                                &capability_id,
+                                &format!("{} - {}", skill_id, op.name),
+                                &format!("{} endpoint for {}.{}: {}", op.method.as_deref().unwrap_or("POST"), skill_id, op.name, endpoint),
+                                &full_url,
+                                op.method.as_deref().unwrap_or("POST"),
+                            )?;
+                            
+                            if let Err(e) = marketplace.register_capability_manifest(manifest).await {
+                                registered_capabilities.push(format!("{}: failed ({})", capability_id, e));
+                            } else {
+                                registered_capabilities.push(capability_id.clone());
+                            }
+                        }
+                    }
+                    
+                    // Build result
+                    let mut result_map = HashMap::from([
+                        (MapKey::String("skill_id".to_string()), Value::String(skill_id.to_string())),
+                        (MapKey::String("status".to_string()), Value::String("loaded".to_string())),
+                        (MapKey::String("url".to_string()), Value::String(url)),
+                        (MapKey::String("skill_definition".to_string()), Value::String(skill_content)),
+                        (MapKey::String("base_url".to_string()), Value::String(base_url)),
+                    ]);
+                    
+                    if !registered_capabilities.is_empty() {
+                        let caps: Vec<Value> = registered_capabilities
+                            .into_iter()
+                            .map(Value::String)
+                            .collect();
+                        result_map.insert(
+                            MapKey::String("registered_capabilities".to_string()),
+                            Value::Vector(caps),
+                        );
+                    }
+                    
+                    Ok(Value::Map(result_map))
+                })
+            }),
+            "low",
+            vec!["network".to_string()],
+            EffectType::Effectful,
+        )
+        .await?;
+    }
+
+    {
+        let marketplace_for_skill_execute = Arc::clone(&marketplace);
+        register_native_chat_capability(
+            &*marketplace,
+            "ccos.skill.execute",
+            "Execute Skill Operation",
+            "Execute an operation from a loaded skill",
+            Arc::new(move |inputs: &Value| {
+                let inputs = inputs.clone();
+                let marketplace = Arc::clone(&marketplace_for_skill_execute);
+                Box::pin(async move {
+                    // Extract skill and operation from inputs
+                    let (skill, operation, params) = if let Value::Map(ref map) = inputs {
+                        let skill = map.get(&MapKey::String("skill".to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("skill".to_string()))))
+                            .and_then(|v| v.as_string())
+                            .map(|s| s.to_string())
+                            .ok_or_else(|| RuntimeError::Generic("Missing skill parameter".to_string()))?;
+                        
+                        let operation = map.get(&MapKey::String("operation".to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("operation".to_string()))))
+                            .and_then(|v| v.as_string())
+                            .map(|s| s.to_string())
+                            .ok_or_else(|| RuntimeError::Generic("Missing operation parameter".to_string()))?;
+
+                        // Extract parameters (everything except skill and operation)
+                        let mut params_map = HashMap::new();
+                        for (k, v) in map {
+                            let key_str = match k {
+                                MapKey::String(s) => s.clone(),
+                                MapKey::Keyword(Keyword(s)) => s.clone(),
+                                _ => continue,
+                            };
+                            if key_str != "skill" && key_str != "operation" {
+                                params_map.insert(k.clone(), v.clone());
+                            }
+                        }
+                        
+                        Ok((skill, operation, Value::Map(params_map)))
+                    } else {
+                        Err(RuntimeError::Generic("Expected map inputs".to_string()))
+                    }?;
+
+                    // Normalize names to match registrar logic (lowercase, kebab-case)
+                    let normalized_skill = skill.to_lowercase().replace(" ", "-").replace("_", "-");
+                    let normalized_op = operation.to_lowercase().replace(" ", "-").replace("_", "-");
+                    
+                    let capability_id = format!("{}.{}", normalized_skill, normalized_op);
+                    
+                    log::info!("[Gateway] Forwarding ccos.skill.execute to {}", capability_id);
+
+                    // Execute the underlying capability
+                    marketplace.execute_capability(&capability_id, &params).await
+                })
+            }),
+            "medium",
+            vec!["network".to_string()],
+            EffectType::Effectful,
+        )
+        .await?;
+    }
+
     Ok(())
+}
+
+
+/// Extract the base URL (scheme + host + port) from a full URL.
+/// E.g., "http://localhost:8765/skills/skill.md" -> "http://localhost:8765"
+fn extract_base_url(url: &str) -> String {
+    // Parse URL to extract components
+    if let Ok(parsed) = url.parse::<reqwest::Url>() {
+        let scheme = parsed.scheme();
+        let host = parsed.host_str().unwrap_or("localhost");
+        let port = parsed.port();
+        
+        if let Some(port) = port {
+            format!("{}://{}:{}", scheme, host, port)
+        } else {
+            format!("{}://{}", scheme, host)
+        }
+    } else {
+        // Fallback: try to extract manually
+        url.split('/')
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+}
+
+/// Create an HTTP capability manifest for a skill operation.
+fn create_http_capability_manifest(
+    id: &str,
+    name: &str,
+    description: &str,
+    endpoint_url: &str,
+    method: &str,
+) -> RuntimeResult<CapabilityManifest> {
+    use crate::capability_marketplace::types::HttpCapability;
+    
+    let mut metadata = HashMap::new();
+    metadata.insert("name".to_string(), name.to_string());
+    metadata.insert("description".to_string(), description.to_string());
+    metadata.insert("endpoint".to_string(), endpoint_url.to_string());
+    metadata.insert("method".to_string(), method.to_string());
+    metadata.insert("security_level".to_string(), "medium".to_string());
+    
+    // Create HTTP capability provider with available fields
+    let http_cap = HttpCapability {
+        base_url: endpoint_url.to_string(),
+        auth_token: None,
+        timeout_ms: 30000,
+    };
+    
+    Ok(CapabilityManifest {
+        id: id.to_string(),
+        name: name.to_string(),
+        description: description.to_string(),
+        provider: ProviderType::Http(http_cap),
+        version: "0.1.0".to_string(),
+        input_schema: None,
+        output_schema: None,
+        attestation: None,
+        provenance: None,
+        permissions: vec![],
+        effects: vec!["network".to_string()],
+        metadata: metadata.clone(),
+        agent_metadata: None,
+        domains: vec!["skill".to_string()],
+        categories: vec!["http".to_string()],
+        effect_type: EffectType::Effectful,
+    })
 }
 
 /// Filter tool results before they leave the MCP gateway.
@@ -1015,7 +1329,9 @@ fn parse_verifier_inputs(inputs: &Value) -> RuntimeResult<(String, String, Strin
     ))
 }
 
-fn parse_egress_inputs(inputs: &Value) -> RuntimeResult<(Value, String, String, String, String)> {
+fn parse_egress_inputs(
+    inputs: &Value,
+) -> RuntimeResult<(Value, String, String, String, String, Option<ChatDataLabel>)> {
     let Value::Map(map) = inputs else {
         return Err(RuntimeError::Generic("Expected map inputs".to_string()));
     };
@@ -1026,11 +1342,22 @@ fn parse_egress_inputs(inputs: &Value) -> RuntimeResult<(Value, String, String, 
         .clone();
     let session_id = get_string_arg(map, "session_id")
         .ok_or_else(|| RuntimeError::Generic("Missing session_id".to_string()))?;
-    let run_id = get_string_arg(map, "run_id").ok_or_else(|| RuntimeError::Generic("Missing run_id".to_string()))?;
-    let step_id = get_string_arg(map, "step_id").ok_or_else(|| RuntimeError::Generic("Missing step_id".to_string()))?;
+    let run_id = get_string_arg(map, "run_id")
+        .ok_or_else(|| RuntimeError::Generic("Missing run_id".to_string()))?;
+    let step_id = get_string_arg(map, "step_id")
+        .ok_or_else(|| RuntimeError::Generic("Missing step_id".to_string()))?;
     let policy_pack_version = get_string_arg(map, "policy_pack_version")
         .unwrap_or_else(|| "chat-mode-v0".to_string());
-    Ok((content, session_id, run_id, step_id, policy_pack_version))
+    let class_override = get_string_arg(map, "content_class").as_deref().and_then(ChatDataLabel::parse);
+
+    Ok((
+        content,
+        session_id,
+        run_id,
+        step_id,
+        policy_pack_version,
+        class_override,
+    ))
 }
 
 #[derive(Debug, Clone)]

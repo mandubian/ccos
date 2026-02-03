@@ -125,6 +125,21 @@ fn to_approval_item(request: &ApprovalRequest) -> ApprovalItem {
             "chat".to_string(),
             None,
         ),
+        ApprovalCategory::SecretWrite { key, scope, .. } => (
+            ApprovalType::Effect, // reuse Effect type for secrets
+            format!("Secret Write: {}", key),
+            format!("Store secret '{}' with scope '{}'", key, scope),
+            "onboarding".to_string(),
+            None,
+        ),
+        ApprovalCategory::HumanActionRequest { action_type, title, instructions, skill_id, step_id, .. } => (
+            ApprovalType::Effect, // reuse Effect type for human actions
+            format!("Human Action: {}", title),
+            format!("{} for skill {} step {}: {}", action_type, skill_id, step_id, 
+                if instructions.len() > 100 { format!("{}...", &instructions[..100]) } else { instructions.clone() }),
+            "onboarding".to_string(),
+            None,
+        ),
     };
 
     ApprovalItem {

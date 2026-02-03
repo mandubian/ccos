@@ -94,6 +94,39 @@ pub enum ApprovalCategory {
         /// Human-readable constraints summary enforced by verifier
         constraints: String,
     },
+
+    /// Secret write approval - storing a new secret value
+    /// Value is never logged; only key and scope are tracked
+    SecretWrite {
+        /// Secret key name (e.g., "MOLTBOOK_SECRET")
+        key: String,
+        /// Scope: "skill" or "global"
+        scope: String,
+        /// Skill ID for skill-scoped secrets
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        skill_id: Option<String>,
+        /// Human-readable description of the secret's purpose
+        description: String,
+    },
+
+    /// Human action request approval - requires human intervention
+    /// for onboarding steps like OAuth, email verification, tweet verification
+    HumanActionRequest {
+        /// Action type identifier (e.g., "tweet_verification", "oauth_consent")
+        action_type: String,
+        /// Short title for the approval UI
+        title: String,
+        /// Detailed markdown instructions for the human
+        instructions: String,
+        /// JSON schema for validating the human's response
+        required_response_schema: serde_json::Value,
+        /// Timeout in hours before the request expires
+        timeout_hours: i64,
+        /// Skill that needs this human action
+        skill_id: String,
+        /// Onboarding step identifier
+        step_id: String,
+    },
 }
 
 /// Health tracking for approved servers
@@ -146,6 +179,12 @@ impl fmt::Display for ApprovalCategory {
             }
             ApprovalCategory::ChatPublicDeclassification { .. } => {
                 write!(f, "ChatPublicDeclassification")
+            }
+            ApprovalCategory::SecretWrite { key, .. } => {
+                write!(f, "SecretWrite({})", key)
+            }
+            ApprovalCategory::HumanActionRequest { action_type, skill_id, .. } => {
+                write!(f, "HumanActionRequest({} for {})", action_type, skill_id)
             }
         }
     }
@@ -213,6 +252,9 @@ pub struct ApprovalRequest {
     pub status: ApprovalStatus,
     /// Optional context about why this approval was requested
     pub context: Option<String>,
+    /// Human-provided response data (for HumanActionRequest completions)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<serde_json::Value>,
 }
 
 impl ApprovalRequest {
@@ -231,6 +273,7 @@ impl ApprovalRequest {
             expires_at: now + chrono::Duration::hours(expires_in_hours),
             status: ApprovalStatus::Pending,
             context,
+            response: None,
         }
     }
 

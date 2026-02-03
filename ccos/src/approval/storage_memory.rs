@@ -77,6 +77,8 @@ impl ApprovalStorage for InMemoryApprovalStorage {
                         super::types::ApprovalCategory::ChatPublicDeclassification { .. } => {
                             "ChatPublicDeclassification"
                         }
+                        super::types::ApprovalCategory::SecretWrite { .. } => "SecretWrite",
+                        super::types::ApprovalCategory::HumanActionRequest { .. } => "HumanActionRequest",
                     };
                     if actual_type != cat_type {
                         return false;
