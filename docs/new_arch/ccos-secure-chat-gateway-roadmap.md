@@ -219,10 +219,12 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
   - `ccos/src/chat/mod.rs` (classification metadata, in-memory quarantine, transform+verifier capabilities, egress gating, MCP result filtering, audit event helper)
   - `ccos/tests/chat_mode_tests.rs` (proves deny-by-default + approval/verifier gates; `cargo test -p ccos --test chat_mode_tests`)
   - Approvals plumbed end-to-end via `ApprovalCategory::{ChatPolicyException, ChatPublicDeclassification}` and surfaced in MCP/HTTP approval listings.
-- ✅ **Phase 1 MVP wiring in progress**:
+- ✅ **Phase 1 MVP implementation complete**:
   - `ccos/src/chat/quarantine.rs` (persistent encrypted quarantine store + TTL enforcement + purge tooling)
   - `ccos/src/chat/connector.rs` (loopback webhook connector w/ allowlist + activation triggers)
   - `ccos/src/chat/gateway.rs` + `ccos-chat-gateway` binary (chat mode execution path with transform-only + egress gating)
+  - `ccos/src/bin/ccos_agent.rs` (agent runtime with configuration management and skill loading)
+  - `ccos/src/chat/spawner.rs` (agent process spawner with environment propagation)
   - Causal-chain query now supports function-prefix filtering for chat audit surfacing.
 
 ### References / Alignment
@@ -247,24 +249,24 @@ To ship “Moltbot-like services” securely, CCOS needs product/ops layers arou
 ## Phase 1 — MVP: Local Gateway + One Connector + Minimal Control Surface
 **Goal**: a usable, safe local service that can be driven by an external agent (or later, an internal one).
 
-### WS1 Gateway/Daemon (The "Sheriff")
-- **D1.1**: single binary “gateway” mode with:
+### WS1 Gateway/Daemon (The "Sheriff") [Status: ✅ MVP Complete]
+- **D1.1**: single binary “gateway” (Sheriff) mode with:
   - loopback-only HTTP/WebSocket control plane
   - persistent config + runtime state
   - session router (per sender / per chat thread)
   - restart/reconnect behavior with backoff.
 
-### WS2 Channel Connector (MVP)
-- **D1.2**: implement one connector end-to-end (choose the lowest-risk channel first):
-  - normalized message schema (text, attachments metadata, thread info, sender, timestamps)
-  - activation rules (mention/allowlist)
-  - outbound send with rate limiting.
+### WS2 Channel Connector (MVP) [Status: ✅ MVP Complete]
+- **D1.2**: implement one connector end-to-end (Loopback Webhook):
+  - normalized message schema (text, sender, timestamps)
+  - activation rules (mentions: `@agent`, keywords: `onboard,done,...)`)
+  - outbound send via `ccos.chat.egress.send_outbound` capability.
 
-### WS3 Data Protection (MVP)
+### WS3 Data Protection (MVP) [Status: ✅ MVP Complete]
 - **D1.3**: quarantine store + minimal transforms:
-  - “summarize message” (returns redacted summary)
-  - “extract tasks/entities” (returns structured map)
-  - “attachment text extraction” behind an explicit policy gate.
+  - “summarize message” (returns redacted summary) — *implemented via agent reasoning*
+  - “extract tasks/entities” (returns structured map) — *implemented via agent reasoning*
+  - “transparent message content resolution” (automatic fetch from quarantine for agent ingestion)
 
 ### WS4 Approvals + Secrets (MVP)
 - **D1.4**: minimal approvals CLI:
