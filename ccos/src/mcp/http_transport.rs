@@ -715,6 +715,39 @@ async fn handle_api_approvals_list(
                         "constraints": constraints
                     }),
                 ),
+                ApprovalCategory::SecretWrite {
+                    key,
+                    scope,
+                    skill_id,
+                    description,
+                } => (
+                    "SecretWrite",
+                    json!({
+                        "key": key,
+                        "scope": scope,
+                        "skill_id": skill_id,
+                        "description": description
+                    }),
+                ),
+                ApprovalCategory::HumanActionRequest {
+                    action_type,
+                    title,
+                    instructions,
+                    timeout_hours,
+                    skill_id,
+                    step_id,
+                    ..
+                } => (
+                    "HumanActionRequest",
+                    json!({
+                        "action_type": action_type,
+                        "title": title,
+                        "instructions_preview": instructions.chars().take(200).collect::<String>(),
+                        "timeout_hours": timeout_hours,
+                        "skill_id": skill_id,
+                        "step_id": step_id
+                    }),
+                ),
             };
 
             // Determine status string for UI filtering

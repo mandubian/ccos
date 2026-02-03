@@ -237,6 +237,18 @@ risk_default = "medium"
 [llm_profiles]
 default = "openrouter_free:balanced_ds_32"
 
+# Google Gemini profile
+[[llm_profiles.model_sets]]
+name = "google"
+provider = "google"
+api_key_env = "GEMINI_API_KEY"
+default = "gemini-1.5-pro"
+
+  [[llm_profiles.model_sets.models]]
+  name = "gemini-1.5-pro"
+  model = "gemini-1.5-pro"
+  quality = "balanced"
+
 # Stub profile - ONLY for testing (not realistic)
 # To use: explicitly pass --profile stub/dev
 [[llm_profiles.profiles]]

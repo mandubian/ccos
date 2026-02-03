@@ -325,6 +325,8 @@ impl SkillMapper {
                                 let first_cmd = first_cmd.to_string();
                                 let skill_secrets = skill.secrets.clone();
                                 let cap_id_for_handler = cap_id.clone();
+                                let skill_cloned = skill.clone();
+                                let source_url_cloned = source_url.map(|s| s.to_string());
 
                                 let handler = Arc::new(move |inputs: &Value| {
                                     let marketplace = marketplace.clone();
@@ -334,6 +336,8 @@ impl SkillMapper {
                                     let primitive_mapper = PrimitiveMapper::new();
                                     let skill_secrets = skill_secrets.clone();
                                     let cap_id = cap_id_for_handler.clone();
+                                    let skill = skill_cloned.clone();
+                                    let source_url = source_url_cloned.clone();
 
                                     let inputs_cloned = inputs.clone();
                                     Box::pin(async move {
@@ -353,7 +357,18 @@ impl SkillMapper {
                                         let mut final_params = first_mapped.params.clone();
 
                                         // Inject secrets into headers
-                                        inject_secrets_into_params(&mut final_params, &skill_secrets);
+                                        inject_secrets_into_params(
+                                            &mut final_params,
+                                            &skill_secrets,
+                                        );
+
+                                        // Resolve relative URLs and replace placeholders
+                                        resolve_relative_url(
+                                            &mut final_params,
+                                            &skill,
+                                            source_url.as_deref(),
+                                        );
+                                        template_replace_secrets(&mut final_params, &skill_secrets);
 
                                         let inputs_json = rtfs_value_to_json(inputs)?;
                                         match inputs_json {
@@ -361,10 +376,14 @@ impl SkillMapper {
                                                 for (k, v) in obj {
                                                     // Special case: if "body" is an object/array,
                                                     // serialize it to a JSON string for HTTP POST.
-                                                    if k == "body" && (v.is_object() || v.is_array()) {
+                                                    if k == "body"
+                                                        && (v.is_object() || v.is_array())
+                                                    {
                                                         final_params.insert(
                                                             k,
-                                                            serde_json::Value::String(v.to_string()),
+                                                            serde_json::Value::String(
+                                                                v.to_string(),
+                                                            ),
                                                         );
                                                     } else {
                                                         final_params.insert(k, v);
@@ -385,7 +404,10 @@ impl SkillMapper {
                                         let rtfs_params = json_to_rtfs_value(&rtfs_params_json)?;
 
                                         let fetch_result = marketplace
-                                            .execute_capability(&first_mapped.capability_id, &rtfs_params)
+                                            .execute_capability(
+                                                &first_mapped.capability_id,
+                                                &rtfs_params,
+                                            )
                                             .await?;
 
                                         let body = match fetch_result {
@@ -394,9 +416,12 @@ impl SkillMapper {
                                                 match m.get(&key) {
                                                     Some(Value::String(s)) => s.clone(),
                                                     Some(v) => rtfs_value_to_json(v)?.to_string(),
-                                                    None => return Err(RuntimeError::Generic(
-                                                        "http-fetch result missing body".to_string(),
-                                                    )),
+                                                    None => {
+                                                        return Err(RuntimeError::Generic(
+                                                            "http-fetch result missing body"
+                                                                .to_string(),
+                                                        ))
+                                                    }
                                                 }
                                             }
                                             Value::String(s) => s,
@@ -407,7 +432,8 @@ impl SkillMapper {
                                         marketplace
                                             .execute_capability("ccos.json.parse", &parse_args)
                                             .await
-                                    }) as BoxFuture<'static, RuntimeResult<Value>>
+                                    })
+                                        as BoxFuture<'static, RuntimeResult<Value>>
                                 });
 
                                 let manifest = CapabilityManifest {
@@ -471,6 +497,8 @@ impl SkillMapper {
                     let skill_id = skill.id.clone();
                     let skill_secrets = skill.secrets.clone();
                     let cap_id_for_handler = cap_id.clone();
+                    let skill_cloned = skill.clone();
+                    let source_url_cloned = source_url.map(|s| s.to_string());
 
                     let handler = Arc::new(move |inputs: &Value| {
                         let marketplace = marketplace.clone();
@@ -480,6 +508,8 @@ impl SkillMapper {
                         let primitive_mapper = PrimitiveMapper::new();
                         let skill_secrets = skill_secrets.clone();
                         let cap_id = cap_id_for_handler.clone();
+                        let skill = skill_cloned.clone();
+                        let source_url = source_url_cloned.clone();
 
                         let inputs_cloned = inputs.clone();
                         Box::pin(async move {
@@ -495,6 +525,14 @@ impl SkillMapper {
 
                                     // Inject secrets into headers
                                     inject_secrets_into_params(&mut final_params, &skill_secrets);
+
+                                    // Resolve relative URLs and replace placeholders
+                                    resolve_relative_url(
+                                        &mut final_params,
+                                        &skill,
+                                        source_url.as_deref(),
+                                    );
+                                    template_replace_secrets(&mut final_params, &skill_secrets);
 
                                     // Merge user-provided inputs (RTFS) into mapped params (JSON)
                                     // using the shared conversion utility.
@@ -524,9 +562,7 @@ impl SkillMapper {
 
                                     // Convert merged params back to RTFS Value
                                     let rtfs_params_json = serde_json::Value::Object(
-                                        final_params
-                                            .into_iter()
-                                            .collect::<serde_json::Map<_, _>>(),
+                                        final_params.into_iter().collect::<serde_json::Map<_, _>>(),
                                     );
                                     let rtfs_params = json_to_rtfs_value(&rtfs_params_json)?;
 
@@ -572,10 +608,7 @@ impl SkillMapper {
                         .register_capability_manifest(manifest)
                         .await
                         .map_err(|e| {
-                            SkillError::Execution(format!(
-                                "Failed to register capability: {}",
-                                e
-                            ))
+                            SkillError::Execution(format!("Failed to register capability: {}", e))
                         })?;
 
                     if skill.approval.required || !skill.secrets.is_empty() {
@@ -632,15 +665,8 @@ impl SkillMapper {
                         SkillError::Execution(format!("Failed to register capability: {}", e))
                     })?;
 
-                ensure_skill_approvals(
-                    &mut approval_queue,
-                    skill,
-                    &cap_id,
-                    source_url,
-                    cmd,
-                    true,
-                )
-                .await?;
+                ensure_skill_approvals(&mut approval_queue, skill, &cap_id, source_url, cmd, true)
+                    .await?;
 
                 registered_ids.push(cap_id);
                 continue;
@@ -740,12 +766,95 @@ async fn check_approval_status(capability_id: &str) -> RuntimeResult<()> {
     Ok(())
 }
 
+fn resolve_relative_url(
+    params: &mut HashMap<String, serde_json::Value>,
+    skill: &Skill,
+    source_url: Option<&str>,
+) {
+    if let Some(url_val) = params.get_mut("url") {
+        if let Some(url_str) = url_val.as_str() {
+            if url_str.starts_with('/') {
+                // Resolve base URL
+                let base_str: Option<String> = skill
+                    .metadata
+                    .get("api_base")
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        source_url.and_then(|su| {
+                            let parts: Vec<&str> = su.split('/').collect();
+                            if parts.len() >= 3 {
+                                // Extract protocol and host (e.g. http://localhost:8765)
+                                Some(parts[0..3].join("/"))
+                            } else {
+                                None
+                            }
+                        })
+                    });
+
+                if let Some(base_url) = base_str {
+                    let mut final_base = base_url.to_string();
+                    if final_base.ends_with('/') {
+                        final_base.pop();
+                    }
+                    *url_val = serde_json::Value::String(format!("{}{}", final_base, url_str));
+                }
+            }
+        }
+    }
+}
+
+fn template_replace_secrets(params: &mut HashMap<String, serde_json::Value>, secrets: &[String]) {
+    let secret_store = SecretStore::new(Some(get_workspace_root())).ok();
+    let secret_store = match secret_store {
+        Some(s) => s,
+        None => return,
+    };
+
+    let mut values_to_replace = Vec::new();
+    for secret_name in secrets {
+        if let Some(secret_value) = secret_store.get(secret_name) {
+            values_to_replace.push((format!("{{{}}}", secret_name), secret_value.clone()));
+            values_to_replace.push((format!("${{{}}}", secret_name), secret_value.clone()));
+            values_to_replace.push((format!("${}", secret_name), secret_value.clone()));
+        }
+    }
+
+    if values_to_replace.is_empty() {
+        return;
+    }
+
+    // Replace in all string values (including headers)
+    for value in params.values_mut() {
+        replace_in_json_value(value, &values_to_replace);
+    }
+}
+
+fn replace_in_json_value(value: &mut serde_json::Value, replacements: &[(String, String)]) {
+    match value {
+        serde_json::Value::String(s) => {
+            for (placeholder, secret) in replacements {
+                if s.contains(placeholder) {
+                    *s = s.replace(placeholder, secret);
+                }
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                replace_in_json_value(v, replacements);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                replace_in_json_value(v, replacements);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Inject secrets into HTTP params (headers) for a skill.
 /// Looks up secrets from SecretStore and adds Authorization header if found.
-fn inject_secrets_into_params(
-    params: &mut HashMap<String, serde_json::Value>,
-    secrets: &[String],
-) {
+fn inject_secrets_into_params(params: &mut HashMap<String, serde_json::Value>, secrets: &[String]) {
     let secret_store = SecretStore::new(Some(get_workspace_root())).ok();
     let secret_store = match secret_store {
         Some(s) => s,
@@ -802,9 +911,8 @@ async fn ensure_skill_approvals(
         } else {
             workspace_root.clone()
         };
-        let storage_path = approval_base.join(
-            &rtfs::config::AgentConfig::from_env().storage.approvals_dir,
-        );
+        let storage_path =
+            approval_base.join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
         let storage = FileApprovalStorage::new(storage_path).map_err(|e| {
             SkillError::Execution(format!("Failed to init approval storage: {}", e))
         })?;
@@ -828,10 +936,7 @@ async fn ensure_skill_approvals(
                 ApprovalCategory::SecretRequired {
                     capability_id: capability_id.to_string(),
                     secret_type: secret.clone(),
-                    description: format!(
-                        "Skill '{}' requires secret '{}'",
-                        skill.name, secret
-                    ),
+                    description: format!("Skill '{}' requires secret '{}'", skill.name, secret),
                 },
                 RiskAssessment {
                     level: RiskLevel::Medium,
@@ -856,10 +961,7 @@ async fn ensure_skill_approvals(
             ApprovalCategory::EffectApproval {
                 capability_id: capability_id.to_string(),
                 effects,
-                intent_description: format!(
-                    "Skill '{}' requires approval",
-                    skill.name
-                ),
+                intent_description: format!("Skill '{}' requires approval", skill.name),
             },
             RiskAssessment {
                 level: RiskLevel::Medium,
@@ -868,9 +970,10 @@ async fn ensure_skill_approvals(
             24,
             Some(context.clone()),
         );
-        queue.add(request).await.map_err(|e| {
-            SkillError::Execution(format!("Failed to enqueue approval: {}", e))
-        })?;
+        queue
+            .add(request)
+            .await
+            .map_err(|e| SkillError::Execution(format!("Failed to enqueue approval: {}", e)))?;
     }
 
     if sandboxed_unknown {
@@ -900,8 +1003,8 @@ mod tests {
     use super::*;
     use crate::approval::storage_file::FileApprovalStorage;
     use crate::approval::{ApprovalCategory, ApprovalFilter, UnifiedApprovalQueue};
-    use crate::skills::types::SkillOperation;
     use crate::capabilities::registry::CapabilityRegistry;
+    use crate::skills::types::SkillOperation;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -987,10 +1090,10 @@ mod tests {
 
         let cap_id = cap_ids.first().expect("Expected one capability").clone();
 
-        let approvals_dir = get_workspace_root()
-            .join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
-        let storage = FileApprovalStorage::new(approvals_dir)
-            .expect("Approval storage should initialize");
+        let approvals_dir =
+            get_workspace_root().join(&rtfs::config::AgentConfig::from_env().storage.approvals_dir);
+        let storage =
+            FileApprovalStorage::new(approvals_dir).expect("Approval storage should initialize");
         let queue = UnifiedApprovalQueue::new(Arc::new(storage));
 
         let pending = queue

@@ -55,6 +55,11 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
         self.storage.list(filter).await
     }
 
+    /// Update an existing approval request
+    pub async fn update(&self, request: &ApprovalRequest) -> RuntimeResult<()> {
+        self.storage.update(request).await
+    }
+
     /// List all pending approval requests
     pub async fn list_pending(&self) -> RuntimeResult<Vec<ApprovalRequest>> {
         self.storage.list(ApprovalFilter::pending()).await
@@ -766,6 +771,7 @@ impl<S: ApprovalStorage> UnifiedApprovalQueue<S> {
             expires_at: Utc::now() + chrono::Duration::hours(168), // 1 week
             status,
             context: Some("Created by filesystem sync".to_string()),
+            response: None,
         })
     }
 
@@ -1240,6 +1246,7 @@ impl ApprovalRequest {
             expires_at: pd.expires_at,
             status: ApprovalStatus::Pending,
             context: None,
+            response: None,
         }
     }
 }

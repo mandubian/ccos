@@ -48,6 +48,9 @@ pub struct Skill {
     /// Example usages (for few-shot prompting)
     #[serde(default)]
     pub examples: Vec<SkillExample>,
+    /// Onboarding configuration for multi-step setup
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onboarding: Option<OnboardingConfig>,
     /// Additional metadata
     #[serde(default)]
     pub metadata: HashMap<String, String>,
@@ -199,6 +202,7 @@ impl Skill {
             display: DisplayMetadata::default(),
             instructions: instructions.into(),
             examples: Vec::new(),
+            onboarding: None,
             metadata: HashMap::new(),
         }
     }
@@ -237,6 +241,182 @@ impl Skill {
     pub fn with_examples(mut self, examples: Vec<SkillExample>) -> Self {
         self.examples = examples;
         self
+    }
+
+    /// Set onboarding configuration
+    pub fn with_onboarding(mut self, onboarding: OnboardingConfig) -> Self {
+        self.onboarding = Some(onboarding);
+        self
+    }
+}
+
+// =============================================================================
+// Onboarding Types
+// =============================================================================
+
+/// Onboarding configuration for skills requiring multi-step setup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnboardingConfig {
+    /// Whether onboarding is required for this skill
+    #[serde(default = "default_true")]
+    pub required: bool,
+    /// Ordered list of onboarding steps
+    pub steps: Vec<OnboardingStep>,
+}
+
+/// A single step in the onboarding process
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnboardingStep {
+    /// Unique step identifier
+    pub id: String,
+    /// Step type: api_call, human_action, etc.
+    #[serde(rename = "type")]
+    pub step_type: OnboardingStepType,
+    /// Operation to execute (for api_call steps)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    /// Step dependencies - must complete before this step
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    /// Data storage configuration (what to store from responses)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub store: Vec<StoreConfig>,
+    /// Human action configuration (for human_action steps)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<HumanActionConfig>,
+    /// Parameters to pass to the operation
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub params: HashMap<String, String>,
+}
+
+/// Types of onboarding steps
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnboardingStepType {
+    /// API call step (agent-autonomous)
+    ApiCall,
+    /// Human-in-the-loop step
+    HumanAction,
+    /// Condition/check step
+    Condition,
+}
+
+/// Configuration for what to store from step responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreConfig {
+    /// JSON path in response (e.g., "response.agent_id")
+    pub from: String,
+    /// Where to store (e.g., "memory:moltbook.agent_id" or "secret:MOLTBOOK_SECRET")
+    pub to: String,
+    /// Whether this requires approval before storing
+    #[serde(default)]
+    pub requires_approval: bool,
+}
+
+/// Configuration for human action steps
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HumanActionConfig {
+    /// Action type identifier
+    pub action_type: String,
+    /// Title for approval UI
+    pub title: String,
+    /// Detailed instructions (markdown supported)
+    pub instructions: String,
+    /// Expected response schema
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_response: Option<serde_json::Value>,
+}
+
+/// Current state of skill onboarding
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum OnboardingState {
+    /// Skill not yet loaded
+    NotLoaded,
+    /// Skill loaded, checking requirements
+    Loaded,
+    /// Ready to use (no onboarding required)
+    Ready,
+    /// Needs setup/onboarding
+    NeedsSetup,
+    /// Needs secrets configuration
+    NeedsSecrets,
+    /// Waiting for human action
+    PendingHumanAction,
+    /// Waiting for secret approval
+    PendingSecretApproval,
+    /// Fully operational
+    Operational,
+}
+
+impl Default for OnboardingState {
+    fn default() -> Self {
+        OnboardingState::NotLoaded
+    }
+}
+
+/// Runtime state of skill onboarding (stored in memory)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillOnboardingState {
+    /// Current onboarding status
+    pub status: OnboardingState,
+    /// Current step index (0-based)
+    pub current_step: usize,
+    /// Total number of steps
+    pub total_steps: usize,
+    /// IDs of completed steps
+    pub completed_steps: Vec<String>,
+    /// Approval ID if waiting for human action
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_approval_id: Option<String>,
+    /// Data collected during onboarding
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub data: HashMap<String, serde_json::Value>,
+    /// When onboarding started
+    pub started_at: String,
+    /// Last update timestamp
+    pub last_updated: String,
+}
+
+impl SkillOnboardingState {
+    /// Create initial state for a skill with onboarding
+    pub fn new(total_steps: usize) -> Self {
+        let now = chrono::Utc::now().to_rfc3339();
+        Self {
+            status: OnboardingState::Loaded,
+            current_step: 0,
+            total_steps,
+            completed_steps: Vec::new(),
+            pending_approval_id: None,
+            data: HashMap::new(),
+            started_at: now.clone(),
+            last_updated: now,
+        }
+    }
+
+    /// Mark current step as complete and advance
+    pub fn complete_step(&mut self, step_id: String) {
+        self.completed_steps.push(step_id);
+        self.current_step += 1;
+        self.last_updated = chrono::Utc::now().to_rfc3339();
+
+        if self.current_step >= self.total_steps {
+            self.status = OnboardingState::Operational;
+        }
+    }
+
+    /// Set status to waiting for human action
+    pub fn set_pending_human_action(&mut self, approval_id: String) {
+        self.status = OnboardingState::PendingHumanAction;
+        self.pending_approval_id = Some(approval_id);
+        self.last_updated = chrono::Utc::now().to_rfc3339();
+    }
+
+    /// Resume after human action completion
+    pub fn resume_from_human_action(&mut self) {
+        self.status = OnboardingState::NeedsSetup;
+        self.pending_approval_id = None;
+        self.last_updated = chrono::Utc::now().to_rfc3339();
     }
 }
 

@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use ccos::chat::gateway::ChatGateway;
 use ccos::chat::connector::{ActivationRules, LoopbackConnectorConfig};
+use ccos::chat::gateway::ChatGateway;
 use ccos::chat::quarantine::FileQuarantineStore;
 
 #[derive(Parser)]
@@ -33,8 +33,8 @@ struct ServeArgs {
     #[arg(long)]
     connector_secret: String,
 
-    #[arg(long, default_value = "http://127.0.0.1:8899/outbound")]
-    outbound_url: String,
+    #[arg(long)]
+    outbound_url: Option<String>,
 
     #[arg(long, default_value = "storage/approvals")]
     approvals_dir: PathBuf,
@@ -78,6 +78,7 @@ struct PurgeArgs {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
     let cli = Cli::parse();
 
     let result = match cli.command {
@@ -99,11 +100,17 @@ async fn serve_gateway(args: ServeArgs) -> Result<(), String> {
         required_keywords: args.keywords,
     };
 
+    println!(
+        "[Gateway] Starting with connector bind: {}",
+        args.connector_bind_addr
+    );
+    println!("[Gateway] Outbound URL: {:?}", args.outbound_url);
+
     let connector = LoopbackConnectorConfig {
         bind_addr: args.connector_bind_addr,
         shared_secret: args.connector_secret,
         activation,
-        outbound_url: Some(args.outbound_url),
+        outbound_url: args.outbound_url,
         default_ttl_seconds: args.quarantine_ttl_seconds,
         min_send_interval_ms: args.min_send_interval_ms,
     };
@@ -125,8 +132,7 @@ async fn serve_gateway(args: ServeArgs) -> Result<(), String> {
 
 fn purge_quarantine(args: PurgeArgs) -> Result<(), String> {
     let removed = if args.mode == "all" {
-        FileQuarantineStore::purge_all_in_dir(&args.quarantine_dir)
-            .map_err(|e| format!("{}", e))?
+        FileQuarantineStore::purge_all_in_dir(&args.quarantine_dir).map_err(|e| format!("{}", e))?
     } else {
         FileQuarantineStore::purge_expired_in_dir(&args.quarantine_dir)
             .map_err(|e| format!("{}", e))?

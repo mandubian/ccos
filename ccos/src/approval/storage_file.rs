@@ -410,6 +410,7 @@ impl FileApprovalStorage {
                 reasons: vec!["Loaded from filesystem".into()],
             },
             context: None,
+            response: None,
         })
     }
 
@@ -482,6 +483,8 @@ impl FileApprovalStorage {
                 ApprovalCategory::BudgetExtension { .. } => "BudgetExtension",
                 ApprovalCategory::ChatPolicyException { .. } => "ChatPolicyException",
                 ApprovalCategory::ChatPublicDeclassification { .. } => "ChatPublicDeclassification",
+                ApprovalCategory::SecretWrite { .. } => "SecretWrite",
+                ApprovalCategory::HumanActionRequest { .. } => "HumanActionRequest",
             };
             if request_type != category_type {
                 return false;

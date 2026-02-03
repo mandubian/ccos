@@ -1175,49 +1175,134 @@ impl CapabilityExecutor for HttpExecutor {
         &self,
         provider: &ProviderType,
         inputs: &Value,
-        _context: &ExecutionContext<'_>,
+        context: &ExecutionContext<'_>,
     ) -> RuntimeResult<Value> {
         if let ProviderType::Http(http) = provider {
-            // Test-only shortcut pattern kept here if needed in tests
-            // Normal path mirrors marketplace HTTP logic
-            let args = match inputs {
-                Value::List(list) => list.clone(),
-                Value::Vector(vec) => vec.clone(),
-                v => vec![v.clone()],
+            let (url, method, headers_owned, body) = match inputs {
+                Value::Map(map) => {
+                    let url = map
+                        .get(&MapKey::String("url".to_string()))
+                        .or_else(|| {
+                            map.get(&MapKey::Keyword(rtfs::ast::Keyword("url".to_string())))
+                        })
+                        .and_then(|v| v.as_string())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| http.base_url.clone());
+
+                    let method = map
+                        .get(&MapKey::String("method".to_string()))
+                        .or_else(|| {
+                            map.get(&MapKey::Keyword(rtfs::ast::Keyword("method".to_string())))
+                        })
+                        .and_then(|v| v.as_string())
+                        .map(|s| s.to_string())
+                        .or_else(|| context.metadata.get("method").cloned())
+                        .unwrap_or_else(|| "POST".to_string());
+
+                    let mut headers = HashMap::new();
+                    if let Some(h_val) =
+                        map.get(&MapKey::String("headers".to_string())).or_else(|| {
+                            map.get(&MapKey::Keyword(rtfs::ast::Keyword("headers".to_string())))
+                        })
+                    {
+                        if let Value::Map(h_map) = h_val {
+                            for (k, v) in h_map {
+                                let ks = value_conversion::map_key_to_string(k);
+                                if let Some(vs) = v.as_string() {
+                                    headers.insert(ks, vs.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    let body = if let Some(b_val) =
+                        map.get(&MapKey::String("body".to_string())).or_else(|| {
+                            map.get(&MapKey::Keyword(rtfs::ast::Keyword("body".to_string())))
+                        }) {
+                        match b_val {
+                            Value::String(s) => s.clone(),
+                            _ => A2AExecutor::value_to_json(b_val)
+                                .map(|j| j.to_string())
+                                .unwrap_or_default(),
+                        }
+                    } else {
+                        // If no explicit body, treat the whole map as JSON body
+                        // excluding control keys
+                        let mut body_map = map.clone();
+                        body_map.remove(&MapKey::String("url".to_string()));
+                        body_map.remove(&MapKey::Keyword(rtfs::ast::Keyword("url".to_string())));
+                        body_map.remove(&MapKey::String("method".to_string()));
+                        body_map.remove(&MapKey::Keyword(rtfs::ast::Keyword("method".to_string())));
+                        body_map.remove(&MapKey::String("headers".to_string()));
+                        body_map
+                            .remove(&MapKey::Keyword(rtfs::ast::Keyword("headers".to_string())));
+
+                        if body_map.is_empty() {
+                            String::new()
+                        } else {
+                            A2AExecutor::value_to_json(&Value::Map(body_map))
+                                .map(|j| j.to_string())
+                                .unwrap_or_default()
+                        }
+                    };
+                    (url, method, headers, body)
+                }
+                _ => {
+                    let args = match inputs {
+                        Value::List(list) => list.clone(),
+                        Value::Vector(vec) => vec.clone(),
+                        v => vec![v.clone()],
+                    };
+                    let url = args
+                        .get(0)
+                        .and_then(|v| v.as_string())
+                        .unwrap_or(&http.base_url)
+                        .to_string();
+                    let method = args
+                        .get(1)
+                        .and_then(|v| v.as_string())
+                        .unwrap_or("GET")
+                        .to_string();
+                    let mut headers = HashMap::new();
+                    if let Some(Value::Map(h_map)) = args.get(2) {
+                        for (k, v) in h_map {
+                            let ks = value_conversion::map_key_to_string(k);
+                            if let Some(vs) = v.as_string() {
+                                headers.insert(ks, vs.to_string());
+                            }
+                        }
+                    }
+                    let body = args
+                        .get(3)
+                        .and_then(|v| v.as_string())
+                        .unwrap_or("")
+                        .to_string();
+                    (url, method, headers, body)
+                }
             };
-            let url = args
-                .get(0)
-                .and_then(|v| v.as_string())
-                .unwrap_or(&http.base_url);
-            let method = args.get(1).and_then(|v| v.as_string()).unwrap_or("GET");
-            let default_headers = std::collections::HashMap::new();
-            let headers = args
-                .get(2)
-                .and_then(|v| match v {
-                    Value::Map(m) => Some(m),
-                    _ => None,
-                })
-                .unwrap_or(&default_headers);
-            let body = args
-                .get(3)
-                .and_then(|v| v.as_string())
-                .unwrap_or("")
-                .to_string();
+
             let client = reqwest::Client::new();
             let method_enum =
                 reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
-            let mut req = client.request(method_enum, url);
+
+            tracing::info!("[HttpExecutor] Sending {} request to {}", method_enum, url);
+            let mut req = client.request(method_enum, &url);
             if let Some(token) = &http.auth_token {
                 req = req.bearer_auth(token);
             }
-            for (k, v) in headers.iter() {
-                if let MapKey::String(ref key) = k {
-                    if let Value::String(ref val) = v {
-                        req = req.header(key, val);
-                    }
-                }
+            for (key, val) in headers_owned.iter() {
+                req = req.header(key, val);
             }
+
             if !body.is_empty() {
+                // If it looks like JSON and no content-type, add it
+                if (body.starts_with('{') || body.starts_with('['))
+                    && !headers_owned
+                        .keys()
+                        .any(|k| k.eq_ignore_ascii_case("content-type"))
+                {
+                    req = req.header("Content-Type", "application/json");
+                }
                 req = req.body(body);
             }
             let response = req
@@ -1228,6 +1313,19 @@ impl CapabilityExecutor for HttpExecutor {
             let status = response.status().as_u16() as i64;
             let response_headers = response.headers().clone();
             let resp_body = response.text().await.unwrap_or_default();
+
+            if status >= 400 {
+                return Err(RuntimeError::Generic(format!(
+                    "HTTP {} request to '{}' failed with status {}: {}",
+                    method, url, status, resp_body
+                )));
+            }
+
+            tracing::info!(
+                "[HttpExecutor] Received status {} with body: {}",
+                status,
+                resp_body
+            );
             let mut response_map = std::collections::HashMap::new();
             response_map.insert(MapKey::String("status".to_string()), Value::Integer(status));
             response_map.insert(MapKey::String("body".to_string()), Value::String(resp_body));
