@@ -1,8 +1,8 @@
 # Skill Onboarding System Specification
 
-**Status**: Implemented (Phases 1-2)  
-**Version**: 0.2  
-**Date**: 2026-02-01  
+**Status**: Partially Implemented (Core capabilities exist; UX + stronger governance semantics still evolving)  
+**Version**: 0.3  
+**Date**: 2026-02-04  
 **Authors**: CCOS Team
 
 ---
@@ -102,7 +102,6 @@ Phase 4: Operational Setup (Agent Autonomous)
 | `ccos.skill.load` | Load skill definition | None |
 | `ccos.skill.execute` | Execute skill operation | Per-operation approval |
 | `ccos.secrets.set` | Store credential | Requires approval |
-| `ccos.secrets.get` | Retrieve credential | Audit logged |
 | `ccos.memory.store` | Persist onboarding state | None |
 | `ccos.memory.get` | Retrieve onboarding state | None |
 | `ccos.approval.request_human_action` | Request human intervention | Creates approval |
@@ -131,8 +130,9 @@ governance:
 
 **Security Notes**:
 - Value is never logged or returned in responses
-- Stored encrypted in local `.ccos/secrets.toml`
-- Scope "skill" prefixes key with skill name for isolation
+- Stored in local `.ccos/secrets.toml` with restrictive filesystem permissions (0600 on Unix). This file is currently plain TOML (not encrypted at rest).
+- Scope "skill" prefixes key with `skill_id:` for isolation (implementation detail).
+- Current caveat: `ccos.secrets.set` records an approval request and persists the value immediately; the approval is an audit/governance hook, not a hard gate yet.
 
 #### 3.2.2 `ccos.memory.store`
 
@@ -299,7 +299,7 @@ governance:
 
 | Task | Description | Effort | Status |
 |------|-------------|--------|--------|
-| 1.1 | Implement `ccos.secrets.set` capability | 2h | ✅ Done |
+| 1.1 | Implement `ccos.secrets.set` capability | 2h | ✅ Done (see caveat in §3.2.1) |
 | 1.2 | Implement `ccos.memory.store` capability | 1h | ✅ Done |
 | 1.3 | Implement `ccos.memory.get` capability | 1h | ✅ Done |
 | 1.4 | Add SecretWrite approval category | 1h | ✅ Done |
@@ -317,9 +317,9 @@ governance:
 | Task | Description | Effort | Status |
 |------|-------------|--------|--------|
 | 2.1 | Implement `ccos.approval.request_human_action` | 3h | ✅ Done |
-| 2.2 | Implement `ccos.approval.complete` | 2h | ⏳ Partially Done |
+| 2.2 | Implement `ccos.approval.complete` | 2h | ✅ Done |
 | 2.3 | Add HumanActionRequest approval category | 1h | ✅ Done |
-| 2.4 | Response validation against schema | 2h | ⏳ Pending |
+| 2.4 | Response validation against schema | 2h | 🔶 Partial (schema support exists; tighten validation + UX) |
 | 2.5 | Integration tests with mock human | 2h | ⏳ Pending |
 
 **Files to modify**:
@@ -470,10 +470,13 @@ operations:
 ### 7.2 Secret Handling
 
 1. **Never log secret values**: All logging must redact secret content
-2. **Encrypted at rest**: SecretStore uses encrypted local storage
+2. **At rest**: SecretStore uses a local `.ccos/secrets.toml` file with restrictive filesystem permissions (not encrypted at rest yet)
 3. **Scoped access**: Skill-scoped secrets isolated from other skills
 4. **Approval audit trail**: Who approved storing which secret (not the value)
 5. **Injection only**: Secrets injected into headers, never returned to agent
+
+**Optional convenience (agent-side)**:
+- The agent can be started with `--persist-skill-secrets` / `CCOS_AGENT_PERSIST_SKILL_SECRETS=1` to persist discovered per-skill bearer tokens to `SecretStore` (`.ccos/secrets.toml`) and reuse them across restarts. This is primarily to support multi-step onboarding flows where later operations require `Authorization: Bearer ...`.
 
 ### 7.3 Human Action Safety
 

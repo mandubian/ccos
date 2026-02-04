@@ -18,6 +18,8 @@ pub enum LoadError {
     UnsupportedFormat(String),
     /// Invalid URL
     InvalidUrl(String),
+    /// Skill validation failed
+    Validation(String),
 }
 
 impl std::fmt::Display for LoadError {
@@ -27,6 +29,7 @@ impl std::fmt::Display for LoadError {
             LoadError::Parse(e) => write!(f, "Parse error: {}", e),
             LoadError::UnsupportedFormat(fmt) => write!(f, "Unsupported format: {}", fmt),
             LoadError::InvalidUrl(url) => write!(f, "Invalid URL: {}", url),
+            LoadError::Validation(msg) => write!(f, "Validation error: {}", msg),
         }
     }
 }
@@ -89,6 +92,8 @@ pub async fn load_skill_from_url(url: &str) -> Result<LoadedSkillInfo, LoadError
                 .map_err(|e| LoadError::Parse(e))?
         }
     };
+
+    validate_skill(&skill)?;
 
     let requires_approval = skill.approval.required || !skill.secrets.is_empty();
 
@@ -162,6 +167,26 @@ fn detect_format(url: &str, content: &str) -> SkillFormat {
     }
 
     SkillFormat::Unknown
+}
+
+/// Validate a skill after parsing
+pub fn validate_skill(skill: &Skill) -> Result<(), LoadError> {
+    if skill.id.is_empty() {
+        return Err(LoadError::Validation("Skill ID is empty".to_string()));
+    }
+    if skill.operations.is_empty() {
+        return Err(LoadError::Validation(format!(
+            "Skill '{}' has no operations defined",
+            skill.id
+        )));
+    }
+    if skill.capabilities.is_empty() {
+        return Err(LoadError::Validation(format!(
+            "Skill '{}' has no registered capabilities",
+            skill.id
+        )));
+    }
+    Ok(())
 }
 
 /// Parse skill from markdown format
@@ -372,7 +397,10 @@ fn type_expr_from_json_value(value: &JsonValue) -> TypeExpr {
                     optional: false,
                 })
                 .collect();
-            TypeExpr::Map { entries, wildcard: None }
+            TypeExpr::Map {
+                entries,
+                wildcard: None,
+            }
         }
         JsonValue::Array(items) => {
             let inner = items
@@ -569,5 +597,38 @@ Body: { "human_x_username": "@human_handle" }
         assert_eq!(slugify("Hello World"), "hello-world");
         assert_eq!(slugify("Search & Find"), "search-find");
         assert_eq!(slugify("API v2.0"), "api-v2-0");
+    }
+
+    #[tokio::test]
+    async fn test_load_validation_empty() {
+        // Skill with no operations
+        let skill = Skill::new("test", "Test", "Test", vec!["cap1".to_string()], "inst");
+        let result = validate_skill(&skill);
+        assert!(result.is_err());
+        if let Err(LoadError::Validation(msg)) = result {
+            assert!(msg.contains("no operations"));
+        } else {
+            panic!("Expected validation error");
+        }
+
+        // Skill with no capabilities
+        let mut skill = Skill::new("test", "Test", "Test", vec![], "inst");
+        skill.operations.push(SkillOperation {
+            name: "op1".to_string(),
+            description: "desc".to_string(),
+            endpoint: None,
+            method: None,
+            command: None,
+            runtime: None,
+            input_schema: None,
+            output_schema: None,
+        });
+        let result = validate_skill(&skill);
+        assert!(result.is_err());
+        if let Err(LoadError::Validation(msg)) = result {
+            assert!(msg.contains("no registered capabilities"));
+        } else {
+            panic!("Expected validation error");
+        }
     }
 }

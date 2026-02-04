@@ -8,21 +8,34 @@
    - Define `RunState` with: Done, Paused(Approval), Paused(ExternalEvent), Failed, Cancelled.
    - Store runs per session with immutable budget context + completion predicate.
    - Persist run status transitions to Causal Chain.
+   - Status: ✅ Implemented in-memory + causal-chain events (`run.create`, `run.transition`, `run.cancel`).
+   - Remaining: ⏳ durable storage across gateway restarts; stronger invariants for terminal transitions.
    - Acceptance: runs survive restarts and always end in a terminal state.
 
 2. **Run orchestration endpoints**
-   - Add Gateway endpoints for: create run, get run status, cancel run.
-   - Ensure token/session validation; include run_id, step_id, and correlation IDs in audit events.
+   - Add Gateway endpoints for: create run, get run status, cancel run, transition, list runs, list run actions.
+   - Ensure token/session validation; include run_id + step_id correlation in causal chain.
+   - Status: ✅ Implemented:
+     - `POST /chat/run`
+     - `GET /chat/run/:run_id`
+     - `GET /chat/run?session_id=...`
+     - `GET /chat/run/:run_id/actions?limit=...`
+     - `POST /chat/run/:run_id/cancel`
+     - `POST /chat/run/:run_id/transition`
    - Acceptance: external system can submit a goal without a chat message.
 
 3. **Checkpoint/Resume segments**
    - Implement bounded execution segments with checkpointing between segments.
    - Wire resume triggers (cron, external event, manual resume).
+   - Status: ⏳ Not implemented yet (runs can pause/resume, but without durable checkpoints).
    - Acceptance: a long‑running goal progresses in bounded segments.
 
 4. **Budget enforcement in agent loop**
-   - Enforce budgets for steps, wall‑clock, tokens, and retries within the agent loop.
+   - Enforce budgets for steps and wall‑clock within the agent loop.
+   - Enforce run state + per-run budget gate in Gateway `/chat/execute` (block non-chat capabilities while paused/terminal; pause to approval on budget exceed).
    - On exceed: hard‑stop or approval‑required (per policy pack).
+   - Status: ✅ Steps/time budgets (agent) + run gate (gateway).
+   - Remaining: ⏳ token/cost/network metering; retries budget.
    - Acceptance: budgets never allow infinite runs.
 
 ## P0 — Skill Loading & Execution Safety (Must‑Have)
@@ -30,21 +43,25 @@
 5. **Skill load contract validation (fail‑fast)**
    - Reject load results with missing `skill_id`, no operations, or no registered capabilities.
    - Do not surface “unnamed skill” states to users; return actionable error instead.
+   - Status: ✅ Implemented (fail-fast parsing/registration); plus URL guardrails for `ccos.skill.load`.
    - Acceptance: invalid skill definitions never enter runtime state.
 
 6. **Capability schema exposure + tool registry sync**
    - Expose operation `input_schema` to the LLM/tooling layer at load time.
    - Ensure gateway registry and agent context stay in sync after load/unload.
+   - Status: 🔶 Partially implemented (schemas flow via capability registry; still need richer “tool registry delta” semantics and unload story).
    - Acceptance: LLM sees accurate tool schemas and available operations.
 
 7. **Runtime input validation + missing‑field prompting**
    - Validate params against schema before `ccos.skill.execute`.
    - Auto‑fill from safe agent context (allowlist), then prompt user for remaining required fields.
+   - Status: 🔶 Partially implemented (schema validation exists; prompting behavior needs tightening; agent now skips `ccos.skill.execute` calls missing `operation`).
    - Acceptance: no invalid request reaches an executor; user gets clear missing‑field prompts.
 
 8. **Sanitized logging & safe tool outputs**
    - Redact secrets/tokens and avoid logging full skill definitions.
    - Log execution summaries with redacted inputs/outputs.
+   - Status: ✅ Implemented baseline redaction + safer error messaging; continue hardening as needed.
    - Acceptance: logs contain no sensitive data and are still diagnosable.
 
 ## P1 — Jailing + Scheduler (Critical for Safe Autonomy)
@@ -52,11 +69,13 @@
 9. **Agent process jailing**
    - Replace `LogOnlySpawner` with a jailed `ProcessSpawner` for production.
    - Ensure agent has no direct shell/network; only Gateway allowed.
+   - Status: ⏳ Planned.
    - Acceptance: direct egress by agent is impossible without Gateway.
 
 10. **Scheduler / cron triggers**
    - Add a scheduler for periodic goal execution and follow‑ups.
    - Attach schedule to run metadata and persist it.
+   - Status: ⏳ Planned.
    - Acceptance: autonomous goals can run without incoming chat.
 
 ## P2 — Goal Planning & Memory (Generic Goals)
@@ -64,11 +83,16 @@
 11. **Goal queue and completion predicates**
    - Support goal queue per run (subgoals + completion predicates).
    - Ensure explicit completion predicate checks before Done.
+   - Status: 🔶 Partial completion predicate support:
+     - Agent respects `manual|always|never` and avoids auto-done for unknown predicates.
+     - Gateway enforces `never` and supports `capability_succeeded:<capability_id>` for Done transitions.
+   - Remaining: ⏳ goal/subgoal queue; broader predicate vocabulary and robust evaluation.
    - Acceptance: “generic goal” can complete without manual chat prompts.
 
 12. **Governed memory for goals**
    - Add governed working memory for goal progress and context.
    - Ensure data classification and policy enforcement for stored items.
+   - Status: 🔶 Working memory exists; goal-specific memory model + governance policies still evolving.
    - Acceptance: agent can resume goal with safe state.
 
 ## P3 — Connector + External System Enablement
@@ -76,11 +100,13 @@
 13. **Stable external connector contract**
    - Provide adapter SDK/contract for external systems (auth, activation, normalization, outbound).
    - Ensure raw chat data stays quarantined by default.
+   - Status: ⏳ Planned.
    - Acceptance: any external system can integrate without breaking safety rules.
 
 14. **Outbound delivery guarantees**
    - Implement retry policy and idempotency keys for outbound messages.
    - Ensure audit events record delivery attempts.
+   - Status: ⏳ Planned.
    - Acceptance: outbound delivery is reliable and auditable.
 
 ## Demo: Moltbook Autonomy Validation
@@ -88,6 +114,7 @@
 15. **Autonomous Moltbook run**
    - Goal: register → human verification prompt → verify → heartbeat → post to feed.
    - Tie each stage to run lifecycle and budgets.
+   - Status: 🔶 Partial (demo works interactively; full “no-manual-chat” orchestration and robust resume/checkpoint remains).
    - Acceptance: demo completes without manual chat interaction, only approvals where required.
 
 ---

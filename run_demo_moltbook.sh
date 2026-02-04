@@ -142,7 +142,7 @@ echo ""
 # Instruct user to start chat
 echo -e "${BLUE}[4/5] Services ready! Please start the interactive chat to begin...${NC}"
 echo -e "  ${YELLOW}Run this in a new terminal:${NC}"
-echo -e "  ${CYAN}./target/debug/ccos-chat --user-id user1 --channel-id moltbook-demo${NC}"
+echo -e "  ${CYAN}./target/debug/ccos-chat --user-id user1 --channel-id moltbook-demo --status-url http://localhost:8765${NC}"
 echo -e "  ${YELLOW}Then type in the chat:${NC}"
 echo -e "  ${WHITE}@agent onboard moltbook${NC}"
 echo ""

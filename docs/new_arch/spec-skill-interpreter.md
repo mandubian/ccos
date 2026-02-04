@@ -4,6 +4,20 @@
 
 This specification defines how CCOS agents dynamically load, interpret, and execute **skills** from external sources (e.g., `skill.md` files). The goal is to enable autonomous capability discovery while maintaining CCOS's security guarantees: all execution flows through governed capabilities, never raw shell commands.
 
+## Implementation Status (as of 2026-02-04)
+
+This document mixes current behavior and a longer-term target architecture. Current implementation highlights:
+
+- `ccos.skill.load` has URL guardrails: it rejects non-skill-looking URLs by default; use `force=true` to override. This prevents accidental attempts to “load a skill” from arbitrary links (notably `x.com/...` / `twitter.com/...`).
+- The agent LLM prompt is tightened to avoid interpreting arbitrary user-provided URLs as skill definitions.
+- Skill execution is mediated through governed capabilities and the capability marketplace, with secrets injected via `SecretStore` (`.ccos/secrets.toml`) rather than returned to the agent.
+
+Not yet implemented end-to-end (still aspirational in this spec):
+
+- Automatic mapping of arbitrary shell toolchains (`ffmpeg`, `sed`, complex pipelines) into a polyglot sandbox.
+- OpenAPI ingestion and rich schema synthesis beyond what the skill definition provides.
+- Robust unload/delta synchronization semantics for tool registries.
+
 ## Problem Statement
 
 When an agent fetches a skill definition (e.g., from `https://moltbook.com/skill.md`), the skill often describes operations in terms of:

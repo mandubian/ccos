@@ -1571,13 +1571,30 @@ fn register_ccos_tools(
             let rtfs_args = json_to_rtfs_value(&args)
                 .map_err(|e| format!("Failed to convert arguments: {}", e))?;
 
-            let result = mp.execute_capability(&cap_id, &rtfs_args).await
-                .map_err(|e| format!("Execution failed: {}", e))?;
+            let result = mp.execute_capability(&cap_id, &rtfs_args).await;
             
-            // Convert result back to JSON
-            let result_json = rtfs_value_to_json(&result)
-                 .map_err(|e| format!("Failed to convert result: {}", e))?;
-            Ok(result_json)
+            match result {
+                Ok(val) => {
+                    // Convert result back to JSON
+                    let result_json = rtfs_value_to_json(&val)
+                         .map_err(|e| format!("Failed to convert result: {}", e))?;
+                    Ok(result_json)
+                }
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("PROMPT_MISSING_INPUT:") {
+                        // Extract the prompt message
+                        let prompt = err_msg.split("PROMPT_MISSING_INPUT:").nth(1).unwrap_or(&err_msg).trim();
+                        Ok(json!({
+                            "status": "missing_input",
+                            "message": prompt,
+                            "prompt": format!("I need more information to execute this skill: {}. Please provide the missing values.", prompt)
+                        }))
+                    } else {
+                        Err(format!("Execution failed: {}", e))
+                    }
+                }
+            }
         })
     });
     register_ecosystem_tool(

@@ -35,13 +35,15 @@ pub mod agent_llm;
 pub mod connector;
 pub mod gateway;
 pub mod quarantine;
+pub mod run;
 pub mod session;
 pub mod spawner;
 
 pub use connector::{ActivationMetadata, AttachmentRef, MessageDirection, MessageEnvelope};
 pub use quarantine::{FileQuarantineStore, InMemoryQuarantineStore, QuarantineKey, QuarantineStore};
+pub use run::{BudgetContext, Run, RunState, RunStore, SharedRunStore, new_shared_run_store};
 pub use session::{ChatMessage, SessionRegistry};
-pub use spawner::{AgentSpawner, SpawnerFactory};
+pub use spawner::{AgentSpawner, SpawnConfig, SpawnerFactory};
 
 /// Reserved key for CCOS-internal chat metadata inside RTFS values.
 ///
@@ -957,7 +959,7 @@ pub async fn register_chat_capabilities(
             &*marketplace,
             "ccos.skill.load",
             "Load Skill",
-            "Load a skill definition from a URL and register its capabilities. Returns skill_id, status, and the skill_definition content.",
+            "Load a skill definition from a URL (Markdown/YAML/JSON) and register its capabilities. Returns skill_id, status, and the skill_definition content. Optional input: force=true to bypass URL heuristics.",
             Arc::new(move |inputs: &Value| {
                 let inputs = inputs.clone();
                 let marketplace = Arc::clone(&marketplace_for_skill_load);
@@ -971,6 +973,33 @@ pub async fn register_chat_capabilities(
                     } else {
                         None
                     }.ok_or_else(|| RuntimeError::Generic("Missing url parameter".to_string()))?;
+
+                    // Optional safety valve: allow callers to override URL heuristics.
+                    let force = if let Value::Map(ref map) = inputs {
+                        map.get(&MapKey::String("force".to_string()))
+                            .or_else(|| map.get(&MapKey::Keyword(Keyword("force".to_string()))))
+                            .and_then(|v| match v {
+                                Value::Boolean(b) => Some(*b),
+                                _ => None,
+                            })
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    };
+
+                    // Guardrail: skill.load is meant for skill definitions, not arbitrary URLs.
+                    // This avoids confusing failures when the user provides, e.g., an X/Twitter tweet URL.
+                    if !force && !url_looks_like_skill_definition(&url) {
+                        let hint = if url_looks_like_tweet_url(&url) {
+                            "This looks like an X/Twitter URL (tweet/profile), not a skill definition. If you're in an onboarding flow, pass this URL to the appropriate skill operation (e.g. verify-human-claim)."
+                        } else {
+                            "This URL doesn't look like a skill definition. Provide a URL to a skill file (typically .md/.yaml/.yml/.json or a /skill.md endpoint), or set force=true to attempt loading anyway."
+                        };
+                        return Err(RuntimeError::Generic(format!(
+                            "ccos.skill.load: Refusing to load non-skill URL: {}",
+                            hint
+                        )));
+                    }
                     
                     // Fetch the skill definition from the URL
                     let client = reqwest::Client::new();
@@ -980,15 +1009,16 @@ pub async fn register_chat_capabilities(
                                 response.text().await.unwrap_or_default()
                             } else {
                                 return Err(RuntimeError::Generic(format!(
-                                    "ccos.skill.load: Error fetching skill: HTTP {}",
-                                    response.status()
+                                    "ccos.skill.load: Error fetching skill from upstream ({}): HTTP {}",
+                                    url,
+                                    response.status(),
                                 )));
                             }
                         }
                         Err(e) => {
                             return Err(RuntimeError::Generic(format!(
-                                "ccos.skill.load: Error fetching skill: {}",
-                                e
+                                "ccos.skill.load: Error fetching skill from upstream ({}): {}",
+                                url, e
                             )))
                         }
                     };
@@ -1183,6 +1213,32 @@ fn extract_base_url(url: &str) -> String {
             .collect::<Vec<_>>()
             .join("/")
     }
+}
+
+fn url_looks_like_skill_definition(url: &str) -> bool {
+    let u = url.trim().to_ascii_lowercase();
+
+    // Common explicit skill definition patterns
+    if u.contains("/skill.md") {
+        return true;
+    }
+
+    // Typical file extensions (GitHub raw links, local dev servers, etc.)
+    u.ends_with(".md")
+        || u.ends_with(".markdown")
+        || u.ends_with(".yaml")
+        || u.ends_with(".yml")
+        || u.ends_with(".json")
+}
+
+fn url_looks_like_tweet_url(url: &str) -> bool {
+    let u = url.trim().to_ascii_lowercase();
+    u.starts_with("http://x.com/")
+        || u.starts_with("https://x.com/")
+        || u.starts_with("http://twitter.com/")
+        || u.starts_with("https://twitter.com/")
+        || u.contains("://x.com/")
+        || u.contains("://twitter.com/")
 }
 
 /// Create an HTTP capability manifest for a skill operation.

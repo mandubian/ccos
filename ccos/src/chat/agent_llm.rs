@@ -3,6 +3,7 @@
 //! Provides intelligent message processing using LLM providers.
 //! The Agent uses this to understand user intent and plan capability execution.
 
+use crate::utils::log_redaction::redact_text_for_logs;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -81,7 +82,7 @@ impl AgentLlmClient {
     async fn process_with_openai(
         &self,
         message: &str,
-        _context: &[String], // context handling to be added
+        context: &[String],
         capabilities: &[String],
         agent_context: &str,
     ) -> anyhow::Result<AgentPlan> {
@@ -112,6 +113,8 @@ impl AgentLlmClient {
             format!("\nAgent context (safe metadata):\n{}\n", agent_context)
         };
 
+        let recent_context_block = format_recent_context_block(context);
+
         let system_prompt = format!(
             r#"You are a CCOS agent. Your job is to:
 1. Understand the user's message
@@ -121,12 +124,15 @@ impl AgentLlmClient {
 IMPORTANT: You receive the ACTUAL message content directly, not UUID pointers. The Gateway has already resolved any quarantine references. Work with the message content provided.
 
 When working with skills:
-- Use ccos.skill.load with: {{ "url": "..." }} to load skill definitions.
+- Use ccos.skill.load with: {{ "url": "..." }} to load skill definitions (Markdown/YAML/JSON).
+- Only use ccos.skill.load when the user is explicitly trying to load/onboard/install a skill OR when the URL clearly points to a skill definition file (e.g. ends with .md/.yaml/.yml/.json or contains /skill.md).
+- If the user provides a URL that is clearly NOT a skill definition (e.g. an X/Twitter tweet URL like https://x.com/... or a normal web page), treat it as data for a skill operation instead (usually via ccos.skill.execute), or ask a clarifying question. Do NOT call ccos.skill.load for arbitrary URLs.
 - Once loaded, the skill_definition will describe available operations and any setup requirements.
 - Use ccos.skill.execute for any required skill operation (onboarding or otherwise) with: {{ "skill": "skill_id", "operation": "operation_name", "params": {{...}} }}.
 - Plan and execute the steps required to fulfill the user's request using the available skill operations.
 - Do not guess or invent skill URLs. If the user did not provide a URL and none is available in context, ask the user for the correct skill URL.
 - Only use operations explicitly listed in Registered capabilities; do not invent operation names (e.g. "skill_definition"). If unsure, ask the user or check the registered capabilities list.
+{}
 {}
 
 You have access to these capabilities:
@@ -145,6 +151,7 @@ Respond in JSON format:
   "response": "natural language response to user"
             }}"#,
             context_block,
+            recent_context_block,
             caps_list
         );
 
@@ -228,7 +235,7 @@ Respond in JSON format:
     async fn process_with_anthropic(
         &self,
         message: &str,
-        _context: &[String],
+        context: &[String],
         capabilities: &[String],
         agent_context: &str,
     ) -> anyhow::Result<AgentPlan> {
@@ -246,6 +253,8 @@ Respond in JSON format:
             format!("\nAgent context (safe metadata):\n{}\n", agent_context)
         };
 
+        let recent_context_block = format_recent_context_block(context);
+
         let system_prompt = format!(
             r#"You are a CCOS agent. Your job is to:
 1. Understand the user's message
@@ -255,12 +264,15 @@ Respond in JSON format:
 IMPORTANT: You receive the ACTUAL message content directly, not UUID pointers. The Gateway has already resolved any quarantine references. Work with the message content provided.
 
 When working with skills:
-- Use ccos.skill.load with: {{ "url": "..." }} to load skill definitions.
+- Use ccos.skill.load with: {{ "url": "..." }} to load skill definitions (Markdown/YAML/JSON).
+- Only use ccos.skill.load when the user is explicitly trying to load/onboard/install a skill OR when the URL clearly points to a skill definition file (e.g. ends with .md/.yaml/.yml/.json or contains /skill.md).
+- If the user provides a URL that is clearly NOT a skill definition (e.g. an X/Twitter tweet URL like https://x.com/... or a normal web page), treat it as data for a skill operation instead (usually via ccos.skill.execute), or ask a clarifying question. Do NOT call ccos.skill.load for arbitrary URLs.
 - Once loaded, the skill_definition will describe available operations and any setup requirements.
 - Use ccos.skill.execute for any required skill operation (onboarding or otherwise) with: {{ "skill": "skill_id", "operation": "operation_name", "params": {{...}} }}.
 - Plan and execute the steps required to fulfill the user's request using the available skill operations.
 - Do not guess or invent skill URLs. If the user did not provide a URL and none is available in context, ask the user for the correct skill URL.
 - Only use operations explicitly listed in Registered capabilities; do not invent operation names (e.g. "skill_definition"). If unsure, ask the user or check the registered capabilities list.
+{}
 {}
 
 You have access to these capabilities:
@@ -279,6 +291,7 @@ Respond in JSON format:
             "response": "natural language response to user"
 }}"#,
             context_block,
+            recent_context_block,
             caps_list
         );
 
@@ -353,6 +366,32 @@ Respond in JSON format:
             }
         }
     }
+}
+
+fn format_recent_context_block(context: &[String]) -> String {
+    if context.is_empty() {
+        return String::new();
+    }
+
+    // Keep the prompt stable and small: include only a few recent turns, redacted.
+    let max_lines = 8usize;
+    let max_line_len = 240usize;
+    let start = context.len().saturating_sub(max_lines);
+
+    let lines = context[start..]
+        .iter()
+        .map(|line| {
+            let redacted = redact_text_for_logs(line);
+            if redacted.len() > max_line_len {
+                format!("{}...", &redacted[..max_line_len])
+            } else {
+                redacted
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("\nRecent conversation (redacted):\n{}\n", lines)
 }
 
 #[cfg(test)]
